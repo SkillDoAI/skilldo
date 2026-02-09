@@ -1,0 +1,17 @@
+# Ollama — local models (no API key needed)
+[llm]
+provider = "openai-compatible"
+model = "qwen3-coder:latest"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+max_tokens = 16384  # Local models benefit from higher token limits
+
+[generation]
+max_retries = 10  # Local models may need more retries
+max_source_tokens = 100000
+enable_agent5 = true
+agent5_mode = "thorough"
+
+[generation.container]
+runtime = "docker"
+timeout = 1800  # 30 min — some libraries take a while to install

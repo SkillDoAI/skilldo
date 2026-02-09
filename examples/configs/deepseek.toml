@@ -1,0 +1,15 @@
+# DeepSeek — OpenAI-compatible cloud provider
+[llm]
+provider = "openai-compatible"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://api.deepseek.com/v1"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+enable_agent5 = true
+agent5_mode = "thorough"
+
+[generation.container]
+runtime = "docker"

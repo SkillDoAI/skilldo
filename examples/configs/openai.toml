@@ -1,0 +1,14 @@
+# OpenAI (GPT) — cloud provider
+[llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+enable_agent5 = true
+agent5_mode = "thorough"
+
+[generation.container]
+runtime = "docker"

@@ -1,0 +1,28 @@
+[package]
+name = "skilldo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+octocrab = "0.41"
+git2 = "0.19"
+handlebars = "6"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+async-trait = "0.1"
+dirs = "5"
+tempfile = "3"
+regex = "1"
+
+[dev-dependencies]
+mockito = "1"
+
+[profile.release]
+overflow-checks = true

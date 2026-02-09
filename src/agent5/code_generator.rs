@@ -1,0 +1,198 @@
+use anyhow::Result;
+use tracing::debug;
+
+use super::{CodePattern, LanguageCodeGenerator};
+use crate::llm::client::LlmClient;
+
+/// Python code generator using LLM
+pub struct PythonCodeGenerator<'a> {
+    llm_client: &'a dyn LlmClient,
+    custom_instructions: Option<String>,
+}
+
+impl<'a> PythonCodeGenerator<'a> {
+    pub fn new(llm_client: &'a dyn LlmClient) -> Self {
+        Self {
+            llm_client,
+            custom_instructions: None,
+        }
+    }
+
+    pub fn with_custom_instructions(mut self, instructions: Option<String>) -> Self {
+        self.custom_instructions = instructions;
+        self
+    }
+
+    /// Generate the prompt for creating test code from a pattern
+    fn create_test_prompt(pattern: &CodePattern, custom_instructions: Option<&str>) -> String {
+        let mut prompt = format!(
+            r#"You are validating a SKILL.md file by writing test code.
+
+Your task: Write a COMPLETE, RUNNABLE Python script that thoroughly tests this pattern.
+
+Pattern: {}
+Description: {}
+
+Example from SKILL.md:
+```python
+{}
+```
+
+ENVIRONMENT: This runs via `uv run test.py` in an isolated container with internet access but NO TTY.
+
+CRITICAL RULES:
+1. Start with PEP 723 inline script metadata declaring dependencies with CORRECT PyPI package names:
+   # /// script
+   # requires-python = ">=3.11"
+   # dependencies = ["actual-pypi-package-name"]
+   # ///
+   (e.g., use "scikit-learn" not "sklearn", "Pillow" not "PIL", "beautifulsoup4" not "bs4")
+2. Declare ALL packages your code imports in the dependencies — think through what you need BEFORE writing code. If you use numpy, requests, etc. alongside the main library, include them
+3. If the library has a built-in test client (TestClient, test_client(), CliRunner, etc.), USE IT
+4. Do NOT assert on ANSI codes, colors, or terminal formatting - no TTY available
+5. For output capture, use StringIO and assert on TEXT CONTENT only
+6. For HTTP client libraries: use https://httpbin.org for testing (e.g., /get, /post, /status/404, /status/500). For simple GET tests, https://www.google.com is also fine. Do NOT use httpstat.us
+7. Keep it under 40 lines, COMPLETE and RUNNABLE with no placeholders
+8. Print "✓ Test passed: {}" on success
+9. Test real functionality with real assertions - not just "does it import"
+
+ASSERTION RULES (critical for reliability):
+- NEVER assert exact floating point values. Use ranges: `assert 0.0 <= score <= 1.0`
+- NEVER assert `isinstance(x, int)` for numeric data — libraries return numpy/custom types. Use `hasattr(x, '__len__')` or check `.shape`
+- NEVER assert `isinstance(x, list)` — data may be arrays, tuples, or custom sequences. Check `len(x) > 0` instead
+- NEVER hardcode expected string content from network responses or datasets that may change
+- DO assert on shapes, lengths, types of return values, ranges, and that operations don't raise
+- DO use `hasattr`, `len() > 0`, `x.shape == (n, m)`, value ranges, set membership
+- Call the API EXACTLY as shown in the example code — do not invent parameters or change signatures
+- NEVER assert `__name__` equals a specific value — it varies by execution context (uv run, python, etc.)
+- NEVER assert on exact CLI help text formatting or exact exception message strings — check exit codes and broad content instead
+
+Output format:
+```python
+[your code here - MUST start with # /// script metadata]
+```
+
+Write the complete test script now:"#,
+            pattern.name, pattern.description, pattern.code, pattern.name
+        );
+
+        if let Some(custom) = custom_instructions {
+            prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
+        }
+
+        prompt
+    }
+
+    /// Extract Python code from markdown code blocks
+    fn extract_code_from_response(response: &str) -> Result<String> {
+        let trimmed = response.trim();
+
+        // Try to extract from ```python code block
+        if let Some(start) = trimmed.find("```python") {
+            let code_start = start + "```python".len();
+            if let Some(end) = trimmed[code_start..].find("```") {
+                let code = trimmed[code_start..code_start + end].trim();
+                return Ok(code.to_string());
+            }
+        }
+
+        // Try generic ``` code block
+        if let Some(start) = trimmed.find("```") {
+            let code_start = start + "```".len();
+            if let Some(end) = trimmed[code_start..].find("```") {
+                let code = trimmed[code_start..code_start + end].trim();
+                return Ok(code.to_string());
+            }
+        }
+
+        // If no code block found, use the response as-is (may be raw code)
+        Ok(trimmed.to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl<'a> LanguageCodeGenerator for PythonCodeGenerator<'a> {
+    async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String> {
+        debug!("Generating test code for pattern: {}", pattern.name);
+
+        let prompt = Self::create_test_prompt(pattern, self.custom_instructions.as_deref());
+        let response = self.llm_client.complete(&prompt).await?;
+
+        let code = Self::extract_code_from_response(&response)?;
+
+        debug!("Generated {} bytes of test code", code.len());
+        debug!("Generated test code:\n{}", code);
+        Ok(code)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_code_from_response() {
+        // Test with python code block
+        let response = r#"
+Here's the test:
+
+```python
+import click
+
+@click.command()
+def hello():
+    print("Hello")
+
+if __name__ == '__main__':
+    hello()
+```
+"#;
+
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("import click"));
+        assert!(code.contains("def hello():"));
+        assert!(!code.contains("```"));
+    }
+
+    #[test]
+    fn test_extract_code_from_generic_block() {
+        let response = r#"
+```
+import sys
+print(sys.version)
+```
+"#;
+
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("import sys"));
+        assert!(!code.contains("```"));
+    }
+
+    #[test]
+    fn test_extract_raw_code() {
+        let response = r#"
+import os
+print(os.getcwd())
+"#;
+
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("import os"));
+    }
+
+    #[test]
+    fn test_create_test_prompt() {
+        let pattern = CodePattern {
+            name: "Basic Click Command".to_string(),
+            description: "Create a simple CLI command".to_string(),
+            code: "import click\n\n@click.command()\ndef hello():\n    pass".to_string(),
+            category: super::super::PatternCategory::BasicUsage,
+        };
+
+        let prompt = PythonCodeGenerator::create_test_prompt(&pattern, None);
+
+        assert!(prompt.contains("Basic Click Command"));
+        assert!(prompt.contains("Create a simple CLI command"));
+        assert!(prompt.contains("import click"));
+        assert!(prompt.contains("✓ Test passed: Basic Click Command"));
+    }
+}
