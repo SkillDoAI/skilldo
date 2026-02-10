@@ -1,8 +1,8 @@
 use anyhow::{bail, Result};
 use std::env;
 
-use super::client::LlmClient;
 use super::client::MockLlmClient;
+use super::client::{LlmClient, RetryClient};
 use super::client_impl::{AnthropicClient, GeminiClient, OpenAIClient};
 use crate::config::{Config, LlmConfig};
 
@@ -30,18 +30,18 @@ pub fn create_client_from_llm_config(
 
     let max_tokens = llm_config.get_max_tokens();
 
-    match llm_config.provider.as_str() {
-        "anthropic" => Ok(Box::new(AnthropicClient::new(
+    let client: Box<dyn LlmClient> = match llm_config.provider.as_str() {
+        "anthropic" => Box::new(AnthropicClient::new(
             api_key,
             llm_config.model.clone(),
             max_tokens,
-        ))),
+        )),
 
-        "openai" => Ok(Box::new(OpenAIClient::new(
+        "openai" => Box::new(OpenAIClient::new(
             api_key,
             llm_config.model.clone(),
             max_tokens,
-        ))),
+        )),
 
         "openai-compatible" => {
             let base_url = llm_config
@@ -49,22 +49,28 @@ pub fn create_client_from_llm_config(
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434/v1".to_string());
 
-            Ok(Box::new(OpenAIClient::with_base_url(
+            Box::new(OpenAIClient::with_base_url(
                 api_key,
                 llm_config.model.clone(),
                 base_url,
                 max_tokens,
-            )))
+            ))
         }
 
-        "gemini" => Ok(Box::new(GeminiClient::new(
+        "gemini" => Box::new(GeminiClient::new(
             api_key,
             llm_config.model.clone(),
             max_tokens,
-        ))),
+        )),
 
         unknown => bail!("Unknown LLM provider: {}", unknown),
-    }
+    };
+
+    Ok(Box::new(RetryClient::new(
+        client,
+        llm_config.network_retries,
+        llm_config.retry_delay,
+    )))
 }
 
 /// Create an LLM client based on configuration
@@ -76,18 +82,18 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
     let api_key = config.get_api_key()?;
     let max_tokens = config.llm.get_max_tokens();
 
-    match config.llm.provider.as_str() {
-        "anthropic" => Ok(Box::new(AnthropicClient::new(
+    let client: Box<dyn LlmClient> = match config.llm.provider.as_str() {
+        "anthropic" => Box::new(AnthropicClient::new(
             api_key,
             config.llm.model.clone(),
             max_tokens,
-        ))),
+        )),
 
-        "openai" => Ok(Box::new(OpenAIClient::new(
+        "openai" => Box::new(OpenAIClient::new(
             api_key,
             config.llm.model.clone(),
             max_tokens,
-        ))),
+        )),
 
         "openai-compatible" => {
             let base_url = config
@@ -96,22 +102,28 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434/v1".to_string());
 
-            Ok(Box::new(OpenAIClient::with_base_url(
+            Box::new(OpenAIClient::with_base_url(
                 api_key,
                 config.llm.model.clone(),
                 base_url,
                 max_tokens,
-            )))
+            ))
         }
 
-        "gemini" => Ok(Box::new(GeminiClient::new(
+        "gemini" => Box::new(GeminiClient::new(
             api_key,
             config.llm.model.clone(),
             max_tokens,
-        ))),
+        )),
 
         unknown => bail!("Unknown LLM provider: {}", unknown),
-    }
+    };
+
+    Ok(Box::new(RetryClient::new(
+        client,
+        config.llm.network_retries,
+        config.llm.retry_delay,
+    )))
 }
 
 #[cfg(test)]
@@ -193,5 +205,96 @@ mod tests {
         if let Err(e) = result {
             assert!(e.to_string().contains("API key not found"));
         }
+    }
+
+    // --- Tests for create_client_from_llm_config ---
+
+    fn make_llm_config(
+        provider: &str,
+        api_key_env: Option<&str>,
+        base_url: Option<&str>,
+    ) -> LlmConfig {
+        LlmConfig {
+            provider: provider.to_string(),
+            model: "test-model".to_string(),
+            api_key_env: api_key_env.map(|s| s.to_string()),
+            base_url: base_url.map(|s| s.to_string()),
+            max_tokens: None,
+            network_retries: 0,
+            retry_delay: 1,
+        }
+    }
+
+    #[test]
+    fn test_create_client_from_llm_config_dry_run() {
+        let config = make_llm_config("anthropic", None, None);
+        let result = create_client_from_llm_config(&config, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_client_from_llm_config_anthropic() {
+        env::set_var("SKILLDO_TEST_FACTORY_LLM_KEY_1", "test_key");
+        let config = make_llm_config("anthropic", Some("SKILLDO_TEST_FACTORY_LLM_KEY_1"), None);
+        let result = create_client_from_llm_config(&config, false);
+        assert!(result.is_ok());
+        env::remove_var("SKILLDO_TEST_FACTORY_LLM_KEY_1");
+    }
+
+    #[test]
+    fn test_create_client_from_llm_config_openai() {
+        env::set_var("SKILLDO_TEST_FACTORY_LLM_KEY_2", "test_key");
+        let config = make_llm_config("openai", Some("SKILLDO_TEST_FACTORY_LLM_KEY_2"), None);
+        let result = create_client_from_llm_config(&config, false);
+        assert!(result.is_ok());
+        env::remove_var("SKILLDO_TEST_FACTORY_LLM_KEY_2");
+    }
+
+    #[test]
+    fn test_create_client_from_llm_config_gemini() {
+        env::set_var("SKILLDO_TEST_FACTORY_LLM_KEY_3", "test_key");
+        let config = make_llm_config("gemini", Some("SKILLDO_TEST_FACTORY_LLM_KEY_3"), None);
+        let result = create_client_from_llm_config(&config, false);
+        assert!(result.is_ok());
+        env::remove_var("SKILLDO_TEST_FACTORY_LLM_KEY_3");
+    }
+
+    #[test]
+    fn test_create_client_from_llm_config_openai_compatible() {
+        let config = make_llm_config("openai-compatible", None, Some("http://localhost:11434/v1"));
+        let result = create_client_from_llm_config(&config, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_client_from_llm_config_unknown_provider() {
+        let config = make_llm_config("unknown_provider", None, None);
+        let result = create_client_from_llm_config(&config, false);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("Unknown LLM provider"));
+        }
+    }
+
+    #[test]
+    fn test_create_client_from_llm_config_no_api_key() {
+        let config = make_llm_config(
+            "anthropic",
+            Some("SKILLDO_TEST_FACTORY_LLM_NONEXISTENT_KEY"),
+            None,
+        );
+        let result = create_client_from_llm_config(&config, false);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("API key not found"));
+        }
+    }
+
+    #[test]
+    fn test_create_client_from_llm_config_api_key_none() {
+        // When api_key_env is "none", the function should not error (unwrap_or_default path)
+        let config = make_llm_config("anthropic", Some("none"), None);
+        let result = create_client_from_llm_config(&config, false);
+        assert!(result.is_ok());
     }
 }

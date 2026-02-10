@@ -119,16 +119,12 @@ impl LanguageExecutor for ContainerExecutor {
         debug!("Created temp directory: {}", temp_dir.path().display());
 
         // Generate a unique container name
-        let container_name = format!(
-            "skilldo-test-{}",
-            temp_dir
-                .path()
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .replace('.', "")
-        );
+        let dir_name = temp_dir
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        let container_name = format!("skilldo-test-{}", dir_name.replace('.', ""));
 
         debug!("Container name: {}", container_name);
 
@@ -354,5 +350,110 @@ mod tests {
         let executor = ContainerExecutor::new(make_config(), "python");
         let script = executor.generate_container_script(&[]).unwrap();
         assert!(script.contains("python test.py"));
+    }
+
+    #[test]
+    fn test_get_image_python() {
+        let executor = ContainerExecutor::new(make_config(), "python");
+        assert_eq!(executor.get_image(), "python:3.11-alpine");
+    }
+
+    #[test]
+    fn test_get_image_javascript() {
+        let executor = ContainerExecutor::new(make_config(), "javascript");
+        assert_eq!(executor.get_image(), "node:18-alpine");
+    }
+
+    #[test]
+    fn test_get_image_typescript() {
+        let executor = ContainerExecutor::new(make_config(), "typescript");
+        assert_eq!(executor.get_image(), "node:18-alpine");
+    }
+
+    #[test]
+    fn test_get_image_rust() {
+        let executor = ContainerExecutor::new(make_config(), "rust");
+        assert_eq!(executor.get_image(), "rust:1.70-alpine");
+    }
+
+    #[test]
+    fn test_get_image_go() {
+        let executor = ContainerExecutor::new(make_config(), "go");
+        assert_eq!(executor.get_image(), "golang:1.20-alpine");
+    }
+
+    #[test]
+    fn test_get_image_unknown_defaults_to_python() {
+        let executor = ContainerExecutor::new(make_config(), "haskell");
+        assert_eq!(executor.get_image(), "python:3.11-alpine");
+    }
+
+    #[test]
+    fn test_javascript_container_script_with_deps() {
+        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let deps = vec!["express".to_string(), "cors".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.contains("npm install --no-save express cors"));
+        assert!(script.contains("node test.js"));
+    }
+
+    #[test]
+    fn test_unknown_language_container_script() {
+        let executor = ContainerExecutor::new(make_config(), "haskell");
+        let script = executor.generate_container_script(&[]).unwrap();
+        // Unknown falls through to python defaults
+        assert!(script.contains("python test.py"));
+    }
+
+    #[test]
+    fn test_cleanup_no_container_name() {
+        let executor = ContainerExecutor::new(make_config(), "python");
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        let result = executor.cleanup(&env);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Container name not set"));
+    }
+
+    #[test]
+    fn test_cleanup_disabled() {
+        let mut config = make_config();
+        config.cleanup = false;
+        let executor = ContainerExecutor::new(config, "python");
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: Some("test-container".to_string()),
+            dependencies: vec![],
+        };
+        // Should return Ok without trying to rm anything
+        assert!(executor.cleanup(&env).is_ok());
+    }
+
+    #[test]
+    fn test_run_code_no_container_name() {
+        let executor = ContainerExecutor::new(make_config(), "python");
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        let result = executor.run_code(&env, "print('hello')");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Container name not set"));
     }
 }

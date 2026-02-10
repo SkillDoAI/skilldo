@@ -1,4 +1,4 @@
-.PHONY: help build test clean install lint audit run-tests coverage release docker
+.PHONY: help build test clean install lint audit run-tests coverage release docker check-deps
 
 # Default target
 help:
@@ -7,13 +7,16 @@ help:
 	@echo "Available targets:"
 	@echo "  build       - Build debug binary"
 	@echo "  release     - Build optimized release binary"
-	@echo "  test        - Run all tests"
+	@echo "  test        - Run all tests (requires uv)"
 	@echo "  test-fast   - Run tests in parallel"
-	@echo "  coverage    - Generate test coverage report"
+	@echo "  coverage    - Generate HTML test coverage report (requires cargo-llvm-cov, uv)"
 	@echo "  lint        - Run clippy linter"
+	@echo "  fmt         - Format code"
+	@echo "  fmt-check   - Check formatting"
 	@echo "  audit       - Check dependencies for known vulnerabilities"
 	@echo "  clean       - Remove build artifacts"
 	@echo "  install     - Install binary to ~/.cargo/bin"
+	@echo "  check-deps  - Verify all development dependencies are installed"
 	@echo "  docker      - Build Docker container"
 	@echo "  run         - Run with example (make run ARGS='generate /path/to/repo')"
 
@@ -27,25 +30,34 @@ release:
 	@echo ""
 	@echo "✅ Binary ready: target/release/skilldo ($(shell ls -lh target/release/skilldo | awk '{print $$5}'))"
 
-# Run all tests
-test:
+# Check that dev dependencies are installed
+check-deps:
+	@echo "Checking development dependencies..."
+	@command -v cargo >/dev/null 2>&1 || { echo "❌ cargo not found (install Rust: https://rustup.rs)"; exit 1; }
+	@command -v uv >/dev/null 2>&1 || { echo "❌ uv not found (install: pip install uv or brew install uv)"; exit 1; }
+	@echo "✅ All dependencies found"
+
+# Run all tests (requires uv for Agent 5 executor tests)
+test: check-deps
 	cargo test --all
 
 # Run tests in parallel (faster)
-test-fast:
+test-fast: check-deps
 	cargo test --all -- --test-threads=8
 
 # Run specific test
 test-one:
 	cargo test $(TEST)
 
-# Generate coverage report (requires cargo-tarpaulin)
-coverage:
-	@if ! command -v cargo-tarpaulin &> /dev/null; then \
-		echo "Installing cargo-tarpaulin..."; \
-		cargo install cargo-tarpaulin; \
+# Generate HTML coverage report (requires cargo-llvm-cov and uv)
+coverage: check-deps
+	@if ! cargo llvm-cov --version >/dev/null 2>&1; then \
+		echo "Installing cargo-llvm-cov..."; \
+		cargo install cargo-llvm-cov; \
 	fi
-	cargo tarpaulin --out Html --output-dir coverage
+	cargo llvm-cov --html
+	@echo ""
+	@echo "✅ Coverage report: target/llvm-cov/html/index.html"
 
 # Run clippy linter
 lint:

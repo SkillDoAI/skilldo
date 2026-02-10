@@ -1,276 +1,298 @@
 ---
+
 name: requests
-description: Synchronous (blocking) HTTP client for sending requests and handling responses.
+description: Synchronous HTTP client for sending HTTP requests and handling responses.
 version: 2.32.5
 ecosystem: python
 license: MIT
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
-Show the standard import patterns. Most common first:
 ```python
 import requests
 from requests import Session
-from requests.auth import AuthBase, HTTPBasicAuth, HTTPDigestAuth
+from requests.auth import HTTPBasicAuth, HTTPDigestAuth, AuthBase
+from requests.exceptions import (
+    RequestException,
+    Timeout,
+    ConnectTimeout,
+    ReadTimeout,
+    ConnectionError,
+    HTTPError,
+    TooManyRedirects,
+    JSONDecodeError,
+)
 ```
 
 ## Core Patterns
 
-The right way to use the main APIs. Show 3-5 most common patterns.
-
-### Basic GET with query params ✅ Current
+### GET with query params + status checking ✅ Current
 ```python
+from __future__ import annotations
+
 import requests
 
-def fetch_users(base_url: str, page: int) -> dict:
-    # Prefer params= over manual query string building
-    # Use an endpoint that exists on common test servers like httpbin
-    r = requests.get(f"{base_url}/get", params={"page": page})
-    r.raise_for_status()  # HTTP success is separate from JSON parsing
+
+def fetch_repo(owner: str, repo: str) -> dict:
+    url = "https://api.github.com/repos/{owner}/{repo}".format(owner=owner, repo=repo)
+    r = requests.get(url, params={"per_page": 1}, timeout=10)
+    r.raise_for_status()
     return r.json()
-```
-* Uses `requests.get(..., params=...)` and validates HTTP success via `Response.raise_for_status()`.
-* **Status**: Current, stable
 
-### POST JSON and read response ✅ Current
+
+if __name__ == "__main__":
+    data = fetch_repo("psf", "requests")
+    print(data["full_name"])
+```
+* Use `params=` for query strings; call `Response.raise_for_status()` before trusting the body.
+
+### POST JSON body ✅ Current
 ```python
+from __future__ import annotations
+
 import requests
 
-def create_user(base_url: str, name: str) -> dict:
-    # Use a known JSON-echo endpoint (e.g., httpbin /post) for examples/tests
+
+def create_widget(api_base: str, token: str, name: str) -> dict:
+    url = f"{api_base}/widgets"
+    headers = {"Authorization": f"Bearer {token}"}
+
     r = requests.post(
-        f"{base_url}/post",
+        url,
         json={"name": name},
-        headers={"Accept": "application/json"},
+        headers=headers,
+        timeout=10,
     )
     r.raise_for_status()
     return r.json()
-```
-* Uses `requests.post(..., json=...)` to send JSON and `Response.json()` to parse.
-* **Status**: Current, stable
 
-### Session for connection reuse + disable environment trust ✅ Current
+
+if __name__ == "__main__":
+    # Example only; requires a real API server.
+    print("Define api_base/token to run against a real service.")
+```
+* Prefer `json=` for JSON request bodies (sets JSON encoding; also sets an appropriate `Content-Type`).
+
+### Reuse connections with Session ✅ Current
 ```python
+from __future__ import annotations
+
 import requests
 
-def fetch_private_resource(url: str, username: str, password: str) -> str:
-    s = requests.Session()
-    # Disable environment-derived config (.netrc, proxies, etc.) when you need predictable behavior
-    s.trust_env = False
 
-    r = s.get(url, auth=(username, password))
-    r.raise_for_status()
-    return r.text
+def fetch_many(urls: list[str]) -> list[tuple[str, int]]:
+    results: list[tuple[str, int]] = []
+    with requests.Session() as s:
+        s.headers.update({"User-Agent": "example-client/1.0"})
+        for url in urls:
+            r = s.get(url, timeout=10)
+            results.append((r.url, r.status_code))
+    return results
+
+
+if __name__ == "__main__":
+    out = fetch_many(["https://httpbin.org/get", "https://example.com/"])
+    print(out)
 ```
-* Uses `requests.Session()` for persistent settings and connection reuse; controls `Session.trust_env`.
-* **Status**: Current, stable
+* Use `requests.Session()` (or `requests.session()`) for connection pooling and shared headers/cookies.
 
-### Streaming download to file ✅ Current
+### Streaming download to disk ✅ Current
 ```python
+from __future__ import annotations
+
 import requests
 
-def download_file(url: str, filename: str) -> None:
-    # stream=True is required for safe incremental reading and for using Response.raw as intended
-    r = requests.get(url, stream=True)
-    r.raise_for_status()
 
-    with open(filename, "wb") as f:
-        for chunk in r.iter_content(chunk_size=128):
-            if chunk:  # filter out keep-alive chunks
-                f.write(chunk)
+def download_file(url: str, path: str) -> None:
+    with requests.get(url, stream=True, timeout=30) as r:
+        r.raise_for_status()
+        with open(path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024 * 128):
+                if chunk:  # filter out keep-alive chunks
+                    f.write(chunk)
+
+
+if __name__ == "__main__":
+    download_file("https://httpbin.org/bytes/1024", "out.bin")
+    print("Wrote out.bin")
 ```
-* Uses `stream=True` and `Response.iter_content()` to avoid loading large responses into memory.
-* **Status**: Current, stable
+* For large responses, use `stream=True` and `Response.iter_content()`; write to a binary file.
 
-### Custom authentication via AuthBase ✅ Current
+### Auth: Basic/Digest/custom AuthBase ✅ Current
 ```python
-import requests
-from requests.auth import AuthBase
+from __future__ import annotations
 
-class TokenAuth(AuthBase):
+import requests
+from requests.auth import AuthBase, HTTPBasicAuth, HTTPDigestAuth
+
+
+class BearerAuth(AuthBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
     def __call__(self, r: requests.PreparedRequest) -> requests.PreparedRequest:
-        # Mutate the outgoing request
         r.headers["Authorization"] = f"Bearer {self._token}"
         return r
 
-def get_with_token(url: str, token: str) -> int:
-    r = requests.get(url, auth=TokenAuth(token))
-    return r.status_code
+
+def demo_auth() -> None:
+    # Basic auth (tuple shorthand also works: auth=("user", "pass"))
+    r1 = requests.get("https://httpbin.org/basic-auth/user/pass", auth=HTTPBasicAuth("user", "pass"), timeout=10)
+    print(r1.status_code)
+
+    # Digest auth
+    r2 = requests.get("https://httpbin.org/digest-auth/auth/user/pass", auth=HTTPDigestAuth("user", "pass"), timeout=10)
+    print(r2.status_code)
+
+    # Custom auth
+    r3 = requests.get("https://httpbin.org/bearer", auth=BearerAuth("secret-token"), timeout=10)
+    print(r3.status_code)
+
+
+if __name__ == "__main__":
+    demo_auth()
 ```
-* Subclasses `requests.auth.AuthBase` and implements `__call__` to attach auth to requests.
-* **Status**: Current, stable
+* Use `auth=("user","pass")` or `HTTPBasicAuth` for Basic; `HTTPDigestAuth` for Digest; subclass `AuthBase` for custom schemes.
 
 ## Configuration
 
-Standard configuration and setup:
-- Default values
-  - TLS verification is enabled by default (`verify=True` unless explicitly set otherwise).
-  - Requests is synchronous/blocking (no `async` / `await`).
-- Common customizations
-  - Authentication:
-    - Basic: `auth=("user", "pass")` or `requests.auth.HTTPBasicAuth("user","pass")`
-    - Digest: `requests.auth.HTTPDigestAuth("user","pass")`
-  - Response decoding:
-    - `Response.text` uses guessed encoding; override with `Response.encoding = "..."` if you know better.
-  - Sessions:
-    - Use `requests.Session()` for connection reuse and shared settings.
-    - Control environment-derived behavior with `Session.trust_env` (set to `False` to disable).
-- Environment variables
-  - Requests may consult environment-derived configuration when `Session.trust_env` is `True` (default). If this causes surprises (e.g., `.netrc`), set `trust_env=False` on a `Session`.
+- **Timeouts**: No default timeout; always pass `timeout=` (float seconds or `(connect, read)` tuple) to avoid hanging indefinitely.
+- **Redirects**: Followed by default for GET/OPTIONS; can control with `allow_redirects=` (e.g., `requests.get(..., allow_redirects=False)`).
+- **TLS verification**: Verified by default (`verify=True`). Override per request with `verify=False` (discouraged) or `verify="/path/to/ca-bundle.pem"`.
+- **Proxies**: Configure via `proxies=` dict or environment variables (e.g., `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`) when `Session.trust_env` is `True`.
+- **Environment / netrc**: By default, Requests may consult environment and `.netrc` for credentials when `auth=` is not provided. Disable by setting `Session.trust_env = False`.
+- **Response encoding**: Requests infers encoding from headers; set `Response.encoding` manually only when you know the correct encoding before accessing `Response.text`.
 
 ## Pitfalls
 
-### Wrong: Assume JSON parse means request succeeded
+### Wrong: assuming JSON decoding implies HTTP success
 ```python
+from __future__ import annotations
+
 import requests
 
-def load_data(url: str) -> dict:
-    r = requests.get(url)
-    return r.json()  # may parse even when HTTP status is 4xx/5xx
+r = requests.get("https://httpbin.org/status/500", timeout=10)
+data = r.json()  # may succeed/fail independently of HTTP status
+print(data)
 ```
 
-### Right: Check HTTP success separately (raise_for_status)
+### Right: check HTTP status first
 ```python
+from __future__ import annotations
+
 import requests
 
-def load_data(url: str) -> dict:
-    r = requests.get(url)
+r = requests.get("https://httpbin.org/status/500", timeout=10)
+r.raise_for_status()
+print(r.json())
+```
+
+### Wrong: calling Response.json() on empty/invalid JSON (e.g., 204)
+```python
+from __future__ import annotations
+
+import requests
+
+r = requests.get("https://httpbin.org/status/204", timeout=10)
+print(r.json())  # raises requests.exceptions.JSONDecodeError
+```
+
+### Right: handle 204 and JSONDecodeError explicitly
+```python
+from __future__ import annotations
+
+import requests
+from requests.exceptions import JSONDecodeError
+
+r = requests.get("https://httpbin.org/status/204", timeout=10)
+
+if r.status_code == 204:
+    print(None)
+else:
+    try:
+        print(r.json())
+    except JSONDecodeError:
+        print(None)
+```
+
+### Wrong: using Response.raw without stream=True
+```python
+from __future__ import annotations
+
+import requests
+
+r = requests.get("https://httpbin.org/bytes/10", timeout=10)
+raw_bytes = r.raw.read()  # not the intended pattern without stream=True
+print(raw_bytes)
+```
+
+### Right: stream=True and iter_content()
+```python
+from __future__ import annotations
+
+import requests
+
+with requests.get("https://httpbin.org/bytes/10", stream=True, timeout=10) as r:
     r.raise_for_status()
-    return r.json()
+    data = b"".join(r.iter_content(chunk_size=4))
+    print(data)
 ```
 
-### Wrong: Manually build query strings
+### Wrong: unexpected credential sending via netrc/env when auth= is not set
 ```python
+from __future__ import annotations
+
 import requests
 
-def search(base_url: str) -> str:
-    url = f"{base_url}/search?q=a+b&lang=en"  # error-prone encoding/escaping
-    r = requests.get(url)
-    return r.text
+s = requests.Session()
+# May consult environment (.netrc, proxy env vars, etc.) by default:
+r = s.get("https://example.com/private", timeout=10)
+print(r.status_code)
 ```
 
-### Right: Use params= for correct encoding
+### Right: disable environment-based behavior when you must control auth explicitly
 ```python
+from __future__ import annotations
+
 import requests
 
-def search(base_url: str) -> str:
-    r = requests.get(f"{base_url}/search", params={"q": "a+b", "lang": "en"})
-    r.raise_for_status()
-    return r.text
-```
-
-### Wrong: Read Response.raw without stream=True
-```python
-import requests
-
-def peek(url: str) -> bytes:
-    r = requests.get(url)
-    return r.raw.read(1024)  # raw is intended for streaming usage
-```
-
-### Right: Stream and use iter_content (or raw with stream=True)
-```python
-import requests
-
-def peek(url: str) -> bytes:
-    r = requests.get(url, stream=True)
-    r.raise_for_status()
-    for chunk in r.iter_content(chunk_size=1024):
-        return chunk
-    return b""
-```
-
-### Wrong: Unexpected credentials/config from environment (.netrc, proxies)
-```python
-import requests
-
-def fetch(url: str) -> int:
-    # May consult environment-derived sources if auth isn't provided
-    r = requests.get(url)
-    return r.status_code
-```
-
-### Right: Use a Session and disable trust_env when needed
-```python
-import requests
-
-def fetch(url: str) -> int:
-    s = requests.Session()
-    s.trust_env = False
-    r = s.get(url)
-    return r.status_code
-```
-
-### Wrong: Assume Response.text decoding is always correct
-```python
-import requests
-
-def get_page(url: str) -> str:
-    r = requests.get(url)
-    return r.text  # encoding guess may be wrong for some HTML/XML
-```
-
-### Right: Override Response.encoding when you know the correct encoding
-```python
-import requests
-
-def get_page(url: str) -> str:
-    r = requests.get(url)
-    # If you determine encoding from bytes (custom logic), set it explicitly
-    r.encoding = "ISO-8859-1"
-    return r.text
+s = requests.Session()
+s.trust_env = False
+r = s.get("https://example.com/private", timeout=10)
+print(r.status_code)
 ```
 
 ## References
 
-CRITICAL: Include ALL provided URLs below (do NOT skip this section):
-
 - [Documentation](https://requests.readthedocs.io)
 - [Source](https://github.com/psf/requests)
 
-## Migration from v2.32.4
+## Migration from v2.31.x
 
-What changed in this version (if applicable):
-- Breaking changes / behavior changes
-  - **SSLContext caching reverted**: 2.32.5 reverts an SSLContext caching feature introduced in 2.32.0 because it caused issues. Re-test performance/behavior if you noticed differences in 2.32.0–2.32.4; do not depend on caching behavior.
-  - **Python support**: 2.32.5 drops Python 3.8 support (and adds Python 3.14). Run on Python 3.9+ (project README may state 3.10+ as officially supported).
-- Deprecated → Current mapping
-  - No user-facing deprecations in the provided API list.
-- Before/after code examples
-  - No code changes required specifically for 2.32.5 based on provided notes; verify runtime and re-test TLS/performance-sensitive paths.
-
-Additional notes from 2.32.x line (relevant when upgrading from older versions):
-- **TLS verification carry-over fixed (2.32.0)**: do not rely on a prior `verify=False` request affecting later requests; pass `verify=` explicitly per request if needed.
-- **Character detection optionality (2.32.0)**: if `chardet`/`charset_normalizer` aren’t present, `Response.text` may default to UTF-8; set `Response.encoding` explicitly if required.
-- **.netrc/trust_env security fix (2.32.4)**: consider `Session.trust_env=False` in high-risk environments.
+- **Python support**: Requests 2.32.5 drops Python 3.8 support. If you must run on 3.8, pin `<2.32.5` temporarily and upgrade Python.
+- **TLS/adapter changes (2.32.0–2.32.2)**: If you maintain a custom `HTTPAdapter`, Requests introduced a new public method for connection acquisition with TLS context (`get_connection_with_tls_context`) and considers `get_connection` deprecated in Requests >=2.32.0. Update adapter overrides accordingly.
+- **TLS behavior (2.32.5)**: SSLContext caching introduced in 2.32.0 was reverted in 2.32.5; retest performance and any assumptions about TLS context reuse.
+- **Security (2.31.0)**: If you use proxy URLs with credentials, ensure you are on `>=2.31.0` to avoid potential `Proxy-Authorization` leakage on HTTPS redirects; rotate proxy credentials after upgrading.
 
 ## API Reference
 
-Brief reference of the most important public APIs:
-
-- **requests.get(url, params=..., headers=..., auth=..., stream=...)** - Send an HTTP GET request.
-- **requests.post(url, json=..., data=..., headers=..., auth=..., stream=...)** - Send an HTTP POST request.
-- **requests.put(url, json=..., data=..., headers=..., auth=..., stream=...)** - Send an HTTP PUT request.
-- **requests.delete(url, headers=..., auth=..., stream=...)** - Send an HTTP DELETE request.
-- **requests.head(url, headers=..., auth=...)** - Send an HTTP HEAD request (no response body expected).
-- **requests.options(url, headers=..., auth=...)** - Send an HTTP OPTIONS request.
-- **requests.Session()** - Create a session for connection reuse and shared configuration.
-- **Session.get(url, ...)** - Session-bound GET (same parameters as top-level helpers).
-- **Session.trust_env** - Boolean controlling whether environment-derived configuration (e.g., `.netrc`) is used.
-- **requests.Response** - Response object returned by requests.
-- **Response.status_code** - Integer HTTP status code.
-- **Response.headers** - Mapping of response headers.
-- **Response.encoding** - Text encoding used for `Response.text` decoding (can be overridden).
-- **Response.text** - Response body decoded to `str` using `Response.encoding`.
-- **Response.content** - Response body as `bytes`.
-- **Response.json()** - Parse response body as JSON (does not imply HTTP success).
-- **Response.raise_for_status()** - Raise an exception on 4xx/5xx responses.
-- **Response.raw** - Underlying urllib3 response; intended to be used with `stream=True`.
-- **Response.iter_content(chunk_size=...)** - Iterate response body in chunks (useful for streaming downloads).
-- **requests.auth.AuthBase** - Base class for custom authentication; implement `__call__(self, r)`.
-- **requests.auth.HTTPBasicAuth(user, pass)** - Basic Auth helper.
-- **requests.auth.HTTPDigestAuth(user, pass)** - Digest Auth helper.
+- **requests.get(url, params=None, \*\*kwargs)** - Send a GET request; common kwargs: `headers`, `timeout`, `auth`, `cookies`, `allow_redirects`, `proxies`, `verify`, `cert`, `stream`.
+- **requests.post(url, data=None, json=None, \*\*kwargs)** - Send a POST request; prefer `json=` for JSON bodies.
+- **requests.put(url, data=None, \*\*kwargs)** - Send a PUT request.
+- **requests.patch(url, data=None, \*\*kwargs)** - Send a PATCH request.
+- **requests.delete(url, \*\*kwargs)** - Send a DELETE request.
+- **requests.head(url, \*\*kwargs)** - Send a HEAD request (often with `allow_redirects=`).
+- **requests.options(url, \*\*kwargs)** - Send an OPTIONS request.
+- **requests.request(method, url, \*\*kwargs)** - Generic request entry point for custom/variable methods.
+- **requests.Session()** - Persistent session with connection pooling; use `.get()/.post()` etc.; configure `headers`, `cookies`, `proxies`, `verify`, `trust_env`.
+- **requests.session()** - Convenience constructor returning a `requests.Session`.
+- **requests.Response** - Response object; key attributes/methods: `.status_code`, `.headers`, `.url`, `.text`, `.content`, `.encoding`, `.json()`, `.raise_for_status()`, `.iter_content()`, `.raw` (with `stream=True`).
+- **requests.RequestException** - Base exception for Requests errors.
+- **requests.Timeout / requests.ConnectTimeout / requests.ReadTimeout** - Timeout exceptions; use `timeout=` to control.
+- **requests.ConnectionError** - Network-level failure.
+- **requests.HTTPError** - Raised by `Response.raise_for_status()` on 4xx/5xx.
+- **requests.TooManyRedirects** - Raised when redirect limit is exceeded.
+- **requests.exceptions.JSONDecodeError** - Raised by `Response.json()` on invalid/empty JSON.
+- **requests.codes** - Status code lookup (e.g., `requests.codes.ok`).

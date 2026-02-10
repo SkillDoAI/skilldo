@@ -20,7 +20,7 @@ fn create_frontmatter(
         .unwrap_or_default();
 
     format!(
-        "---\nname: {}\nversion: {}\necosystem: {}\n{}{}\n---\n\n",
+        "---\nname: {}\ndescription: {ecosystem} library\nversion: {}\necosystem: {}\n{}{}\n---\n\n",
         package_name, version, ecosystem, license_field, generated_field
     )
 }
@@ -38,12 +38,14 @@ pub fn ensure_frontmatter(
 
     // If frontmatter exists but has wrong format, replace it
     if let Some(after_start) = trimmed.strip_prefix("---") {
-        // Check if it has required fields
+        // Check if it has all required fields (must match linter's required list)
+        let has_name = trimmed.contains("name:");
+        let has_description = trimmed.contains("description:");
         let has_version = trimmed.contains("version:");
         let has_ecosystem = trimmed.contains("ecosystem:");
 
-        // If missing critical fields, replace the frontmatter
-        if !has_version || !has_ecosystem {
+        // If missing any required field, replace the frontmatter
+        if !has_name || !has_description || !has_version || !has_ecosystem {
             warn!("Frontmatter has wrong format - replacing it");
 
             // Find end of existing frontmatter
@@ -56,7 +58,19 @@ pub fn ensure_frontmatter(
                 );
             }
         } else {
-            // Has correct fields, keep it
+            // Has correct fields — inject generated_with if missing
+            if let Some(model) = generated_with {
+                if !trimmed.contains("generated_with:") {
+                    if let Some(end_pos) = after_start.find("---") {
+                        let frontmatter = &after_start[..end_pos].trim_end();
+                        let content_after = &after_start[end_pos + 3..];
+                        return format!(
+                            "---\n{}\ngenerated_with: {}\n---{}",
+                            frontmatter, model, content_after
+                        );
+                    }
+                }
+            }
             return content.to_string();
         }
     }
@@ -143,10 +157,10 @@ mod tests {
 
     #[test]
     fn test_keep_existing_frontmatter() {
-        let content = "---\nname: torch\nversion: 2.0.0\necosystem: python\n---\n\n## Imports";
+        let content = "---\nname: torch\ndescription: python library\nversion: 2.0.0\necosystem: python\n---\n\n## Imports";
         let result = ensure_frontmatter(content, "torch", "2.0.0", "python", None, None);
 
-        // Should not duplicate frontmatter (has required fields)
+        // Should not duplicate frontmatter (has all required fields)
         assert_eq!(result, content);
     }
 

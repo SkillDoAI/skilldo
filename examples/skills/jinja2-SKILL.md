@@ -1,117 +1,161 @@
 ---
+
 name: jinja2
-description: Template engine for generating text (commonly HTML) from templates and Python data.
+description: A Python templating engine for rendering text (often HTML) from templates and context data.
 version: 3.2.0
 ecosystem: python
 license: BSD-3-Clause
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
 ```python
-from importlib.metadata import version
-
+import jinja2
 from jinja2 import (
     Environment,
-    FileSystemBytecodeCache,
     FileSystemLoader,
     PackageLoader,
+    Template,
     Undefined,
     pass_context,
     pass_environment,
     pass_eval_context,
 )
-from jinja2.filters import attr, int as jinja_int, select, unique, urlize, xmlattr
-from markupsafe import Markup, escape
+from jinja2.ext import AutoEscapeExtension, WithExtension
+from jinja2.filters import attr, int, select, unique, urlize, xmlattr
+from importlib.metadata import version
 ```
 
 ## Core Patterns
 
-### Create an Environment with a loader ✅ Current
+### Create an Environment with a loader and render a template ✅ Current
 ```python
 from __future__ import annotations
 
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, Undefined
-
-
-def build_env(template_dir: str | Path = "templates") -> Environment:
-    # Put templates under ./templates (common convention)
-    loader = FileSystemLoader(str(template_dir))
-
-    env = Environment(
-        loader=loader,
-        autoescape=True,          # enable escaping for HTML-ish output
-        undefined=Undefined,      # default: renders as empty string when undefined
-        trim_blocks=True,         # optional whitespace control
-        lstrip_blocks=True,       # optional whitespace control
-    )
-    return env
-
-
-if __name__ == "__main__":
-    env = build_env()
-    template = env.from_string("Hello {{ user }}!")
-    print(template.render(user="Ada"))
-```
-* Creates a reusable `jinja2.Environment` that loads templates from disk.
-* **Status**: Current, stable
-
-### Overlay an Environment for per-request overrides ✅ Current
-```python
-from __future__ import annotations
-
 from jinja2 import Environment, FileSystemLoader
 
 
-def make_base_env() -> Environment:
-    return Environment(loader=FileSystemLoader("templates"), autoescape=True)
+def main() -> None:
+    templates_dir = Path("templates")
+    templates_dir.mkdir(parents=True, exist_ok=True)
 
-
-def render_with_request_overrides(env: Environment, *, debug: bool) -> str:
-    # overlay() copies the environment with selected overrides
-    request_env = env.overlay(
-        autoescape=True,
-        trim_blocks=not debug,
-        lstrip_blocks=not debug,
+    # Ensure the file ends with exactly one trailing newline.
+    (templates_dir / "hello.txt.jinja").write_text(
+        "Hello {{ name }}!\nItems: {{ items|join(', ') }}\n",
+        encoding="utf-8",
+        newline="\n",
     )
-    template = request_env.from_string("{% if debug %}DEBUG{% else %}OK{% endif %}")
-    return template.render(debug=debug)
+
+    env = Environment(
+        loader=FileSystemLoader(str(templates_dir)),
+        autoescape=False,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        keep_trailing_newline=True,  # preserve the final "\n" from the template source
+    )
+
+    template = env.get_template("hello.txt.jinja")
+    out = template.render(name="Ada", items=["a", "b", "c"])
+
+    # Print without adding an extra newline (the template already ends with one).
+    print(out, end="")
 
 
 if __name__ == "__main__":
-    base = make_base_env()
-    print(render_with_request_overrides(base, debug=True))
-    print(render_with_request_overrides(base, debug=False))
+    main()
 ```
-* Uses `Environment.overlay` to avoid mutating global configuration while customizing behavior.
-* **Status**: Current, stable
+* Use `Environment(loader=...)` + `env.get_template(name)` for file-based templates.
+* `trim_blocks` and `lstrip_blocks` are common whitespace controls for text/HTML output.
 
-### Async template rendering (avoid sync render in an active event loop) ✅ Current
+### Render from an in-memory Template ✅ Current
 ```python
 from __future__ import annotations
 
-import asyncio
 from jinja2 import Environment
 
 
-async def main() -> None:
-    env = Environment(enable_async=True, autoescape=True)
+def main() -> None:
+    # Use an Environment so rendering behavior (like trailing newlines) is explicit.
+    env = Environment(keep_trailing_newline=True)
+    template = env.from_string("2 + 2 = {{ 2 + 2 }}\n")
 
-    template = env.from_string("Hello {{ user }}!")
-    # In async contexts, use the async API.
-    html = await template.render_async(user="Ada")
-    print(html)
+    out = template.render()
+    print(out, end="")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
 ```
-* Renders an async-enabled template using `Template.render_async` (preferred in async apps).
-* **Status**: Current, stable
+* Use `Template(source)` for short, in-memory templates (no loader required).
+* Prefer `Environment.from_string(...)` when you need consistent environment configuration.
 
-### Stream output from an async generator ✅ Current
+### Add custom filters using pass_* decorators ✅ Current
+```python
+from __future__ import annotations
+
+from typing import Any
+
+from jinja2 import Environment, pass_context
+
+
+@pass_context
+def is_defined(ctx: Any, name: str) -> bool:
+    # ctx is a jinja2.runtime.Context at runtime; treat as Any for stable typing here.
+    return ctx.resolve_or_missing(name) is not ctx.environment.undefined
+
+
+def main() -> None:
+    env = Environment()
+    env.filters["is_defined"] = is_defined
+
+    template = env.from_string(
+        "{% if 'x'|is_defined %}x is defined{% else %}x is missing{% endif %}\n"
+    )
+    print(template.render(x=123))
+    print(template.render())
+
+
+if __name__ == "__main__":
+    main()
+```
+* Use `@pass_context`, `@pass_environment`, `@pass_eval_context` instead of removed legacy decorators.
+* `Context.resolve_or_missing(name)` is the supported way to check for missing variables.
+
+### Overlay an Environment for per-request configuration ✅ Current
+```python
+from __future__ import annotations
+
+from jinja2 import Environment
+
+
+def main() -> None:
+    base_env = Environment(autoescape=False, keep_trailing_newline=True)
+    html_env = base_env.overlay(autoescape=True)
+
+    # Use a variable so the template behavior is explicit and easy to test.
+    t = "{{ value }}\n"
+    out_base = base_env.from_string(t).render(value="<b>x</b>")
+    out_html = html_env.from_string(t).render(value="<b>x</b>")
+
+    # base_env does not autoescape; html_env does.
+    assert out_base == "<b>x</b>\n"
+    assert out_html == "&lt;b&gt;x&lt;/b&gt;\n"
+
+    # Print without adding extra newlines; each render already ends with "\n".
+    print(out_base, end="")
+    print(out_html, end="")
+
+
+if __name__ == "__main__":
+    main()
+```
+* `Environment.overlay(...)` creates a derived environment that shares caches but can override options.
+* Useful for toggling `autoescape`, adding request-specific globals/filters, etc.
+
+### Async template generation with generate_async ✅ Current
 ```python
 from __future__ import annotations
 
@@ -122,199 +166,196 @@ from jinja2 import Environment
 
 
 async def main() -> None:
-    env = Environment(enable_async=True, autoescape=True)
-    template = env.from_string("{% for x in xs %}{{ x }} {% endfor %}")
+    env = Environment(enable_async=True)
+    template = env.from_string("Hello {{ name }}!\n")
 
-    parts: List[str] = []
-    async for chunk in template.generate_async(xs=[1, 2, 3]):
-        parts.append(chunk)
+    chunks: List[str] = []
+    async for piece in template.generate_async(name="Async"):
+        chunks.append(piece)
 
-    print("".join(parts).strip())
+    print("".join(chunks), end="")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
-* Uses `Template.generate_async` to stream output (useful for large renders).
-* **Status**: Current, stable
-
-### Bytecode cache for faster template compilation ✅ Current
-```python
-from __future__ import annotations
-
-from jinja2 import Environment, FileSystemBytecodeCache, FileSystemLoader
-
-
-def build_cached_env() -> Environment:
-    cache = FileSystemBytecodeCache(directory=".jinja2_bytecode_cache")
-    env = Environment(
-        loader=FileSystemLoader("templates"),
-        autoescape=True,
-        bytecode_cache=cache,
-    )
-    return env
-
-
-if __name__ == "__main__":
-    env = build_cached_env()
-    template = env.from_string("Cached: {{ n }}")
-    print(template.render(n=1))
-```
-* Uses `FileSystemBytecodeCache` to store compiled template bytecode on disk.
-* **Status**: Current, stable
-
-### Read installed version (avoid deprecated __version__) ⚠️ Soft Deprecation
-```python
-from __future__ import annotations
-
-from importlib.metadata import version
-
-
-def jinja_version() -> str:
-    # Prefer feature detection over version checks when possible.
-    return version("jinja2")
-
-
-if __name__ == "__main__":
-    print(jinja_version())
-```
-* Uses `importlib.metadata.version('jinja2')` when you truly need the installed version.
-* **Deprecated since**: v3.2.0 (for `jinja2.__version__`, not for `importlib.metadata.version`)
-* **Still works**: Yes, safe to use in existing code
-* **Guidance**: Still works fine. Don't rewrite existing code - only use current API for new projects.
-* **Modern alternative**: Prefer feature detection (e.g., `hasattr(Environment, "overlay")`) instead of version checks.
+* When `enable_async=True`, use async-aware APIs like `Template.generate_async(...)`.
+* Consume the async generator fully (or ensure it’s properly closed) to avoid resource leaks.
 
 ## Configuration
 
-- **Template loaders**
-  - `FileSystemLoader("templates")` for file-based templates.
-  - `PackageLoader("your_package", "templates")` for templates shipped inside a Python package.
-- **Autoescaping**
-  - Set `Environment(autoescape=True)` to escape variables by default (typical for HTML output).
-  - If your project uses extension-based autoescape rules, keep consistent naming (e.g. `user.html.jinja`) so tooling and configuration align.
+- **Template loading**
+  - `FileSystemLoader("templates")` for filesystem templates (common project convention: `templates/` directory).
+  - `PackageLoader("your_pkg", "templates")` for templates shipped inside a Python package.
 - **Whitespace control**
-  - `trim_blocks=True` and `lstrip_blocks=True` reduce extra whitespace.
-  - In templates, use `{%- ... -%}` to strip whitespace around a specific tag.
-  - Use `+` modifiers per-block to disable trimming behavior when enabled globally.
-- **Undefined handling**
-  - `undefined=Undefined` is the default behavior (undefined renders as empty string in many contexts).
-  - Consider stricter undefined behavior in applications that want failures for missing variables (configure via `Environment(undefined=...)`).
+  - `Environment(trim_blocks=True, lstrip_blocks=True)` for cleaner output.
+  - In templates, use `{%- ... -%}` to strip adjacent whitespace; `+` can disable configured stripping for a specific tag.
+- **Autoescaping**
+  - Configure via `Environment(autoescape=...)` or use `jinja2.ext.AutoEscapeExtension` where appropriate.
 - **Bytecode caching**
-  - Use `bytecode_cache=FileSystemBytecodeCache(...)` to speed repeated startup/compilation.
+  - `FileSystemBytecodeCache(directory="...")` can speed up template compilation in some deployments.
+- **Undefined handling**
+  - `Environment(undefined=Undefined)` (default) produces `Undefined` objects; configure a different undefined type if you need stricter behavior.
 - **Line statements/comments**
-  - If enabling, configure `Environment(line_statement_prefix=..., line_comment_prefix=...)` (keep default delimiters unless required).
+  - If using line statements/comments, set `line_statement_prefix` / `line_comment_prefix` on `Environment`.
 
 ## Pitfalls
 
-### Wrong: Using `{{ ... }}` inside control tags
+### Wrong: Content before `{% extends %}` renders unexpectedly
 ```python
-from jinja2 import Environment
+from __future__ import annotations
 
-env = Environment()
-template = env.from_string("{% if {{ user }} %}Hello{% endif %}")
-print(template.render(user=True))
-```
-
-### Right: Use variables directly in `{% ... %}` tags
-```python
-from jinja2 import Environment
-
-env = Environment()
-template = env.from_string("{% if user %}Hello{% endif %}")
-print(template.render(user=True))
-```
-
-### Wrong: Invalid whitespace control syntax (spaces around `-`)
-```python
-from jinja2 import Environment
-
-env = Environment()
-template = env.from_string("{% - if foo - %}X{% endif %}")
-print(template.render(foo=True))
-```
-
-### Right: `-` must be adjacent to delimiters
-```python
-from jinja2 import Environment
-
-env = Environment()
-template = env.from_string("{%- if foo -%}X{%- endif -%}")
-print(template.render(foo=True))
-```
-
-### Wrong: `extends` not first tag (unexpected output before inheritance)
-```python
 from jinja2 import Environment, DictLoader
 
-env = Environment(loader=DictLoader({
-    "base.html": "BASE:{% block content %}{% endblock %}",
-    "child.html": "BEFORE{% extends 'base.html' %}{% block content %}C{% endblock %}",
-}))
-print(env.get_template("child.html").render())
+
+def main() -> None:
+    env = Environment(loader=DictLoader({
+        "base.html": "<body>{% block content %}BASE{% endblock %}</body>",
+        "child.html": "Hello!\n{% extends 'base.html' %}{% block content %}CHILD{% endblock %}",
+    }))
+    print(env.get_template("child.html").render())
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Right: Put `{% extends ... %}` first
+### Right: Keep `{% extends %}` as the first tag
 ```python
+from __future__ import annotations
+
 from jinja2 import Environment, DictLoader
 
-env = Environment(loader=DictLoader({
-    "base.html": "BASE:{% block content %}{% endblock %}",
-    "child.html": "{% extends 'base.html' %}{% block content %}C{% endblock %}",
-}))
-print(env.get_template("child.html").render())
+
+def main() -> None:
+    env = Environment(loader=DictLoader({
+        "base.html": "<body>{% block content %}BASE{% endblock %}</body>",
+        "child.html": "{% extends 'base.html' %}{% block content %}CHILD{% endblock %}",
+    }))
+    print(env.get_template("child.html").render())
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Wrong: Block inside a loop without `scoped` (loop variable not visible in block)
+### Wrong: Block inside a loop can’t see loop variables (missing `scoped`)
 ```python
+from __future__ import annotations
+
 from jinja2 import Environment
 
-env = Environment()
-template = env.from_string(
-    "{% for item in seq %}"
-    "{% block loop_item %}{{ item }}{% endblock %}"
-    "{% endfor %}"
-)
-print(template.render(seq=[1, 2, 3]))
+
+def main() -> None:
+    env = Environment()
+    template = env.from_string(
+        "{% for item in seq %}"
+        "<li>{% block loop_item %}{{ item }}{% endblock %}</li>"
+        "{% endfor %}\n"
+    )
+    print(template.render(seq=[1, 2]))
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Right: Mark the block `scoped` to access outer variables
+### Right: Mark the block `scoped` to access loop variables
 ```python
+from __future__ import annotations
+
 from jinja2 import Environment
 
-env = Environment()
-template = env.from_string(
-    "{% for item in seq %}"
-    "{% block loop_item scoped %}{{ item }}{% endblock %}"
-    "{% endfor %}"
-)
-print(template.render(seq=[1, 2, 3]))
+
+def main() -> None:
+    env = Environment()
+    template = env.from_string(
+        "{% for item in seq %}"
+        "<li>{% block loop_item scoped %}{{ item }}{% endblock %}</li>"
+        "{% endfor %}\n"
+    )
+    print(template.render(seq=[1, 2]))
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Wrong: Calling sync render for async templates from an async context
+### Wrong: Invalid whitespace control syntax (`-` must touch the delimiters)
 ```python
-import asyncio
+from __future__ import annotations
+
 from jinja2 import Environment
 
-async def handler() -> None:
-    env = Environment(enable_async=True)
-    template = env.from_string("{{ x }}")
-    # In an active event loop this can fail because sync render may call asyncio.run().
-    print(template.render(x=1))
 
-asyncio.run(handler())
+def main() -> None:
+    env = Environment()
+    # This template will raise a TemplateSyntaxError due to "{% - if foo - %}".
+    template = env.from_string("{% - if foo - %}X{% endif %}\n")
+    print(template.render(foo=True))
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Right: Use the async rendering API
+### Right: Use `{%- ... -%}` (minus adjacent to delimiters)
 ```python
-import asyncio
+from __future__ import annotations
+
 from jinja2 import Environment
 
-async def handler() -> None:
-    env = Environment(enable_async=True)
-    template = env.from_string("{{ x }}")
-    print(await template.render_async(x=1))
 
-asyncio.run(handler())
+def main() -> None:
+    env = Environment()
+    template = env.from_string("{%- if foo -%}X{%- endif -%}\n")
+    print(template.render(foo=True))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### Wrong: Untrusted keys passed to `xmlattr` can cause injection/malformed output
+```python
+from __future__ import annotations
+
+from jinja2 import Environment
+
+
+def main() -> None:
+    env = Environment(autoescape=True)
+    template = env.from_string("<a{{ attrs|xmlattr }}>link</a>\n")
+
+    # Simulating untrusted input: keys should be validated/whitelisted in Python.
+    user_attrs = {"onmouseover": "alert(1)", "href": "https://example.com"}
+    print(template.render(attrs=user_attrs))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### Right: Whitelist keys in Python before rendering `xmlattr`
+```python
+from __future__ import annotations
+
+from jinja2 import Environment
+
+
+def main() -> None:
+    env = Environment(autoescape=True)
+    template = env.from_string("<a{{ attrs|xmlattr }}>link</a>\n")
+
+    user_attrs = {"onmouseover": "alert(1)", "href": "https://example.com"}
+    allowed = {"href", "title", "rel", "class", "id"}
+    safe_attrs = {k: v for k, v in user_attrs.items() if k in allowed}
+
+    print(template.render(attrs=safe_attrs))
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 ## References
@@ -327,56 +368,76 @@ asyncio.run(handler())
 
 ## Migration from v3.1.x
 
-### Breaking changes in 3.2.0
-- **Runtime**: Python 3.10+ required (3.7/3.8/3.9 dropped).
-- **Dependencies**: MarkupSafe >= 3.0 required.
-- **Dependencies (i18n users)**: Babel >= 2.17 required.
-- **Build**: Packaging metadata moved to `pyproject.toml` and build backend changed to `flit_core` (mostly affects building from source).
-- **Deprecation**: `jinja2.__version__` is deprecated in 3.2.0.
+- **Python support (breaking)**: 3.2.0 requires **Python 3.10+** (drops 3.7–3.9).
+- **Dependency minimums (breaking)**: MarkupSafe **>= 3.0**, Babel **>= 2.17**.
+- **Version checks (soft deprecation)**: `jinja2.__version__` is deprecated.
 
-### Deprecated → Current mapping
-- `jinja2.__version__` ⚠️ → Prefer feature detection; if you must read a version use:
+### `jinja2.__version__` ⚠️ Soft Deprecation
+- Deprecated since: 3.2.0
+- Still works: true (but emits deprecation warnings)
+- Modern alternative: `importlib.metadata.version("jinja2")`
+- Migration guidance:
 ```python
+from __future__ import annotations
+
 from importlib.metadata import version
 
-v = version("jinja2")
-print(v)
+
+def main() -> None:
+    print(version("jinja2"))
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Before/after: avoid `__version__`
+### Legacy decorator aliases (`contextfilter`, etc.) 🗑️ Removed
+- Removed since: 3.1.0
+- Modern alternatives: `pass_context`, `pass_eval_context`, `pass_environment`
+- Migration guidance (example):
 ```python
-# Before (deprecated in 3.2.0)
-import jinja2
+from __future__ import annotations
 
-print(jinja2.__version__)
-```
+from jinja2 import Environment, pass_environment
 
-```python
-# After
-from importlib.metadata import version
 
-print(version("jinja2"))
+@pass_environment
+def env_name(env: Environment, value: str) -> str:
+    return f"{value} (autoescape={env.autoescape})"
+
+
+def main() -> None:
+    env = Environment()
+    env.filters["env_name"] = env_name
+    print(env.from_string("{{ 'x'|env_name }}\n").render())
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 ## API Reference
 
-- **Environment(loader=None, autoescape=False, undefined=..., trim_blocks=False, lstrip_blocks=False, enable_async=False, bytecode_cache=None, ...)** - Central configuration object; compiles and loads templates.
-- **Environment.overlay(**kwargs)** - Create a derived environment with overridden options (useful per-request/per-tenant).
-- **FileSystemLoader(searchpath)** - Load templates from directories on disk.
-- **PackageLoader(package_name, package_path="templates")** - Load templates from a Python package.
-- **FileSystemBytecodeCache(directory, pattern="__jinja2_%s.cache")** - Persist compiled template bytecode to disk.
-- **Undefined** - Default undefined type used by the environment (controls behavior of missing variables).
-- **Template.generate_async(\*\*context)** - Async generator yielding rendered chunks.
-- **pass_context** - Decorator to pass the active `Context` into a filter/function.
-- **pass_eval_context** - Decorator to pass the evaluation context (e.g., autoescape state).
-- **pass_environment** - Decorator to pass the active `Environment`.
-- **jinja2.filters.attr(value, name)** - Attribute lookup filter (attribute-focused; does not bypass sandbox checks).
-- **jinja2.filters.unique(seq, ...)** - Filter unique items from a sequence.
+- **Environment(...)** - Central configuration object; key params include `loader`, `autoescape`, `trim_blocks`, `lstrip_blocks`, `undefined`, `enable_async`, `line_statement_prefix`, `line_comment_prefix`.
+- **Environment.__init__(...)** - Constructs an environment; use to configure loaders, escaping, async, whitespace.
+- **Environment.overlay(...)** - Create a derived environment that shares internal state/caches but overrides selected options.
+- **Template(...)** - In-memory compiled template from source text.
+- **Template.render(...)** - Render synchronously with context variables (`template.render(**vars)`).
+- **Template.generate_async(...)** - Async generator yielding rendered chunks; requires `Environment(enable_async=True)`.
+- **FileSystemLoader(...)** - Load templates from directories on disk.
+- **PackageLoader(...)** - Load templates from a Python package’s resources.
+- **FileSystemBytecodeCache(...)** - Persist compiled template bytecode to the filesystem.
+- **Undefined** - Default undefined value type used for missing variables.
+- **pass_context** - Decorator to pass the active `Context` as first argument to a filter/test/global.
+- **pass_eval_context** - Decorator to pass the evaluation context (e.g., autoescape state) to a callable.
+- **pass_environment** - Decorator to pass the active `Environment` to a callable.
+- **Context.resolve_or_missing(name)** - Resolve a variable name or return a sentinel indicating it is missing (preferred override point for custom Context behavior).
+- **jinja2.filters.attr(value, name)** - Filter to fetch an attribute; respects environment attribute lookup/sandbox rules.
+- **jinja2.filters.xmlattr(mapping)** - Convert a dict of attributes to XML/HTML attribute syntax; validate/whitelist keys before use.
+- **jinja2.filters.unique(seq)** - Filter to yield unique items from a sequence.
 - **jinja2.filters.int(value, default=0, base=10)** - Convert to int with defaults.
-- **jinja2.filters.xmlattr(mapping, autospace=True)** - Render a dict as XML/HTML attributes (keys must be validated; never trust user-controlled keys).
-- **jinja2.filters.urlize(value, trim_url_limit=None, nofollow=False, target=None, rel=None, extra_schemes=None)** - Convert URLs in text to clickable links.
-- **jinja2.filters.select(seq, test=None, ...)** - Filter a sequence by a test.
-- **Context.resolve_or_missing(key)** - Context lookup hook for custom `Context` subclasses.
-- **Context.resolve(key)** - Resolve a variable name in the context.
-- **Markup** (from `markupsafe.Markup`) - Marks a string as already-escaped/safe for HTML.
-- **escape** (from `markupsafe.escape`) - Escape text for HTML/XML contexts.
+- **jinja2.filters.urlize(value)** - Convert URLs in text into clickable links (HTML output).
+- **jinja2.filters.select(seq, test_name=None, **kwargs)** - Select items from a sequence based on a test.
+- **jinja2.ext.WithExtension** - Built-in extension for the `{% with %}` statement.
+- **jinja2.ext.AutoEscapeExtension** - Built-in extension related to autoescaping behavior.
+- **importlib.metadata.version("jinja2")** - Recommended way to query installed Jinja version.

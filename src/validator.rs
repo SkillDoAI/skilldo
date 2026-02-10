@@ -283,4 +283,173 @@ x = undefined_function()
             }
         }
     }
+
+    #[test]
+    fn test_validate_javascript_skipped() {
+        let validator = FunctionalValidator::new();
+        let result = validator.validate("# SKILL.md", "javascript").unwrap();
+        assert_eq!(
+            result,
+            ValidationResult::Skipped("JavaScript validation not yet implemented".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_typescript_skipped() {
+        let validator = FunctionalValidator::new();
+        let result = validator.validate("# SKILL.md", "typescript").unwrap();
+        assert_eq!(
+            result,
+            ValidationResult::Skipped("JavaScript validation not yet implemented".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_unknown_ecosystem_skipped() {
+        let validator = FunctionalValidator::new();
+        let result = validator.validate("# SKILL.md", "rust").unwrap();
+        assert_eq!(
+            result,
+            ValidationResult::Skipped("Validation not supported for rust".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_no_code_blocks() {
+        let skill_md = r#"
+# SKILL.md
+Some documentation without any python code blocks.
+"#;
+
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(code.is_empty());
+
+        // Also confirm validate returns Skipped for this case
+        let result = validator.validate(skill_md, "python").unwrap();
+        match result {
+            ValidationResult::Skipped(msg) => {
+                assert!(msg.contains("No runnable code"));
+            }
+            _ => panic!("Expected Skipped for SKILL.md with no code blocks"),
+        }
+    }
+
+    #[test]
+    fn test_extract_code_adds_print_when_no_assertion() {
+        let skill_md = r#"
+```python
+import os
+x = os.getcwd()
+```
+"#;
+
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(code.contains("import os"));
+        assert!(code.contains("print("));
+        assert!(code.contains("Code executed successfully"));
+    }
+
+    #[test]
+    fn test_validation_result_equality() {
+        assert_eq!(
+            ValidationResult::Pass("x".into()),
+            ValidationResult::Pass("x".into())
+        );
+        assert_ne!(
+            ValidationResult::Pass("x".into()),
+            ValidationResult::Pass("y".into())
+        );
+        assert_ne!(
+            ValidationResult::Pass("x".into()),
+            ValidationResult::Fail("x".into())
+        );
+        assert_eq!(
+            ValidationResult::Skipped("s".into()),
+            ValidationResult::Skipped("s".into())
+        );
+    }
+
+    #[test]
+    fn test_extract_multiple_code_blocks_prefers_imports() {
+        let skill_md = r#"
+# SKILL.md
+
+## Example 1
+```python
+x = 1
+```
+
+## Example 2
+```python
+import os
+os.path.exists('.')
+```
+"#;
+
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+
+        // The first block (x = 1) is only 1 line with no import, so it gets skipped.
+        // The second block has an import, so it should be selected.
+        assert!(code.contains("import os"));
+    }
+
+    #[test]
+    fn test_extract_single_line_block_too_short() {
+        let skill_md = r#"
+```python
+x = 1
+```
+"#;
+
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+
+        // Single line, no import => skipped (needs import OR >= 2 lines)
+        assert!(code.is_empty());
+    }
+
+    #[test]
+    fn test_validate_no_code_returns_skipped() {
+        let skill_md = r#"
+# SKILL.md
+
+This document has only text. No python code blocks at all.
+
+Some more prose here.
+"#;
+
+        let validator = FunctionalValidator::new();
+        let result = validator.validate(skill_md, "python").unwrap();
+
+        assert_eq!(
+            result,
+            ValidationResult::Skipped("No runnable code found in SKILL.md".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validation_result_variants() {
+        // Verify all three variants can be created and matched
+        let pass = ValidationResult::Pass("output".to_string());
+        let fail = ValidationResult::Fail("error".to_string());
+        let skipped = ValidationResult::Skipped("reason".to_string());
+
+        match &pass {
+            ValidationResult::Pass(msg) => assert_eq!(msg, "output"),
+            _ => panic!("Expected Pass variant"),
+        }
+
+        match &fail {
+            ValidationResult::Fail(msg) => assert_eq!(msg, "error"),
+            _ => panic!("Expected Fail variant"),
+        }
+
+        match &skipped {
+            ValidationResult::Skipped(msg) => assert_eq!(msg, "reason"),
+            _ => panic!("Expected Skipped variant"),
+        }
+    }
 }

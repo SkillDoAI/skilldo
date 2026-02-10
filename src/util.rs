@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use std::fmt;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -72,9 +73,78 @@ pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
     Ok(dep)
 }
 
+/// Calculate file priority for source file reading order.
+/// Lower values = higher priority (read first).
+/// Uses `Path::components()` for separator-agnostic matching (works on Unix, macOS, WSL).
+pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let relative = path.strip_prefix(repo_path).unwrap_or(path);
+    let depth = relative.components().count();
+
+    // Check for internal/private path segments using components (separator-agnostic)
+    let is_internal = relative.components().any(|c| {
+        let s = c.as_os_str().to_str().unwrap_or("");
+        matches!(
+            s,
+            "_internal" | "_impl" | "testing" | "tests" | "benchmarks" | "tools" | "scripts"
+        )
+    });
+
+    // Priority 0: Top-level package __init__.py (torch/__init__.py)
+    if file_name == "__init__.py" && depth == 2 {
+        return 0;
+    }
+
+    // Priority 10: Subpackage __init__.py files (torch/nn/__init__.py)
+    if file_name == "__init__.py" && depth > 2 {
+        return 10;
+    }
+
+    // Priority 100: Internal/private files (read last if at all)
+    if file_name.starts_with('_') || is_internal {
+        return 100;
+    }
+
+    // Priority 20: Public top-level modules (torch/nn.py)
+    if !file_name.starts_with('_') && depth == 2 {
+        return 20;
+    }
+
+    // Priority 30: Public subpackage modules (torch/nn/functional.py)
+    if !file_name.starts_with('_') && depth == 3 {
+        return 30;
+    }
+
+    // Priority 50: Everything else (deeper submodules)
+    50
+}
+
+/// Kill a process by PID. Uses SIGKILL on Unix (Linux, macOS, WSL).
+#[cfg(unix)]
+fn kill_process(pid: u32) {
+    // kill -9 sends SIGKILL to the process.
+    // This works on Linux, macOS, and WSL.
+    let _ = Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(not(unix))]
+fn kill_process(pid: u32) {
+    // On Windows (non-WSL), use taskkill
+    let _ = Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// Run a command with a timeout, killing the child process on expiry.
 /// Spawns the command, waits up to `timeout` for it to finish.
-/// On timeout, sends SIGKILL to the child process and returns an error.
+/// On timeout, kills the child process and returns an error.
 pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
     let child = cmd
         .stdout(Stdio::piped())
@@ -93,12 +163,7 @@ pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::
     match receiver.recv_timeout(timeout) {
         Ok(result) => result.context("Failed to execute command"),
         Err(_) => {
-            let _ = Command::new("kill")
-                .arg("-9")
-                .arg(pid.to_string())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            kill_process(pid);
             bail!("Command timed out after {:?}", timeout)
         }
     }

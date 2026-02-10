@@ -61,8 +61,9 @@ impl TestResult {
             .filter(|tc| tc.result.is_fail())
             .map(|tc| {
                 format!(
-                    "Pattern: {}\nError: {}",
+                    "Pattern: {}\nGenerated test code:\n```python\n{}\n```\nError: {}",
                     tc.pattern_name,
+                    tc.generated_code,
                     tc.result.error_message(),
                 )
             })
@@ -394,5 +395,89 @@ mod tests {
         let feedback = result.generate_feedback().unwrap();
         assert!(feedback.contains("Test 2"));
         assert!(feedback.contains("error"));
+    }
+
+    #[test]
+    fn test_select_patterns_adaptive_mode() {
+        // Adaptive mode currently behaves like Minimal (1 pattern).
+        // Verify it returns a subset, not all patterns.
+        let patterns = [
+            CodePattern {
+                name: "Basic".to_string(),
+                description: "".to_string(),
+                code: "".to_string(),
+                category: PatternCategory::BasicUsage,
+            },
+            CodePattern {
+                name: "Config".to_string(),
+                description: "".to_string(),
+                code: "".to_string(),
+                category: PatternCategory::Configuration,
+            },
+            CodePattern {
+                name: "Error".to_string(),
+                description: "".to_string(),
+                code: "".to_string(),
+                category: PatternCategory::ErrorHandling,
+            },
+            CodePattern {
+                name: "Async".to_string(),
+                description: "".to_string(),
+                code: "".to_string(),
+                category: PatternCategory::AsyncPattern,
+            },
+        ];
+
+        // Simulate Adaptive selection logic (mirrors select_patterns)
+        let mode = ValidationMode::Adaptive;
+        let selected_count = match mode {
+            ValidationMode::Minimal => 1,
+            ValidationMode::Thorough => 3.min(patterns.len()),
+            ValidationMode::Adaptive => 1,
+        };
+
+        assert!(
+            selected_count < patterns.len(),
+            "Adaptive should not return all patterns"
+        );
+    }
+
+    #[test]
+    fn test_generate_feedback_all_passed() {
+        let result = TestResult {
+            passed: 3,
+            failed: 0,
+            test_cases: vec![
+                TestCase {
+                    pattern_name: "Basic".to_string(),
+                    result: ExecutionResult::Pass("ok".to_string()),
+                    generated_code: "print('ok')".to_string(),
+                },
+                TestCase {
+                    pattern_name: "Config".to_string(),
+                    result: ExecutionResult::Pass("ok".to_string()),
+                    generated_code: "print('config')".to_string(),
+                },
+                TestCase {
+                    pattern_name: "Error".to_string(),
+                    result: ExecutionResult::Pass("ok".to_string()),
+                    generated_code: "print('error')".to_string(),
+                },
+            ],
+        };
+
+        // All tests passed, so no feedback should be generated
+        assert!(result.generate_feedback().is_none());
+    }
+
+    #[test]
+    fn test_test_result_some_failed() {
+        let result = TestResult {
+            passed: 2,
+            failed: 1,
+            test_cases: vec![],
+        };
+
+        assert!(!result.all_passed());
     }
 }

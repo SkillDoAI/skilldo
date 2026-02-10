@@ -206,8 +206,12 @@ impl Generator {
         let linter = SkillLinter::new();
         let functional_validator = FunctionalValidator::new();
 
-        for attempt in 0..self.max_retries {
-            info!("Validation pass {} of {}", attempt + 1, self.max_retries);
+        // Always run at least one validation pass. max_retries=0 means
+        // "one pass, no retries on failure" (not "skip all validation").
+        let validation_passes = self.max_retries.max(1);
+
+        for attempt in 0..validation_passes {
+            info!("Validation pass {} of {}", attempt + 1, validation_passes);
 
             // 1. Format Validation (Linter) - Fast
             info!("  → Running format validation (linter)...");
@@ -224,7 +228,7 @@ impl Generator {
                     .collect();
                 warn!("  ✗ Format validation failed: {} errors", error_msgs.len());
 
-                if attempt == self.max_retries - 1 {
+                if attempt == validation_passes - 1 {
                     info!("Max retries reached, returning best attempt despite format issues");
                     break;
                 }
@@ -294,6 +298,11 @@ impl Generator {
                             agent5.validate(&skill_md).await;
                         match validation_result {
                             Ok(test_result) => {
+                                if test_result.test_cases.is_empty() {
+                                    // No patterns found to test — nothing to validate, not a failure
+                                    info!("  ⏭️  Agent 5: No testable patterns found, skipping");
+                                    break;
+                                }
                                 if test_result.all_passed() {
                                     info!("  ✓ Agent 5: All {} tests passed", test_result.passed);
                                     break; // All validations passed!
@@ -304,7 +313,7 @@ impl Generator {
                                     );
 
                                     // Patch with targeted feedback if we have retries left
-                                    if attempt < self.max_retries - 1 {
+                                    if attempt < validation_passes - 1 {
                                         if let Some(feedback) = test_result.generate_feedback() {
                                             let patch_prompt = format!(
                                                 "Here is the current SKILL.md:\n\n{}\n\n{}",
@@ -336,7 +345,7 @@ impl Generator {
                     warn!("  ✗ Functional validation failed");
                     warn!("    Error: {}", error.lines().next().unwrap_or(""));
 
-                    if attempt == self.max_retries - 1 {
+                    if attempt == validation_passes - 1 {
                         info!("Max retries reached, returning best attempt despite code issues");
                         break;
                     }
@@ -366,6 +375,200 @@ impl Generator {
             self.model_name.as_deref(),
         );
 
+        // Post-normalization lint check — catch any issues introduced by normalization
+        let post_issues = linter.lint(&skill_md)?;
+        let post_errors: Vec<_> = post_issues
+            .iter()
+            .filter(|i| matches!(i.severity, Severity::Error))
+            .collect();
+        if !post_errors.is_empty() {
+            warn!(
+                "Post-normalization lint found {} errors (returning anyway):",
+                post_errors.len()
+            );
+            for issue in &post_errors {
+                warn!("  - [{}] {}", issue.category, issue.message);
+            }
+        }
+
         Ok(skill_md)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::detector::Language;
+    use crate::llm::client::MockLlmClient;
+    use crate::pipeline::collector::CollectedData;
+
+    #[test]
+    fn test_strip_markdown_fences() {
+        let input = "```markdown\n# Hello\nworld\n```";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, "# Hello\nworld");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_plain() {
+        let input = "```\n# Hello\nworld\n```";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, "# Hello\nworld");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_no_fences() {
+        let input = "# Hello\nworld";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, "# Hello\nworld");
+    }
+
+    #[test]
+    fn test_generator_new() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3);
+
+        assert_eq!(gen.max_retries, 3);
+        assert!(gen.enable_agent5);
+        assert!(matches!(gen.agent5_mode, ValidationMode::Thorough));
+        assert!(gen.existing_skill.is_none());
+        assert!(gen.model_name.is_none());
+        assert!(gen.agent5_client.is_none());
+    }
+
+    #[test]
+    fn test_generator_builder_methods() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3)
+            .with_agent5(false)
+            .with_agent5_mode(ValidationMode::Minimal)
+            .with_existing_skill("existing content".to_string())
+            .with_model_name("test-model".to_string())
+            .with_agent5_client(Box::new(MockLlmClient::new()));
+
+        assert!(!gen.enable_agent5);
+        assert!(matches!(gen.agent5_mode, ValidationMode::Minimal));
+        assert_eq!(gen.existing_skill.as_deref(), Some("existing content"));
+        assert_eq!(gen.model_name.as_deref(), Some("test-model"));
+        assert!(gen.agent5_client.is_some());
+    }
+
+    fn make_test_data() -> CollectedData {
+        CollectedData {
+            package_name: "testpkg".to_string(),
+            version: "1.0.0".to_string(),
+            license: Some("MIT".to_string()),
+            project_urls: vec![],
+            language: Language::Python,
+            source_file_count: 5,
+            examples_content: String::new(),
+            test_content: "def test_foo(): pass".to_string(),
+            docs_content: "# Docs".to_string(),
+            source_content: "class Foo: pass".to_string(),
+            changelog_content: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_produces_skill_md() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1).with_agent5(false);
+
+        let data = make_test_data();
+        let result = gen.generate(&data).await.unwrap();
+
+        // Mock Agent 4 produces frontmatter with name/version/ecosystem, normalizer preserves it
+        assert!(
+            result.contains("---"),
+            "should contain frontmatter delimiters"
+        );
+        assert!(
+            result.contains("ecosystem: python"),
+            "should contain ecosystem in frontmatter"
+        );
+
+        // The mock Agent 4 output contains these sections
+        assert!(
+            result.contains("## Imports"),
+            "should contain Imports section"
+        );
+        assert!(
+            result.contains("## Core Patterns"),
+            "should contain Core Patterns section"
+        );
+        assert!(
+            result.contains("## Pitfalls"),
+            "should contain Pitfalls section"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generate_non_python_skips_functional_validation() {
+        // Non-Python language: functional validation is skipped, Agent 5 skipped
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1).with_agent5(false);
+
+        let mut data = make_test_data();
+        data.language = Language::JavaScript;
+
+        let result = gen.generate(&data).await.unwrap();
+        assert!(result.contains("---"), "should contain frontmatter");
+        // Pipeline completes without errors for non-Python languages
+        assert!(!result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_existing_skill_uses_update_mode() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_agent5(false)
+            .with_existing_skill("# Old SKILL.md".to_string());
+
+        let data = make_test_data();
+        let result = gen.generate(&data).await.unwrap();
+
+        // Should still produce valid output (mock returns same Agent 4 response)
+        assert!(result.contains("---"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_model_name() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_agent5(false)
+            .with_model_name("gpt-5.2".to_string());
+
+        let data = make_test_data();
+        let result = gen.generate(&data).await.unwrap();
+
+        // Normalizer should inject generated_with into frontmatter
+        assert!(result.contains("generated_with:"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_examples_content() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1).with_agent5(false);
+
+        let mut data = make_test_data();
+        data.examples_content = "# Example\nimport testpkg\ntestpkg.run()".to_string();
+
+        let result = gen.generate(&data).await.unwrap();
+        assert!(
+            result.contains("---"),
+            "should produce valid output with examples"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generate_max_retries_zero_still_validates() {
+        // max_retries=0 should still run one validation pass (not skip all validation)
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 0).with_agent5(false);
+
+        let data = make_test_data();
+        let result = gen.generate(&data).await.unwrap();
+
+        // Output should still have frontmatter (normalization + lint ran)
+        assert!(
+            result.contains("---"),
+            "max_retries=0 should still produce valid output"
+        );
+        assert!(
+            result.contains("ecosystem:"),
+            "should have ecosystem in frontmatter"
+        );
     }
 }

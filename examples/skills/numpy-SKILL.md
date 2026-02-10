@@ -1,211 +1,257 @@
 ---
+
 name: numpy
-description: Fundamental n-dimensional array library for numerical computing in Python.
+description: N-dimensional array computing library providing array types, vectorized operations, linear algebra, FFT, random sampling, and testing utilities.
 version: 1.26
 ecosystem: python
 license: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
-Show the standard import patterns. Most common first:
 ```python
 import numpy as np
-
-from numpy import array, clip, isin, savetxt, unique
-from numpy.random import default_rng
-from numpy.typing import NDArray
+from numpy import array, asarray, arange, zeros, ones, empty, linspace
+from numpy import dtype, reshape, concatenate, stack, where
+from numpy import sum, mean, std, min, max
+from numpy import dot
+from numpy.linalg import norm, solve
 ```
 
 ## Core Patterns
 
-**CRITICAL: Prioritize PUBLIC APIs over internal/compat modules**
-- Use APIs from api_surface with `publicity_score: "high"` first
-- Avoid `.compat`, `.internal`, `._private` modules unless they're the only option
-- Example: Prefer `numpy.random` over `numpy._build_utils`
-
-**CRITICAL: Mark deprecation status with clear indicators**
-
-### Create arrays and control dtype ✅ Current
-```python
-import numpy as np
-from numpy.typing import NDArray
-
-def normalize(x: NDArray[np.floating]) -> NDArray[np.floating]:
-    # np.array(copy=...) is available in NumPy 1.26
-    a = np.array(x, dtype=np.float64, copy=True)
-    denom = np.clip(np.linalg.norm(a), 1e-12, np.inf)
-    return a / denom
-
-x = np.array([3, 4, 0], dtype=np.float64)
-print(normalize(x))
-```
-* Convert inputs to an `ndarray` with a known dtype and safe copy semantics.
-* **Status**: Current, stable
-
-### Boolean masking with `np.isin` + `np.clip` ✅ Current
+### Create arrays and control dtype/shape ✅ Current
 ```python
 import numpy as np
 
-values = np.array([1, 2, 3, 4, 5, 6])
-mask = np.isin(values, [2, 4, 6])  # membership test
-picked = values[mask]
+def main() -> None:
+    a: np.ndarray = np.array([1, 2, 3], dtype=np.int64)
+    b: np.ndarray = np.zeros((2, 3), dtype=np.float64)
+    c: np.ndarray = np.arange(0, 10, 2, dtype=np.int32)
 
-# Clip to a range (common for bounds enforcement)
-bounded = np.clip(picked, 0, 4)
-print(picked, bounded)
+    d: np.dtype = np.dtype([("x", np.int32), ("y", np.float64)])
+    rec: np.ndarray = np.zeros(3, dtype=d)
+
+    # Print in a way that reliably includes dtype names and field names in stdout.
+    print("a dtype:", a.dtype)
+    print("b dtype:", b.dtype)
+    print("c dtype:", c.dtype)
+    print("rec dtype names:", rec.dtype.names)
+
+if __name__ == "__main__":
+    main()
 ```
-* Filter arrays using vectorized membership and enforce bounds.
-* **Status**: Current, stable
+* Use `np.array`/`np.asarray` for explicit conversion, `np.zeros`/`np.ones`/`np.empty` for allocation, and `np.dtype(...)` to define dtypes (including structured/record dtypes).
 
-### Unique values (optionally along an axis) ✅ Current
+### Vectorized computation, masking, and selection ✅ Current
 ```python
 import numpy as np
 
-a = np.array([3, 3, 2, 1, 2, 2])
-u, idx, inv, counts = np.unique(
-    a,
-    return_index=True,
-    return_inverse=True,
-    return_counts=True,
-)
-print("unique:", u)
-print("first_index:", idx)
-print("inverse:", inv)
-print("counts:", counts)
-```
-* Deduplicate and optionally recover indices, inverse mapping, and counts.
-* **Status**: Current, stable
+def main() -> None:
+    x: np.ndarray = np.linspace(-2.0, 2.0, 9)
+    y: np.ndarray = x**2 - 1.0
 
-### Random integers with the modern Generator API ✅ Current
+    mask: np.ndarray = y > 0
+    y_pos: np.ndarray = y[mask]
+
+    y_clipped: np.ndarray = np.clip(y, -0.5, 2.0)
+    y_piecewise: np.ndarray = np.where(x < 0, -y, y)
+
+    print("x:", x)
+    print("y:", y)
+    print("mask:", mask)
+    print("y[mask]:", y_pos)
+    print("clip:", y_clipped)
+    print("where:", y_piecewise)
+
+if __name__ == "__main__":
+    main()
+```
+* Prefer ufuncs and vectorized expressions over Python loops; use boolean masks and `np.where` for selection.
+
+### Reshape, stack, and concatenate ✅ Current
 ```python
 import numpy as np
 
-rng = np.random.default_rng(12345)
-x = rng.integers(low=0, high=10, size=(2, 5), dtype=np.int64)
-print(x)
-```
-* Use `numpy.random.Generator` (via `default_rng`) for reproducible random generation.
-* **Status**: Current, stable
+def main() -> None:
+    a: np.ndarray = np.arange(12)
+    m: np.ndarray = a.reshape(3, 4)
 
-### Save numeric data to text with `np.savetxt` ✅ Current
+    top: np.ndarray = m[:2, :]
+    bottom: np.ndarray = m[2:, :]
+
+    v: np.ndarray = np.concatenate([top, bottom], axis=0)
+    h: np.ndarray = np.concatenate([m[:, :2], m[:, 2:]], axis=1)
+
+    stacked0: np.ndarray = np.stack([m, m + 100], axis=0)
+
+    print("m:\n", m)
+    print("concat axis=0:\n", v)
+    print("concat axis=1:\n", h)
+    print("stack axis=0 shape:", stacked0.shape)
+
+if __name__ == "__main__":
+    main()
+```
+* Use `reshape` for view-like shape changes when possible; use `concatenate`/`stack` for combining arrays along axes.
+
+### Linear algebra with `numpy.linalg` ✅ Current
 ```python
 import numpy as np
 
-data = np.array([[1.5, 2.0], [3.25, 4.75]], dtype=np.float64)
+def main() -> None:
+    A: np.ndarray = np.array([[3.0, 1.0], [1.0, 2.0]], dtype=np.float64)
+    b: np.ndarray = np.array([9.0, 8.0], dtype=np.float64)
 
-# Save to a file path
-np.savetxt("out.csv", data, delimiter=",", header="a,b", comments="")
-print(open("out.csv", "r", encoding="utf-8").read())
+    x: np.ndarray = np.linalg.solve(A, b)
+    r: np.ndarray = A @ x - b
+    r_norm: float = float(np.linalg.norm(r))
+
+    print("x:", x)
+    print("residual norm:", r_norm)
+
+if __name__ == "__main__":
+    main()
 ```
-* Write arrays to delimited text formats (CSV/TSV-like).
-* **Status**: Current, stable
+* Use `np.linalg.solve` for linear systems and `np.linalg.norm` for vector/matrix norms; prefer `@` for matrix multiplication.
+
+### Run NumPy’s test suite from Python ✅ Current
+```python
+import numpy as np
+
+def main() -> None:
+    # Runs NumPy's own test suite (requires pytest; may take time).
+    result = np.test()
+    print("numpy.test() returned:", result)
+
+if __name__ == "__main__":
+    main()
+```
+* Use the public `numpy.test()` entry point to run the library’s tests (primarily for contributors/CI).
 
 ## Configuration
 
-Standard configuration and setup:
-- NumPy is mostly configured at build/install time (BLAS/LAPACK, SIMD, etc.).
-- Runtime introspection:
-  - `numpy.__version__` for the installed version string.
-  - `numpy.show_config()` prints build configuration (BLAS/LAPACK, compilers).
-  - `numpy.show_runtime()` prints runtime CPU/dispatch info when available.
-
-```python
-import numpy as np
-
-print(np.__version__)
-np.show_config()
-np.show_runtime()
-```
-
-Notes:
-- Prefer `import numpy as np` and access submodules (e.g., `np.linalg`, `np.random`) via the public namespace; NumPy uses lazy imports for some submodules.
+- NumPy has minimal runtime “configuration” in typical user code; behavior is mainly controlled via:
+  - **Dtypes**: choose `dtype=` explicitly (`np.float64`, `np.int32`, structured `np.dtype([...])`) to avoid platform-dependent defaults.
+  - **Printing**: `np.set_printoptions(...)` to control precision, suppress scientific notation, etc.
+  - **Error handling**: `np.seterr(...)` / `np.errstate(...)` to configure floating-point warnings/errors.
+- Testing (contributors/CI):
+  - `numpy.test()` requires `pytest` and (for parts of the suite) `hypothesis`.
 
 ## Pitfalls
 
-### Wrong: Assuming `.item()` works on non-scalar arrays
+### Wrong: Assuming list-based structured dtypes create custom field names
 ```python
 import numpy as np
 
-a = np.array([1, 2, 3])
-print(a.item())  # ValueError: can only convert an array of size 1 to a Python scalar
+def main() -> None:
+    dt = [np.int32, np.float64]  # list form => default field names f0, f1 (not "x", "y")
+    a = np.zeros(3, dtype=dt)
+    print(a["x"])  # raises ValueError: no field of name x
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Right: Use `.item()` only for size-1 arrays, otherwise use `.tolist()`
+### Right: Specify names explicitly for structured dtypes
 ```python
 import numpy as np
 
-scalar_arr = np.array([42])
-print(scalar_arr.item())  # 42 (Python int)
+def main() -> None:
+    dt = {"names": ["x", "y"], "formats": [np.int32, np.float64]}
+    a = np.zeros(3, dtype=dt)
+    a["x"] = [1, 2, 3]
+    print(a["x"])
 
-a = np.array([1, 2, 3])
-print(a.tolist())  # [1, 2, 3]
+if __name__ == "__main__":
+    main()
 ```
 
-### Wrong: Calling `np.unique` and expecting it to preserve input order
+### Wrong: Using `numpy._core` (private) instead of public top-level APIs
 ```python
 import numpy as np
 
-a = np.array([10, 1, 10, 2])
-print(np.unique(a))  # array([ 1,  2, 10]) sorted by default
+def main() -> None:
+    # Private module; not stable API.
+    import numpy._core as core  # noqa: F401
+    # Code that depends on private internals is brittle across versions.
+    print(core)
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Right: If you need first-seen order, use `return_index` and reorder
+### Right: Use public `numpy` APIs (top-level) and documented submodules
 ```python
 import numpy as np
 
-a = np.array([10, 1, 10, 2])
-u, idx = np.unique(a, return_index=True)
-ordered = u[np.argsort(idx)]
-print(ordered)  # array([10,  1,  2])
+def main() -> None:
+    a = np.arange(5)
+    print(np.sum(a))
+    print(np.__version__)
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Wrong: Using `np.isin` with mismatched shapes and expecting broadcasting like arithmetic
+### Wrong: Expecting `np.asarray` to copy input data
 ```python
 import numpy as np
 
-a = np.array([[1, 2], [3, 4]])
-b = np.array([[1, 4], [2, 3]])
-# np.isin tests membership in the *flattened* "test_elements" by default, not pairwise
-print(np.isin(a, b))  # not a pairwise comparison
+def main() -> None:
+    base = np.array([1, 2, 3], dtype=np.int64)
+    view = np.asarray(base)  # may share memory
+    view[0] = 999
+    print("base changed:", base)  # base changed too
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Right: Use `np.isin` for membership; for pairwise equality use `==`
+### Right: Use `np.array(..., copy=True)` when you need an explicit copy
 ```python
 import numpy as np
 
-a = np.array([[1, 2], [3, 4]])
-b = np.array([[1, 4], [2, 3]])
+def main() -> None:
+    base = np.array([1, 2, 3], dtype=np.int64)
+    copied = np.array(base, copy=True)
+    copied[0] = 999
+    print("base:", base)
+    print("copied:", copied)
 
-print(np.isin(a, [1, 4]))  # membership in a set/list
-print(a == b)              # pairwise elementwise comparison
+if __name__ == "__main__":
+    main()
 ```
 
-### Wrong: Creating ambiguous structured dtypes (field layout unclear)
+### Wrong: Running `numpy.test()` without test dependencies installed
 ```python
 import numpy as np
 
-# Ambiguous/fragile: relying on implicit field names and layout
-dt = np.dtype([("x", "i4"), ("y", "i4")])
-arr = np.zeros(2, dtype=dt)
-print(arr.dtype)
+def main() -> None:
+    # If pytest/hypothesis are missing, this can error or skip large parts.
+    np.test()
+
+if __name__ == "__main__":
+    main()
 ```
 
-### Right: Use explicit structured dtype specifications for clarity
+### Right: Ensure `pytest` (and often `hypothesis`) are installed before calling `numpy.test()`
 ```python
+import importlib.util
 import numpy as np
 
-dt = np.dtype({"names": ["x", "y"], "formats": ["<i4", "<i4"]})
-arr = np.zeros(2, dtype=dt)
-arr["x"] = [1, 2]
-arr["y"] = [10, 20]
-print(arr)
-print(arr.dtype)
+def main() -> None:
+    if importlib.util.find_spec("pytest") is None:
+        raise RuntimeError("pytest is required to run numpy.test()")
+    # hypothesis is also used by parts of the suite; install if needed.
+    np.test()
+
+if __name__ == "__main__":
+    main()
 ```
 
 ## References
-
-CRITICAL: Include ALL provided URLs below (do NOT skip this section):
 
 - [homepage](https://numpy.org)
 - [documentation](https://numpy.org/doc/)
@@ -216,37 +262,27 @@ CRITICAL: Include ALL provided URLs below (do NOT skip this section):
 
 ## Migration from v[previous]
 
-What changed in this version (if applicable):
-- Breaking changes
-  - Benchmark tooling: `asv dev` removed in 1.26.0 → use `asv run`.
-- Deprecated → Current mapping
-  - Prefer the modern RNG API (`numpy.random.default_rng()` + `Generator` methods like `.integers`) for new code.
-- Before/after code examples
-
-```python
-# Before (benchmark automation; removed in 1.26.0)
-# $ asv dev
-
-# After
-# $ asv run
-```
+- No explicit runtime breaking changes were provided in the supplied excerpts for NumPy 1.26.x.
+- Practical upgrade notes from the provided context:
+  - If you rely on NumPy’s typing stubs, expect incremental signature/typing refinements in 1.26 (may require updating annotations or type-checker expectations).
+  - Prefer documented structured dtype forms (e.g., dict with `names`/`formats`) to avoid implicit default field names.
+  - For contributors using the C-API: follow dtype descriptor (`PyArray_Descr*`) ownership/steals-reference rules (reference counting correctness).
 
 ## API Reference
 
-Brief reference of the most important public APIs:
-
-- **numpy.array(object, dtype=None, *, copy=True, order='K', subok=False, ndmin=0, like=None)** - Create an `ndarray` from array-like input.
-- **numpy.ndarray** - Core n-dimensional array type (supports slicing, broadcasting, vectorized ops).
-- **numpy.ndarray.tolist()** - Convert an array to nested Python lists.
-- **numpy.ndarray.item()** - Convert a size-1 array to a Python scalar.
-- **numpy.clip(a, a_min, a_max, ...)** - Limit values to an interval.
-- **numpy.isin(element, test_elements, ...)** - Elementwise membership test.
-- **numpy.unique(ar, return_index=False, return_inverse=False, return_counts=False, axis=None, *, equal_nan=True)** - Find unique elements (and optional index/inverse/counts).
-- **numpy.pad(array, pad_width, mode='constant', **kwargs)** - Pad an array along its edges.
-- **numpy.savetxt(fname, X, ...)** - Save an array to a text file.
-- **numpy.random.default_rng(seed=None)** - Create a `Generator` for random numbers.
-- **numpy.random.Generator.integers(low, high=None, size=None, dtype=np.int64, endpoint=False)** - Random integers from a range.
-- **numpy.linalg** - Linear algebra submodule (e.g., norms, solves, decompositions).
-- **numpy.test** - Run NumPy’s test suite for the installed build.
-- **numpy.show_config()** - Print build-time configuration.
-- **numpy.__version__** - Installed NumPy version string.
+- **numpy.test** - Run NumPy’s test suite via `pytest`; useful for contributors/CI.
+- **numpy.__version__** - NumPy version string.
+- **numpy.array(obj, dtype=..., copy=..., ndmin=...)** - Create an `ndarray` from array-like input.
+- **numpy.asarray(a, dtype=...)** - Convert to `ndarray` without unnecessary copying.
+- **numpy.arange([start,] stop[, step], dtype=...)** - Create evenly spaced values in a half-open interval.
+- **numpy.linspace(start, stop, num=..., dtype=...)** - Create `num` evenly spaced samples over an interval.
+- **numpy.zeros(shape, dtype=...)** - Allocate an array filled with zeros.
+- **numpy.ones(shape, dtype=...)** - Allocate an array filled with ones.
+- **numpy.empty(shape, dtype=...)** - Allocate an uninitialized array (contents arbitrary).
+- **numpy.dtype(spec)** - Construct/normalize a dtype (including structured dtypes).
+- **numpy.reshape(a, newshape)** - Return a reshaped view/copy of an array.
+- **numpy.concatenate(seq, axis=...)** - Join arrays along an existing axis.
+- **numpy.stack(seq, axis=...)** - Join arrays along a new axis.
+- **numpy.where(condition, x, y)** - Elementwise selection based on a boolean condition.
+- **numpy.linalg.solve(A, b)** - Solve a linear system `A @ x = b`.
+- **numpy.linalg.norm(x, ord=..., axis=..., keepdims=...)** - Compute vector/matrix norms.

@@ -49,44 +49,10 @@ fn extract_from_git_tag(repo_path: &Path) -> Result<String> {
     Ok(tag.strip_prefix('v').unwrap_or(&tag).to_string())
 }
 
-/// Extract version from package metadata (changelog, docs, pyproject.toml, etc.)
+/// Extract version from package metadata
+/// Priority: build system files > source code > changelog/docs > git tags
 fn extract_from_package(repo_path: &Path) -> Result<String> {
-    // Strategy 1: Try changelog files first (often most reliable)
-    // Common names: CHANGELOG.md, CHANGES.rst, HISTORY.md, etc.
-    for changelog_name in &[
-        "CHANGELOG.md",
-        "CHANGELOG.rst",
-        "CHANGELOG",
-        "CHANGES.md",
-        "CHANGES.rst",
-        "CHANGES",
-        "HISTORY.md",
-        "HISTORY.rst",
-        "HISTORY",
-        "NEWS.md",
-        "NEWS.rst",
-        "NEWS",
-    ] {
-        let changelog_path = repo_path.join(changelog_name);
-        if changelog_path.exists() {
-            if let Ok(version) = extract_version_from_changelog(&changelog_path) {
-                return Ok(version);
-            }
-        }
-    }
-
-    // Strategy 2: Try documentation files (release notes, whatsnew, blog posts)
-    // Look in docs/, doc/, web/ directories
-    for docs_dir in &["docs", "doc", "web"] {
-        let dir_path = repo_path.join(docs_dir);
-        if dir_path.exists() {
-            if let Ok(version) = extract_version_from_docs(&dir_path) {
-                return Ok(version);
-            }
-        }
-    }
-
-    // Strategy 3: Try pyproject.toml
+    // Strategy 1: pyproject.toml — canonical source of truth for Python packages
     let pyproject = repo_path.join("pyproject.toml");
     if pyproject.exists() {
         if let Ok(content) = std::fs::read_to_string(&pyproject) {
@@ -118,7 +84,7 @@ fn extract_from_package(repo_path: &Path) -> Result<String> {
         }
     }
 
-    // Strategy 4: Try setup.cfg
+    // Strategy 2: setup.cfg
     let setup_cfg = repo_path.join("setup.cfg");
     if setup_cfg.exists() {
         if let Ok(content) = std::fs::read_to_string(&setup_cfg) {
@@ -136,18 +102,16 @@ fn extract_from_package(repo_path: &Path) -> Result<String> {
         }
     }
 
-    // Strategy 5: Try __version__ in Python source files
-    // Common locations: {package}/__init__.py, {package}/_version.py, src/{package}/__init__.py
+    // Strategy 3: __version__ in Python source files
     if let Ok(version) = extract_version_from_python_source(repo_path) {
         return Ok(version);
     }
 
-    // Strategy 6: Try version.txt (used by PyTorch and others)
+    // Strategy 4: version.txt (used by PyTorch and others)
     let version_txt = repo_path.join("version.txt");
     if version_txt.exists() {
         if let Ok(content) = std::fs::read_to_string(&version_txt) {
             let trimmed = content.trim();
-            // Strip pre-release suffixes (e.g., "2.5.0a0" -> "2.5.0")
             let cleaned: String = trimmed
                 .chars()
                 .take_while(|c| c.is_numeric() || *c == '.')
@@ -160,12 +124,44 @@ fn extract_from_package(repo_path: &Path) -> Result<String> {
         }
     }
 
-    // Strategy 7: Try git tags as last resort before "unknown"
+    // Strategy 5: Changelog files (may contain "Unreleased" — less reliable than build files)
+    for changelog_name in &[
+        "CHANGELOG.md",
+        "CHANGELOG.rst",
+        "CHANGELOG",
+        "CHANGES.md",
+        "CHANGES.rst",
+        "CHANGES",
+        "HISTORY.md",
+        "HISTORY.rst",
+        "HISTORY",
+        "NEWS.md",
+        "NEWS.rst",
+        "NEWS",
+    ] {
+        let changelog_path = repo_path.join(changelog_name);
+        if changelog_path.exists() {
+            if let Ok(version) = extract_version_from_changelog(&changelog_path) {
+                return Ok(version);
+            }
+        }
+    }
+
+    // Strategy 6: Documentation files (release notes, whatsnew — least reliable)
+    for docs_dir in &["docs", "doc", "web"] {
+        let dir_path = repo_path.join(docs_dir);
+        if dir_path.exists() {
+            if let Ok(version) = extract_version_from_docs(&dir_path) {
+                return Ok(version);
+            }
+        }
+    }
+
+    // Strategy 7: Git tags as last resort
     if let Ok(version) = extract_from_git_tag(repo_path) {
         return Ok(version);
     }
 
-    // Fallback to "unknown"
     Ok("unknown".to_string())
 }
 
@@ -561,5 +557,77 @@ mod tests {
         .unwrap();
         let result = extract_from_package(tmp.path()).unwrap();
         assert_eq!(result, "2.32.5");
+    }
+
+    #[test]
+    fn test_extract_version_pattern_rejects_single_part() {
+        assert_eq!(extract_version_pattern("1"), None);
+    }
+
+    #[test]
+    fn test_extract_version_pattern_accepts_two_part() {
+        assert_eq!(extract_version_pattern("1.0"), Some("1.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_version_pattern_accepts_three_part() {
+        assert_eq!(extract_version_pattern("1.0.0"), Some("1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_from_git_tag_no_repo() {
+        let tmp = TempDir::new().unwrap();
+        let result = extract_from_git_tag(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_from_branch_no_repo() {
+        let tmp = TempDir::new().unwrap();
+        let result = extract_from_branch(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_from_commit_no_repo() {
+        let tmp = TempDir::new().unwrap();
+        let result = extract_from_commit(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_version_from_changelog_deep() {
+        let tmp = TempDir::new().unwrap();
+        let changelog_path = tmp.path().join("CHANGELOG.md");
+
+        // Build a changelog with 200+ lines of filler before any version heading.
+        // The function only searches the first ~100 lines, so the version on line 150+
+        // should NOT be found.
+        let mut content = String::from("# Changelog\n\n");
+        for i in 0..200 {
+            content.push_str(&format!("- Fix item number {}\n", i));
+        }
+        content.push_str("\n## 9.9.9\n\n- Late version entry\n");
+
+        fs::write(&changelog_path, &content).unwrap();
+        let result = extract_version_from_changelog(&changelog_path);
+        // The version heading is past line 100, so the function should not find it.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_version_from_docs_no_docs() {
+        let tmp = TempDir::new().unwrap();
+        // No docs/ directory exists at all.
+        let result = extract_version_from_docs(&tmp.path().join("docs"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_version_from_python_source_no_files() {
+        let tmp = TempDir::new().unwrap();
+        // Empty directory — no Python source files.
+        let result = extract_version_from_python_source(tmp.path());
+        assert!(result.is_err());
     }
 }

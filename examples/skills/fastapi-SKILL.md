@@ -1,31 +1,24 @@
 ---
+
 name: fastapi
-description: A Python web framework for building ASGI APIs with type hints and automatic request validation.
+description: ASGI web framework for building HTTP APIs with Python type hints and automatic OpenAPI generation.
 version: 0.128.4
 ecosystem: python
 license: MIT
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
-Show the standard import patterns. Most common first:
 ```python
-from fastapi import FastAPI, Depends, HTTPException, status
+import fastapi
+from fastapi import FastAPI
 from pydantic import BaseModel
 ```
 
 ## Core Patterns
 
-The right way to use the main APIs. Show 3-5 most common patterns.
-
-**CRITICAL: Prioritize PUBLIC APIs over internal/compat modules**
-- Use APIs from api_surface with `publicity_score: "high"` first
-- Avoid `.compat`, `.internal`, `._private` modules unless they're the only option
-- Example: Prefer `library.MainClass` over `library.compat.helper_function`
-
-**CRITICAL: Mark deprecation status with clear indicators**
-
-### Create an app + basic routes ✅ Current
+### Create an app instance and define routes ✅ Current
 ```python
 from fastapi import FastAPI
 
@@ -33,36 +26,16 @@ app = FastAPI()
 
 @app.get("/")
 def read_root() -> dict[str, str]:
-    return {"Hello": "World"}
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int) -> dict[str, int]:
-    # Path parameters are parsed/validated from the URL
-    return {"item_id": item_id}
-```
-* Create a single `FastAPI()` application instance and register path operations with decorators.
-* **Status**: Current, stable
-
-### Query parameters: required vs optional ✅ Current
-```python
-from fastapi import FastAPI
-
-app = FastAPI()
+    return {"status": "ok"}
 
 @app.get("/items/{item_id}")
 def read_item(item_id: int, q: str | None = None) -> dict[str, object]:
-    # q is optional because it defaults to None
     return {"item_id": item_id, "q": q}
-
-@app.get("/search/")
-def search(q: str) -> dict[str, str]:
-    # q is required because it has no default
-    return {"q": q}
 ```
-* Use type hints and defaults to control validation and required/optional behavior.
-* **Status**: Current, stable
+* Create a single `app = FastAPI()` at module scope, then register routes with `@app.get(...)`, etc.
+* Use type hints for path/query parsing and OpenAPI schema generation.
 
-### Request body with Pydantic models ✅ Current
+### Request bodies with Pydantic models ✅ Current
 ```python
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -76,191 +49,94 @@ class Item(BaseModel):
 
 @app.put("/items/{item_id}")
 def update_item(item_id: int, item: Item) -> dict[str, object]:
-    # FastAPI parses JSON into the Pydantic model and validates types
     return {"item_id": item_id, "item": item.model_dump()}
 ```
-* Model JSON request bodies with `pydantic.BaseModel` subclasses.
-* **Status**: Current, stable
+* Model JSON request bodies with `pydantic.BaseModel` to get validation and schema.
+* Pass the model as a typed endpoint parameter to make it a body parameter.
 
-### Async endpoints when using async/await ✅ Current
+### Async endpoints for awaited I/O ✅ Current
 ```python
 from fastapi import FastAPI
+import asyncio
 
 app = FastAPI()
 
-async def some_async_call() -> str:
-    return "ok"
+async def fetch_value() -> str:
+    await asyncio.sleep(0.01)
+    return "value"
 
 @app.get("/async")
 async def read_async() -> dict[str, str]:
-    # If you call async code, your endpoint should be async and must await it
-    data = await some_async_call()
-    return {"data": data}
+    value = await fetch_value()
+    return {"value": value}
 ```
-* Use `async def` for I/O-bound endpoints that await coroutines.
-* **Status**: Current, stable
+* Use `async def` when you need `await` inside the endpoint.
+* Keep endpoints as `def` when you don’t need async I/O.
 
-### Dependency injection with Depends ✅ Current
+### Development and production CLI ✅ Current
 ```python
-from fastapi import Depends, FastAPI, HTTPException, status
+"""
+Run locally (auto-reload):
+    fastapi dev main.py
 
-app = FastAPI()
+Run for production:
+    fastapi run main.py
 
-def get_current_user(token: str | None = None) -> dict[str, str]:
-    # In real apps, parse/verify token (e.g., from Authorization header)
-    if token != "secret":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    return {"username": "alice"}
-
-@app.get("/protected")
-def protected(user: dict[str, str] = Depends(get_current_user)) -> dict[str, object]:
-    return {"user": user}
-```
-* Use `Depends(...)` to inject shared logic (auth, DB sessions, etc.) into endpoints.
-* **Status**: Current, stable
-
-## Routing Patterns
-
-```python
+This file should be named main.py and expose `app`.
+"""
 from fastapi import FastAPI
-from pydantic import BaseModel
 
 app = FastAPI()
 
-class Item(BaseModel):
-    name: str
-    price: float
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int) -> dict[str, int]:
-    return {"item_id": item_id}
-
-@app.post("/items/")
-def create_item(item: Item) -> dict[str, object]:
-    return {"created": item.model_dump()}
-
-@app.put("/items/{item_id}")
-def replace_item(item_id: int, item: Item) -> dict[str, object]:
-    return {"item_id": item_id, "item": item.model_dump()}
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "healthy"}
 ```
-
-## Request Handling
-
-```python
-from fastapi import FastAPI
-from pydantic import BaseModel
-
-app = FastAPI()
-
-class Item(BaseModel):
-    name: str
-    price: float
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: str | None = None) -> dict[str, object]:
-    # item_id: path param, q: query param
-    return {"item_id": item_id, "q": q}
-
-@app.post("/items/")
-def create_item(item: Item) -> dict[str, object]:
-    # item: request body parsed as JSON and validated
-    return {"item": item.model_dump()}
-```
-
-## Response Handling
-
-```python
-from fastapi import FastAPI, HTTPException, status
-
-app = FastAPI()
-
-@app.get("/ok")
-def ok() -> dict[str, str]:
-    return {"status": "ok"}
-
-@app.get("/not-found")
-def not_found() -> None:
-    # Raise HTTP errors with status codes
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-```
-
-## Middleware/Dependencies
-
-```python
-from fastapi import Depends, FastAPI
-
-app = FastAPI()
-
-def common_params(q: str | None = None) -> dict[str, str | None]:
-    return {"q": q}
-
-@app.get("/items/")
-def list_items(params: dict[str, str | None] = Depends(common_params)) -> dict[str, object]:
-    return {"params": params}
-```
-
-## Error Handling
-
-```python
-from fastapi import FastAPI, HTTPException, status
-
-app = FastAPI()
-
-@app.get("/divide")
-def divide(a: int, b: int) -> dict[str, float]:
-    if b == 0:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="b must not be zero",
-        )
-    return {"result": a / b}
-```
-
-## Background Tasks
-
-FastAPI supports background tasks via `BackgroundTasks`, but it is not included in the provided documented API list. Prefer consulting the official docs before using it in agent-generated code for this ruleset.
-
-## WebSocket Patterns
-
-FastAPI supports WebSockets, but WebSocket APIs are not included in the provided documented API list. Prefer consulting the official docs before using it in agent-generated code for this ruleset.
+* `fastapi dev main.py` is the recommended development workflow (auto-reload by default).
+* `fastapi run main.py` is the recommended production entrypoint.
 
 ## Configuration
 
-- **App creation**: create one instance, typically:
-  - `app = FastAPI()`
-- **Run commands (CLI)**:
-  - Development (auto-reload by default): `fastapi dev main.py`
+- **Application instance**: create exactly one `FastAPI()` instance at module scope (e.g., `main.py`) so CLI runners can import it.
+- **Parameter required vs optional**:
+  - Required query/path parameters: omit a default (e.g., `q: str`)
+  - Optional query parameters: use `| None` and a default (e.g., `q: str | None = None`)
+- **Sync vs async**:
+  - Use `def` for purely synchronous work.
+  - Use `async def` if you need to `await` (e.g., async DB/HTTP clients).
+- **CLI**:
+  - Development: `fastapi dev main.py`
   - Production: `fastapi run main.py`
-- **Install extras (portable quoting)**:
-  - `pip install "fastapi[standard]"`
-- **Type-hint driven validation**:
-  - Path/query/body validation is derived from function signatures and Pydantic models.
 
 ## Pitfalls
 
-### Wrong: Calling async code from a sync endpoint
+### Wrong: using `await` inside a sync endpoint
 ```python
 from fastapi import FastAPI
+import asyncio
 
 app = FastAPI()
 
 async def some_async_call() -> str:
-    return "ok"
+    await asyncio.sleep(0.01)
+    return "done"
 
 @app.get("/")
-def read_root() -> dict[str, object]:
-    data = some_async_call()  # forgot await; also endpoint isn't async
+def read_root():
+    data = await some_async_call()  # SyntaxError / invalid usage
     return {"data": data}
 ```
 
-### Right: Use `async def` and `await`
+### Right: make the endpoint `async def` when awaiting
 ```python
 from fastapi import FastAPI
+import asyncio
 
 app = FastAPI()
 
 async def some_async_call() -> str:
-    return "ok"
+    await asyncio.sleep(0.01)
+    return "done"
 
 @app.get("/")
 async def read_root() -> dict[str, str]:
@@ -268,19 +144,18 @@ async def read_root() -> dict[str, str]:
     return {"data": data}
 ```
 
-### Wrong: Making a query parameter required by accident
+### Wrong: missing type hints prevents intended parsing/validation
 ```python
 from fastapi import FastAPI
 
 app = FastAPI()
 
 @app.get("/items/{item_id}")
-def read_item(item_id: int, q: str) -> dict[str, object]:
-    # q is required because it has no default
+def read_item(item_id, q=None):
     return {"item_id": item_id, "q": q}
 ```
 
-### Right: Mark it optional with `| None` and a default `None`
+### Right: add type hints for path/query parameters
 ```python
 from fastapi import FastAPI
 
@@ -291,18 +166,18 @@ def read_item(item_id: int, q: str | None = None) -> dict[str, object]:
     return {"item_id": item_id, "q": q}
 ```
 
-### Wrong: Using `dict` for request bodies (loses validation/schema)
+### Wrong: using an untyped `dict` for request bodies
 ```python
 from fastapi import FastAPI
 
 app = FastAPI()
 
 @app.put("/items/{item_id}")
-def update_item(item_id: int, item: dict) -> dict[str, object]:
-    return {"item_name": item["name"], "item_id": item_id}
+def update_item(item_id: int, item: dict):
+    return {"item_id": item_id, "item_name": item.get("name")}
 ```
 
-### Right: Use a Pydantic `BaseModel`
+### Right: use `pydantic.BaseModel` for request bodies
 ```python
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -316,7 +191,30 @@ class Item(BaseModel):
 
 @app.put("/items/{item_id}")
 def update_item(item_id: int, item: Item) -> dict[str, object]:
-    return {"item_name": item.name, "item_id": item_id}
+    return {"item_id": item_id, "item_name": item.name, "price": item.price}
+```
+
+### Wrong: marking optional query params as required by omitting defaults
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/search")
+def search(q: str) -> dict[str, str]:
+    # q is required here; requests without ?q=... will fail validation
+    return {"q": q}
+```
+
+### Right: make query params optional with `| None` and a default
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/search")
+def search(q: str | None = None) -> dict[str, str | None]:
+    return {"q": q}
 ```
 
 ## References
@@ -329,27 +227,17 @@ def update_item(item_id: int, item: Item) -> dict[str, object]:
 
 ## Migration from v[previous]
 
-What changed in this version (if applicable):
-- Breaking changes: Not provided in the supplied context.
-- Deprecated → Current mapping: Not provided in the supplied context.
-- Notes from provided context:
-  - Prefer `fastapi dev main.py` for development (auto-reload).
-  - Prefer `fastapi run main.py` for production.
-  - If upgrading from invoking Uvicorn directly, consider migrating to these CLI commands.
+No breaking changes or deprecations were provided in the supplied context for FastAPI v0.128.4. If migrating between versions, validate:
+- CLI usage expectations (`fastapi dev` for development, `fastapi run` for production)
+- Endpoint signatures keep correct type hints and optional defaults
+- Async endpoints are declared with `async def` when using `await`
 
 ## API Reference
 
-Brief reference of the most important public APIs:
-
-- **fastapi.FastAPI() / FastAPI()** — Create the ASGI application.
-  - Common use: `app = FastAPI()`
-- **FastAPI.get(path, ...)** — Decorator to register a GET path operation.
-  - Use: `@app.get("/items/{item_id}")`
-- **FastAPI.put(path, ...)** — Decorator to register a PUT path operation.
-  - Use: `@app.put("/items/{item_id}")`
-- **pydantic.BaseModel / BaseModel** — Define request/response body schemas with validation.
-  - Use: `class Item(BaseModel): ...`
-- **fastapi dev** — CLI command for local development (auto-reload by default).
-  - Use: `fastapi dev main.py`
-- **fastapi run** — CLI command for production runs.
-  - Use: `fastapi run main.py`
+- **fastapi.FastAPI()** - Create an application instance; used to register routes and serve ASGI.
+- **FastAPI.get(path)** - Decorator to register an HTTP GET endpoint for `path`.
+- **FastAPI.put(path)** - Decorator to register an HTTP PUT endpoint for `path`.
+- **pydantic.BaseModel** - Base class for request/response models; provides validation and schema.
+- **fastapi (CLI command)** - Command-line entrypoint for running FastAPI apps.
+- **fastapi dev** - CLI subcommand for local development (auto-reload by default).
+- **fastapi run** - CLI subcommand for production execution.

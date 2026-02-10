@@ -1,185 +1,218 @@
 ---
+
 name: pytest
-description: Python testing framework that discovers tests, runs them, and provides fixtures and rich assertion reporting.
+description: Python testing framework that discovers tests, provides fixtures, and offers rich assertion introspection.
 version: 3.9.3
 ecosystem: python
 license: MIT
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
-Show the standard import patterns. Most common first:
 ```python
 import pytest
-
-from pytest import fixture, fail
+from pytest import fixture, fail, raises
 ```
 
 ## Core Patterns
 
-### Test discovery + plain asserts ✅ Current
-```python
-# content of: test_math.py
-def test_addition() -> None:
-    # Use plain assert to get pytest assertion introspection on failure.
-    assert 1 + 1 == 2
-```
-* Put tests in `test_*.py` files and name functions `test_*` so pytest auto-discovers them.
-* Prefer plain `assert` to leverage pytest introspection.
-* **Status**: Current, stable
-
-### Define and use a fixture via dependency injection ✅ Current
+### Define and use fixtures (dependency injection) ✅ Current
 ```python
 import pytest
 
-@pytest.fixture
-def my_fruit() -> str:
+@pytest.fixture()
+def fruit() -> str:
     return "apple"
 
-def test_needs_fixture(my_fruit: str) -> None:
-    # The fixture value is injected by name via the test function parameter.
-    assert my_fruit == "apple"
+def test_fruit_value(fruit: str) -> None:
+    assert fruit == "apple"
 ```
-* Use `@pytest.fixture` to create reusable setup.
-* Request fixtures by adding parameters to tests (and to other fixtures).
-* **Status**: Current, stable
+* Request fixtures by naming them as test function parameters.
+* Prefer fixtures over manual setup/teardown in tests.
 
-### Compose fixtures (fixture depends on another fixture) ✅ Current
+### Assert exceptions with pytest.raises ✅ Current
 ```python
 import pytest
 
-@pytest.fixture
-def base_url() -> str:
-    return "https://example.invalid"
+def parse_port(value: str) -> int:
+    port = int(value)
+    if not (0 <= port <= 65535):
+        raise ValueError("port out of range")
+    return port
 
-@pytest.fixture
-def api_url(base_url: str) -> str:
-    # Fixtures can depend on other fixtures by listing them as parameters.
-    return base_url + "/api"
-
-def test_api_url(api_url: str) -> None:
-    assert api_url.endswith("/api")
+def test_parse_port_rejects_out_of_range() -> None:
+    with pytest.raises(ValueError, match="out of range"):
+        parse_port("70000")
 ```
-* Use fixture composition to build layered setup without global state.
-* **Status**: Current, stable
+* Use `match=` to assert on stable parts of the error message.
 
-### Fail a test with an explicit message ✅ Current
+### Fail fast with pytest.fail ✅ Current
 ```python
 import pytest
 
-def test_not_implemented_yet() -> None:
-    # Use pytest.fail() when you want an explicit failure path and message.
-    pytest.fail("deliberately failing to highlight missing implementation")
+def test_requires_feature_flag() -> None:
+    feature_enabled = False
+    if not feature_enabled:
+        pytest.fail("feature flag must be enabled for this test")
 ```
-* `pytest.fail()` stops the test immediately and records a failure reason.
-* **Status**: Current, stable
+* Use `pytest.fail(...)` for explicit, readable failure paths (e.g., unreachable branches).
+
+### Parametrize tests with pytest.mark.parametrize ✅ Current
+```python
+import pytest
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [(1, 2, 3), (0, 0, 0), (-1, 1, 0)],
+)
+def test_add(a: int, b: int, expected: int) -> None:
+    assert add(a, b) == expected
+```
+* Prefer parametrization over loops inside a single test for clearer reporting.
+
+### Use tmp_path for filesystem isolation ✅ Current
+```python
+from __future__ import annotations
+
+from pathlib import Path
+
+def test_writes_file(tmp_path: Path) -> None:
+    out = tmp_path / "out.txt"
+    out.write_text("hello", encoding="utf-8")
+    assert out.read_text(encoding="utf-8") == "hello"
+```
+* `tmp_path` provides a unique `pathlib.Path` per test for safe filesystem operations.
 
 ## Configuration
 
-Standard configuration and setup:
-- **Test discovery conventions**
-  - Files: `test_*.py` or `*_test.py` (common convention; `test_*.py` is widely used)
-  - Functions: `test_*`
-- **Fixtures**
-  - Declared with `@pytest.fixture`
-  - Used by naming them as parameters in tests/fixtures
-- **Environment variables**
-  - `CI` or `BUILD_NUMBER`: pytest detects CI and adjusts output behavior (notably: short test summary info is **not truncated** to terminal width in CI).
-- **Config file formats**
-  - Common pytest config locations include `pytest.ini`, `setup.cfg`, and `tox.ini` (pytest reads configuration from these when present).
+* **Config formats**: `pytest.ini`, `pyproject.toml` (under `[tool.pytest.ini_options]`), `tox.ini`, `setup.cfg`.
+* **Common settings**:
+  * `testpaths`: directories to search for tests.
+  * `python_files`, `python_classes`, `python_functions`: discovery patterns.
+  * `addopts`: default CLI args (e.g., `-q`, `-ra`).
+  * `markers`: register custom markers to avoid warnings.
+* **INI “pathlist” values**: options declared by plugins/conftest via `parser.addini(..., type="pathlist")` are returned as paths relative to the config file directory.
+* **Environment variables affecting output**:
+  * `CI` or `BUILD_NUMBER`: pytest adapts output for CI logs (notably: short test summary is not truncated to terminal width). Avoid tests that assert on truncation/terminal-width-dependent formatting.
 
 ## Pitfalls
 
-### Wrong: Using a fixture without requesting it (treating it like a variable)
+### Wrong: Referencing a fixture function instead of requesting it
 ```python
 import pytest
 
 @pytest.fixture
-def my_fruit() -> str:
+def fruit() -> str:
     return "apple"
 
-def test_needs_fixture() -> None:
-    # WRONG: this refers to the fixture function object, not the injected value.
-    assert my_fruit == "apple"
+def test_fruit_value() -> None:
+    # This refers to the function object, not the fixture value.
+    assert fruit == "apple"
 ```
 
-### Right: Request the fixture by name as a test parameter
+### Right: Request the fixture by name as a parameter
 ```python
 import pytest
 
 @pytest.fixture
-def my_fruit() -> str:
+def fruit() -> str:
     return "apple"
 
-def test_needs_fixture(my_fruit: str) -> None:
-    assert my_fruit == "apple"
+def test_fruit_value(fruit: str) -> None:
+    assert fruit == "apple"
 ```
 
-### Wrong: Calling a fixture function directly (bypasses pytest fixture lifecycle)
+### Wrong: Asserting on terminal-width-dependent output (brittle in CI)
+```python
+def test_output_truncation_assumption(capsys) -> None:
+    print("short test summary info " + ("x" * 200))
+    out = capsys.readouterr().out
+    # Brittle: assumes truncation that may not happen in CI.
+    assert out.endswith("...\n")
+```
+
+### Right: Assert on stable substrings instead
+```python
+def test_output_contains_stable_substring(capsys) -> None:
+    print("short test summary info " + ("x" * 200))
+    out = capsys.readouterr().out
+    assert "short test summary info" in out
+```
+
+### Wrong: Overly strict exception message checks
 ```python
 import pytest
 
-@pytest.fixture
-def token() -> str:
-    return "secret-token"
+def f() -> None:
+    raise ValueError("bad value: 42")
 
-def test_token_value() -> None:
-    # WRONG: calling the fixture function directly bypasses pytest's fixture system.
-    t = token()  # type: ignore[misc]
-    assert t == "secret-token"
+def test_exception_message_too_strict() -> None:
+    # Too strict: minor message changes can break the test.
+    with pytest.raises(ValueError, match=r"^bad value: 42$"):
+        f()
 ```
 
-### Right: Let pytest provide the fixture value
+### Right: Match only the stable part of the message
 ```python
 import pytest
 
-@pytest.fixture
-def token() -> str:
-    return "secret-token"
+def f() -> None:
+    raise ValueError("bad value: 42")
 
-def test_token_value(token: str) -> None:
-    assert token == "secret-token"
+def test_exception_message_stable_match() -> None:
+    with pytest.raises(ValueError, match=r"bad value"):
+        f()
 ```
 
-### Wrong: Brittle assertions about CI-dependent truncated output formatting
+### Wrong: Writing incorrect expectations and ignoring assertion introspection
 ```python
-# This example is illustrative of a brittle pattern:
-# tests that assert exact truncated output may fail on CI.
+def inc(x: int) -> int:
+    return x + 1
 
-def test_brittle_output_parsing() -> None:
-    # WRONG: relying on '...' truncation is not stable across environments.
-    assert "...truncated..." == "...truncated..."
+def test_inc_wrong_expected_value() -> None:
+    assert inc(3) == 5
 ```
 
-### Right: Assert on stable content (don’t depend on truncation behavior)
+### Right: Fix the expected value; rely on plain assert
 ```python
-import pytest
+def inc(x: int) -> int:
+    return x + 1
 
-def test_failure_message_is_stable() -> None:
-    # Prefer asserting on stable, semantic content in your own code/tests.
-    # If you need a controlled failure:
-    pytest.fail("deliberately failing")
+def test_inc_correct_expected_value() -> None:
+    assert inc(3) == 4
 ```
 
 ## References
 
-CRITICAL: Include ALL provided URLs below (do NOT skip this section):
-
-- [Official Documentation](https://docs.pytest.org/en/3.9.3/)
+- [Official Documentation](https://docs.pytest.org/en/stable/)
 - [GitHub Repository](https://github.com/pytest-dev/pytest)
 
 ## Migration from v[previous]
 
-What changed in this version (if applicable):
-- Breaking changes: Not provided in the input context.
-- Deprecated → Current mapping: Not provided in the input context.
-- Notes relevant to upgrades/CI:
-  - If you have tooling/tests that parse pytest output, be aware pytest changes output truncation behavior when `CI` or `BUILD_NUMBER` is set (CI shows full lines in short test summary info).
+No specific breaking-change notes were provided for v3.9.3 in the given context.
+
+Deprecated-to-current guidance reflected in the test patterns:
+* Prefer `tmp_path`/`tmp_path_factory` (`pathlib.Path`) over legacy `tmpdir`/`tmpdir_factory` (py.path-style).
+* Prefer public fixtures like `request` instead of constructing internal request objects directly.
 
 ## API Reference
 
-Brief reference of the most important public APIs:
-
-- **pytest** (module) - Main entry point module; provides test helpers and decorators.
-- **@pytest.fixture** - Declare a fixture function; pytest injects fixture values by matching parameter names.
-- **pytest.fail(reason: str = "", pytrace: bool = True)** - Immediately fail the current test with a message (optionally controlling traceback display).
+- **pytest.fixture** - Define a fixture; key params: `scope`, `params`, `autouse`, `name`.
+- **pytest.fail** - Immediately fail a test with a message; key params: `reason`, `pytrace`.
+- **pytest.raises** - Assert an exception is raised; key params: expected exception type(s), `match`.
+- **pytest.mark.parametrize** - Parametrize a test function over input cases; key params: argnames, argvalues, `ids`.
+- **tmp_path (fixture)** - Per-test temporary directory as `pathlib.Path`.
+- **tmp_path_factory (fixture)** - Session-scoped factory for temporary paths; method: `getbasetemp()`.
+- **capsys (fixture)** - Capture `stdout`/`stderr` from Python-level writes; method: `readouterr()`.
+- **capfd (fixture)** - Capture `stdout`/`stderr` at the file-descriptor level; method: `readouterr()`.
+- **monkeypatch (fixture)** - Temporarily modify environment/attributes; methods: `setattr`, `setenv`, `chdir`.
+- **pytestconfig (fixture)** - Access configuration and CLI options; common method: `getoption(...)`.
+- **request (fixture)** - Introspect the requesting test context; common method: `getfixturevalue(name)`.
+- **pytest.skip** - Skip at runtime; key params: `reason`, `allow_module_level`.
+- **pytest.importorskip** - Skip if an import fails; key params: module name, `minversion`, `reason`.
+- **pytest.xfail** - Mark expected failure at runtime; key params: `reason`, `strict`.
+- **pytest.mark** - Namespace for markers (e.g., `skip`, `xfail`, custom markers).

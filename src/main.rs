@@ -53,6 +53,14 @@ enum Commands {
         #[arg(long)]
         config: Option<String>,
 
+        /// Override LLM model (e.g., "gpt-5.2", "claude-sonnet-4-5-20250929")
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Override max generation retries (default: from config)
+        #[arg(long)]
+        max_retries: Option<usize>,
+
         /// Use mock LLM client for testing
         #[arg(long)]
         dry_run: bool,
@@ -77,6 +85,8 @@ async fn main() -> Result<()> {
             version,
             version_from,
             config,
+            model,
+            max_retries,
             dry_run,
         } => {
             cli::generate::run(
@@ -87,6 +97,8 @@ async fn main() -> Result<()> {
                 version,
                 version_from,
                 config,
+                model,
+                max_retries,
                 dry_run,
             )
             .await?;
@@ -94,4 +106,113 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_parse_generate_defaults() {
+        let cli = Cli::try_parse_from(["skilldo", "generate"]).unwrap();
+        match cli.command {
+            Commands::Generate {
+                path,
+                language,
+                output,
+                dry_run,
+                ..
+            } => {
+                assert_eq!(path, ".");
+                assert!(language.is_none());
+                assert_eq!(output, "SKILL.md");
+                assert!(!dry_run);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_generate_with_all_args() {
+        let cli = Cli::try_parse_from([
+            "skilldo",
+            "generate",
+            "/tmp/repo",
+            "--language",
+            "python",
+            "--output",
+            "out.md",
+            "--model",
+            "gpt-5.2",
+            "--max-retries",
+            "5",
+            "--version",
+            "2.0.0",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Generate {
+                path,
+                language,
+                output,
+                model,
+                max_retries,
+                version,
+                dry_run,
+                ..
+            } => {
+                assert_eq!(path, "/tmp/repo");
+                assert_eq!(language.unwrap(), "python");
+                assert_eq!(output, "out.md");
+                assert_eq!(model.unwrap(), "gpt-5.2");
+                assert_eq!(max_retries.unwrap(), 5);
+                assert_eq!(version.unwrap(), "2.0.0");
+                assert!(dry_run);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_generate_with_input() {
+        let cli = Cli::try_parse_from([
+            "skilldo",
+            "generate",
+            ".",
+            "-i",
+            "old-SKILL.md",
+            "-o",
+            "new-SKILL.md",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Generate { input, output, .. } => {
+                assert_eq!(input.unwrap(), "old-SKILL.md");
+                assert_eq!(output, "new-SKILL.md");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_generate_version_from() {
+        let cli =
+            Cli::try_parse_from(["skilldo", "generate", "--version-from", "git-tag"]).unwrap();
+        match cli.command {
+            Commands::Generate { version_from, .. } => {
+                assert_eq!(version_from.unwrap(), "git-tag");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_missing_subcommand() {
+        let result = Cli::try_parse_from(["skilldo"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_subcommand() {
+        let result = Cli::try_parse_from(["skilldo", "foobar"]);
+        assert!(result.is_err());
+    }
 }

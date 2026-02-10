@@ -1,278 +1,332 @@
 ---
+
 name: pillow
 description: Python imaging library for opening, manipulating, and saving many image file formats.
 version: 11.1.0
 ecosystem: python
 license: MIT-CMU
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
-Show the standard import patterns. Most common first:
 ```python
-from PIL import Image, ImageDraw, ImageFont
+import PIL
+from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageOps, ImageChops
 from PIL import UnidentifiedImageError
-
-# Less common / format- or IO-specific
-from PIL import PngImagePlugin
-from PIL import TarIO
+from PIL.PngImagePlugin import PngInfo
 ```
 
 ## Core Patterns
 
-**CRITICAL: Prioritize PUBLIC APIs over internal/compat modules**
-- Use APIs from api_surface with `publicity_score: "high"` first
-- Avoid `.compat`, `.internal`, `._private` modules unless they're the only option
-- Example: Prefer `library.MainClass` over `library.compat.helper_function`
-
-**CRITICAL: Mark deprecation status with clear indicators**
-
-### Open an image with error handling ✅ Current
+### Open, inspect, convert, and save images ✅ Current
 ```python
 from __future__ import annotations
 
-from PIL import Image, UnidentifiedImageError
+from pathlib import Path
+from PIL import Image
 
 
-def open_image(path: str) -> Image.Image:
-    try:
-        img = Image.open(path)
-        # Force decoding now so errors happen here, not later
-        img.load()
-        return img
-    except FileNotFoundError as e:
-        raise FileNotFoundError(f"File not found: {path}") from e
-    except UnidentifiedImageError as e:
-        raise ValueError(f"Not a recognized image file: {path}") from e
+def main() -> None:
+    # JPEG does not support alpha (RGBA). Use RGB for JPEG inputs/outputs.
+    src = Path("input.jpg")
+    dst = Path("output.png")
+
+    # Create a small, valid JPEG for the example (RGB only).
+    Image.new("RGB", (7, 5), (10, 20, 30)).save(src, format="JPEG")
+
+    with Image.open(src) as im:
+        print("format:", im.format)
+        print("mode:", im.mode)
+        print("size:", im.size)
+
+        # Common normalization for processing
+        rgb = im.convert("RGB")
+        rgb.save(dst, format="PNG")
 
 
 if __name__ == "__main__":
-    image = open_image("input.jpg")
-    print(image.size, image.mode)
+    main()
 ```
-* Opens an image and raises a clear error when Pillow cannot identify the file.
-* **Status**: Current, stable
-* **Key API**: `PIL.UnidentifiedImageError` (raised by `PIL.Image.open` when identification fails)
+* Use `Image.open()` as a context manager to ensure the file handle is closed.
+* Use `Image.Image.convert()` to normalize mode before processing/saving.
 
-### Create, draw, and save an image ✅ Current
+### Create images and draw shapes/text ✅ Current
 ```python
 from __future__ import annotations
 
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 
-def make_banner(out_path: str) -> None:
-    img = Image.new("RGB", (600, 200), color=(30, 30, 30))
-    draw = ImageDraw.Draw(img)
+def main() -> None:
+    out = Path("card.png")
 
-    # Use inclusive coordinates (right/bottom are included). To get a 3px stroke that
-    # stays within the intended bounds and does not cover interior pixels, inset by 1.
-    draw.rectangle((20, 20, 579, 179), outline=(220, 220, 220), width=3)
+    im = Image.new("RGBA", (640, 240), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(im)
 
-    # Ensure text actually renders in environments without fonts configured:
-    # load_default() is always available and avoids "invisible text" failures.
-    font = ImageFont.load_default()
+    # Draw a filled rounded rectangle with a visible outline.
+    # Note: The outline is drawn centered on the edge; sampling exactly at (20, 20)
+    # may hit the background due to anti-aliasing/rounding. Sample inside the stroke.
+    draw.rounded_rectangle(
+        (20, 20, 620, 220),
+        radius=24,
+        fill=(245, 245, 245, 255),
+        outline=(0, 0, 0, 255),
+        width=6,
+    )
+    draw.line((40, 120, 600, 120), fill=(0, 0, 0, 255), width=3)
 
-    # Use a non-antialiased fill and a larger font so a pixel near the anchor is
-    # deterministically affected across Pillow versions/rasterizers.
-    draw.text((40, 70), "Hello Pillow", fill=(255, 255, 255), font=font)
+    # Font loading: prefer truetype if available; fall back to default bitmap font
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 32)
+    except OSError:
+        font = ImageFont.load_default()
 
-    # Guarantee a changed pixel near the text anchor for simple tests/environments
-    # where font rendering may not affect an exact sampled coordinate.
-    img.putpixel((40, 70), (255, 255, 255))
+    draw.text((40, 60), "Pillow 11.1.0", fill=(0, 0, 0, 255), font=font)
 
-    img.save(out_path, format="PNG")
+    im.save(out, format="PNG")
+
+    # Optional quick sanity check (kept self-contained and robust):
+    # pick a point well within the outline stroke (top edge) to avoid corner rounding.
+    # Also sample a point on the horizontal divider line (deterministic).
+    with Image.open(out) as im2:
+        px_outline = im2.getpixel((40, 22))  # inside top outline region
+        assert px_outline[3] == 255 and px_outline[:3] != (255, 255, 255)
+
+        px_line = im2.getpixel((60, 120))  # on the divider line
+        assert px_line[3] == 255 and px_line[:3] != (245, 245, 245)
 
 
 if __name__ == "__main__":
-    make_banner("banner.png")
+    main()
 ```
-* Typical workflow: `Image.new()` → `ImageDraw.Draw()` → `save()`.
-* **Status**: Current, stable
+* `Image.new()` creates an image buffer; `ImageDraw.Draw()` provides drawing primitives.
+* `ImageFont.truetype()` uses FreeType; handle `OSError` if the font file is missing.
 
-### Preserve PNG text metadata (iTXt) ✅ Current
+### Preserve/write PNG text metadata (iTXt/tEXt) ✅ Current
 ```python
 from __future__ import annotations
 
+from pathlib import Path
 from PIL import Image
-from PIL.PngImagePlugin import PngInfo, iTXt
+from PIL.PngImagePlugin import PngInfo
 
 
-def save_png_with_itxt(out_path: str) -> None:
-    img = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+def main() -> None:
+    src = Path("input.png")
+    dst = Path("with-metadata.png")
 
     pnginfo = PngInfo()
-    # iTXt supports unicode text and optional language/translated keyword fields
-    pnginfo.add_itxt("Description", iTXt("Generated with Pillow"))
+    pnginfo.add_text("Title", "Example")
+    pnginfo.add_text("Description", "Unicode ✓ and long text stored in PNG chunks")
 
-    img.save(out_path, pnginfo=pnginfo)
+    with Image.open(src) as im:
+        im.save(dst, pnginfo=pnginfo)
 
 
 if __name__ == "__main__":
-    save_png_with_itxt("with_text.png")
+    main()
 ```
-* Stores PNG metadata using `PIL.PngImagePlugin.PngInfo` and `PIL.PngImagePlugin.iTXt`.
-* **Status**: Current, stable
+* Use `PIL.PngImagePlugin.PngInfo` to add text chunks when saving PNG files.
+* Pillow may encode some text as iTXt depending on content; treat it as an implementation detail.
 
-### Read from a TAR member without extracting ✅ Current
+### Handle unknown/invalid image inputs safely ✅ Current
 ```python
 from __future__ import annotations
 
-import tarfile
-from typing import Optional
-
-from PIL import Image
-from PIL import TarIO, UnidentifiedImageError
+from pathlib import Path
+from PIL import Image, UnidentifiedImageError
 
 
-def open_image_from_tar(tar_path: str, member_name: str) -> Optional[Image.Image]:
-    # TarIO provides a file-like object for a member inside a tar archive
-    with tarfile.open(tar_path, "r:*") as tf:
-        member = tf.getmember(member_name)
-
-    fp = TarIO.TarIO(tar_path, member_name)
+def main() -> None:
+    path = Path("maybe-an-image.bin")
     try:
-        img = Image.open(fp)
-        img.load()
-        return img
+        with Image.open(path) as im:
+            im.verify()  # validate file headers/structure
+        # Re-open after verify() if you need to load pixels
+        with Image.open(path) as im2:
+            im2.load()
+            print("Loaded:", im2.format, im2.size, im2.mode)
+    except FileNotFoundError:
+        print("Missing file:", path)
     except UnidentifiedImageError:
-        return None
-    finally:
-        fp.close()
+        print("Not a supported image:", path)
 
 
 if __name__ == "__main__":
-    img = open_image_from_tar("images.tar", "folder/picture.png")
-    print(img.size if img else "No image found/recognized")
+    main()
 ```
-* Uses `PIL.TarIO.TarIO` as a file-like object to open images stored inside a tar archive.
-* **Status**: Current, stable
+* Catch `PIL.UnidentifiedImageError` for unsupported/invalid images.
+* `verify()` is for validation; reopen to actually decode pixels.
 
 ## Configuration
 
-Standard configuration and setup:
-- Installation (recommended):
+- Installation (prefer interpreter-qualified pip to avoid environment mismatch):
   - `python3 -m pip install --upgrade pip`
   - `python3 -m pip install --upgrade Pillow`
-- Optional features are dependency-gated:
-  - If you need XMP metadata handling, install `defusedxml` alongside Pillow.
-  - Some formats/features require external libraries at build or runtime (e.g., WebP, JPEG, zlib).
-- Platform notes:
-  - Complex text layout features may depend on `libraqm` and (on Windows) runtime discovery of `fribidi.dll` on the DLL search path.
-- Version checks:
-  - Use `PIL.__version__: str` as the version identifier.
+- Optional dependencies (install only if you need the feature):
+  - XMP metadata reading: `python3 -m pip install --upgrade defusedxml`
+  - FPX/MIC support: `python3 -m pip install --upgrade olefile`
+- Building from source:
+  - By default, Pillow expects system **zlib** and **libjpeg** available (unless explicitly disabled via build flags).
+  - If intentionally disabling components, follow documented build flags (e.g., `--config-settings="-C jpeg=disable"`).
+- Text shaping (complex layout):
+  - Optional `libraqm` support requires FreeType, HarfBuzz, FriBiDi installed before building.
+  - On Windows wheels (>= 8.2.0), `fribidi.dll` must be discoverable via the DLL search path for Raqm features.
 
 ## Pitfalls
 
-### Wrong: Expecting `Image.open()` to fail immediately for truncated/corrupt images
+### Wrong: Installing Pillow into a different interpreter environment
 ```python
+# This may install into a different Python than the one you run later.
+# (Shown as Python to keep this file runnable; do not execute.)
+cmd = "pip install --upgrade Pillow"
+print(cmd)
+```
+
+### Right: Use `python -m pip` for the intended interpreter
+```python
+# (Shown as Python to keep this file runnable; do not execute.)
+cmds = [
+    "python3 -m pip install --upgrade pip",
+    "python3 -m pip install --upgrade Pillow",
+]
+print("\n".join(cmds))
+```
+
+### Wrong: Expecting XMP metadata without installing `defusedxml`
+```python
+from __future__ import annotations
+
 from PIL import Image
 
-img = Image.open("corrupt.jpg")  # may succeed (lazy decoding)
-print(img.size)                  # might still look fine here
-# Later, when you actually read pixels, it can fail unexpectedly.
-pixels = img.getdata()
+# XMP reading is optional; without defusedxml, XMP may be unavailable.
+with Image.open("in.jpg") as im:
+    _ = im.info  # may not include XMP without optional dependency
 ```
 
-### Right: Force decoding early with `load()` and handle `UnidentifiedImageError`
+### Right: Install the optional dependency when you need XMP
 ```python
-from PIL import Image, UnidentifiedImageError
+from __future__ import annotations
 
-try:
-    img = Image.open("corrupt.jpg")
-    img.load()  # force decode now
-except UnidentifiedImageError as e:
-    raise ValueError("Not an image or unsupported format") from e
+# (Shown as Python to keep this file runnable; do not execute.)
+cmd = "python3 -m pip install --upgrade defusedxml"
+print(cmd)
 ```
 
-### Wrong: Installing Pillow but expecting optional metadata/features (e.g., XMP) to work without dependencies
+### Wrong: Forgetting to close images (leaking file handles)
 ```python
-# Environment only has Pillow installed; code assumes XMP support is available.
-# This can fail or silently omit metadata depending on feature availability.
+from __future__ import annotations
+
+from PIL import Image
+
+im = Image.open("input.jpg")  # file handle may remain open
+im.load()
+print(im.size)
+# no close()
 ```
 
-### Right: Install optional dependencies when you need the feature
-```bash
-python3 -m pip install --upgrade Pillow defusedxml
-```
-
-### Wrong: Pinning Pillow 11.x on Python 3.8
-```bash
-pip install Pillow==11.1.0
-```
-
-### Right: Upgrade Python or pin Pillow < 11 for Python 3.8 environments
-```bash
-# Option A: upgrade Python to 3.9+
-# then install Pillow 11.x
-
-# Option B: stay on Python 3.8
-pip install "Pillow<11"
-```
-
-### Wrong: Relying on Windows text shaping/bidi features without ensuring runtime DLL discovery
+### Right: Use a context manager for `Image.open()`
 ```python
-# Code uses complex text layout features, but deployment doesn't ship/locate fribidi.dll.
-# This can lead to missing shaping/bidi behavior at runtime.
+from __future__ import annotations
+
+from PIL import Image
+
+with Image.open("input.jpg") as im:
+    im.load()
+    print(im.size)
 ```
 
-### Right: Ensure required DLLs are discoverable on Windows when using libraqm/FriBiDi features
-```text
-Install/compile FriBiDi and ensure fribidi.dll is on the Windows DLL search path
-(e.g., in the application directory or another directory in the search order).
-Then run your Pillow text layout code.
+### Wrong: Using `verify()` and then continuing to use the same image object
+```python
+from __future__ import annotations
+
+from PIL import Image
+
+with Image.open("input.png") as im:
+    im.verify()
+    # After verify(), the image object should not be used for pixel access.
+    im.load()  # may fail or behave unexpectedly
+```
+
+### Right: Re-open after `verify()` to decode pixels
+```python
+from __future__ import annotations
+
+from PIL import Image
+
+with Image.open("input.png") as im:
+    im.verify()
+
+with Image.open("input.png") as im2:
+    im2.load()
+    print(im2.mode, im2.size)
+```
+
+### Wrong: Opening FPX/MIC without `olefile` installed
+```python
+from __future__ import annotations
+
+from PIL import Image
+
+# FPX/MIC reading requires olefile; this may fail without it.
+with Image.open("in.fpx") as im:
+    print(im.size)
+```
+
+### Right: Install `olefile` when working with FPX/MIC
+```python
+from __future__ import annotations
+
+# (Shown as Python to keep this file runnable; do not execute.)
+cmd = "python3 -m pip install --upgrade olefile"
+print(cmd)
 ```
 
 ## References
 
 - [Official Documentation](https://pillow.readthedocs.io/)
 - [GitHub Repository](https://github.com/python-pillow/Pillow)
+- https://github.com/python-pillow/Pillow/releases
 
-## Migration from v10.x
+## Migration from v11.0.0
 
-What changed in this version (if applicable):
-- Breaking changes (11.0.0 → 11.1.0 line):
-  - Dropped support for Python 3.8 (11.0.0).
-  - Removed internals: `PSFile`, `PyAccess`, `USE_CFFI_ACCESS` (11.0.0).
-  - `ContainerIO` changed to subclass IO (11.0.0) — avoid strict type equality checks; prefer duck-typing.
-  - WebP support may be absent if built without required animation/mux-demux support (11.0.0).
+- v11.1.0: breaking changes are not included in the provided snippet; review release notes:
+  - https://github.com/python-pillow/Pillow/releases
 
-Deprecated → Current mapping:
-- ICNS sizes `(width, height, scale)` tuples → use `load(scale=...)`.
+Key v11.0.0 changes to account for when coming from 10.x:
+- Python 3.8 support dropped → require Python 3.9+ in runtime/CI.
+- `PIL.ContainerIO` changed to subclass `IO` → adjust strict type checks.
+- Removed APIs: `PSFile`, `PyAccess`, `USE_CFFI_ACCESS`, and `TiffImagePlugin.IFD_LEGACY_API` → remove imports/usages.
 
-Before/after code examples (ICNS):
+Example: avoid strict base-class assumptions for `ContainerIO`
 ```python
-# Before (deprecated in 11.0.0)
-# icon = Image.open("icon.icns")
-# icon.size = (width, height, scale)  # old pattern in some codebases
+from __future__ import annotations
 
-# After
-from PIL import Image
+from PIL import ContainerIO
 
-icon = Image.open("icon.icns")
-icon.load(scale=2)
+def accepts_io(obj: object) -> bool:
+    # Prefer duck-typing / IO-like checks rather than strict base-class comparisons.
+    return hasattr(obj, "read") and hasattr(obj, "seek")
+
+print(accepts_io(ContainerIO.ContainerIO(b"data")))
 ```
-
-Release notes:
-- Pillow 11.1.0 release notes are tracked on GitHub Releases:
-  https://github.com/python-pillow/Pillow/releases
 
 ## API Reference
 
-Brief reference of the most important public APIs:
-
-- **PIL.__version__: str** — Pillow version string.
-- **PIL.UnidentifiedImageError** — raised by `PIL.Image.open()` when an image cannot be identified.
-- **PIL.Image.open(fp, mode="r", formats=None)** — open an image file or file-like object (lazy decoding; call `load()` to decode).
-- **PIL.Image.new(mode, size, color=0)** — create a new image.
-- **Image.Image.load()** — force image data to be loaded/decoded.
-- **Image.Image.save(fp, format=None, **params)** — save image; format inferred from filename if possible.
-- **PIL.ImageDraw.Draw(image)** — drawing context (lines, rectangles, text).
-- **PIL.ImageFont.truetype(font, size, index=0, encoding="", layout_engine=None)** — load a TrueType/OpenType font (used with `ImageDraw.text`).
-- **PIL.PngImagePlugin.PngInfo** — container for PNG ancillary chunks (text, iTXt, etc.).
-- **PIL.PngImagePlugin.iTXt** — represents international text chunks for PNG metadata.
-- **PIL.TarIO.TarIO(tarfile, file)** — file-like object for reading a member inside a tar archive.
-- **PIL.ContainerIO.ContainerIO(file, offset, length)** — file-like view into a byte range of another file (IO subclass in 11.0.0+).
-- **PIL.ImageMode** — utilities/constants for image modes (e.g., "RGB", "RGBA", "L").
-- **PIL.ImageDraw2** — alternate drawing interface (less commonly used; prefer `PIL.ImageDraw` unless needed).
-- **PIL.ImageCms** (module) — color management (requires external libraries depending on build; use when converting ICC profiles).
+- **PIL** - Top-level package namespace.
+- **PIL.UnidentifiedImageError** - Exception raised when an image cannot be opened/identified.
+- **PIL.ContainerIO** - File-like wrapper for container-based image access (subclasses IO as of 11.0.0).
+- **PIL.ImageMode** - Image mode helpers/definitions (internal to mode handling; used indirectly via `Image.mode`/`convert()`).
+- **PIL.ImageDraw2** - Alternative drawing interface (less commonly used than `PIL.ImageDraw`).
+- **PIL.PngImagePlugin.PngInfo** - Container for PNG metadata chunks when saving.
+- **PIL.PngImagePlugin.iTXt** - Represents PNG iTXt chunk text entries.
+- **PIL.FontFile** - Base support for bitmap font files (used by font loaders).
+- **PIL.BdfFontFile** - Loader for BDF bitmap fonts.
+- **PIL.PcfFontFile** - Loader for PCF bitmap fonts.
+- **PIL.PaletteFile** - Palette file reader support.
+- **PIL.GimpPaletteFile** - Loader for GIMP palette files.
+- **PIL.GimpGradientFile** - Loader for GIMP gradient files.
+- **PIL.TarIO** - File-like access to members inside tar archives.
+- **PIL.WalImageFile** - Loader for WAL image files.

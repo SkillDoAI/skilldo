@@ -242,7 +242,55 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires uv installed
+    fn test_execution_result_is_pass() {
+        let result = ExecutionResult::Pass("ok".into());
+        assert!(result.is_pass());
+        assert!(!result.is_fail());
+    }
+
+    #[test]
+    fn test_execution_result_is_fail() {
+        let result = ExecutionResult::Fail("err".into());
+        assert!(result.is_fail());
+        assert!(!result.is_pass());
+    }
+
+    #[test]
+    fn test_execution_result_timeout() {
+        let result = ExecutionResult::Timeout;
+        assert!(!result.is_pass());
+        assert!(!result.is_fail());
+    }
+
+    #[test]
+    fn test_execution_result_error_message() {
+        assert_eq!(
+            ExecutionResult::Pass("stdout output".into()).error_message(),
+            "stdout output"
+        );
+        assert_eq!(
+            ExecutionResult::Fail("stderr output".into()).error_message(),
+            "stderr output"
+        );
+        assert_eq!(
+            ExecutionResult::Timeout.error_message(),
+            "Test execution timed out (60 seconds)"
+        );
+    }
+
+    #[test]
+    fn test_python_uv_executor_default() {
+        let executor = PythonUvExecutor::default();
+        assert_eq!(executor.timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_python_uv_executor_with_timeout() {
+        let executor = PythonUvExecutor::new().with_timeout(30);
+        assert_eq!(executor.timeout_secs, 30);
+    }
+
+    #[test]
     fn test_setup_environment_no_deps() {
         let executor = PythonUvExecutor::new();
         let env = executor.setup_environment(&[]).unwrap();
@@ -253,7 +301,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires uv installed
     fn test_run_simple_code() {
         let executor = PythonUvExecutor::new();
         let env = executor.setup_environment(&[]).unwrap();
@@ -271,7 +318,6 @@ print("Hello from test")
     }
 
     #[test]
-    #[ignore] // Requires uv installed
     fn test_run_failing_code() {
         let executor = PythonUvExecutor::new();
         let env = executor.setup_environment(&[]).unwrap();
@@ -289,7 +335,62 @@ raise ValueError("Test error")
     }
 
     #[test]
-    #[ignore] // Requires uv installed and network
+    fn test_cleanup_is_noop() {
+        // cleanup() just returns Ok — TempDir handles actual cleanup
+        let executor = PythonUvExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        assert!(executor.cleanup(&env).is_ok());
+    }
+
+    #[test]
+    fn test_run_code_missing_python_path() {
+        let executor = PythonUvExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        let result = executor.run_code(&env, "print('hello')");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Python path not set"));
+    }
+
+    #[test]
+    fn test_run_code_nonexistent_python() {
+        let executor = PythonUvExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: Some(PathBuf::from("/nonexistent/python3")),
+            container_name: None,
+            dependencies: vec![],
+        };
+        // Should fail because the python binary doesn't exist
+        let result = executor.run_code(&env, "print('hello')");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_setup_environment_rejects_bad_deps() {
+        let executor = PythonUvExecutor::new();
+        // If uv isn't available, setup_environment will bail before dep validation.
+        // If uv IS available, it should still reject the bad dep name.
+        let result = executor.setup_environment(&["valid-pkg; rm -rf /".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_setup_with_dependencies() {
         let executor = PythonUvExecutor::new();
         let deps = vec!["click".to_string()];

@@ -360,3 +360,192 @@ fn test_skip_pycache_directories() {
         .any(|f| f.to_str().unwrap().contains("__pycache__")));
     assert!(files.iter().any(|f| f.ends_with("main.py")));
 }
+
+#[test]
+fn test_license_from_toml_table_format() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // Table format: license = { text = "BSD-3-Clause" }
+    let pyproject_content = r#"
+[project]
+name = "test-package"
+version = "1.0.0"
+license = { text = "BSD-3-Clause" }
+"#;
+    fs::write(repo_path.join("pyproject.toml"), pyproject_content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let license = handler.get_license();
+
+    assert_eq!(license, Some("BSD-3-Clause".to_string()));
+}
+
+#[test]
+fn test_project_urls_from_setup_py_homepage() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // setup.py with project_urls containing a simple key (no colon in key name)
+    let setup_content = r#"
+from setuptools import setup
+
+setup(
+    name='test-package',
+    project_urls={
+        "Homepage": "https://example.com",
+    }
+)
+"#;
+    fs::write(repo_path.join("setup.py"), setup_content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let urls = handler.get_project_urls();
+
+    // Parser uses split_once(':') so "Homepage": "https://..." splits into
+    // key="Homepage" and value=" "https://example.com"," which gets cleaned
+    assert!(!urls.is_empty());
+    assert!(urls.iter().any(|(k, _v)| k.contains("Homepage")));
+}
+
+#[test]
+fn test_version_from_setup_cfg() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // setup.cfg with version -- get_version does not read setup.cfg,
+    // so this should fall back to "latest"
+    let setup_cfg_content = "[metadata]\nname = test-package\nversion = 2.0.0\n";
+    fs::write(repo_path.join("setup.cfg"), setup_cfg_content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let version = handler.get_version().unwrap();
+
+    assert_eq!(version, "latest");
+}
+
+#[test]
+fn test_version_from_version_txt() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // version.txt -- get_version does not read version.txt,
+    // so this should fall back to "latest"
+    fs::write(repo_path.join("version.txt"), "3.1.0\n").unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let version = handler.get_version().unwrap();
+
+    assert_eq!(version, "latest");
+}
+
+#[test]
+fn test_docs_collection_depth_limit() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // Create deeply nested docs directories (12+ levels, limit is 10)
+    let mut deep_dir = repo_path.join("docs");
+    for i in 0..12 {
+        deep_dir = deep_dir.join(format!("level{}", i));
+    }
+    fs::create_dir_all(&deep_dir).unwrap();
+    fs::write(deep_dir.join("deep.md"), "# Too deep").unwrap();
+
+    // Also create a doc at a reachable depth
+    let shallow_dir = repo_path.join("docs").join("level0");
+    fs::write(shallow_dir.join("shallow.md"), "# Reachable").unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let docs = handler.find_docs().unwrap();
+
+    // Shallow doc should be found
+    assert!(docs.iter().any(|p| p.ends_with("shallow.md")));
+
+    // Deep doc beyond depth 10 should NOT be found
+    assert!(!docs.iter().any(|p| p.ends_with("deep.md")));
+}
+
+#[test]
+fn test_skip_venv_in_tests() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // Create .venv directory containing a test-like file (should be skipped)
+    let venv_tests = repo_path.join(".venv").join("lib").join("tests");
+    fs::create_dir_all(&venv_tests).unwrap();
+    fs::write(venv_tests.join("test_something.py"), "# venv test").unwrap();
+
+    // Create a real test file
+    let tests_dir = repo_path.join("tests");
+    fs::create_dir(&tests_dir).unwrap();
+    fs::write(tests_dir.join("test_real.py"), "# real test").unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let files = handler.find_test_files().unwrap();
+
+    // Should find real test but not .venv test
+    assert!(files.iter().any(|f| f.ends_with("test_real.py")));
+    assert!(!files.iter().any(|f| f.to_str().unwrap().contains(".venv")));
+}
+
+#[test]
+fn test_find_source_empty_repo() {
+    let temp = TempDir::new().unwrap();
+
+    // Empty temp dir with no Python source files
+    let handler = PythonHandler::new(temp.path());
+    let result = handler.find_source_files();
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("No Python source files found"));
+}
+
+#[test]
+fn test_file_priority_depth() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // Create files at various depths to exercise file_priority sorting:
+    // - Top-level package __init__.py (depth 2) -> priority 0
+    // - Public top-level module (depth 2) -> priority 20
+    // - Public subpackage module (depth 3) -> priority 30
+    // - Deep submodule (depth 4+) -> priority 50
+    // - Internal/private file -> priority 100
+    let pkg = repo_path.join("mypkg");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("__init__.py"), "# init").unwrap();
+    fs::write(pkg.join("api.py"), "# public module").unwrap();
+
+    let sub = pkg.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("helper.py"), "# subpackage module").unwrap();
+
+    let deep = sub.join("deep");
+    fs::create_dir_all(&deep).unwrap();
+    fs::write(deep.join("impl.py"), "# deep module").unwrap();
+
+    let internal = pkg.join("_internal");
+    fs::create_dir_all(&internal).unwrap();
+    fs::write(internal.join("secret.py"), "# internal").unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let files = handler.find_source_files().unwrap();
+
+    // find_source_files sorts by file_priority, so __init__.py should come first
+    let first_file = files[0].file_name().unwrap().to_str().unwrap();
+    assert_eq!(
+        first_file, "__init__.py",
+        "Top-level __init__.py should have highest priority"
+    );
+
+    // Internal files should be sorted last
+    let last_file = files.last().unwrap();
+    assert!(
+        last_file.to_str().unwrap().contains("_internal"),
+        "Internal files should have lowest priority (sorted last)"
+    );
+}

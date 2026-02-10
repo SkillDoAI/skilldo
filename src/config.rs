@@ -31,6 +31,24 @@ pub struct LlmConfig {
     /// - gemini: 8192
     #[serde(default)]
     pub max_tokens: Option<u32>,
+
+    /// Max retries for transient network errors (connection drops, 429s, 5xx).
+    /// Default: 10. Set to 0 to disable.
+    #[serde(default = "default_network_retries")]
+    pub network_retries: usize,
+
+    /// Delay between retries in seconds (constant interval).
+    /// Default: 120 (retries every 2 minutes, 10 attempts = 20 min max).
+    #[serde(default = "default_retry_delay")]
+    pub retry_delay: u64,
+}
+
+fn default_network_retries() -> usize {
+    10
+}
+
+fn default_retry_delay() -> u64 {
+    120
 }
 
 impl LlmConfig {
@@ -286,6 +304,8 @@ impl Default for Config {
                 api_key_env: Some("AI_API_KEY".to_string()),
                 base_url: None,
                 max_tokens: None, // Use provider default (4096 for anthropic)
+                network_retries: default_network_retries(),
+                retry_delay: default_retry_delay(),
             },
             generation: GenerationConfig {
                 max_retries: 5,
@@ -372,6 +392,8 @@ mod tests {
             api_key_env: None,
             base_url: None,
             max_tokens: None,
+            network_retries: 10,
+            retry_delay: 120,
         };
         assert_eq!(llm.get_max_tokens(), 4096);
 

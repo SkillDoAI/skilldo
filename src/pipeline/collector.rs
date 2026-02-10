@@ -280,48 +280,214 @@ impl Collector {
     }
 
     /// Calculate file priority (lower = higher priority, read first)
-    /// Based on python.rs file_priority logic but language-agnostic
     fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
-        let path_str = path.to_str().unwrap_or("");
-        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let relative = path.strip_prefix(repo_path).unwrap_or(path);
-        let depth = relative.components().count();
+        crate::util::calculate_file_priority(path, repo_path)
+    }
+}
 
-        // Priority 0: Top-level package __init__.py (tensorflow/__init__.py)
-        if file_name == "__init__.py" && depth == 2 {
-            return 0;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // -- floor_char_boundary tests --
+
+    #[test]
+    fn test_floor_char_boundary_ascii() {
+        let s = "hello world";
+
+        // Exact boundary positions in ASCII are always valid
+        assert_eq!(floor_char_boundary(s, 0), 0);
+        assert_eq!(floor_char_boundary(s, 5), 5);
+        assert_eq!(floor_char_boundary(s, 11), 11);
+
+        // Beyond string length clamps to len
+        assert_eq!(floor_char_boundary(s, 100), s.len());
+    }
+
+    #[test]
+    fn test_floor_char_boundary_multibyte() {
+        // Each emoji is 4 bytes in UTF-8
+        let s = "\u{1F600}\u{1F601}\u{1F602}"; // 3 emoji, 12 bytes total
+        assert_eq!(s.len(), 12);
+
+        // Index 0 is a valid boundary (start of first emoji)
+        assert_eq!(floor_char_boundary(s, 0), 0);
+
+        // Index 4 is a valid boundary (start of second emoji)
+        assert_eq!(floor_char_boundary(s, 4), 4);
+
+        // Indices 1, 2, 3 are mid-character; should floor to 0
+        assert_eq!(floor_char_boundary(s, 1), 0);
+        assert_eq!(floor_char_boundary(s, 2), 0);
+        assert_eq!(floor_char_boundary(s, 3), 0);
+
+        // Indices 5, 6, 7 are mid-character; should floor to 4
+        assert_eq!(floor_char_boundary(s, 5), 4);
+        assert_eq!(floor_char_boundary(s, 6), 4);
+        assert_eq!(floor_char_boundary(s, 7), 4);
+
+        // Index 8 is a valid boundary (start of third emoji)
+        assert_eq!(floor_char_boundary(s, 8), 8);
+
+        // CJK character test (3 bytes each)
+        let cjk = "\u{4E16}\u{754C}"; // "世界", 6 bytes
+        assert_eq!(cjk.len(), 6);
+        assert_eq!(floor_char_boundary(cjk, 1), 0);
+        assert_eq!(floor_char_boundary(cjk, 2), 0);
+        assert_eq!(floor_char_boundary(cjk, 3), 3);
+        assert_eq!(floor_char_boundary(cjk, 4), 3);
+        assert_eq!(floor_char_boundary(cjk, 5), 3);
+    }
+
+    #[test]
+    fn test_floor_char_boundary_empty_string() {
+        let s = "";
+        assert_eq!(floor_char_boundary(s, 0), 0);
+        assert_eq!(floor_char_boundary(s, 10), 0);
+    }
+
+    // -- calculate_file_priority tests --
+
+    #[test]
+    fn test_calculate_file_priority_top_level_init() {
+        // Top-level __init__.py at depth 2 (repo/pkg/__init__.py) => priority 0
+        let repo = Path::new("/repo");
+        let path = PathBuf::from("/repo/pkg/__init__.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 0);
+    }
+
+    #[test]
+    fn test_calculate_file_priority_subpackage_init() {
+        // Subpackage __init__.py at depth 3+ => priority 10
+        let repo = Path::new("/repo");
+        let path = PathBuf::from("/repo/pkg/sub/__init__.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 10);
+    }
+
+    #[test]
+    fn test_calculate_file_priority_internal_files() {
+        let repo = Path::new("/repo");
+
+        // Private file (starts with _)
+        let path = PathBuf::from("/repo/pkg/_private.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 100);
+
+        // Internal directory
+        let path = PathBuf::from("/repo/pkg/_internal/utils.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 100);
+
+        // Tests directory
+        let path = PathBuf::from("/repo/pkg/tests/test_foo.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 100);
+
+        // Benchmarks directory
+        let path = PathBuf::from("/repo/pkg/benchmarks/bench.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 100);
+    }
+
+    #[test]
+    fn test_calculate_file_priority_public_modules() {
+        let repo = Path::new("/repo");
+
+        // Public top-level module at depth 2 => priority 20
+        let path = PathBuf::from("/repo/pkg/api.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 20);
+
+        // Public subpackage module at depth 3 => priority 30
+        let path = PathBuf::from("/repo/pkg/sub/models.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 30);
+
+        // Deeper module => priority 50
+        let path = PathBuf::from("/repo/pkg/a/b/c/deep.py");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 50);
+    }
+
+    #[test]
+    fn test_calculate_file_priority_readme() {
+        // README.md at repo root, depth 1, not __init__.py, not private => priority 50
+        // (doesn't match depth 2 or 3 public module rules)
+        let repo = Path::new("/repo");
+        let path = PathBuf::from("/repo/README.md");
+        assert_eq!(Collector::calculate_file_priority(&path, repo), 50);
+    }
+
+    // -- read_files_smart budget tests --
+
+    #[test]
+    fn test_read_files_smart_respects_budget() {
+        // Arrange: create multiple files that together exceed a small budget
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path();
+        let pkg = repo.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+
+        // Create 5 files, each 1000 chars
+        let mut paths = Vec::new();
+        for i in 0..5 {
+            let file_path = pkg.join(format!("mod_{}.py", i));
+            fs::write(&file_path, "x".repeat(1000)).unwrap();
+            paths.push(file_path);
         }
 
-        // Priority 10: Subpackage __init__.py files (tensorflow/keras/__init__.py)
-        if file_name == "__init__.py" && depth > 2 {
-            return 10;
-        }
+        // Act: read with a 2500 char budget (should NOT read all 5000 chars)
+        let result = Collector::read_files_smart(&paths, 2500, repo).unwrap();
 
-        // Priority 100: Skip internal/private files (read last if at all)
-        if file_name.starts_with('_')
-            || path_str.contains("/_internal/")
-            || path_str.contains("/_impl/")
-            || path_str.contains("/testing/")
-            || path_str.contains("/tests/")
-            || path_str.contains("/benchmarks/")
-            || path_str.contains("/tools/")
-            || path_str.contains("/scripts/")
-        {
-            return 100;
-        }
+        // Assert: content length should be within budget (allow for file headers)
+        // The actual content chars tracked internally won't exceed 2500,
+        // but headers add some overhead. Total should be well under 5000.
+        assert!(
+            result.len() < 5000,
+            "Should not read all files; got {} chars",
+            result.len()
+        );
+    }
 
-        // Priority 20: Public top-level modules (tensorflow/nn.py)
-        if !file_name.starts_with('_') && depth == 2 {
-            return 20;
-        }
+    #[test]
+    fn test_read_files_smart_empty_paths() {
+        let dir = TempDir::new().unwrap();
+        let result = Collector::read_files_smart(&[], 10_000, dir.path()).unwrap();
+        assert_eq!(result, "");
+    }
 
-        // Priority 30: Public subpackage modules (tensorflow/keras/layers.py)
-        if !file_name.starts_with('_') && depth == 3 {
-            return 30;
-        }
+    // -- detect_package_name tests --
 
-        // Priority 50: Everything else (deeper submodules)
-        50
+    #[test]
+    fn test_detect_package_name_from_setup_py() {
+        // Arrange: setup.py with double-quoted name, no pyproject.toml
+        let dir = TempDir::new().unwrap();
+        let base = dir.path();
+        fs::write(
+            base.join("setup.py"),
+            r#"from setuptools import setup
+setup(
+    name="my-package",
+    version="1.0.0",
+)
+"#,
+        )
+        .unwrap();
+
+        // Act
+        let name = Collector::detect_package_name(base).unwrap();
+
+        // Assert
+        assert_eq!(name, "my-package");
+    }
+
+    #[test]
+    fn test_detect_package_name_from_dirname() {
+        // Arrange: no pyproject.toml, no setup.py => falls back to dir name
+        let dir = TempDir::new().unwrap();
+        let project_dir = dir.path().join("my-cool-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        // Act
+        let name = Collector::detect_package_name(&project_dir).unwrap();
+
+        // Assert
+        assert_eq!(name, "my-cool-project");
     }
 }
 

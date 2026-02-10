@@ -1,9 +1,69 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use tracing::warn;
 
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     async fn complete(&self, prompt: &str) -> Result<String>;
+}
+
+/// Wraps any LlmClient with retry logic for transient network errors.
+pub struct RetryClient {
+    inner: Box<dyn LlmClient>,
+    max_retries: usize,
+    retry_delay_secs: u64,
+}
+
+impl RetryClient {
+    pub fn new(inner: Box<dyn LlmClient>, max_retries: usize, retry_delay_secs: u64) -> Self {
+        Self {
+            inner,
+            max_retries,
+            retry_delay_secs,
+        }
+    }
+}
+
+#[async_trait]
+impl LlmClient for RetryClient {
+    async fn complete(&self, prompt: &str) -> Result<String> {
+        let mut last_error = None;
+
+        for attempt in 0..=self.max_retries {
+            match self.inner.complete(prompt).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    let err_str = e.to_string();
+                    let is_transient = err_str.contains("connection closed")
+                        || err_str.contains("timed out")
+                        || err_str.contains("reset by peer")
+                        || err_str.contains("broken pipe")
+                        || err_str.contains("429")
+                        || err_str.contains("503")
+                        || err_str.contains("502")
+                        || err_str.contains("500 Internal");
+
+                    if is_transient && attempt < self.max_retries {
+                        warn!(
+                            "Transient error (attempt {}/{}), retrying in {}s: {}",
+                            attempt + 1,
+                            self.max_retries + 1,
+                            self.retry_delay_secs,
+                            err_str.lines().next().unwrap_or(&err_str)
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(self.retry_delay_secs))
+                            .await;
+                        last_error = Some(e);
+                        continue;
+                    }
+
+                    return Err(e);
+                }
+            }
+        }
+
+        Err(last_error.unwrap())
+    }
 }
 
 pub struct MockLlmClient;
@@ -308,6 +368,132 @@ def create(tags: list = None):
             Ok(r#"{"status": "pass"}"#.to_string())
         } else {
             Ok(r#"{"status": "mock"}"#.to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A mock LlmClient that fails a configurable number of times with a given
+    /// error message, then succeeds. Tracks total call count.
+    struct FailThenSucceed {
+        call_count: Arc<AtomicUsize>,
+        fail_times: usize,
+        error_msg: String,
+    }
+
+    impl FailThenSucceed {
+        fn new(call_count: Arc<AtomicUsize>, fail_times: usize, error_msg: &str) -> Self {
+            Self {
+                call_count,
+                fail_times,
+                error_msg: error_msg.to_string(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for FailThenSucceed {
+        async fn complete(&self, _prompt: &str) -> Result<String> {
+            let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_times {
+                Err(anyhow::anyhow!("{}", self.error_msg))
+            } else {
+                Ok("success".to_string())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_retry_succeeds_first_try() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let mock = FailThenSucceed::new(count.clone(), 0, "unused");
+        let client = RetryClient::new(Box::new(mock), 3, 0);
+
+        let result = client.complete("hello").await.unwrap();
+
+        assert_eq!(result, "success");
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_succeeds_after_transient_failure() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let mock = FailThenSucceed::new(count.clone(), 1, "connection closed");
+        let client = RetryClient::new(Box::new(mock), 3, 0);
+
+        let result = client.complete("hello").await.unwrap();
+
+        assert_eq!(result, "success");
+        assert_eq!(count.load(Ordering::SeqCst), 2); // 1 failure + 1 success
+    }
+
+    #[tokio::test]
+    async fn test_retry_non_transient_error_no_retry() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let mock = FailThenSucceed::new(count.clone(), 10, "invalid API key");
+        let client = RetryClient::new(Box::new(mock), 3, 0);
+
+        let result = client.complete("hello").await;
+
+        assert!(result.is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 1); // no retry for non-transient
+        assert!(result.unwrap_err().to_string().contains("invalid API key"));
+    }
+
+    #[tokio::test]
+    async fn test_retry_exhausted() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let mock = FailThenSucceed::new(count.clone(), 100, "connection closed");
+        let client = RetryClient::new(Box::new(mock), 2, 0);
+
+        let result = client.complete("hello").await;
+
+        assert!(result.is_err());
+        // 1 initial attempt + 2 retries = 3 total calls
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("connection closed"));
+    }
+
+    #[tokio::test]
+    async fn test_retry_recognizes_all_transient_errors() {
+        let transient_errors = [
+            "connection closed by server",
+            "request timed out",
+            "reset by peer",
+            "broken pipe",
+            "HTTP 429 rate limited",
+            "HTTP 503 service unavailable",
+            "HTTP 502 bad gateway",
+            "500 Internal server error",
+        ];
+
+        for error_msg in &transient_errors {
+            let count = Arc::new(AtomicUsize::new(0));
+            let mock = FailThenSucceed::new(count.clone(), 1, error_msg);
+            let client = RetryClient::new(Box::new(mock), 3, 0);
+
+            let result = client.complete("hello").await;
+
+            assert!(
+                result.is_ok(),
+                "Expected retry+success for transient error '{}', got: {:?}",
+                error_msg,
+                result
+            );
+            assert_eq!(
+                count.load(Ordering::SeqCst),
+                2,
+                "Expected exactly 2 calls (1 fail + 1 success) for '{}'",
+                error_msg
+            );
         }
     }
 }
