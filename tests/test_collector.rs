@@ -638,6 +638,43 @@ setup(
 }
 
 #[tokio::test]
+async fn test_collect_package_name_from_setup_py_double_quotes() {
+    // Arrange - setup.py with double-quoted name (no pyproject.toml)
+    let dir = TempDir::new().unwrap();
+    let base = dir.path();
+
+    fs::write(
+        base.join("setup.py"),
+        r#"from setuptools import setup
+
+setup(
+    name="my-package",
+    version="2.0.0",
+)
+"#,
+    )
+    .unwrap();
+
+    let pkg_dir = base.join("my_package");
+    fs::create_dir_all(&pkg_dir).unwrap();
+    fs::write(pkg_dir.join("__init__.py"), "pass").unwrap();
+
+    let tests_dir = base.join("tests");
+    fs::create_dir_all(&tests_dir).unwrap();
+    fs::write(tests_dir.join("test_basic.py"), "def test_pass(): pass").unwrap();
+
+    let collector = Collector::new(base, Language::Python);
+
+    // Act
+    let result = collector.collect().await;
+
+    // Assert
+    assert!(result.is_ok());
+    let data = result.unwrap();
+    assert_eq!(data.package_name, "my-package");
+}
+
+#[tokio::test]
 async fn test_collect_package_name_from_directory() {
     // Arrange
     let dir = TempDir::new().unwrap();
@@ -1044,4 +1081,71 @@ async fn test_collect_handles_all_optional_content_missing() {
     assert!(!data.test_content.is_empty());
     assert!(!data.package_name.is_empty());
     assert!(!data.version.is_empty());
+}
+
+#[tokio::test]
+async fn test_collect_returns_package_metadata() {
+    // Arrange: minimal Python project with pyproject.toml name/version and one .py file
+    let dir = TempDir::new().unwrap();
+    let base = dir.path();
+
+    fs::write(
+        base.join("pyproject.toml"),
+        r#"[project]
+name = "metadata-pkg"
+version = "3.2.1"
+license = "Apache-2.0"
+
+[project.urls]
+Repository = "https://github.com/example/metadata-pkg"
+"#,
+    )
+    .unwrap();
+
+    let pkg_dir = base.join("metadata_pkg");
+    fs::create_dir_all(&pkg_dir).unwrap();
+    fs::write(
+        pkg_dir.join("__init__.py"),
+        r#""""metadata_pkg init."""
+__version__ = "3.2.1"
+
+def greet():
+    return "hi"
+"#,
+    )
+    .unwrap();
+
+    let tests_dir = base.join("tests");
+    fs::create_dir_all(&tests_dir).unwrap();
+    fs::write(
+        tests_dir.join("test_greet.py"),
+        "def test_greet(): assert True",
+    )
+    .unwrap();
+
+    let collector = Collector::new(base, Language::Python);
+
+    // Act
+    let data = collector.collect().await.expect("collect() should succeed");
+
+    // Assert: verify all CollectedData fields
+    assert_eq!(data.package_name, "metadata-pkg");
+    assert_eq!(data.version, "3.2.1");
+    assert_eq!(data.license, Some("Apache-2.0".to_string()));
+    assert_eq!(data.language, Language::Python);
+    assert!(data.source_file_count > 0, "Should count source files");
+    assert!(
+        data.project_urls
+            .iter()
+            .any(|(k, v)| k == "Repository" && v == "https://github.com/example/metadata-pkg"),
+        "Should include project URL"
+    );
+    assert!(
+        !data.source_content.is_empty(),
+        "Should have source content from __init__.py"
+    );
+    assert!(
+        !data.test_content.is_empty(),
+        "Should have test content from test_greet.py"
+    );
 }

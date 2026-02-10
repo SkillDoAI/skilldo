@@ -20,6 +20,8 @@ pub async fn run(
     version_override: Option<String>,
     version_from: Option<String>,
     config_path: Option<String>,
+    model_override: Option<String>,
+    max_retries_override: Option<usize>,
     dry_run: bool,
 ) -> Result<()> {
     let repo_path = Path::new(&path);
@@ -43,7 +45,17 @@ pub async fn run(
     info!("Dry run: {}", dry_run);
 
     // Load config (explicit path, repo root, or user config dir)
-    let config = Config::load_with_path(config_path)?;
+    let mut config = Config::load_with_path(config_path)?;
+
+    // Apply CLI overrides
+    if let Some(ref model) = model_override {
+        info!("CLI override: model = {}", model);
+        config.llm.model = model.clone();
+    }
+    if let Some(retries) = max_retries_override {
+        info!("CLI override: max_retries = {}", retries);
+        config.generation.max_retries = retries;
+    }
 
     // Collect files
     info!("Collecting files...");
@@ -122,4 +134,220 @@ pub async fn run(
     linter.print_issues(&issues);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    /// Create a minimal Python repo in a temp dir for dry-run tests
+    fn make_test_repo() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        let setup_py = dir.path().join("setup.py");
+        fs::write(
+            &setup_py,
+            r#"from setuptools import setup
+setup(name="testpkg", version="1.0.0")
+"#,
+        )
+        .unwrap();
+        let pkg_dir = dir.path().join("testpkg");
+        fs::create_dir(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("__init__.py"),
+            "def hello():\n    return 'world'\n",
+        )
+        .unwrap();
+        let tests_dir = dir.path().join("tests");
+        fs::create_dir(&tests_dir).unwrap();
+        fs::write(
+            tests_dir.join("test_hello.py"),
+            "def test_hello():\n    assert True\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_defaults() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            None, // auto-detect
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            true, // dry_run
+        )
+        .await;
+        assert!(result.is_ok(), "dry run failed: {:?}", result.err());
+        assert!(output.exists(), "SKILL.md should be written");
+        let content = fs::read_to_string(&output).unwrap();
+        assert!(content.contains("---"), "should contain frontmatter");
+        assert!(!content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_explicit_language() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_version_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            Some("9.9.9".to_string()),
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(output.exists());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_model_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            Some("custom-model-v1".to_string()),
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_max_retries_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_update_mode_with_input() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        // Create an existing SKILL.md as input
+        let input_path = repo.path().join("old-SKILL.md");
+        let mut f = fs::File::create(&input_path).unwrap();
+        writeln!(
+            f,
+            "---\npackage: testpkg\nversion: 0.9.0\n---\n# Old content"
+        )
+        .unwrap();
+
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            Some(input_path.to_str().unwrap().to_string()),
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_update_mode_existing_output() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        // Pre-create output file — run() should detect and use update mode
+        fs::write(
+            &output,
+            "---\npackage: testpkg\nversion: 0.5.0\n---\n# Existing",
+        )
+        .unwrap();
+
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None, // no explicit input
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_invalid_language() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("brainfuck".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_err(), "should reject unknown language");
+    }
 }

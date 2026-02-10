@@ -1,247 +1,221 @@
 ---
+
 name: celery
-description: Distributed task queue for running Python callables asynchronously via message brokers.
+description: Distributed task queue for running Python callables asynchronously via a message broker.
 version: 5.6.2
 ecosystem: python
 license: BSD-3-Clause'
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
 ```python
+import celery
 from celery import Celery
-from celery import shared_task
-from celery.result import AsyncResult
 ```
 
 ## Core Patterns
 
-### Define a Celery app + task with `@app.task` ✅ Current
+### Create an app and register tasks with `@app.task` ✅ Current
 ```python
 from __future__ import annotations
 
 from celery import Celery
 
-# Create a single app instance, importable by workers.
-app = Celery(
-    "hello",
-    broker="amqp://guest@localhost//",
-)
+app = Celery("hello", broker="amqp://guest@localhost//")
 
-@app.task
+
+@app.task(name="hello")
 def hello() -> str:
     return "hello world"
-```
-* Defines a single `celery.Celery` application and registers a task using `Celery.task`.
-* **Status**: Current, stable
 
-### Enqueue a task and fetch the result ✅ Current
-```python
-from __future__ import annotations
-
-from celery import Celery
-from celery.result import AsyncResult
-
-# For a self-contained example (no external broker/backend needed),
-# run tasks eagerly and store results in-memory so AsyncResult.get() works.
-app = Celery("hello")
-app.conf.update(
-    task_always_eager=True,
-    task_store_eager_result=True,
-    result_backend="cache+memory://",
-)
-
-@app.task
-def add(x: int, y: int) -> int:
-    return x + y
 
 def main() -> None:
-    # Send by calling the task's delay() shortcut.
-    async_result = add.delay(2, 3)
+    # Celery registers a Task object in app.tasks, not the raw function.
+    task = app.tasks["hello"]
+    assert task.name == "hello"
+    assert task() == "hello world"
 
-    # You can store/transport the id, then re-hydrate later:
-    same_result: AsyncResult = AsyncResult(async_result.id, app=app)
-
-    # Block until ready (works here because results are stored eagerly).
-    value: int = same_result.get(timeout=10)
-    print(value)
 
 if __name__ == "__main__":
     main()
 ```
-* Queues work with `delay()` and retrieves results via `celery.result.AsyncResult`.
-* **Status**: Current, stable
+* Create exactly one `Celery(...)` application instance per logical app and register tasks on that instance.
+* The `Celery('name', ...)` identifier should be stable for monitoring/logging and multi-app setups.
 
-### Configure via `app.conf` (module-friendly) ✅ Current
+### Call a task synchronously (local function call) ✅ Current
 ```python
 from __future__ import annotations
 
 from celery import Celery
 
-app = Celery("proj", broker="redis://localhost:6379/0")
+# Use an in-memory broker so this example is runnable without external services.
+app = Celery("math_app", broker="memory://")
 
-# Keep configuration close to the app so workers import it consistently.
-app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-    # result_backend requires installing the correct extra (e.g., celery[redis])
-    result_backend="redis://localhost:6379/1",
-)
 
 @app.task
-def ping() -> str:
-    return "pong"
-```
-* Centralizes Celery configuration in code (common for small projects/services).
-* **Status**: Current, stable
+def add(x: int, y: int) -> int:
+    return x + y
 
-### Autodiscover tasks from modules/packages ✅ Current
+
+def main() -> None:
+    # This is a normal Python call (no broker/worker involved).
+    result = add(2, 3)
+    print(result)
+
+
+if __name__ == "__main__":
+    main()
+```
+* Celery tasks are still regular callables; invoking them directly runs in-process and bypasses the broker/worker.
+
+### Use extras to match broker/backend dependencies ✅ Current
 ```python
 from __future__ import annotations
+
+# This file is runnable Python, but the key is the dependency pin:
+# requirements.txt:
+#   celery[redis]
 
 from celery import Celery
+from kombu import Connection
 
-app = Celery("proj", broker="amqp://guest@localhost//")
+app = Celery("redis_app", broker="redis://localhost:6379/0")
 
-# Common layout: proj/celery_app.py defines app, tasks live in proj/tasks.py, etc.
-# autodiscover_tasks expects packages where it can import "<pkg>.tasks" by default.
-app.autodiscover_tasks(["proj"])
 
-# Example task module would be: proj/tasks.py containing @shared_task or @app.task tasks.
+def main() -> None:
+    # Prove the redis transport is importable/resolvable (i.e., the extra is installed).
+    conn = Connection(app.conf.broker_url)
+
+    # kombu resolves the transport implementation on-demand; just accessing it
+    # is enough to verify the optional dependency is present.
+    transport = conn.transport
+    module_path = transport.__class__.__module__
+
+    assert module_path.startswith("kombu.transport.redis")
+
+
+if __name__ == "__main__":
+    main()
 ```
-* Helps workers find tasks without importing each task module manually.
-* **Status**: Current, stable
-
-### Define reusable tasks with `@shared_task` ✅ Current
-```python
-from __future__ import annotations
-
-from celery import Celery, shared_task
-
-# Library/app code can declare tasks without needing the app instance at import time.
-@shared_task
-def mul(x: int, y: int) -> int:
-    return x * y
-
-# In your main app module:
-app = Celery("proj", broker="amqp://guest@localhost//")
-app.autodiscover_tasks(["proj"])
-```
-* Useful when tasks live in reusable Django/apps or libraries and should bind to the “current app”.
-* **Status**: Current, stable
+* Install Celery with the correct extras for your chosen broker/backend (e.g., `celery[redis]`) to avoid missing optional dependencies at runtime.
 
 ## Configuration
 
-- **Create one app instance** per process/package and keep it importable (e.g., `proj/celery_app.py`).
-- **Broker URL**: pass explicitly at instantiation time (`Celery(..., broker="amqp://...")` or `broker="redis://..."`).
-- **Result backend**: configure when you need `AsyncResult.get()`:
-  - `app.conf.result_backend = "redis://..."` (requires installing `celery[redis]`).
-- **Common `app.conf` keys**:
-  - `timezone`, `enable_utc`
-  - `task_serializer`, `result_serializer`, `accept_content`
-- **Environment variables** (common in deployments):
-  - `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` are widely used conventions; you can map them into `Celery(..., broker=...)` / `app.conf.result_backend` in your app code.
-- **Dependency extras**: install transport/backend dependencies explicitly, e.g.:
-  - `pip install "celery[redis]"` for Redis broker/backend
-  - `pip install "celery[gevent]"` for gevent pool support (if you use it)
+- Create the app with explicit name and broker:
+  - `app = Celery("my_app", broker="amqp://guest@localhost//")`
+- Prefer real brokers (RabbitMQ/Redis) for production; treat local-only or experimental transports as development-only.
+- Dependency management:
+  - Use extras such as `celery[redis]`, `celery[gevent]`, `celery[eventlet]`, `celery[sqlalchemy]` depending on transport/backend/pool needs.
+- Runtime compatibility planning:
+  - Celery 5.6.x supports Python 3.9–3.13 and PyPy 3.9+.
+  - Celery 5.7.x will require Python 3.10+ (Python 3.9 removed).
+- Framework integration:
+  - Integration packages are optional; use them when you need lifecycle hooks (e.g., close DB connections after fork with prefork pools).
 
 ## Pitfalls
 
-### Wrong: Defining a function without registering it as a task
+### Wrong: Decorating tasks on the `Celery` class (unbound task registration)
 ```python
+from __future__ import annotations
+
 from celery import Celery
 
-app = Celery("hello", broker="amqp://guest@localhost//")
+Celery("hello", broker="amqp://guest@localhost//")
 
+
+@Celery.task
 def hello() -> str:
     return "hello world"
 ```
 
-### Right: Register the task with `@app.task`
+### Right: Bind tasks to a specific app instance with `@app.task`
 ```python
+from __future__ import annotations
+
 from celery import Celery
 
 app = Celery("hello", broker="amqp://guest@localhost//")
+
 
 @app.task
 def hello() -> str:
     return "hello world"
 ```
 
-### Wrong: Installing `celery` without extras, then configuring Redis
+### Wrong: Installing plain `celery` but configuring Redis broker/backend
 ```python
-# requirements.txt
-celery
+from __future__ import annotations
 
-# ...later in code:
-# broker="redis://localhost:6379/0"
-# result_backend="redis://localhost:6379/1"
-```
+# requirements.txt (problematic):
+# celery
 
-### Right: Install the correct extra for your broker/backend
-```python
-# requirements.txt
-celery[redis]
-```
-
-### Wrong: Calling `.get()` without a result backend configured
-```python
 from celery import Celery
 
-app = Celery("proj", broker="amqp://guest@localhost//")
-
-@app.task
-def add(x: int, y: int) -> int:
-    return x + y
-
-result = add.delay(1, 2)
-# This will fail/hang without a configured result backend:
-value = result.get(timeout=10)
-print(value)
+app = Celery("redis_app", broker="redis://localhost:6379/0")
 ```
 
-### Right: Configure a result backend (and install its dependencies)
+### Right: Install the matching extra (e.g., `celery[redis]`)
 ```python
+from __future__ import annotations
+
+# requirements.txt:
+# celery[redis]
+
 from celery import Celery
 
-app = Celery("proj", broker="redis://localhost:6379/0")
-app.conf.result_backend = "redis://localhost:6379/1"
+app = Celery("redis_app", broker="redis://localhost:6379/0")
+```
+
+### Wrong: Creating multiple app instances unintentionally (tasks registered on one, worker runs another)
+```python
+from __future__ import annotations
+
+from celery import Celery
+
+app_a = Celery("app_a", broker="amqp://guest@localhost//")
+app_b = Celery("app_b", broker="amqp://guest@localhost//")
+
+
+@app_a.task
+def hello() -> str:
+    return "hello from a"
+```
+
+### Right: Use a single app instance per logical application
+```python
+from __future__ import annotations
+
+from celery import Celery
+
+app = Celery("app", broker="amqp://guest@localhost//")
+
 
 @app.task
-def add(x: int, y: int) -> int:
-    return x + y
-
-result = add.delay(1, 2)
-value = result.get(timeout=10)
-print(value)
+def hello() -> str:
+    return "hello"
 ```
 
-### Wrong: Expecting official Windows support in production deployments
+### Wrong: Assuming Microsoft Windows is a supported production platform
 ```python
-# Deploying Celery workers on Windows and expecting official support/issue triage.
+from __future__ import annotations
+
+from celery import Celery
+
+# This code may run, but operational support is best-effort on Windows.
+app = Celery("win_app", broker="amqp://guest@localhost//")
 ```
 
-### Right: Run workers on supported Unix-like platforms (best-effort on Windows)
+### Right: Deploy workers on supported Unix-like environments (validate Windows yourself if required)
 ```python
-# Prefer Linux/macOS for production workers.
-# If you must use Windows, treat it as best-effort and validate thoroughly.
-```
+from __future__ import annotations
 
-### Wrong: Python/Celery version mismatch (Python 3.8 with Celery 5.6.x)
-```bash
-pip install -U celery==5.6.2
-```
+from celery import Celery
 
-### Right: Pin Celery for older Python, or upgrade Python
-```bash
-# Python 3.8 users should pin Celery 5.5 or earlier:
-pip install "celery<5.6"
-
-# Or upgrade Python to >=3.9 to use Celery 5.6.x:
-pip install "celery==5.6.2"
+# Prefer deploying Celery workers on Linux/macOS in production.
+# If you must use Windows, validate thoroughly in your environment.
+app = Celery("prod_app", broker="amqp://guest@localhost//")
 ```
 
 ## References
@@ -252,42 +226,13 @@ pip install "celery==5.6.2"
 - [Tracker](https://github.com/celery/celery/issues")
 - [Funding](https://opencollective.com/celery)
 
-## Migration from v5.5.x
+## Migration from v5.6.x
 
-What changed in this version (if applicable):
-- **Breaking changes**:
-  - Celery **5.6.x requires Python >= 3.9**. Python 3.8 must stay on Celery 5.5 or earlier.
-- **Forward-looking compatibility note**:
-  - Celery **5.6.x is the last series supporting Python 3.9**. Celery 5.7.x removes Python 3.9 support; upgrade to Python 3.10+ before upgrading Celery.
-
-Before/after (Python version pinning):
-```bash
-# Before (Python 3.8 runtime)
-pip install "celery<5.6"
-
-# After (Python >=3.9 runtime)
-pip install "celery==5.6.2"
-```
+- Breaking change when upgrading to Celery 5.7.x:
+  - **Change:** Python 3.9 support removed; Celery 5.7.x requires Python 3.10+.
+  - **Migration guidance:** Upgrade runtime/CI to Python 3.10+ before upgrading Celery. If you must stay on Python 3.9, pin Celery to `~=5.6`.
 
 ## API Reference
 
-- **Celery(main, broker=..., backend=..., include=...)**
-  - Create the application instance used by producers and workers.
-- **Celery.task(*dargs, **dkwargs)** (`@app.task`)
-  - Decorator to register a Python callable as a task bound to this app.
-- **shared_task(*dargs, **dkwargs)** (`@shared_task`)
-  - Decorator to define a task that binds to the current Celery app (common for reusable modules).
-- **Celery.conf.update(**settings)**
-  - Update configuration keys (serializers, timezone, result backend, etc.).
-- **Celery.autodiscover_tasks(packages, related_name="tasks")**
-  - Import task modules automatically from listed packages.
-- **celery.result.AsyncResult(task_id, app=...)**
-  - Handle to a task execution; can check state and fetch results.
-- **AsyncResult.get(timeout=..., propagate=...)**
-  - Wait for and return the task result (requires a result backend).
-- **Task.delay(*args, **kwargs)**
-  - Shortcut to enqueue a task asynchronously using default options.
-- **Task.apply_async(args=None, kwargs=None, countdown=None, eta=None, expires=None, queue=None, retry=None, **options)**
-  - Enqueue with scheduling/routing/options (use when you need more control than `delay()`).
-- **Task.name**
-  - Fully qualified task name used for routing and calling by name.
+- **celery.Celery(main, broker=...)** - Create a Celery application instance; key params: `main` (app name), `broker` (broker URL).
+- **Celery.task(*dargs, **dkwargs)** - Decorator to register a function as a task on that app instance; used as `@app.task`.

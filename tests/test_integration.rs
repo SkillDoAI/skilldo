@@ -204,6 +204,8 @@ async fn test_pipeline_with_custom_config() {
             api_key_env: None,
             base_url: None,
             max_tokens: None,
+            network_retries: 10,
+            retry_delay: 120,
         },
         generation: GenerationConfig {
             max_retries: 5,

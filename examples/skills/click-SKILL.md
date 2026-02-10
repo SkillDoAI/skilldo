@@ -1,176 +1,327 @@
 ---
+
 name: click
-description: A package for creating command-line interfaces (CLI) in Python.
+description: A Python library for building command line interfaces with composable commands, options, and arguments.
 version: 8.3.1
 ecosystem: python
 license: BSD-3-Clause
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
-Show the standard import patterns. Most common first:
 ```python
 import click
+from click import (
+    Abort,
+    BadParameter,
+    ClickException,
+    UsageError,
+    argument,
+    command,
+    confirm,
+    echo,
+    group,
+    option,
+    pass_context,
+    pass_obj,
+    prompt,
+    secho,
+    style,
+)
 from click.testing import CliRunner
+from click.shell_completion import CompletionItem, ShellComplete, add_completion_class
 ```
 
 ## Core Patterns
 
-### Basic Command ✅ Current
+### Single command with options and arguments ✅ Current
 ```python
 import click
+
 
 @click.command()
-@click.argument('name')
-@click.option('--count', default=1, help='Number of greetings.')
-def greet(count: int, name: str) -> None:
-    """Greets NAME for COUNT times."""
-    for _ in range(count):
-        click.echo(f'Hello {name}!')
+@click.argument("name")
+@click.option("--times", "-t", type=click.INT, default=1, show_default=True)
+@click.option("--loud/--quiet", default=False, help="Toggle uppercase output.")
+def hello(name: str, times: int, loud: bool) -> None:
+    """Greet NAME a number of TIMES."""
+    msg = f"Hello, {name}!"
+    if loud:
+        msg = msg.upper()
 
-if __name__ == '__main__':
-    greet()
+    for _ in range(times):
+        click.echo(msg)
+
+
+if __name__ == "__main__":
+    hello()
 ```
-* This command takes a name and an optional count, greeting the name the specified number of times.
-* **Status**: Current, stable
+* Use `@click.command()` to define a CLI entry point; add inputs with `@click.argument()` and `@click.option()`.
+* Prefer `click.echo()` over `print()` for consistent terminal behavior; use `err=True` for stderr.
 
-### Command Group ✅ Current
+### Command groups and subcommands ✅ Current
 ```python
 import click
+
 
 @click.group()
 def cli() -> None:
-    """A group of commands."""
+    """Top-level command group."""
     pass
 
-@cli.command()
-def command1() -> None:
-    """A simple command in the group."""
-    click.echo("Command 1 executed.")
 
 @cli.command()
-def command2() -> None:
-    """Another command in the group."""
-    click.echo("Command 2 executed.")
+@click.option("--path", type=click.Path(dir_okay=False, readable=True), required=True)
+def show(path: str) -> None:
+    """Print a file to stdout."""
+    with click.open_file(path, mode="r", encoding="utf-8") as f:
+        click.echo(f.read(), nl=False)
 
-if __name__ == '__main__':
-    cli()
-```
-* This pattern demonstrates how to organize commands into groups.
-* **Status**: Current, stable
 
-### Handling Bad Parameters ✅ Current
-```python
-import click
+@cli.command()
+@click.argument("words", nargs=-1)
+def join(words: tuple[str, ...]) -> None:
+    """Join WORDS with spaces."""
+    click.echo(" ".join(words))
 
-@click.command()
-@click.argument("number", type=int)
-def process_number(number: int) -> None:
-    """Processes a number and checks for validity."""
-    if number < 0:
-        raise click.BadParameter("Number must be non-negative.")
-    click.echo(f"OK: {number}")
 
 if __name__ == "__main__":
-    process_number()
+    cli()
 ```
-* This command raises a `BadParameter` exception for invalid input.
-* **Status**: Current, stable
+* Use `@click.group()` for multi-command CLIs; register subcommands via `@group.command()`.
+* Use `click.Path(...)` and `click.open_file(...)` for validated paths and robust file opening.
 
-### Using Click Echo ✅ Current
+### Context and object passing (`pass_context`, `pass_obj`, `make_pass_decorator`) ✅ Current
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import click
+
+
+@dataclass
+class AppState:
+    verbose: bool
+
+
+pass_state = click.make_pass_decorator(AppState)
+
+
+@click.group()
+@click.option("--verbose/--no-verbose", default=False)
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool) -> None:
+    ctx.obj = AppState(verbose=verbose)
+
+
+@cli.command()
+@pass_state
+def status(state: AppState) -> None:
+    click.echo(f"verbose={state.verbose}")
+
+
+@cli.command()
+@click.pass_context
+def where(ctx: click.Context) -> None:
+    # Direct access to context when needed
+    click.echo(f"command={ctx.command.name}")
+
+
+if __name__ == "__main__":
+    cli()
+```
+* Use `ctx.obj` to store application state; `click.make_pass_decorator()` provides typed access to that object.
+* `@click.pass_context` and `@click.pass_obj` are for dependency injection across command layers.
+
+### Prompts, confirmation, and secure input ✅ Current
 ```python
 import click
 
+
 @click.command()
-def say_hello() -> None:
-    """Outputs a greeting."""
-    click.echo('Hello World!')
+@click.option("--username", prompt=True)
+@click.password_option("--password", confirmation_prompt=True)
+@click.confirmation_option("--confirm", prompt="Proceed with login?")
+def login(username: str, password: str, confirm: bool) -> None:
+    # Never echo passwords; Click handles masking for password options.
+    if not confirm:
+        raise click.Abort()
+    click.echo(f"Logging in as {username} (password length={len(password)})")
 
-if __name__ == '__main__':
-    say_hello()
+
+if __name__ == "__main__":
+    login()
 ```
-* This command simply prints "Hello World!" to the console.
-* **Status**: Current, stable
+* `click.prompt()` / `prompt=True` collects interactive input; `click.password_option()` masks input and can confirm.
+* `click.confirmation_option()` is a reusable “are you sure?” pattern; raise `click.Abort` to stop cleanly.
 
-### File Option ✅ Current
+### Testing commands with `CliRunner` ✅ Current
 ```python
 import click
+from click.testing import CliRunner
+
 
 @click.command()
-@click.option('--file', type=click.File('w'), help='File to write to.')
-def write_file(file) -> None:
-    """Writes to a file."""
-    file.write("Hello, file!")
-    click.echo("Written to file.")
+@click.option("--count", type=click.INT, default=1)
+def repeat(count: int) -> None:
+    for i in range(count):
+        click.echo(f"line {i + 1}")
 
-if __name__ == '__main__':
-    write_file()
+
+def main() -> None:
+    runner = CliRunner()
+    result = runner.invoke(repeat, ["--count", "3"])
+    assert result.exit_code == 0
+    assert "line 3" in result.output
+
+
+if __name__ == "__main__":
+    main()
 ```
-* This command demonstrates how to use a file option to write data to a file.
-* **Status**: Current, stable
+* Use `click.testing.CliRunner.invoke()` to run commands without spawning subprocesses.
+* Inspect `Result.exit_code`, `Result.output`, and `Result.exception` for assertions.
 
 ## Configuration
 
-Standard configuration and setup:
-- Use `@click.option` for optional parameters and `@click.argument` for required parameters.
-- Default values can be specified directly in the decorators.
+- **Defaults and display**
+  - Use `default=...` on `@click.option(...)`.
+  - Use `show_default=True` to show defaults in `--help`.
+- **Types and validation**
+  - Built-in types: `click.STRING`, `click.INT`, `click.FLOAT`, `click.BOOL`, `click.UUID`.
+  - Structured types: `click.Path`, `click.File`, `click.Choice`, `click.IntRange`, `click.FloatRange`, `click.DateTime`, `click.Tuple`.
+- **Environment variables**
+  - Options can read from environment variables using `@click.option(..., envvar="NAME")`.
+- **Help and version**
+  - `click.help_option()` and `click.version_option()` can be used to add standardized `--help` / `--version` behavior.
+- **Embedding vs standalone**
+  - `Command.main(..., standalone_mode=False)` prevents Click from calling `sys.exit` and swallowing exceptions—preferred when embedding in a larger app.
 
 ## Pitfalls
 
-### Wrong: Mutable Default Arguments
+### Wrong: Calling a Click command like a normal function with argv
 ```python
+import click
+
+
 @click.command()
-@click.option('--list', default=[], help='A list of items.')
-def process_items(list):
-    """Processes a list of items."""
-    click.echo(list)
+@click.option("--count", default=1)
+def cmd(count: int) -> None:
+    click.echo(str(count))
+
+
+cmd(["--count", "3"])  # WRONG: bypasses Click's CLI parsing
 ```
 
-### Right: Using None for Default Arguments
+### Right: Use `.main()` (or run under `__main__`) to parse argv
 ```python
+import click
+
+
 @click.command()
-@click.option('--list', default=None, help='A list of items.')
-def process_items(list):
-    """Processes a list of items."""
-    if list is None:
-        list = []
-    click.echo(list)
-```
-* Mutable default arguments can lead to unexpected behavior across function calls.
+@click.option("--count", default=1, type=click.INT)
+def cmd(count: int) -> None:
+    click.echo(str(count))
 
-### Wrong: Missing Await on Async Call
+
+if __name__ == "__main__":
+    cmd()  # parses sys.argv
+
+# Programmatic invocation:
+# cmd.main(["--count", "3"], standalone_mode=False)
+```
+
+### Wrong: Parameter name mismatch between decorator and function signature
 ```python
-async def fetch_data():
-    response = await click.get('https://api.example.com')
+import click
+
+
+@click.command()
+@click.argument("filename")
+def show(file_name: str) -> None:  # WRONG: Click expects "filename"
+    click.echo(file_name)
 ```
 
-### Right: Properly Using Await
+### Right: Match the Python argument name to the Click parameter name
 ```python
-import httpx
+import click
 
-async def fetch_data():
-    async with httpx.AsyncClient() as client:
-        response = await client.get('https://api.example.com')
-        return response.json()
+
+@click.command()
+@click.argument("filename")
+def show(filename: str) -> None:
+    click.echo(filename)
+
+
+if __name__ == "__main__":
+    show()
 ```
-* Async functions need await to function properly.
 
-### Wrong: Ignoring Eager Parameters
+### Wrong: Embedding a CLI but letting Click exit the process
 ```python
-@click.option('--foo', is_eager=False)
-@click.option('--bar')
-def cli(foo, bar):
-    pass
+import click
+
+
+@click.command()
+def cmd() -> None:
+    raise click.UsageError("bad input")
+
+
+def main() -> None:
+    cmd.main(["cmd"])  # WRONG for embedding: may call sys.exit
 ```
 
-### Right: Proper Order for Eager Parameters
+### Right: Use `standalone_mode=False` and handle `ClickException`
 ```python
-@click.option('--foo', is_eager=True)
-@click.option('--bar')
-def cli(foo, bar):
-    pass
+import click
+
+
+@click.command()
+def cmd() -> None:
+    raise click.UsageError("bad input")
+
+
+def main() -> None:
+    try:
+        cmd.main(["cmd"], standalone_mode=False)
+    except click.ClickException as e:
+        # Your app decides how to report errors.
+        e.show()
+        raise
+
+
+if __name__ == "__main__":
+    main()
 ```
-* Eager parameters are evaluated before non-eager parameters.
+
+### Wrong: Callback depending on internal “missing” sentinel behavior (8.3.x sensitive)
+```python
+import click
+
+
+@click.command()
+@click.option("--a", callback=lambda ctx, param, value: ctx.params.get("b"))
+@click.option("--b")
+def cmd(a: str | None, b: str | None) -> None:
+    click.echo(f"a={a!r} b={b!r}")
+```
+
+### Right: Treat missing values as `None`/falsey; avoid relying on internal sentinel states
+```python
+import click
+
+
+@click.command()
+@click.option("--b")
+@click.option("--a", callback=lambda ctx, param, value: (ctx.params.get("b") or value))
+def cmd(a: str | None, b: str | None) -> None:
+    click.echo(f"a={a!r} b={b!r}")
+
+
+if __name__ == "__main__":
+    cmd()
+```
 
 ## References
 
@@ -180,17 +331,60 @@ def cli(foo, bar):
 - [Source](https://github.com/pallets/click/)
 - [Chat](https://discord.gg/pallets)
 
-## Migration from v8.2.0
+## Migration from v8.1.x
 
-What changed in this version:
-- **Breaking changes**: Deprecation of `BaseCommand` and `MultiCommand`. Use `Command` and `Group` instead.
-- **Removal**: The `__version__` attribute has been removed. Use `importlib.metadata.version('click')` to get the version.
-- **Deprecated → Current mapping**: Replace `BaseCommand` with `Command`, and `MultiCommand` with `Group`.
+- **Python version support change (8.2.0)** ❌ Hard Deprecation (runtime constraint)
+  - **Change**: Click 8.2.0+ requires Python 3.10+ (3.7–3.9 dropped).
+  - **Migration guidance**: upgrade runtime to Python 3.10+ or pin Click `<8.2.0`.
+
+- **`click.__version__` deprecated (8.2.0)** ⚠️ Soft Deprecation
+  - **Deprecated since**: 8.2.0
+  - **Still works**: Yes (deprecated)
+  - **Modern alternative**:
+    ```python
+    import importlib.metadata
+
+    version = importlib.metadata.version("click")
+    print(version)
+    ```
+  - **Migration guidance**: stop reading `click.__version__`; use `importlib.metadata.version("click")` or feature detection.
+
+- **`click.BaseCommand` deprecated (8.2.0)** ⚠️ Soft Deprecation
+  - **Deprecated since**: 8.2.0
+  - **Still works**: Yes (deprecated)
+  - **Modern alternative**: subclass `click.Command` (or `click.Group` for multi-command).
+  - **Migration guidance**: update type checks and subclassing targets to `click.Command`.
+
+- **`click.MultiCommand` deprecated (8.2.0)** ⚠️ Soft Deprecation
+  - **Deprecated since**: 8.2.0
+  - **Still works**: Yes (deprecated)
+  - **Modern alternative**: use `click.Group`.
+  - **Migration guidance**: prefer `Group` for custom multi-command behavior.
+
+- **Flag option handling rework (8.3.0)** ✅ Current behavior change
+  - **Change**: flag option defaults are preserved and passed as-is more consistently; special-case compatibility for `default=True`.
+  - **Migration guidance**: review boolean flags and explicitly set `default`, `flag_value`, and `type` to match intended runtime values.
+
+- **Sentinel/UNSET propagation fixes (8.3.1)** ✅ Current behavior fix
+  - **Change**: fixes around internal sentinel values during parsing and callbacks.
+  - **Migration guidance**: callbacks should not depend on internal missing-value sentinels; treat missing values as `None`/falsey and validate explicitly.
 
 ## API Reference
 
-- **Command()** - Main command decorator for defining a command.
-- **Option()** - Used to define options for commands.
-- **Argument()** - Used to define required positional arguments.
-- **echo()** - Outputs text to the console.
-- **BadParameter()** - Exception raised for invalid parameters.
+- **`click.command()`** - Decorator to define a single command; supports `help`, `no_args_is_help`, etc.
+- **`click.group()`** - Decorator to define a command group for subcommands.
+- **`click.option()`** - Add an option; key params: `type`, `default`, `required`, `multiple`, `envvar`, `callback`, `is_flag`, `flag_value`.
+- **`click.argument()`** - Add a positional argument; key params: `nargs`, `type`, `required`.
+- **`click.echo()`** - Write text safely to stdout/stderr; key params: `err`, `nl`, `color`.
+- **`click.secho()`** - `echo()` with styling; key params: `fg`, `bg`, `bold`, `underline`, `err`.
+- **`click.style()` / `click.unstyle()`** - Apply/remove ANSI styling to strings.
+- **`click.prompt()`** - Interactive prompt for input; key params: `default`, `type`, `hide_input`, `confirmation_prompt`.
+- **`click.confirm()`** - Yes/no prompt; key params: `default`, `abort`.
+- **`click.password_option()`** - Option decorator for masked password input; supports confirmation.
+- **`click.version_option()`** - Add `--version` option; key params: `version`, `prog_name`, `message`.
+- **`click.help_option()`** - Add `--help` option; key params: `help`, `hidden`.
+- **`click.open_file()`** - Open files with Click-friendly behavior; key params: `mode`, `encoding`, `errors`, `atomic`.
+- **`click.Path` / `click.File`** - Parameter types for paths/files with validation and automatic opening (for `File`).
+- **`click.Context` / `click.get_current_context()`** - Runtime context; access params, obj, command, and manage resources via `Context.with_resource`.
+- **`click.Command.main()`** - CLI entry runner; key params: `args`, `prog_name`, `standalone_mode`.
+- **`click.testing.CliRunner.invoke()`** - Run a command in tests; key params: `args`, `input`, `env`, `catch_exceptions`.

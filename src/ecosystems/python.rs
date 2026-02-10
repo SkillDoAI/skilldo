@@ -49,48 +49,7 @@ impl PythonHandler {
 
     /// Calculate file priority (lower = higher priority, read first)
     fn file_priority(&self, path: &Path) -> i32 {
-        let path_str = path.to_str().unwrap_or("");
-        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-        // Calculate relative path depth from repo root
-        let relative_path = path.strip_prefix(&self.repo_path).unwrap_or(path);
-        let depth = relative_path.components().count();
-
-        // Priority 0: Top-level package __init__.py (torch/__init__.py)
-        if file_name == "__init__.py" && depth == 2 {
-            return 0;
-        }
-
-        // Priority 10: Subpackage __init__.py files (torch/nn/__init__.py)
-        if file_name == "__init__.py" && depth > 2 {
-            return 10;
-        }
-
-        // Priority 100: Skip internal/private files (read last if at all)
-        if file_name.starts_with('_')
-            || path_str.contains("/_internal/")
-            || path_str.contains("/_impl/")
-            || path_str.contains("/testing/")
-            || path_str.contains("/tests/")
-            || path_str.contains("/benchmarks/")
-            || path_str.contains("/tools/")
-            || path_str.contains("/scripts/")
-        {
-            return 100;
-        }
-
-        // Priority 20: Public top-level modules (torch/nn.py, torch/optim.py)
-        if !file_name.starts_with('_') && depth == 2 {
-            return 20;
-        }
-
-        // Priority 30: Public subpackage modules (torch/nn/functional.py)
-        if !file_name.starts_with('_') && depth == 3 {
-            return 30;
-        }
-
-        // Priority 50: Everything else (deeper submodules)
-        50
+        crate::util::calculate_file_priority(path, &self.repo_path)
     }
 
     /// Find all Python test files (supports recursive search and multiple patterns)

@@ -2039,3 +2039,37 @@ No examples
     assert!(issues.iter().any(|i| i.severity == Severity::Warning));
     assert!(issues.iter().any(|i| i.severity == Severity::Info));
 }
+
+#[test]
+fn test_long_dotted_identifier_should_not_trigger_degeneration() {
+    let linter = SkillLinter::new();
+    // Real-world example: cryptography has deeply nested module paths
+    let content = r#"---
+name: cryptography
+description: python library
+version: 47.0.0
+ecosystem: python
+license: Apache-2.0
+---
+
+## Imports
+```python
+from cryptography.fernet import Fernet
+```
+
+## Core Patterns
+Use cryptography.hazmat.primitives.twofactor.hotp.HOTP for one-time passwords.
+Also see cryptography.hazmat.primitives.asymmetric.ec.EllipticCurvePublicKey for EC keys.
+
+## Pitfalls
+Avoid using cryptography.hazmat.primitives.ciphers.algorithms.ARC4 as it is deprecated.
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.category == "degeneration" && i.message.contains("Nonsense token")),
+        "Dotted identifiers (qualified module paths) should not be flagged as nonsense"
+    );
+}

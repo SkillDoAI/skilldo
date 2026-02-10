@@ -286,7 +286,20 @@ impl SkillLinter {
                 let clean = word.trim_matches(|c: char| {
                     c == '*' || c == '`' || c == '_' || c == ',' || c == '-'
                 });
-                if clean.len() > 80 {
+                // Skip dotted identifiers (e.g., cryptography.hazmat.primitives.twofactor.hotp.HOTP)
+                // These are valid fully-qualified Python/Java/etc. module paths, not gibberish.
+                // Each segment must be reasonably short (<=40 chars) and there must be 2+ segments.
+                let is_dotted_identifier = clean.contains('.') && {
+                    let parts: Vec<&str> = clean.split('.').collect();
+                    parts.len() >= 2
+                        && parts.iter().all(|part| {
+                            !part.is_empty()
+                                && part.len() <= 40
+                                && part.chars().all(|c| c.is_alphanumeric() || c == '_')
+                        })
+                };
+
+                if clean.len() > 80 && !is_dotted_identifier {
                     issues.push(LintIssue {
                         severity: Severity::Error,
                         category: "degeneration".to_string(),
@@ -308,11 +321,17 @@ impl SkillLinter {
         // Known phrases from our prompts that should never appear in the output.
         let prompt_leaks = [
             "CRITICAL: Include ALL",
+            "CRITICAL: Prioritize PUBLIC APIs",
+            "CRITICAL: Mark deprecation status",
+            "CRITICAL: This section is MANDATORY",
             "do NOT skip this section",
             "REQUIRED sections:",
             "Focus on the 10-15",
             "Output as JSON",
             "Your job is to",
+            "Show the standard import patterns",
+            "Add 2 more pitfalls if found",
+            "minimum 3, maximum 5 total",
         ];
         let mut in_code = false;
         for line in &lines {

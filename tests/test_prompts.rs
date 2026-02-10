@@ -1,6 +1,6 @@
 use skilldo::llm::prompts_v2::{
     agent1_api_extractor_v2, agent2_pattern_extractor_v2, agent3_context_extractor_v2,
-    agent4_synthesizer_v2, agent5_reviewer_v2,
+    agent4_synthesizer_v2, agent4_update_v2, agent5_reviewer_v2,
 };
 
 #[test]
@@ -464,11 +464,12 @@ fn test_agent4_includes_library_specific_sections() {
         false,
     );
 
-    assert!(prompt.contains("For Web Frameworks"));
-    assert!(prompt.contains("For CLI Tools"));
-    assert!(prompt.contains("For ORMs"));
-    assert!(prompt.contains("For HTTP Clients"));
-    assert!(prompt.contains("For Async Frameworks"));
+    // Library-specific guidance now lives in <instructions> block
+    assert!(prompt.contains("Web frameworks"));
+    assert!(prompt.contains("CLI tools"));
+    assert!(prompt.contains("ORMs"));
+    assert!(prompt.contains("HTTP clients"));
+    assert!(prompt.contains("Async frameworks"));
 }
 
 #[test]
@@ -486,9 +487,10 @@ fn test_agent4_includes_validation_rules() {
         false,
     );
 
-    assert!(prompt.contains("NEVER use placeholder names"));
-    assert!(prompt.contains("Do NOT invent APIs"));
-    assert!(prompt.contains("ALWAYS use actual API names"));
+    // Validation rules now in <instructions> block with new wording
+    assert!(prompt.contains("Never use placeholder names"));
+    assert!(prompt.contains("Do not invent APIs"));
+    assert!(prompt.contains("REAL APIs"));
     assert!(prompt.contains("Type hints required"));
 }
 
@@ -507,11 +509,11 @@ fn test_agent4_includes_pitfall_requirements() {
         false,
     );
 
-    assert!(prompt.contains("CRITICAL: This section is MANDATORY"));
+    // Pitfall requirements now in <instructions> and template
     assert!(prompt.contains("3-5 common mistakes"));
     assert!(prompt.contains("### Wrong:"));
     assert!(prompt.contains("### Right:"));
-    assert!(prompt.contains("minimum 3, maximum 5"));
+    assert!(prompt.contains("Pitfalls section is mandatory"));
 }
 
 #[test]
@@ -529,8 +531,9 @@ fn test_agent4_includes_references_requirement() {
         false,
     );
 
-    assert!(prompt.contains("CRITICAL: Include ALL provided URLs"));
-    assert!(prompt.contains("do NOT skip this section"));
+    // References requirement now in <instructions> block
+    assert!(prompt.contains("Include ALL provided URLs"));
+    assert!(prompt.contains("Do not skip any URLs"));
 }
 
 #[test]
@@ -548,12 +551,10 @@ fn test_agent4_web_framework_patterns() {
         false,
     );
 
-    assert!(prompt.contains("Routing Patterns"));
-    assert!(prompt.contains("Request Handling"));
-    assert!(prompt.contains("Response Handling"));
-    assert!(prompt.contains("Middleware/Dependencies"));
-    assert!(prompt.contains("@app.get"));
-    assert!(prompt.contains("@app.post"));
+    // Web framework guidance now in <instructions> block
+    assert!(prompt.contains("routing"));
+    assert!(prompt.contains("request"));
+    assert!(prompt.contains("middleware"));
 }
 
 #[test]
@@ -571,11 +572,10 @@ fn test_agent4_cli_patterns() {
         false,
     );
 
-    assert!(prompt.contains("Command Definition"));
-    assert!(prompt.contains("Arguments vs Options"));
-    assert!(prompt.contains("Context Passing"));
-    assert!(prompt.contains("@click.command()"));
-    assert!(prompt.contains("@click.option"));
+    // CLI guidance now in <instructions> block
+    assert!(prompt.contains("command definition"));
+    assert!(prompt.contains("arguments vs options"));
+    assert!(prompt.contains("command groups"));
 }
 
 #[test]
@@ -593,10 +593,11 @@ fn test_agent4_orm_patterns() {
         false,
     );
 
-    assert!(prompt.contains("Model Definition"));
-    assert!(prompt.contains("Query Patterns"));
-    assert!(prompt.contains("Relationships"));
-    assert!(prompt.contains("Transaction Management"));
+    // ORM guidance now in <instructions> block
+    assert!(prompt.contains("model definition"));
+    assert!(prompt.contains("query patterns"));
+    assert!(prompt.contains("relationships"));
+    assert!(prompt.contains("transactions"));
 }
 
 #[test]
@@ -614,10 +615,11 @@ fn test_agent4_http_client_patterns() {
         false,
     );
 
-    assert!(prompt.contains("HTTP Methods"));
-    assert!(prompt.contains("Request Parameters"));
-    assert!(prompt.contains("Response Handling"));
-    assert!(prompt.contains("Session Management"));
+    // HTTP client guidance now in <instructions> block
+    assert!(prompt.contains("HTTP methods"));
+    assert!(prompt.contains("request params"));
+    assert!(prompt.contains("sessions"));
+    assert!(prompt.contains("auth"));
 }
 
 #[test]
@@ -635,10 +637,10 @@ fn test_agent4_async_framework_patterns() {
         false,
     );
 
-    assert!(prompt.contains("Async/Await Basics"));
-    assert!(prompt.contains("Concurrency Patterns"));
-    assert!(prompt.contains("async def"));
-    assert!(prompt.contains("await"));
+    // Async guidance now in <instructions> block
+    assert!(prompt.contains("async/await"));
+    assert!(prompt.contains("concurrency patterns"));
+    assert!(prompt.contains("sync wrappers"));
 }
 
 #[test]
@@ -837,9 +839,8 @@ fn test_agent4_escapes_braces_in_format_string() {
         false,
     );
 
-    // format! converts {{ to { in output, so we check for single braces in code examples
-    assert!(prompt.contains("{item_id}"));
-    assert!(prompt.contains(r#"{"item_id":"#));
+    // format! converts {{ to { in output — check {package_name} placeholder renders correctly
+    assert!(prompt.contains("{package_name}"));
 }
 
 #[test]
@@ -1039,8 +1040,8 @@ fn test_comprehensive_coverage_agent4() {
         "## Pitfalls",
         "## References",
         "## API Reference",
-        "LIBRARY-SPECIFIC SECTIONS",
-        "NOW FOLLOW THESE RULES",
+        "<instructions>",
+        "</instructions>",
     ];
 
     for section in &required_sections {
@@ -1067,4 +1068,118 @@ fn test_comprehensive_coverage_agent5() {
     for section in &required_sections {
         assert!(prompt.contains(section), "Missing section: {}", section);
     }
+}
+
+// --- Overwrite mode and custom instructions ---
+
+#[test]
+fn test_agent1_overwrite_with_custom() {
+    let custom = "My custom agent1 prompt";
+    let prompt = agent1_api_extractor_v2("pkg", "1.0", "source", 1, Some(custom), true);
+    assert_eq!(prompt, custom);
+}
+
+#[test]
+fn test_agent1_overwrite_without_custom_uses_default() {
+    let prompt = agent1_api_extractor_v2("pkg", "1.0", "source", 1, None, true);
+    // No custom provided, should fall through to default prompt
+    assert!(prompt.contains("pkg"));
+    assert!(prompt.contains("Extract"));
+}
+
+#[test]
+fn test_agent1_append_custom() {
+    let custom = "Also extract internal APIs";
+    let prompt = agent1_api_extractor_v2("pkg", "1.0", "source", 1, Some(custom), false);
+    // Custom should be appended, default prompt still present
+    assert!(prompt.contains("pkg"));
+    assert!(prompt.contains("Also extract internal APIs"));
+}
+
+#[test]
+fn test_agent2_overwrite_with_custom() {
+    let custom = "My custom agent2 prompt";
+    let prompt = agent2_pattern_extractor_v2("pkg", "1.0", "tests", Some(custom), true);
+    assert_eq!(prompt, custom);
+}
+
+#[test]
+fn test_agent2_append_custom() {
+    let custom = "Focus on error patterns";
+    let prompt = agent2_pattern_extractor_v2("pkg", "1.0", "tests", Some(custom), false);
+    assert!(prompt.contains("pkg"));
+    assert!(prompt.contains("Focus on error patterns"));
+}
+
+#[test]
+fn test_agent3_overwrite_with_custom() {
+    let custom = "My custom agent3 prompt";
+    let prompt = agent3_context_extractor_v2("pkg", "1.0", "docs", Some(custom), true);
+    assert_eq!(prompt, custom);
+}
+
+#[test]
+fn test_agent3_append_custom() {
+    let custom = "Include performance tips";
+    let prompt = agent3_context_extractor_v2("pkg", "1.0", "docs", Some(custom), false);
+    assert!(prompt.contains("pkg"));
+    assert!(prompt.contains("Include performance tips"));
+}
+
+#[test]
+fn test_agent4_overwrite_with_custom() {
+    let custom = "My custom agent4 prompt";
+    let prompt = agent4_synthesizer_v2(
+        "pkg",
+        "1.0",
+        None,
+        &[],
+        "python",
+        "",
+        "",
+        "",
+        Some(custom),
+        true,
+    );
+    assert_eq!(prompt, custom);
+}
+
+// --- Scale hints for large libraries ---
+
+#[test]
+fn test_agent1_scale_hint_large_library() {
+    let prompt = agent1_api_extractor_v2("biglib", "1.0", "source", 1500, None, false);
+    assert!(prompt.contains("LARGE LIBRARY"));
+    assert!(prompt.contains("1000+ files"));
+}
+
+#[test]
+fn test_agent1_scale_hint_very_large_library() {
+    let prompt = agent1_api_extractor_v2("hugelib", "1.0", "source", 3000, None, false);
+    assert!(prompt.contains("LARGE LIBRARY ALERT"));
+    assert!(prompt.contains("2000+ files"));
+}
+
+#[test]
+fn test_agent1_no_scale_hint_small_library() {
+    let prompt = agent1_api_extractor_v2("smalllib", "1.0", "source", 50, None, false);
+    assert!(!prompt.contains("LARGE LIBRARY"));
+}
+
+// --- Agent 4 update mode ---
+
+#[test]
+fn test_agent4_update_v2_basic() {
+    let prompt = agent4_update_v2(
+        "requests",
+        "2.32.0",
+        "# Existing SKILL.md content",
+        "API surface",
+        "Patterns",
+        "Context",
+    );
+    assert!(prompt.contains("requests"));
+    assert!(prompt.contains("2.32.0"));
+    assert!(prompt.contains("# Existing SKILL.md content"));
+    assert!(prompt.contains("API surface"));
 }

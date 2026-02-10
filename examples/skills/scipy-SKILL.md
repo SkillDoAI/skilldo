@@ -1,437 +1,272 @@
 ---
+
 name: scipy
-description: Scientific computing library providing algorithms for optimization, integration, interpolation, eigenvalue problems, algebraic equations, differential equations, statistics and more
+description: Scientific computing library for numerical routines including sparse matrices, optimization, FFTs, and linear algebra.
 version: 1.18.0
 ecosystem: python
-license: BSD-3-Clause
+license: MIT
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
 ```python
-# Most common: import subpackages directly
-import scipy
-from scipy import optimize, linalg, stats, sparse, integrate, interpolate, signal
+import scipy as sp
+import numpy as np
 
-# Specific functions from submodules
-from scipy.optimize import minimize, differential_evolution, curve_fit
-from scipy.linalg import inv, solve, eig, svd
-from scipy.stats import norm, ttest_ind
-from scipy.sparse import csr_array, coo_array
-from scipy.integrate import quad, odeint
-
-# Low-level callback for performance-critical code
-from scipy import LowLevelCallable
+from scipy import sparse
+from scipy.fft import fft
+from scipy.optimize import differential_evolution
+from scipy.sparse import coo_array, csr_array, csc_array
+from scipy.sparse import linalg as splinalg
+from scipy.sparse import csgraph
 ```
 
 ## Core Patterns
 
-### Unconstrained Optimization ✅ Current
+### Build sparse arrays in the right format ✅ Current
 ```python
-from scipy.optimize import minimize
 import numpy as np
+import scipy as sp
+from scipy.sparse import coo_array, csr_array
 
-def objective(x):
-    """Rosenbrock function"""
-    return (1 - x[0])**2 + 100 * (x[1] - x[0]**2)**2
+# Construct via coordinates (COO is good for construction/modification)
+row = np.array([0, 0, 1, 2], dtype=np.int64)
+col = np.array([0, 2, 1, 2], dtype=np.int64)
+data = np.array([1.0, 3.0, 2.0, 4.0], dtype=np.float64)
 
-# Starting point
-x0 = np.array([0.0, 0.0])
+A_coo = coo_array((data, (row, col)), shape=(3, 3))
 
-# Minimize with default method (BFGS)
-result = minimize(objective, x0)
+# Canonicalize (sum duplicates if any) before heavy use
+A_coo.sum_duplicates()
 
-print(f"Optimal x: {result.x}")
-print(f"Optimal f(x): {result.fun}")
-print(f"Success: {result.success}")
-print(f"Function evaluations: {result.nfev}")
+# Convert to CSR for fast arithmetic / matvec / row slicing
+A = A_coo.tocsr()
+
+x = np.array([1.0, 2.0, 3.0])
+y = A @ x
+
+print("A.nnz:", A.nnz)
+print("y:", y)
 ```
-* Unified interface for multiple optimization algorithms
-* Returns `OptimizeResult` object with solution and metadata
-* **Status**: Current, stable
+* Prefer constructing sparse arrays directly (e.g., `coo_array((data, (row, col)))`) rather than densifying first.
+* Use COO for construction; convert to CSR/CSC for efficient operations.
 
-### Constrained Optimization with Bounds ✅ Current
+### Clean sparse structure: remove explicit zeros and duplicates ✅ Current
 ```python
-from scipy.optimize import minimize, Bounds
 import numpy as np
+from scipy.sparse import csr_array, coo_array
 
-def objective(x):
-    return (x[0] - 1)**2 + (x[1] - 2.5)**2
+# Explicit zeros are stored entries and count toward nnz
+row = np.array([0, 0, 1], dtype=np.int64)
+col = np.array([0, 1, 1], dtype=np.int64)
+data = np.array([1.0, 0.0, 2.0], dtype=np.float64)
 
-# Box constraints: -5 <= x[0] <= 5, 0 <= x[1] <= 10
-bounds = Bounds([-5, 0], [5, 10])
+A = csr_array((data, (row, col)), shape=(2, 2))
+print("nnz before:", A.nnz)
 
-x0 = np.array([0.0, 0.0])
-result = minimize(objective, x0, method='trust-constr', bounds=bounds)
+A.eliminate_zeros()
+print("nnz after eliminate_zeros:", A.nnz)
 
-print(f"Constrained solution: {result.x}")
+# Duplicates in COO are stored separately until summed
+row2 = np.array([0, 0], dtype=np.int64)
+col2 = np.array([0, 0], dtype=np.int64)
+data2 = np.array([1.0, 3.0], dtype=np.float64)
+B = coo_array((data2, (row2, col2)), shape=(1, 1))
+print("B.nnz before:", B.nnz)
+
+B.sum_duplicates()
+print("B.nnz after sum_duplicates:", B.nnz)
+print("B.todense():", B.todense())
 ```
-* Use `Bounds` class for box constraints (lower and upper bounds)
-* Specify `method='trust-constr'` or other constrained optimizer
-* **Status**: Current, stable
+* Use `csr_array.eliminate_zeros()` to drop stored zeros when you mean “no entry”.
+* Use `coo_array.sum_duplicates()` to canonicalize coordinate duplicates.
 
-### Optimization with Linear and Nonlinear Constraints ✅ Current
+### Sparse reductions and dense outputs ✅ Fixed
 ```python
-from scipy.optimize import minimize, LinearConstraint, NonlinearConstraint
 import numpy as np
+from scipy.sparse import csr_array
 
-def objective(x):
-    return (x[0] - 1)**2 + (x[1] - 2.5)**2
-
-# Linear constraint: x[0] + x[1] >= 2
-A = np.array([[1, 1]])
-linear_constraint = LinearConstraint(A, lb=2, ub=np.inf)
-
-# Nonlinear constraint: x[0]^2 + x[1]^2 <= 4
-def circle_constraint(x):
-    return x[0]**2 + x[1]**2
-
-nonlinear_constraint = NonlinearConstraint(circle_constraint, lb=-np.inf, ub=4)
-
-x0 = np.array([0.0, 0.0])
-result = minimize(
-    objective, 
-    x0, 
-    method='trust-constr',
-    constraints=[linear_constraint, nonlinear_constraint]
+A = csr_array(
+    (
+        np.array([1.0, 2.0, 3.0]),
+        (np.array([0, 1, 1]), np.array([0, 0, 2])),
+    ),
+    shape=(3, 3),
 )
 
-print(f"Solution: {result.x}")
-print(f"Constraint violations: {result.constr_violation}")
-```
-* `LinearConstraint(A, lb, ub)` for linear constraints: `lb <= A @ x <= ub`
-* `NonlinearConstraint(fun, lb, ub)` for nonlinear constraints: `lb <= fun(x) <= ub`
-* Use `np.inf` for unbounded constraints
-* **Status**: Current, stable
+# Axis reductions on sparse arrays can return different dense container types
+# depending on SciPy version (ndarray, matrix, etc.). To get predictable shapes,
+# convert to a dense ndarray first, then reduce.
+A_dense = A.toarray()
 
-### Global Optimization ✅ Current
+row_means = A_dense.mean(axis=1, keepdims=True)  # (m, 1)
+col_max = A_dense.max(axis=0, keepdims=True)     # (1, n)
+
+overall_max = A_dense.max()
+argmax_flat = int(A_dense.argmax())
+
+print("row_means shape:", row_means.shape, "value:\n", row_means)
+print("col_max shape:", col_max.shape, "value:\n", col_max)
+print("overall_max:", overall_max)
+print("argmax (flattened):", argmax_flat)
+```
+* Expect reductions like `mean(axis=...)` / `max(axis=...)` to produce dense results, but don’t rely on an exact container/shape across versions—coerce with `np.asarray(...)` and reshape when needed.
+* Use `nnz` to inspect stored structure, not the number of nonzero values in a dense sense (explicit zeros can exist).
+
+### FFT for 1D signals ✅ Current
 ```python
+import numpy as np
+from scipy.fft import fft
+
+# Real-valued time series
+t = np.linspace(0.0, 1.0, 256, endpoint=False)
+x = np.sin(2.0 * np.pi * 10.0 * t) + 0.5 * np.sin(2.0 * np.pi * 40.0 * t)
+
+X = fft(x)  # complex frequency-domain representation
+print("FFT length:", X.shape[0])
+print("First 5 bins:", X[:5])
+```
+* Use `scipy.fft.fft` for FFT computations; output is complex-valued.
+
+### Global optimization with differential evolution ✅ Current
+```python
+from __future__ import annotations
+
+import numpy as np
 from scipy.optimize import differential_evolution
-import numpy as np
 
-def objective(x):
-    """Rastrigin function - has many local minima"""
-    return 10 * len(x) + sum(xi**2 - 10 * np.cos(2 * np.pi * xi) for xi in x)
+def objective(v: np.ndarray) -> float:
+    x, y = float(v[0]), float(v[1])
+    return (x - 1.0) ** 2 + (y + 2.0) ** 2
 
-# Bounds for each dimension
-bounds = [(-5.12, 5.12), (-5.12, 5.12)]
+bounds = [(-5.0, 5.0), (-5.0, 5.0)]
 
-# Differential evolution doesn't need initial point
-result = differential_evolution(objective, bounds, seed=42)
-
-print(f"Global minimum: {result.x}")
-print(f"Function value: {result.fun}")
+result = differential_evolution(objective, bounds=bounds, seed=0)
+print("x*:", result.x)
+print("f(x*):", result.fun)
+print("success:", result.success)
 ```
-* Use for functions with multiple local minima
-* Bounds are required (not optional)
-* Stochastic algorithm - set `seed` for reproducibility
-* **Status**: Current, stable
-
-### Curve Fitting ✅ Current
-```python
-from scipy.optimize import curve_fit
-import numpy as np
-
-# Model function
-def model(x, a, b, c):
-    return a * np.exp(-b * x) + c
-
-# Generate noisy data
-x_data = np.linspace(0, 4, 50)
-y_data = model(x_data, 2.5, 1.3, 0.5) + 0.2 * np.random.normal(size=len(x_data))
-
-# Fit curve to data
-params, covariance = curve_fit(model, x_data, y_data)
-
-print(f"Fitted parameters: a={params[0]:.2f}, b={params[1]:.2f}, c={params[2]:.2f}")
-print(f"Parameter uncertainties: {np.sqrt(np.diag(covariance))}")
-```
-* Nonlinear least squares fitting
-* Returns fitted parameters and covariance matrix
-* Optionally provide bounds and initial parameter guess
-* **Status**: Current, stable
-
-### Linear Algebra Operations ✅ Current
-```python
-from scipy import linalg
-import numpy as np
-
-# Create a matrix
-A = np.array([[1, 2], [3, 4]])
-b = np.array([5, 6])
-
-# Solve linear system: A @ x = b
-x = linalg.solve(A, b)
-
-# Matrix inverse
-A_inv = linalg.inv(A)
-
-# Eigenvalues and eigenvectors
-eigenvalues, eigenvectors = linalg.eig(A)
-
-# Singular value decomposition
-U, s, Vh = linalg.svd(A)
-
-# QR decomposition
-Q, R = linalg.qr(A)
-
-# Cholesky decomposition (for positive definite matrices)
-L = linalg.cholesky(A @ A.T, lower=True)
-
-# Matrix norm
-norm_value = linalg.norm(A, ord='fro')
-```
-* Comprehensive linear algebra routines built on LAPACK
-* More features than NumPy's linalg module
-* Set `check_finite=False` for performance if inputs are known valid
-* **Status**: Current, stable
-
-### Sparse Matrix Operations ✅ Current
-```python
-from scipy import sparse
-import numpy as np
-
-# Create sparse matrix from dense
-dense = np.array([[1, 0, 0], [0, 0, 3], [4, 5, 0]])
-sparse_csr = sparse.csr_array(dense)
-
-# Create from COO format (coordinate format)
-row = np.array([0, 0, 1, 2, 2])
-col = np.array([0, 2, 1, 0, 1])
-data = np.array([1, 2, 3, 4, 5])
-sparse_coo = sparse.coo_array((data, (row, col)), shape=(3, 3))
-
-# Convert between formats
-sparse_csc = sparse_csr.tocsc()  # Compressed Sparse Column
-
-# Sparse matrix operations
-result = sparse_csr @ sparse_csr.T  # Matrix multiplication
-sum_value = sparse_csr.sum()
-max_value = sparse_csr.max()
-
-# Remove explicit zeros
-sparse_csr.eliminate_zeros()
-
-# Consolidate duplicate entries
-sparse_coo.sum_duplicates()
-
-# Convert back to dense
-dense_result = sparse_csr.todense()
-```
-* Multiple sparse formats: CSR (row), CSC (column), COO (coordinate), BSR, DIA, DOK, LIL
-* CSR and CSC are efficient for arithmetic and matrix-vector products
-* COO is efficient for construction and format conversion
-* **Status**: Current, stable
-
-### Statistical Analysis ✅ Current
-```python
-from scipy import stats
-import numpy as np
-
-# Generate random data
-data1 = np.random.normal(10, 2, 100)
-data2 = np.random.normal(11, 2, 100)
-
-# T-test: are means significantly different?
-t_statistic, p_value = stats.ttest_ind(data1, data2)
-print(f"T-test p-value: {p_value:.4f}")
-
-# Distribution fitting
-# Use a normal distribution
-mean, std = stats.norm.fit(data1)
-print(f"Fitted normal: mean={mean:.2f}, std={std:.2f}")
-
-# Probability density function
-x = np.linspace(0, 20, 100)
-pdf = stats.norm.pdf(x, loc=mean, scale=std)
-
-# Cumulative distribution function
-cdf = stats.norm.cdf(15, loc=mean, scale=std)
-
-# Generate random samples from distribution
-samples = stats.norm.rvs(loc=10, scale=2, size=1000)
-
-# Correlation
-correlation, p_corr = stats.pearsonr(data1, data2)
-```
-* Wide range of probability distributions
-* Hypothesis testing (t-test, chi-square, ANOVA, etc.)
-* Distribution fitting and random sampling
-* **Status**: Current, stable
-
-### Numerical Integration ✅ Current
-```python
-from scipy import integrate
-import numpy as np
-
-# Integrate a function
-def integrand(x):
-    return np.exp(-x**2)
-
-# Single integral from 0 to infinity
-result, error = integrate.quad(integrand, 0, np.inf)
-print(f"Integral result: {result:.6f}, error: {error:.2e}")
-
-# Double integral
-def integrand_2d(y, x):
-    return x * y**2
-
-result_2d, error_2d = integrate.dblquad(
-    integrand_2d,
-    0, 2,  # x from 0 to 2
-    lambda x: 0, lambda x: 1  # y from 0 to 1
-)
-
-# Solve ODE: dy/dt = -2y, y(0) = 1
-def dydt(y, t):
-    return -2 * y
-
-t = np.linspace(0, 4, 100)
-y0 = 1
-solution = integrate.odeint(dydt, y0, t)
-```
-* `quad` for single integrals, `dblquad` for double, `tplquad` for triple
-* `odeint` for ordinary differential equations
-* Returns result and error estimate
-* **Status**: Current, stable
+* `scipy.optimize.differential_evolution` minimizes an objective over bounds; use `seed=` for reproducibility.
 
 ## Configuration
 
-### Default Optimization Options
-```python
-from scipy.optimize import minimize
-
-# Default tolerances and options
-result = minimize(
-    objective,
-    x0,
-    method='BFGS',
-    options={
-        'maxiter': 10000,      # Maximum iterations
-        'disp': False,         # Display convergence messages
-        'gtol': 1e-5,          # Gradient tolerance
-        'eps': 1.4901161193847656e-08  # Step size for numerical derivatives
-    }
-)
-```
-
-### Controlling BLAS/LAPACK Threading
-```python
-import threadpoolctl
-
-# SciPy uses multi-threaded BLAS/LAPACK by default
-# Control threading behavior:
-with threadpoolctl.threadpool_limits(limits=4, user_api='blas'):
-    result = linalg.solve(A, b)
-
-# Or set globally
-threadpoolctl.threadpool_limits(limits=1)  # Force single-threaded
-```
-
-### Sparse Matrix Format Selection
-```python
-# Choose format based on operation:
-# - CSR: fast row slicing, matrix-vector products
-# - CSC: fast column slicing, matrix-vector products  
-# - COO: fast format conversion, construction
-# - LIL: fast incremental construction
-# - DOK: fast element access and update
-
-sparse_lil = sparse.lil_array((1000, 1000))  # Build incrementally
-sparse_lil[0, 100] = 1
-sparse_lil[500, 501] = 2
-
-sparse_csr = sparse_lil.tocsr()  # Convert for computation
-```
-
-### Optimization Method Selection
-```python
-# Unconstrained: BFGS (default), Nelder-Mead, CG, Newton-CG
-# Bound-constrained: L-BFGS-B, TNC
-# Constrained: SLSQP, trust-constr (recommended)
-# Global: differential_evolution, basinhopping, dual_annealing
-
-result = minimize(objective, x0, method='trust-constr', constraints=constraints)
-```
+- **Threading defaults**
+  - SciPy itself is typically single-threaded.
+  - Many linear algebra operations call into BLAS/LAPACK (often via NumPy) and are commonly **multi-threaded** by default.
+- **Controlling BLAS/LAPACK threads**
+  - Use the external package `threadpoolctl` to cap BLAS/LAPACK thread usage when needed (e.g., to avoid oversubscription when you add your own parallelism).
+- **Opt-in parallelism**
+  - Some SciPy APIs expose parallel execution via a `workers=` keyword argument (accepting an integer worker count, and for some APIs a map-like callable). Do not assume parallelism unless you explicitly enable it.
+- **Sparse array format selection**
+  - COO: construction/modification; CSR: fast arithmetic/matvec and row slicing; CSC: column slicing; DOK/LIL: incremental construction; DIA: diagonal structure; BSR: block structure.
+  - Operations may change output format for efficiency; convert explicitly when you need a specific format.
 
 ## Pitfalls
 
-### Wrong: Using DIA sparse format for subscripting
+### Wrong: Indexing a format that is not subscriptable (`dia_array`) 
 ```python
-from scipy import sparse
 import numpy as np
+import scipy as sp
 
-dense = np.array([[1, 0, 0], [0, 2, 0], [0, 0, 3]])
-sparse_dia = sparse.dia_array(dense)
+dense = np.array([[1, 0], [0, 2]])
+a = sp.sparse.coo_array(dense)
 
-# This raises TypeError: 'dia_array' object is not subscriptable
-value = sparse_dia[1, 1]
+# Not all sparse formats support indexing/slicing
+b = a.todia()
+print(b[1, 1])  # TypeError: 'dia_array' object is not subscriptable
 ```
 
-### Right: Convert to CSR format for indexing
+### Right: Convert to an indexable format (e.g., CSR) before subscripting
 ```python
-from scipy import sparse
 import numpy as np
+import scipy as sp
 
-dense = np.array([[1, 0, 0], [0, 2, 0], [0, 0, 3]])
-sparse_dia = sparse.dia_array(dense)
+dense = np.array([[1, 0], [0, 2]])
+a = sp.sparse.coo_array(dense)
 
-# Convert to CSR format which supports indexing
-sparse_csr = sparse_dia.tocsr()
-value = sparse_csr[1, 1]  # Works correctly
+print(a.tocsr()[1, 1])
 ```
 
-### Wrong: Explicit zeros taking up storage in sparse arrays
+### Wrong: Assuming sparse operations preserve the input format
 ```python
-from scipy import sparse
 import numpy as np
+import scipy as sp
 
-# Including explicit zeros in data
-row = [0, 0, 1, 1, 2, 2]
-col = [0, 3, 1, 2, 2, 3]
-data = [1, 2, 4, 1, 5, 0]  # The 0 at position (2,3) is stored explicitly
+x = sp.sparse.coo_array(np.eye(3))
+y = x @ x.T
 
-sparse_csr = sparse.csr_array((data, (row, col)))
-print(f"Stored elements: {sparse_csr.nnz}")  # 6 elements stored
+# SciPy may return CSR/CSC for efficiency; don't assume y is COO
+print(type(y))
 ```
 
-### Right: Remove explicit zeros after construction
+### Right: Convert explicitly to the format you require downstream
 ```python
-from scipy import sparse
 import numpy as np
+import scipy as sp
 
-row = [0, 0, 1, 1, 2, 2]
-col = [0, 3, 1, 2, 2, 3]
-data = [1, 2, 4, 1, 5, 0]
+x = sp.sparse.coo_array(np.eye(3))
+y = x @ x.T
 
-sparse_csr = sparse.csr_array((data, (row, col)))
-sparse_csr.eliminate_zeros()  # Remove explicit zeros
-print(f"Stored elements: {sparse_csr.nnz}")  # 5 elements stored
+y_csr = y.tocsr()
+print(type(y_csr))
 ```
 
-### Wrong: Not handling duplicate entries in COO format
+### Wrong: Treating explicit zeros as “no entry”
 ```python
-from scipy import sparse
 import numpy as np
+import scipy as sp
 
-# Multiple values at position (1,1)
-row = [0, 0, 1, 1, 1, 2]
-col = [0, 3, 1, 1, 2, 2]
-data = [1, 2, 1, 3, 1, 5]
+row = np.array([0, 0], dtype=np.int64)
+col = np.array([0, 1], dtype=np.int64)
+data = np.array([1.0, 0.0], dtype=np.float64)
 
-sparse_coo = sparse.coo_array((data, (row, col)))
-print(f"Stored elements: {sparse_coo.nnz}")  # 6 stored elements
-# Duplicates are summed when converted to dense, but stored separately
+A = sp.sparse.csr_array((data, (row, col)), shape=(1, 2))
+print("nnz:", A.nnz)  # counts explicit zeros too
 ```
 
-### Right: Consolidate duplicates explicitly
+### Right: Remove stored zeros when you intend “no stored entry”
 ```python
-from scipy import sparse
 import numpy as np
+import scipy as sp
 
-row = [0, 0, 1, 1, 1, 2]
-col = [0, 3, 1, 1, 2, 2]
-data = [1, 2, 1, 3
+row = np.array([0, 0], dtype=np.int64)
+col = np.array([0, 1], dtype=np.int64)
+data = np.array([1.0, 0.0], dtype=np.float64)
+
+A = sp.sparse.csr_array((data, (row, col)), shape=(1, 2))
+A.eliminate_zeros()
+print("nnz:", A.nnz)
+```
+
+### Wrong: Assuming duplicates in COO are automatically merged
+```python
+import numpy as np
+import scipy as sp
+
+row = np.array([0, 0], dtype=np.int64)
+col = np.array([0, 0], dtype=np.int64)
+data = np.array([1.0, 3.0], dtype=np.float64)
+
+A = sp.sparse.coo_array((data, (row, col)), shape=(1, 1))
+assert A.nnz == 1  # fails: nnz is 2 because duplicates are stored separately
+```
+
+### Right: Canonicalize with `sum_duplicates()` before relying on `nnz`/structure
+```python
+import numpy as np
+import scipy as sp
+
+row = np.array([0, 0], dtype=np.int64)
+col = np.array([0, 0], dtype=np.int64)
+data = np.array([1.0, 3.0], dtype=np.float64)
+
+A = sp.sparse.coo_array((data, (row, col)), shape=(1, 1))
+A.sum_duplicates()
+assert A.nnz == 1
+print(A.todense())
+```
+
 ## References
 
 - [homepage](https://scipy.org/)
@@ -439,3 +274,31 @@ data = [1, 2, 1, 3
 - [source](https://github.com/scipy/scipy)
 - [download](https://github.com/scipy/scipy/releases)
 - [tracker](https://github.com/scipy/scipy/issues)
+
+## Migration from v[previous]
+
+No SciPy 1.18.0-specific breaking changes or deprecations were provided in the supplied inputs. If you provide the SciPy 1.18.0 release notes, add a concrete mapping here (deprecated → modern alternative) with before/after code.
+
+## API Reference
+
+- **scipy.sparse** - Sparse array/matrix subpackage; provides sparse formats and conversions.
+- **scipy.sparse.coo_array((data, (row, col)), shape=...)** - COO sparse array construction from coordinates.
+- **scipy.sparse.csr_array((data, (row, col)), shape=...)** - CSR sparse array construction; efficient arithmetic/matvec.
+- **scipy.sparse.csc_array((data, (row, col)), shape=...)** - CSC sparse array construction; efficient column slicing.
+- **scipy.sparse.bsr_array(...)** - Block sparse row format for block-structured sparsity.
+- **scipy.sparse.dia_array(...)** - Diagonal sparse format for banded/diagonal structure.
+- **scipy.sparse.dok_array(...)** - Dictionary-of-keys sparse format for incremental construction.
+- **scipy.sparse.lil_array(...)** - List-of-lists sparse format for incremental construction.
+- **coo_array.sum_duplicates()** - Sum duplicate (row, col) entries in-place to canonicalize COO data.
+- **coo_array.tocsr()** - Convert COO to CSR.
+- **coo_array.todia()** - Convert COO to DIA (note: DIA may not support indexing).
+- **csr_array.eliminate_zeros()** - Remove explicitly stored zeros in-place (affects `nnz` and structure).
+- **sparse_array.nnz** - Number of stored entries (includes explicit zeros, counts duplicates in COO pre-canonicalization).
+- **sparse_array.todense()** - Convert sparse array to a dense NumPy `ndarray`.
+- **sparse_array.max(axis=None)** - Max reduction; axis reductions often produce dense results.
+- **sparse_array.argmax(axis=None)** - Argmax; typically over flattened array if `axis=None`.
+- **sparse_array.mean(axis=None)** - Mean reduction; axis reductions often produce dense results.
+- **scipy.sparse.linalg** - Sparse linear algebra routines (iterative solvers, decompositions, etc.).
+- **scipy.sparse.csgraph** - Graph algorithms operating on sparse adjacency matrices.
+- **scipy.fft.fft(x, n=None, axis=-1, norm=None)** - 1D FFT.
+- **scipy.optimize.differential_evolution(func, bounds, ...)** - Global optimization over bounded domains.

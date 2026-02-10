@@ -703,9 +703,71 @@ This file helps AI coding agents write correct code using this library.
 2. **USAGE PATTERNS FROM TESTS**: {}
 3. **CONVENTIONS & PITFALLS**: {}
 
+<instructions>
+IMPORTANT: Do NOT include any text from these <instructions> tags in your output.
+These are directives for YOU to follow while generating content. The output should
+contain ONLY the SKILL.md content described in the template below.
+
+RULE 1 — PUBLIC API PRIORITY:
+- Prioritize PUBLIC APIs over internal/compat modules
+- Use APIs from api_surface with publicity_score "high" first
+- Avoid .compat, .internal, ._private modules unless they are the only option
+- Prefer library.MainClass over library.compat.helper_function
+
+RULE 2 — DEPRECATION STATUS:
+Mark each pattern with a status indicator in its heading:
+- Current APIs: add "✅ Current" after the pattern name
+- Soft deprecation: add "⚠️ Soft Deprecation" — say "still okay to use, prefer new API for new code"
+- Hard deprecation: add "❌ Hard Deprecation" — say "action required: migrate before vX.X"
+- Removed: add "🗑️ Removed" — say "no longer available since vX.X"
+For deprecated patterns, include: Deprecated since, Still works (bool), Modern alternative, and Migration guidance.
+
+RULE 3 — PITFALLS SECTION:
+The Pitfalls section is mandatory. Include 3-5 common mistakes with specific Wrong/Right examples using actual API names.
+
+RULE 4 — REFERENCES SECTION:
+Include ALL provided URLs in the References section. Do not skip any URLs.
+
+RULE 5 — CODE QUALITY:
+- Every code example must use REAL APIs from the api_surface or well-known public APIs
+- Never use placeholder names like "MyClass" or "my_function"
+- Every code example must be complete and runnable Python
+- Include all necessary imports, show required parameters, use correct indentation
+- Do not invent APIs that don't exist — cross-reference against api_surface
+
+RULE 6 — DOCUMENTED APIs:
+- Prefer APIs that appear in the documented_apis list from context
+- If an API is in api_surface but NOT in documented_apis, skip it
+- If documented_apis is empty, use api_surface and patterns to identify public APIs
+
+RULE 7 — STYLE:
+- Keep it concise — focus on top 10-15 most used APIs
+- No marketing language ("powerful", "easy", "simple") — just facts and patterns
+- Type hints required if the library uses them
+- Show async/await properly — never forget await on async calls
+- Document decorator order for decorator-heavy libraries
+
+RULE 8 — LIBRARY-SPECIFIC CONTENT:
+Based on the library category, include appropriate extra sections:
+- Web frameworks: routing, request/response handling, middleware, error handling
+- CLI tools: command definition, arguments vs options, command groups
+- ORMs: model definition, query patterns, relationships, transactions
+- HTTP clients: HTTP methods, request params, sessions, auth, timeouts
+- Async frameworks: async/await basics, concurrency patterns, sync wrappers
+
+VERIFY before outputting (do not include this checklist):
+- Library category identified
+- Every API used is real and public
+- At least 5 public APIs documented
+- Core patterns use actual API names (not placeholders)
+- Deprecation status marked with correct indicators
+- Pitfalls section has 3-5 specific examples
+- All provided URLs appear in References
+</instructions>
+
 ## Output Structure
 
-Generate a SKILL.md file with EXACTLY these sections:
+Generate a SKILL.md file with EXACTLY these sections. Output ONLY the markdown below — no preamble, no commentary.
 
 ```markdown
 ---
@@ -718,367 +780,57 @@ license: {}
 
 ## Imports
 
-Show the standard import patterns. Most common first:
 ```python
-from {} import MainClass, helper_function
-from {}.submodule import SpecialCase
+import {{package_name}}
+from {{package_name}} import [most common imports]
+from {{package_name}}.submodule import [secondary imports]
 ```
 
 ## Core Patterns
 
-The right way to use the main APIs. Show 3-5 most common patterns.
+[3-5 most common usage patterns, each with:]
 
-**CRITICAL: Prioritize PUBLIC APIs over internal/compat modules**
-- Use APIs from api_surface with `publicity_score: "high"` first
-- Avoid `.compat`, `.internal`, `._private` modules unless they're the only option
-- Example: Prefer `library.MainClass` over `library.compat.helper_function`
-
-**CRITICAL: Mark deprecation status with clear indicators**
-
-Each pattern must include:
-1. **Status indicator** in the heading:
-   - `✅ Current` - Modern, stable API (use this for new code)
-   - `⚠️ Soft Deprecation` - Still safe to use, but newer option available
-   - `❌ Hard Deprecation` - Will be removed soon, migrate required
-   - `🗑️ Removed` - No longer available, use replacement
-
-2. **Deprecation guidance** (if deprecated):
-   - For soft: "Still works fine. Don't rewrite existing code - only use current API for new projects."
-   - For hard: "Action required: Migrate before vX.X. Include replacement API name."
-   - For removed: "No longer available since vX.X. Include replacement API name."
-
-**Pattern Format:**
-
-### Pattern Name ✅ Current
+### [Pattern Name] [status indicator]
 ```python
-# Modern, recommended code
+# [complete, runnable example]
 ```
-* Description of what it does
-* **Status**: Current, stable
-
-### Legacy Pattern ⚠️ Soft Deprecation
-```python
-# Older code that still works
-```
-* Description of what it does
-* **Deprecated since**: vX.X
-* **Still works**: Yes, safe to use in existing code
-* **Guidance**: Don't rewrite working code - only use current API for new code
-* **Modern alternative**: Use current API name
-
-### Old Pattern ❌ Hard Deprecation
-```python
-# Code that will stop working soon
-```
-* Description of what it does
-* **Deprecated since**: vX.X
-* **Removal planned**: vX.X
-* **Replacement**: Use replacement API name with example
-* **Action required**: Migrate existing code before removal
-
-### Removed API 🗑️ Removed
-```python
-# This no longer works - shown for reference only
-```
-* **Removed in**: vX.X
-* **Replacement**: Use replacement API name with example
-* **Why**: Brief reason for removal
-
-Each pattern:
-- Clear heading with status indicator
-- Complete, runnable code example
-- Comments explaining key points
-- Type hints if the library uses them
-- Deprecation guidance if applicable
+* [description]
+* [deprecation info if applicable]
 
 ## Configuration
 
-Standard configuration and setup:
-- Default values
-- Common customizations
-- Environment variables
-- Config file formats
+[Default values, common customizations, environment variables, config formats]
 
 ## Pitfalls
 
-CRITICAL: This section is MANDATORY. Show 3-5 common mistakes with specific Wrong/Right examples.
-
-### Wrong: [First specific mistake - use actual API names]
+### Wrong: [specific mistake with actual API names]
 ```python
-# Code that looks right but fails
+# [code that looks right but fails]
 ```
 
-### Right: [Correct approach for first mistake]
+### Right: [correct approach]
 ```python
-# The fix with explanation
+# [the fix with explanation]
 ```
 
-### Wrong: [Second specific mistake]
-```python
-# Another common mistake
-```
-
-### Right: [Correct approach for second mistake]
-```python
-# The fix
-```
-
-### Wrong: [Third specific mistake]
-```python
-# Third common mistake
-```
-
-### Right: [Correct approach for third mistake]
-```python
-# The fix
-```
-
-Add 2 more pitfalls if found in the context (minimum 3, maximum 5 total).
+[3-5 Wrong/Right pairs total]
 
 ## References
-
-CRITICAL: Include ALL provided URLs below (do NOT skip this section):
 
 {}
 
 ## Migration from v[previous]
 
-What changed in this version (if applicable):
-- Breaking changes
-- Deprecated → Current mapping
-- Before/after code examples
+[Breaking changes, deprecated-to-current mapping, before/after examples. Omit if not applicable.]
 
 ## API Reference
 
-Brief reference of the most important public APIs:
-
-- **ClassName()** - Constructor with key parameters
-- **method_name()** - What it does, key parameters
-- **@decorator_name** - When to use it
-
-Focus on the 10-15 most used APIs.
+[Brief reference of 10-15 most important public APIs]
+- **ClassName()** - [what it does, key parameters]
+- **method_name()** - [what it does, key parameters]
 ```
 
-## LIBRARY-SPECIFIC SECTIONS
-
-Based on the library category from api_surface, include appropriate sections:
-
-### For Web Frameworks (FastAPI, Flask, Django)
-**REQUIRED sections:**
-- Routing Patterns - Show route decorators with different HTTP methods
-- Request Handling - Query params, path params, body parsing
-- Response Handling - Status codes, headers, JSON/HTML responses
-- Middleware/Dependencies - Dependency injection patterns
-- Error Handling - Exception handlers, HTTP exceptions
-- Background Tasks - If supported
-- WebSocket Patterns - If supported
-
-**Core Patterns must show:**
-```python
-# Route with path parameter
-@app.get("/items/{{item_id}}")
-def read_item(item_id: int):
-    return {{"item_id": item_id}}
-
-# POST with body
-@app.post("/items/")
-def create_item(item: ItemModel):
-    return item
-
-# Dependency injection
-@app.get("/protected")
-def protected(user = Depends(get_current_user)):
-    return {{"user": user}}
-```
-
-### For CLI Tools (Click, argparse)
-**REQUIRED sections:**
-- Command Definition - Command decorators and functions
-- Arguments vs Options - When to use each
-- Context Passing - Click context, argparse Namespace
-- Command Groups - Nesting and organization
-- Error Handling - Exit codes and error messages
-- Configuration - Config file support if present
-
-**Core Patterns must show:**
-```python
-# Basic command
-@click.command()
-@click.option('--count', default=1)
-@click.argument('name')
-def greet(count, name):
-    for _ in range(count):
-        click.echo(f'Hello {{name}}!')
-
-# Command group
-@click.group()
-def cli():
-    pass
-
-@cli.command()
-def command1():
-    pass
-```
-
-### For ORMs (Django ORM, SQLAlchemy)
-**REQUIRED sections:**
-- Model Definition - Field types and constraints
-- Query Patterns - filter, get, create, update, delete
-- Relationships - ForeignKey, ManyToMany patterns
-- Transaction Management - Atomic operations
-- Query Optimization - select_related, prefetch_related
-- Migration Patterns - If applicable
-
-**Core Patterns must show:**
-```python
-# Model definition
-class User(Model):
-    name = CharField(max_length=100)
-    email = EmailField(unique=True)
-
-# Query patterns
-users = User.objects.filter(name__startswith='A')
-user = User.objects.get(id=1)
-User.objects.create(name='Alice', email='a@example.com')
-
-# Relationships
-class Post(Model):
-    author = ForeignKey(User, on_delete=CASCADE)
-```
-
-### For HTTP Clients (requests, httpx)
-**REQUIRED sections:**
-- HTTP Methods - GET, POST, PUT, DELETE with examples
-- Request Parameters - Query params, headers, body
-- Response Handling - Status codes, JSON, content
-- Session Management - Persistent sessions
-- Authentication - Auth patterns supported
-- Timeout and Retry - Error handling
-- Streaming - If supported
-
-**Core Patterns must show:**
-```python
-# GET request
-response = requests.get('https://api.example.com/users')
-data = response.json()
-
-# POST with JSON
-response = requests.post('https://api.example.com/users',
-                        json={{"name": "Alice"}})
-
-# Session with auth
-session = requests.Session()
-session.auth = ('user', 'pass')
-session.get('https://api.example.com/protected')
-```
-
-### For Async Frameworks
-**REQUIRED sections:**
-- Async/Await Basics - When to use async def
-- Concurrency Patterns - gather, create_task
-- Synchronous Wrappers - run_in_executor for blocking code
-- Event Loop Management - get_event_loop patterns
-- Background Tasks - Fire and forget patterns
-
-**Core Patterns must show:**
-```python
-# Async function
-async def fetch_data():
-    async with httpx.AsyncClient() as client:
-        response = await client.get('https://api.example.com')
-        return response.json()
-
-# Concurrent operations
-results = await asyncio.gather(
-    fetch_data(),
-    fetch_data(),
-)
-
-# Running blocking code
-result = await loop.run_in_executor(None, blocking_function)
-```
-
----
-END OF SKILL.MD TEMPLATE ABOVE
----
-
-NOW FOLLOW THESE RULES (do NOT include this section in your output):
-
-1. **Prefer APIs that are in context.documented_apis list**
-   - Cross-reference every API you use against the documented_apis from context
-   - If an API is in api_surface but NOT in documented_apis, skip it (it's undocumented/internal)
-   - If documented_apis is empty or very small, use the api_surface and patterns to identify the most important public APIs. For well-known libraries, you may use your knowledge of their public API to supplement
-   - This ensures SKILL.md documents officially public APIs
-
-2. **Log skipped undocumented APIs internally** (don't include in output)
-   - When you skip an API because it's not documented, note it mentally
-   - Example: "Skipping library.compat.helper - not in documented_apis"
-   - Continue with documented APIs only
-
-3. **Every code example MUST use real APIs**
-   - If api_surface is empty or doesn't contain valid APIs, use patterns and your knowledge of the library to identify real public APIs
-   - NEVER use placeholder names like "MyClass", "my_function"
-   - ALWAYS use actual API names from documented_apis, api_surface, or well-known public APIs of the library
-
-3. **Every code example MUST be complete and runnable** (valid Python syntax)
-   - Include all necessary imports
-   - Show required parameters
-   - Use correct indentation
-
-4. **Mark deprecation status correctly with indicators**
-   - Check api_surface and patterns for deprecation info
-   - Use ✅ for current APIs, ⚠️ for soft deprecation, ❌ for hard deprecation, 🗑️ for removed
-   - Include migration guidance for deprecated APIs
-   - Never say "don't use" for soft deprecations - say "still okay to use, prefer new API for new code"
-
-5. **Do NOT invent APIs that don't exist**
-   - Cross-reference every API used against api_surface
-   - If unsure, omit the example rather than guess
-
-6. **Prefer patterns from the actual test suite**
-   - Use patterns input as primary source of truth
-   - Adapt test patterns into user-facing examples
-
-5. **Keep it concise** - agents have limited context windows
-   - Focus on top 10-15 most used APIs
-   - Omit rarely-used features
-
-6. **No marketing language** - just facts and patterns
-   - No "powerful", "easy", "simple" adjectives
-   - State what it does, not how good it is
-
-7. **Type hints required** if the library uses them
-   - Match type hints from api_surface exactly
-   - Show complex types (Annotated, Union, etc.) correctly
-
-8. **Show async/await properly** for async libraries
-   - NEVER forget await on async function calls
-   - Mark async contexts clearly
-
-9. **Document decorator order** for decorator-heavy libraries
-   - Order matters! Show from top to bottom
-   - Include decorator parameters
-
-10. **Include error handling** if it's a common pattern
-    - Show try/except for expected errors
-    - Document exception types
-
-VERIFY INTERNALLY BEFORE OUTPUT (do NOT include this checklist in output):
-- [ ] Library category identified from api_surface
-- [ ] documented_apis or api_surface provides enough APIs to generate useful content
-- [ ] Every API used is real and public (from documented_apis, api_surface, or well-known public API)
-- [ ] At least 5 public APIs documented (from any reliable source)
-- [ ] Core patterns use actual API names (not placeholders)
-- [ ] All imports match documented_apis entries
-- [ ] Deprecation status marked with correct indicators (✅ ⚠️ ❌ 🗑️)
-- [ ] Deprecated patterns include migration guidance
-- [ ] Soft deprecations say "still okay to use" not "don't use"
-- [ ] Pitfalls section has 3-5 specific examples
-- [ ] No generic framework names used
-
-If validation issues exist, do your BEST to generate useful content anyway. Only output an error if you truly have ZERO information about the library's API (no api_surface, no patterns, no documented_apis, and you don't recognize the library).
-
-Now generate the SKILL.md content:
+Now generate the SKILL.md content for {} v{}:
 "#,
         package_name,
         version,
@@ -1089,9 +841,9 @@ Now generate the SKILL.md content:
         version,
         ecosystem,
         license.unwrap_or("MIT"),
+        references,
         package_name,
-        package_name,
-        references
+        version,
     );
 
     if let Some(custom) = custom_instructions {

@@ -280,23 +280,44 @@ Full ecosystem handlers for JS/TS, Rust, and Go are planned.
 ## Building from Source
 
 ```bash
-# Build release binary (7.1MB)
+# Build release binary
 cargo build --release
 
-# Run tests (575 passing)
-cargo test
+# Run tests (~755 passing, requires uv)
+make test
+
+# Generate HTML coverage report
+make coverage
 
 # Run linter + formatter + audit
-cargo clippy -- -D warnings
-cargo fmt --check
+make lint
+make fmt-check
 cargo audit
 ```
 
 ## Requirements
 
+**Runtime:**
 - Rust 1.70+
 - Docker or Podman (for Agent 5 validation)
 - An LLM API key (or Ollama for local models)
+
+**Development / Testing:**
+- [uv](https://docs.astral.sh/uv/) — required to run the full test suite (Agent 5 executor tests use `uv` to create isolated Python environments)
+- [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) — for coverage reports (`make coverage` will install it automatically)
+- [pre-commit](https://pre-commit.com/) — for git hooks (`pre-commit install && pre-commit install --hook-type pre-push`)
+
+Install dev dependencies:
+```bash
+# Check everything is available
+make check-deps
+
+# Install uv if needed
+pip install uv    # or: brew install uv
+
+# Install pre-commit hooks
+pre-commit install && pre-commit install --hook-type pre-push
+```
 
 ## License
 

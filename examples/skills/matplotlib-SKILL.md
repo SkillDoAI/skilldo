@@ -1,151 +1,267 @@
 ---
-name: matplotlib
-version: 3.10
-ecosystem: python
-# license: Unknown
-generated_with: qwen3-coder:latest + gpt-5.2 (agent5)
----
 
----
 name: matplotlib
-description: A comprehensive library for creating static, animated, and interactive visualizations in Python.
+description: Python library for creating static, animated, and interactive visualizations.
 version: 3.10
 ecosystem: python
 license: MIT
+generated_with: gpt-5.2
 ---
 
 ## Imports
 
-Show the standard import patterns. Most common first:
 ```python
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-from matplotlib import pyplot, figure, axes
-from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib
+from matplotlib import rc_params, set_loglevel, MatplotlibDeprecationWarning
+from matplotlib import get_cachedir, get_configdir, get_data_path, matplotlib_fname
 ```
 
 ## Core Patterns
 
-### Plotting Basic Line Graph ✅ Current
-```python
-import matplotlib.pyplot as plt
-
-x = [1, 2, 3, 4]
-y = [1, 4, 9, 16]
-
-plt.plot(x, y)
-plt.xlabel('X-axis')
-plt.ylabel('Y-axis')
-plt.title('Basic Line Plot')
-plt.show()
-```
-* Creates a simple line plot using pyplot
-* **Status**: Current, stable
-
-### Saving Figure with Customization ✅ Current
-```python
-import matplotlib.pyplot as plt
-
-fig, ax = plt.subplots()
-ax.plot([1, 2, 3], [1, 4, 9])
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-
-plt.savefig('my_plot.png', dpi=300, bbox_inches='tight')
-plt.show()
-```
-* Saves a figure with specified DPI and tight bounding box
-* **Status**: Current, stable
-
-### Using rcParams for Global Styling ✅ Current
-```python
-import matplotlib as mpl
-
-mpl.rcParams['font.size'] = 12
-mpl.rcParams['axes.grid'] = True
-
-import matplotlib.pyplot as plt
-plt.plot([1, 2, 3], [1, 4, 9])
-plt.show()
-```
-* Sets global styling parameters for all subsequent plots
-* **Status**: Current, stable
-
-### Creating Subplots with Shared Axes ✅ Current
-```python
-import matplotlib.pyplot as plt
-
-fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
-ax1.plot([1, 2, 3], [1, 4, 9])
-ax2.plot([1, 2, 3], [1, 8, 27])
-plt.show()
-```
-* Creates multiple subplots sharing x-axis
-* **Status**: Current, stable
-
-### Configuring Backend and Interactive Mode ✅ Current
+### Inspect version and environment ✅ Current
 ```python
 import matplotlib
-matplotlib.use('Agg')  # Set backend before importing pyplot
-import matplotlib.pyplot as plt
+from matplotlib import get_cachedir, get_configdir, get_data_path, matplotlib_fname
 
-matplotlib.interactive(False)
-plt.plot([1, 2, 3], [1, 4, 9])
-plt.show()
+def main() -> None:
+    print("matplotlib:", matplotlib.__version__)
+    print("version_info:", matplotlib.__version_info__)
+    print("configdir:", get_configdir())
+    print("cachedir:", get_cachedir())
+    print("data_path:", get_data_path())
+    print("matplotlibrc:", matplotlib_fname())
+
+if __name__ == "__main__":
+    main()
 ```
-* Sets the rendering backend and disables interactive mode
-* **Status**: Current, stable
+* Use this to debug runtime environment issues (config, cache, bundled data, and the active matplotlibrc).
+
+### Read and query rcParams ✅ Current
+```python
+from __future__ import annotations
+
+import matplotlib
+from matplotlib import rc_params
+
+def main() -> None:
+    params: matplotlib.RcParams = rc_params()
+
+    # Read a value.
+    backend = params.get("backend", None)
+    # NOTE: backend may be an object (not necessarily a str) depending on environment/backend setup.
+    print("backend:", backend)
+
+    # Find all params matching a pattern.
+    font_params: matplotlib.RcParams = params.find_all("font")
+    print("num font-related rcParams:", len(font_params))
+
+    # Copy for safe experimentation.
+    params_copy: matplotlib.RcParams = params.copy()
+    params_copy["figure.dpi"] = 150  # validated assignment via RcParams.__setitem__
+    print("figure.dpi (copy):", params_copy["figure.dpi"])
+    print("figure.dpi (original):", params["figure.dpi"])
+
+if __name__ == "__main__":
+    main()
+```
+* Use `matplotlib.rc_params()` to obtain a validated `RcParams` mapping, then query, filter, and copy it safely.
+
+### Update rcParams with validated vs raw setters ✅ Current
+```python
+from __future__ import annotations
+
+import matplotlib
+from matplotlib import rc_params
+
+def main() -> None:
+    params: matplotlib.RcParams = rc_params()
+
+    # Validated set (recommended): enforces types/allowed values.
+    params["_internal.classic_mode"] = False if "_internal.classic_mode" in params else params.get("_internal.classic_mode", False)
+
+    # Public-but-underscored helpers (documented as public in Matplotlib):
+    # - _set: validated set
+    # - _get: get with Matplotlib's internal semantics
+    # - _update_raw: bypass some validation (use carefully)
+    if "figure.dpi" in params:
+        params._set("figure.dpi", 120)
+        dpi = params._get("figure.dpi")
+        print("figure.dpi via _get:", dpi)
+
+    # Raw update is for advanced cases; keep values correct to avoid later failures.
+    params._update_raw({"savefig.dpi": "figure"})
+    print("savefig.dpi:", params["savefig.dpi"])
+
+if __name__ == "__main__":
+    main()
+```
+* Prefer `params[key] = value` / `RcParams.__setitem__` (validated). Use `_update_raw` only when you fully control inputs.
+
+### Control Matplotlib logging ✅ Current
+```python
+import matplotlib
+
+def main() -> None:
+    matplotlib.set_loglevel("warning")
+    # Common levels: "debug", "info", "warning", "error", "critical"
+    print("log level set; version:", matplotlib.__version__)
+
+if __name__ == "__main__":
+    main()
+```
+* Use `matplotlib.set_loglevel()` to reduce noisy logs in production or increase verbosity while debugging.
+
+### Handle missing external executables ✅ Current
+```python
+from __future__ import annotations
+
+import shutil
+import matplotlib
+
+def require_executable(name: str) -> str:
+    path = shutil.which(name)
+    if path is None:
+        raise matplotlib.ExecutableNotFoundError(f"Required executable not found on PATH: {name}")
+    return path
+
+def main() -> None:
+    # Example: check for a tool your workflow needs.
+    try:
+        exe = require_executable("latex")
+        print("Found latex at:", exe)
+    except matplotlib.ExecutableNotFoundError as e:
+        print("Cannot proceed:", e)
+
+if __name__ == "__main__":
+    main()
+```
+* Raise `matplotlib.ExecutableNotFoundError` (a `FileNotFoundError`) when your Matplotlib-adjacent workflow depends on external tools.
 
 ## Configuration
 
-Standard configuration and setup:
-- Default values: Default backend is 'Agg', interactive mode is off
-- Common customizations: rcParams, backends, logging levels
-- Environment variables: MPLBACKEND, MPLCONFIGDIR
-- Config file formats: ~/.matplotlib/matplotlibrc, font configuration
+- **rcParams**: Central configuration mapping (validated keys/values). Retrieve with `matplotlib.rc_params()`.
+- **Config directory**: `matplotlib.get_configdir()` (location of user config such as `matplotlibrc`).
+- **Cache directory**: `matplotlib.get_cachedir()` (font cache and other cached artifacts).
+- **Data path**: `matplotlib.get_data_path()` (bundled data shipped with Matplotlib).
+- **Active config file**: `matplotlib.matplotlib_fname()` (path to the matplotlibrc in use).
+- **Logging**: `matplotlib.set_loglevel(level: str)` to control Matplotlib’s internal logging verbosity.
+- **API stability note**: In Matplotlib, visual output is treated as part of the public API; changes that alter appearance can be considered breaking.
 
 ## Pitfalls
 
-### Wrong: Not importing pyplot before plotting
-```python
-import matplotlib as mpl
-mpl.plot([1, 2, 3], [1, 4, 9])  # This will fail
-```
-
-### Right: Import pyplot for plotting functions
-```python
-import matplotlib.pyplot as plt
-plt.plot([1, 2, 3], [1, 4, 9])  # Correct way
-```
-
-### Wrong: Using rcParams without proper reference
-```python
-import matplotlib as mpl
-mpl.rcParams['font.size'] = 12  # This may cause issues if used inconsistently
-```
-
-### Right: Use rcParams properly with context manager
-```python
-import matplotlib as mpl
-with mpl.rc_context({'font.size': 12}):
-    import matplotlib.pyplot as plt
-    plt.plot([1, 2, 3], [1, 4, 9])
-```
-
-### Wrong: Ignoring backend choice when using GUI
-```python
-import matplotlib.pyplot as plt
-plt.plot([1, 2, 3], [1, 4, 9])
-plt.show()  # May not work if backend not set properly
-```
-
-### Right: Set backend explicitly before importing pyplot
+### Wrong: Assuming `matplotlib.__version__` is a function
 ```python
 import matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
-plt.plot([1, 2, 3], [1, 4, 9])
-plt.show()
+
+def main() -> None:
+    # TypeError: 'str' object is not callable
+    print(matplotlib.__version__())
+
+if __name__ == "__main__":
+    main()
+```
+
+### Right: Treat `__version__` as a string attribute
+```python
+import matplotlib
+
+def main() -> None:
+    print(matplotlib.__version__)
+    print(matplotlib.__version_info__)
+
+if __name__ == "__main__":
+    main()
+```
+
+### Wrong: Mutating global rcParams when you only meant to experiment
+```python
+from matplotlib import rc_params
+
+def main() -> None:
+    params = rc_params()
+    params["figure.dpi"] = 10  # affects subsequent figures in this process
+    print("figure.dpi now:", params["figure.dpi"])
+
+if __name__ == "__main__":
+    main()
+```
+
+### Right: Work on a copy of rcParams for local experimentation
+```python
+from matplotlib import rc_params
+
+def main() -> None:
+    params = rc_params()
+    local = params.copy()
+    local["figure.dpi"] = 10
+    print("local figure.dpi:", local["figure.dpi"])
+    print("global figure.dpi:", params["figure.dpi"])
+
+if __name__ == "__main__":
+    main()
+```
+
+### Wrong: Using `_update_raw` with invalid values (can break later)
+```python
+from matplotlib import rc_params
+
+def main() -> None:
+    params = rc_params()
+    # This may bypass normal validation and cause errors later when rendering/saving.
+    params._update_raw({"figure.dpi": "not-a-number"})
+    print("figure.dpi:", params["figure.dpi"])
+
+if __name__ == "__main__":
+    main()
+```
+
+### Right: Prefer validated assignment (or `_set`) for rcParams
+```python
+from matplotlib import rc_params
+
+def main() -> None:
+    params = rc_params()
+    params["figure.dpi"] = 200  # validated
+    print("figure.dpi:", params["figure.dpi"])
+
+if __name__ == "__main__":
+    main()
+```
+
+### Wrong: Catching the wrong exception type for missing executables
+```python
+import shutil
+import matplotlib
+
+def main() -> None:
+    try:
+        path = shutil.which("latex")
+        if path is None:
+            raise FileNotFoundError("latex not found")
+    except matplotlib.ExecutableNotFoundError:
+        # This block will not run because FileNotFoundError was raised instead.
+        print("Handle missing executable")
+
+if __name__ == "__main__":
+    main()
+```
+
+### Right: Raise/catch `matplotlib.ExecutableNotFoundError` consistently
+```python
+import shutil
+import matplotlib
+
+def main() -> None:
+    try:
+        path = shutil.which("latex")
+        if path is None:
+            raise matplotlib.ExecutableNotFoundError("latex not found on PATH")
+        print("latex:", path)
+    except matplotlib.ExecutableNotFoundError as e:
+        print("Handle missing executable:", e)
+
+if __name__ == "__main__":
+    main()
 ```
 
 ## References
@@ -158,121 +274,26 @@ plt.show()
 - [Forum](https://discourse.matplotlib.org/)
 - [Donate](https://numfocus.org/donate-to-matplotlib)
 
-## Migration from v3.9
+## Migration from v[previous]
 
-What changed in this version (if applicable):
-- Breaking changes: None significant in v3.10
-- Deprecated → Current mapping: No major mapping changes
-- Before/after code examples: None needed for current stable
+Not applicable (no version-specific breaking-change details were provided in the inputs). When migrating across Matplotlib versions, pay special attention to:
+- Staged deprecations (warnings first, removals later) using Matplotlib’s deprecation utilities.
+- Visual-output changes: figure appearance differences can be considered API changes.
 
 ## API Reference
 
-Brief reference of the most important public APIs:
-
-- **pyplot.plot()** - Creates line plots with x and y data
-- **pyplot.show()** - Displays the current figure
-- **pyplot.savefig()** - Saves the figure to a file
-- **pyplot.subplots()** - Creates a figure and set of subplots
-- **pyplot.figure()** - Creates a new figure
-- **rcParams** - Dictionary for global rc settings
-- **use()** - Sets the matplotlib backend
-- **interactive()** - Sets interactive mode
-- **get_backend()** - Returns the current backend name
-- **colormaps** - Dictionary of available colormaps
-- **pyplot.close()** - Closes a figure window
-- **pyplot.clf()** - Clears the current figure
-- **pyplot.gca()** - Gets the current axes
-- **pyplot.gcf()** - Gets the current figure
-- **pyplot.legend()** - Adds a legend to the axes
-- **pyplot.grid()** - Adds a grid to the axes
-- **pyplot.title()** - Sets title of axes
-- **pyplot.xlabel() / ylabel()** - Sets x, y axis labels
-- **rc_context()** - Context manager for rcParams
-- **get_configdir()** - Returns configuration directory path
-- **get_data_path()** - Returns matplotlib data path
-- **get_cachedir()** - Returns cache directory path
-- **set_loglevel()** - Sets the logging level for matplotlib
-- **make_axes_locatable** - Utility to create axes for plots with subplots
-- **host_subplot** - Alternative to subplot for advanced use cases
-- **AxesGrid** - Grid layout for plotting multiple axes
-- **inset_axes** - Creates inset axes inside a main plot
-- **zoomed_inset_axes** - Creates zoomed-in axes for plots
-- **mark_inset** - Connects axes with a zoomed-in view
-- **AnchoredSizeBar** - Adds a scale bar to plots
-- **ImageGrid** - Grid layout for images
-- **BboxConnectorPatch** - Creates patches connecting bounding boxes
-- **get_tightbbox** - Computes tight bounding box of a figure
-- **defaultParams** - Default parameter dictionary
-- **rcdefaults()** - Resets rcParams to defaults
-- **rc_file()** - Loads rcParams from file
-- **rc_params()** - Returns current rcParams
-- **rc_params_from_file()** - Loads rcParams from file
-- **RcParams** - Class representing rcParams
-- **MatplotlibDeprecationWarning** - Warning class for deprecations
-- **ExecutableNotFoundError** - Exception raised when executable not found
-- **matplotlib_fname()** - Returns path to matplotlib config file
-- **__version__ / __version_info__** - Version information properties
-- **__bibtex__** - BibTeX citation for matplotlib
-- **color_sequences** - Dictionary of color sequences
-- **bivar_colormaps** - Dictionary of bivariate colormaps
-- **multivar_colormaps** - Dictionary of multivariate colormaps
-- **colormaps** - Dictionary of all available colormaps
-- **get_backend()** - Returns the current backend
-- **is_interactive()** - Returns True if interactive mode is on
-- **set_loglevel()** - Sets log level for matplotlib
-- **get_configdir()** - Returns config directory path
-- **get_cachedir()** - Returns cache directory path
-- **get_data_path()** - Returns matplotlib data path
-- **matplotlib_fname()** - Returns matplotlib config file path
-- **rc_file_defaults()** - Loads default rcParams from file
-- **rc_file()** - Loads rcParams from file
-- **rc()** - Sets rcParams
-- **rcdefaults()** - Resets rcParams to defaults
-- **use()** - Sets matplotlib backend
-- **interactive()** - Sets interactive mode
-- **is_interactive()** - Returns if interactive mode is on
-- **get_backend()** - Returns current backend
-- **set_loglevel()** - Sets logging level
-- **get_configdir()** - Returns config directory path
-- **get_cachedir()** - Returns cache directory path
-- **get_data_path()** - Returns matplotlib data path
-- **matplotlib_fname()** - Returns matplotlib config file path
-- **RcParams** - Class representing rcParams
-- **defaultParams** - Default parameters dictionary
-- **rcParams** - Current rcParams dictionary
-- **rcParamsDefault** - Default rcParams dictionary
-- **rcParamsOrig** - Original rcParams dictionary
-- **rc_params()** - Returns current rcParams
-- **rc_params_from_file()** - Loads rcParams from file
-- **rc_file()** - Loads rcParams from file
-- **rc_file_defaults()** - Loads default rcParams from file
-- **rc()** - Sets rcParams
-- **rcdefaults()** - Resets rcParams to defaults
-- **rc_context()** - Context manager for rcParams
-- **use()** - Sets matplotlib backend
-- **interactive()** - Sets interactive mode
-- **is_interactive()** - Returns if interactive mode is on
-- **get_backend()** - Returns current backend
-- **set_loglevel()** - Sets logging level
-- **get_configdir()** - Returns config directory path
-- **get_cachedir()** - Returns cache directory path
-- **get_data_path()** - Returns matplotlib data path
-- **matplotlib_fname()** - Returns matplotlib config file path
-- **MatplotlibDeprecationWarning** - Warning class for deprecations
-- **ExecutableNotFoundError** - Exception raised when executable not found
-- **__version__ / __version_info__** - Version information properties
-- **__bibtex__** - BibTeX citation for matplotlib
-- **color_sequences** - Dictionary of color sequences
-- **bivar_colormaps** - Dictionary of bivariate colormaps
-- **multivar_colormaps** - Dictionary of multivariate colormaps
-- **colormaps** - Dictionary of all available colormaps
-- **make_axes_locatable** - Utility to create axes for plots with subplots
-- **host_subplot** - Alternative to subplot for advanced use cases
-- **AxesGrid** - Grid layout for plotting multiple axes
-- **inset_axes** - Creates inset axes inside a main plot
-- **zoomed_inset_axes** - Creates zoomed-in axes for plots
-- **mark_inset** - Connects axes with a zoomed-in view
-- **AnchoredSizeBar** - Adds a scale bar to plots
-- **ImageGrid** - Grid layout for images
-- **BboxConnectorPatch** - Creates patches connecting bounding boxes
-- **get_tightbbox** - Computes tight bounding box of a figure
+- **matplotlib.__version__** - Version string (computed lazily via module `__getattr__`).
+- **matplotlib.__version_info__** - Structured version info object.
+- **matplotlib.__bibtex__** - BibTeX citation string.
+- **matplotlib.set_loglevel(level: str)** - Set Matplotlib’s logging level.
+- **matplotlib.get_configdir()** - Return the configuration directory path.
+- **matplotlib.get_cachedir()** - Return the cache directory path.
+- **matplotlib.get_data_path()** - Return the path to Matplotlib’s bundled data.
+- **matplotlib.matplotlib_fname()** - Return the path to the active matplotlibrc file.
+- **matplotlib.ExecutableNotFoundError** - Exception for missing external executables (subclass of `FileNotFoundError`).
+- **matplotlib.MatplotlibDeprecationWarning** - Warning category used for Matplotlib deprecations.
+- **matplotlib.RcParams** - Validated mapping for runtime configuration (rcParams).
+- **matplotlib.rc_params(fail_on_error: bool = False)** - Load and return rcParams as an `RcParams` instance.
+- **matplotlib.RcParams.find_all(pattern)** - Return a filtered `RcParams` matching a pattern.
+- **matplotlib.RcParams.copy()** - Return a copy of the `RcParams`.
+- **matplotlib.RcParams._set(key, val)** - Public (documented) helper to set a parameter with Matplotlib semantics.
