@@ -1,0 +1,157 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          cd "target/${TARGET}/release"
+          tar czf "../../../skilldo-${TAG_NAME}-${TARGET}.tar.gz" skilldo
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skilldo-${{ matrix.target }}
+          path: skilldo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum skilldo-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/skilldo-*.tar.gz
+            artifacts/SHA256SUMS
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate formula
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          SHA_LINUX_AMD64=$(sha256sum artifacts/skilldo-${TAG_NAME}-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM64=$(sha256sum artifacts/skilldo-${TAG_NAME}-aarch64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_ARM64=$(sha256sum artifacts/skilldo-${TAG_NAME}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+
+          cat > skilldo.rb <<FORMULA
+          class Skilldo < Formula
+            desc "Generate SKILL.md rules files from library source code"
+            homepage "https://github.com/SkillDoAI/skilldo"
+            version "${VERSION}"
+            license "AGPL-3.0-or-later"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/SkillDoAI/skilldo/releases/download/${TAG_NAME}/skilldo-${TAG_NAME}-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_ARM64}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/SkillDoAI/skilldo/releases/download/${TAG_NAME}/skilldo-${TAG_NAME}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_LINUX_AMD64}"
+              end
+              on_arm do
+                url "https://github.com/SkillDoAI/skilldo/releases/download/${TAG_NAME}/skilldo-${TAG_NAME}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              end
+            end
+
+            def install
+              bin.install "skilldo"
+            end
+
+            test do
+              assert_match "skilldo", shell_output("#{bin}/skilldo --version")
+            end
+          end
+          FORMULA
+
+          # Fix indentation (heredoc adds leading spaces)
+          sed -i 's/^          //' skilldo.rb
+          cat skilldo.rb
+
+      - name: Push to homebrew-tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/SkillDoAI/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp skilldo.rb tap/Formula/skilldo.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/skilldo.rb
+          git commit -m "Update skilldo to ${TAG_NAME}"
+          git push
