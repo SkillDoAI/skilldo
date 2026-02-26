@@ -8,7 +8,7 @@ The goal: make agent rules a standard part of every open source package — like
 
 ## How It Works
 
-Skilldo clones (or reads) a library's repository and runs a 5-agent pipeline to extract knowledge and synthesize it into a single `SKILL.md` file:
+Skilldo reads a library's source directory and runs a 5-agent pipeline to extract knowledge and synthesize it into a single `SKILL.md` file:
 
 ```
 Source Code ──→ Agent 1 (API Extraction)     ──┐
@@ -18,7 +18,7 @@ Docs/README ──→ Agent 3 (Context Extraction) ──┘        ↑         
                                                         (Code Validation)
 ```
 
-1. **Collect** — Discovers source files, tests, documentation, and changelogs from the repository
+1. **Collect** — Discovers source files, tests, documentation, and changelogs from the local directory
 2. **Extract** — Three agents work in parallel to pull out the API surface, usage patterns, and conventions/pitfalls
 3. **Synthesize** — A fourth agent combines everything into a formatted SKILL.md
 4. **Validate** — A fifth agent generates test code from the patterns and runs it in a container to verify correctness
@@ -40,16 +40,29 @@ Agent 5 is optional but recommended. When enabled, it catches hallucinated APIs,
 
 > **Note**: A security review agent may be added before Agent 5 in a future release. Agent numbers are subject to change — the roles are what matter.
 
-## Quick Start
+## Install
 
 ```bash
-# Build from source
-cargo build --release
+# macOS / Linux via Homebrew
+brew install skilldoai/tap/skilldo
 
-# Generate a SKILL.md for a Python library
+# Or build from source
+cargo build --release
+```
+
+Binaries for macOS (ARM) and Linux (x86_64, ARM) are also available on the [Releases](https://github.com/SkillDoAI/skilldo/releases) page.
+
+## Quick Start
+
+Skilldo works on any local directory containing library source code. Clone a repo (or point it at one you already have) and generate:
+
+```bash
+# Clone a library and generate its SKILL.md
 git clone --depth 1 https://github.com/pallets/click.git /tmp/click
 skilldo generate /tmp/click --config my-config.toml --output click-SKILL.md
 ```
+
+The input path is just a directory — it doesn't need to be a git repo. Git is only used as a fallback for version detection (reading the latest tag) when package metadata files don't contain a version.
 
 You'll need a config file with your LLM provider credentials. See [Configuration](#configuration) below.
 
@@ -63,7 +76,7 @@ skilldo generate [PATH] [OPTIONS]
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `PATH` | `.` (current dir) | Path to the library's repository |
+| `PATH` | `.` (current dir) | Path to the library's source directory |
 
 **Options:**
 
@@ -283,7 +296,7 @@ Full ecosystem handlers for JS/TS, Rust, and Go are planned.
 # Build release binary
 cargo build --release
 
-# Run tests (~755 passing, requires uv)
+# Run tests (~789 passing, requires uv)
 make test
 
 # Generate HTML coverage report
@@ -301,6 +314,15 @@ cargo audit
 - Rust 1.70+
 - Docker or Podman (for Agent 5 validation)
 - An LLM API key (or Ollama for local models)
+
+**External commands** (invoked at runtime via shell):
+
+| Command | Required? | Purpose |
+|---------|-----------|---------|
+| `git` | Optional | Version detection fallback (`git describe --tags`, `git rev-parse`) when package metadata doesn't contain a version |
+| `docker` or `podman` | For Agent 5 | Runs generated test code in isolated containers |
+| `uv` | For Agent 5 (local) | Sets up Python environments for local (non-container) validation |
+| `python3` | For non-container validation | Direct Python execution when containers aren't available |
 
 **Development / Testing:**
 - [uv](https://docs.astral.sh/uv/) — required to run the full test suite (Agent 5 executor tests use `uv` to create isolated Python environments)

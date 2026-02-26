@@ -14,7 +14,7 @@ mod util;
 mod validator;
 
 #[derive(Parser)]
-#[command(name = "skilldo")]
+#[command(name = "skilldo", version)]
 #[command(about = "Generate agent rules files for open source libraries", long_about = None)]
 struct Cli {
     #[command(subcommand)]
