@@ -65,7 +65,7 @@ jobs:
       - name: Generate coverage
         run: cargo llvm-cov --fail-under-lines 88 --lcov --output-path lcov.info
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lcov.info
           path: lcov.info
