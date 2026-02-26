@@ -63,7 +63,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Generate coverage
-        run: cargo llvm-cov --fail-under-lines 88 --lcov --output-path lcov.info
+        run: cargo llvm-cov --fail-under-lines 90 --lcov --output-path lcov.info
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v6
         with:
