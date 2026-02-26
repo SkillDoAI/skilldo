@@ -1,9 +1,10 @@
 name: Auto-tag on version bump
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
-    paths: [Cargo.toml]
 
 permissions:
   contents: write
@@ -11,6 +12,7 @@ permissions:
 jobs:
   tag:
     name: Create tag if new version
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
