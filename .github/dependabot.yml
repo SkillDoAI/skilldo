@@ -7,6 +7,10 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    groups:
+      all-cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: github-actions
     directory: /
@@ -15,3 +19,6 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - ci
+    groups:
+      all-actions:
+        patterns: ["*"]
