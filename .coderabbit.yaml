@@ -1,11 +1,6 @@
 reviews:
   path_filters:
-    - '!dev/**'
+    - 'README.md'
+    - '!*.md'
     - '!examples/skills/**'
     - '!examples/configs/**'
-    - '!BACKLOG.md'
-    - '!BUILD.md'
-    - '!AUDIT-PROMPT.md'
-    - '!AUDIT-PROMPT-FULL.md'
-    - '!CLAUDE.md'
-    - '!CHANGELOG.md'
