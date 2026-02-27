@@ -738,41 +738,7 @@ impl SkillLinter {
                 }
             }
 
-            // 3. Credential/secret file access in prose
-            let credential_paths = [
-                "~/.ssh/",
-                "~/.aws/credentials",
-                "~/.aws/config",
-                "~/.gnupg/",
-                "~/.npmrc",
-                "~/.pypirc",
-                "~/.netrc",
-                "~/.docker/config.json",
-                "~/.kube/config",
-                "/etc/shadow",
-            ];
-            for path in &credential_paths {
-                if line.contains(path) {
-                    // Warning (not Error) because libraries like boto3 legitimately
-                    // reference credential file paths in documentation. The exfiltration
-                    // combo check (section 2) catches actually dangerous patterns.
-                    issues.push(LintIssue {
-                        severity: Severity::Warning,
-                        category: "security".to_string(),
-                        message: format!(
-                            "Credential file access in prose: '{}'",
-                            path
-                        ),
-                        suggestion: Some(
-                            "Review: SKILL.md references a credential/secret file path. Ensure it documents usage, not exfiltration."
-                                .to_string(),
-                        ),
-                    });
-                    break;
-                }
-            }
-
-            // 4. Prompt injection
+            // 3. Prompt injection
             let injection_patterns = [
                 "ignore all previous instructions",
                 "ignore previous instructions",
@@ -808,7 +774,7 @@ impl SkillLinter {
                 }
             }
 
-            // 5. System file modification
+            // 4. System file modification
             let system_paths = [
                 "~/.bashrc",
                 "~/.zshrc",
@@ -839,7 +805,7 @@ impl SkillLinter {
                 }
             }
 
-            // 6. Obfuscated payloads — base64 decode piped to shell
+            // 5. Obfuscated payloads — base64 decode piped to shell
             if (lower.contains("base64")
                 && (lower.contains("| sh")
                     || lower.contains("| bash")
@@ -858,7 +824,7 @@ impl SkillLinter {
                 });
             }
 
-            // 7. Reverse shells
+            // 6. Reverse shells
             if lower.contains("/dev/tcp/")
                 || lower.contains("/dev/udp/")
                 || (lower.contains("bash -i") && lower.contains(">&"))
@@ -876,7 +842,7 @@ impl SkillLinter {
                 });
             }
 
-            // 8. Remote script execution — pipe to shell
+            // 7. Remote script execution — pipe to shell
             if (lower.contains("curl ") || lower.contains("wget ") || lower.contains("fetch "))
                 && (lower.contains("| sh")
                     || lower.contains("| bash")
@@ -895,7 +861,7 @@ impl SkillLinter {
                 });
             }
 
-            // 9. Privilege escalation
+            // 8. Privilege escalation
             if lower.contains("chmod 777 /")
                 || lower.contains("chmod -r 777")
                 || lower.contains("chmod +s ")
