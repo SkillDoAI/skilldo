@@ -231,6 +231,92 @@ fn strip_duplicate_frontmatter(content: &str) -> String {
     content.to_string()
 }
 
+/// Strip a wrapping ```markdown fence from the body (after frontmatter).
+/// LLMs sometimes emit: ---\nfrontmatter\n---\n\n```markdown\n...content...\n```
+/// The strip_markdown_fences in generator.rs only catches fences at the very start,
+/// not after frontmatter.
+fn strip_body_markdown_fence(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Find end of frontmatter
+    let mut fm_end = None;
+    let mut dashes = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() == "---" {
+            dashes += 1;
+            if dashes == 2 {
+                fm_end = Some(i);
+                break;
+            }
+        }
+    }
+
+    let fm_end = match fm_end {
+        Some(i) => i,
+        None => return content.to_string(),
+    };
+
+    // Find first non-empty line after frontmatter
+    let body_start = lines[fm_end + 1..]
+        .iter()
+        .position(|l| !l.trim().is_empty())
+        .map(|p| p + fm_end + 1);
+
+    let body_start = match body_start {
+        Some(i) => i,
+        None => return content.to_string(),
+    };
+
+    // Check if body starts with ```markdown (or ```md)
+    let first_body = lines[body_start].trim();
+    if first_body != "```markdown" && first_body != "```md" {
+        return content.to_string();
+    }
+
+    // Check if last non-empty line is a closing ```
+    let last_nonempty = lines.iter().rposition(|l| !l.trim().is_empty());
+    let last_nonempty = match last_nonempty {
+        Some(i) if lines[i].trim() == "```" => i,
+        _ => return content.to_string(),
+    };
+
+    warn!("Stripping wrapping ```markdown fence from body");
+
+    // Rebuild: frontmatter + body without the wrapping fences
+    let mut result: Vec<&str> = Vec::new();
+    result.extend_from_slice(&lines[..=fm_end]);
+    result.push(""); // blank line after frontmatter
+    result.extend_from_slice(&lines[body_start + 1..last_nonempty]);
+
+    let mut out = result.join("\n");
+    out.push('\n');
+    out
+}
+
+/// Fix unclosed code blocks by appending a closing fence.
+/// LLMs sometimes emit an odd number of ``` fences due to truncation or nesting errors.
+fn fix_unclosed_code_blocks(content: &str) -> String {
+    let fence_count = content
+        .lines()
+        .filter(|l| l.trim_start().starts_with("```"))
+        .count();
+
+    if fence_count % 2 != 0 {
+        warn!(
+            "Fixing unclosed code block ({} fences, appending closing fence)",
+            fence_count
+        );
+        let mut fixed = content.to_string();
+        if !fixed.ends_with('\n') {
+            fixed.push('\n');
+        }
+        fixed.push_str("```\n");
+        return fixed;
+    }
+
+    content.to_string()
+}
+
 /// Apply all normalizations (lightweight - only critical fixes)
 pub fn normalize_skill_md(
     content: &str,
@@ -259,7 +345,13 @@ pub fn normalize_skill_md(
     // 3. Strip duplicate frontmatter blocks
     normalized = strip_duplicate_frontmatter(&normalized);
 
-    // 4. Ensure References (if URLs exist)
+    // 4. Strip wrapping ```markdown fence from body
+    normalized = strip_body_markdown_fence(&normalized);
+
+    // 5. Fix unclosed code blocks (safety net)
+    normalized = fix_unclosed_code_blocks(&normalized);
+
+    // 6. Ensure References (if URLs exist)
     normalized = ensure_references(&normalized, project_urls);
 
     normalized
@@ -477,5 +569,86 @@ mod tests {
         );
 
         assert!(result.contains("generated_with: qwen3-coder + gpt-5.2 (agent5)"));
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence() {
+        // Simulates the Sonnet 4.6 pattern: frontmatter then ```markdown wrapper
+        let content = "---\nname: click\ndescription: python library\nversion: 8.3.1\necosystem: python\nlicense: BSD-3-Clause\n---\n\n```markdown\n## Imports\n\n```python\nimport click\n```\n\n## Core Patterns\nSome patterns\n```\n";
+        let result = strip_body_markdown_fence(content);
+
+        assert!(
+            !result.contains("```markdown"),
+            "Should strip ```markdown wrapper"
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve body content"
+        );
+        assert!(
+            result.contains("name: click"),
+            "Should preserve frontmatter"
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_no_wrapper() {
+        let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n";
+        let result = strip_body_markdown_fence(content);
+        assert_eq!(result, content, "No wrapper should mean no changes");
+    }
+
+    #[test]
+    fn test_fix_unclosed_code_blocks() {
+        // Odd number of fences
+        let content =
+            "## Imports\n```python\nimport click\n```\n\n## Patterns\n```python\nclick.command()\n";
+        let result = fix_unclosed_code_blocks(content);
+
+        let fence_count = result
+            .lines()
+            .filter(|l| l.trim_start().starts_with("```"))
+            .count();
+        assert_eq!(fence_count % 2, 0, "Should have even number of fences");
+    }
+
+    #[test]
+    fn test_fix_unclosed_code_blocks_already_closed() {
+        let content = "```python\nimport click\n```\n\n```python\nclick.command()\n```\n";
+        let result = fix_unclosed_code_blocks(content);
+        assert_eq!(result, content, "Already closed should mean no changes");
+    }
+
+    #[test]
+    fn test_full_normalization_strips_markdown_wrapper() {
+        // The exact pattern from CI: frontmatter + ```markdown wrapper
+        let raw = "---\nname: click\ndescription: python library\nversion: 8.3.1\necosystem: python\nlicense: BSD-3-Clause\ngenerated_with: claude-sonnet-4-6\n---\n\n```markdown\n## Imports\n\n```python\nimport click\n```\n\n## Core Patterns\nPatterns here\n\n## Pitfalls\nPitfalls here\n```\n";
+
+        let result = normalize_skill_md(
+            raw,
+            "click",
+            "8.3.1",
+            "python",
+            Some("BSD-3-Clause"),
+            &[],
+            Some("claude-sonnet-4-6"),
+        );
+
+        assert!(
+            !result.contains("```markdown"),
+            "Should strip ```markdown wrapper"
+        );
+        assert!(result.contains("## Imports"), "Should preserve content");
+
+        // Fence count should be even
+        let fence_count = result
+            .lines()
+            .filter(|l| l.trim_start().starts_with("```"))
+            .count();
+        assert_eq!(
+            fence_count % 2,
+            0,
+            "Should have even fence count after normalization"
+        );
     }
 }

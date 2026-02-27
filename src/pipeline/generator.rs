@@ -332,20 +332,21 @@ impl Generator {
             // When Agent 5 is enabled, it handles validation properly (uv + deps).
             // When Agent 5 is disabled, skip functional validation entirely since
             // the legacy validator would just fail on any import.
-            let skip_functional = !self.enable_agent5 || data.language.as_str() == "python";
+            let skip_reason = if !self.enable_agent5 {
+                Some("Agent 5 disabled — legacy validator cannot install dependencies")
+            } else if data.language.as_str() == "python" {
+                Some("Agent 5 enabled — using code generation validation instead")
+            } else {
+                None
+            };
 
-            if skip_functional {
-                info!("  ⏭️  Skipping functional validation (Agent 5 enabled for Python)");
+            if let Some(reason) = skip_reason {
+                info!("  ⏭️  Skipping functional validation ({reason})");
             } else {
                 info!("  → Running functional validation (code execution)...");
             }
 
-            let functional_result = if skip_functional {
-                let reason = if self.enable_agent5 {
-                    "Agent 5 enabled — using code generation validation instead"
-                } else {
-                    "Agent 5 disabled — legacy validator cannot install dependencies"
-                };
+            let functional_result = if let Some(reason) = skip_reason {
                 ValidationResult::Skipped(reason.to_string())
             } else {
                 functional_validator.validate(&skill_md, data.language.as_str())?

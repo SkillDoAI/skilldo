@@ -74,11 +74,11 @@ impl LlmConfig {
 
         // Provider-specific defaults
         match self.provider.as_str() {
-            "anthropic" => 4096,
-            "openai" => 4096,
+            "anthropic" => 8192,
+            "openai" => 8192,
             "openai-compatible" => 16384, // ollama and similar
             "gemini" => 8192,
-            _ => 4096, // Safe default
+            _ => 8192, // Safe default
         }
     }
 
@@ -410,7 +410,7 @@ impl Default for Config {
                 model: "claude-sonnet-4-20250514".to_string(),
                 api_key_env: None, // Inferred from provider in get_api_key()
                 base_url: None,
-                max_tokens: None, // Use provider default (4096 for anthropic)
+                max_tokens: None, // Use provider default (8192 for anthropic)
                 network_retries: default_network_retries(),
                 retry_delay: default_retry_delay(),
                 extra_body: std::collections::HashMap::new(),
@@ -512,10 +512,10 @@ mod tests {
             extra_body: std::collections::HashMap::new(),
             extra_body_json: None,
         };
-        assert_eq!(llm.get_max_tokens(), 4096);
+        assert_eq!(llm.get_max_tokens(), 8192);
 
         llm.provider = "openai".to_string();
-        assert_eq!(llm.get_max_tokens(), 4096);
+        assert_eq!(llm.get_max_tokens(), 8192);
 
         llm.provider = "openai-compatible".to_string();
         assert_eq!(llm.get_max_tokens(), 16384);
