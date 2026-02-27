@@ -153,8 +153,7 @@ jobs:
           ./target/release/skilldo generate /tmp/click \
             --provider anthropic \
             --model claude-sonnet-4-6 \
-            --no-agent5 \
-            --max-retries 3 \
+            --max-retries 5 \
             -o /tmp/click-SKILL.md
 
       - name: Validate output
