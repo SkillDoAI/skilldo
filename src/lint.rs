@@ -223,12 +223,22 @@ impl SkillLinter {
 
             for line in imports_content.lines() {
                 let trimmed = line.trim();
-                // Match "from pkg._internal" or "import pkg._private" patterns
-                if (trimmed.starts_with("from ") || trimmed.starts_with("import "))
-                    && (trimmed.contains("._internal")
-                        || trimmed.contains("._impl")
-                        || trimmed.contains("._private"))
-                {
+                // Match any underscore-prefixed module segment (e.g. pkg._compat, pkg._internal)
+                let module_path = if let Some(rest) = trimmed.strip_prefix("from ") {
+                    rest.split_whitespace().next()
+                } else if let Some(rest) = trimmed.strip_prefix("import ") {
+                    rest.split_whitespace().next()
+                } else {
+                    None
+                };
+                let has_private_segment = module_path
+                    .map(|path| {
+                        path.split('.').any(|seg| {
+                            seg.starts_with('_') && seg != "__future__" && seg != "__init__"
+                        })
+                    })
+                    .unwrap_or(false);
+                if has_private_segment {
                     issues.push(LintIssue {
                         severity: Severity::Warning,
                         category: "content".to_string(),

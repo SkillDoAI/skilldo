@@ -3055,6 +3055,73 @@ Issues
     );
 }
 
+#[test]
+fn test_compat_private_module_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from somelib._compat import thing
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "._compat imports should trigger private module warning. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_future_import_should_not_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from __future__ import annotations
+import somelib
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "__future__ imports should not trigger private module warning. Issues: {:?}",
+        issues
+    );
+}
+
 // ============================================================================
 // BODY FENCE WRAPPING TESTS
 // ============================================================================

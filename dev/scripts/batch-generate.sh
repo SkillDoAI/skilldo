@@ -6,6 +6,7 @@
 # Designed to run unattended overnight.
 
 set +e  # Continue on failure
+set -o pipefail  # Propagate failures through pipes
 
 # --- Paths ---
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -242,8 +243,11 @@ echo ""
 
 # Build first so preflight can verify the binary
 echo "=== Building release binary ==="
-cd "$PROJECT_ROOT"
-cargo build --release 2>&1 | tail -3
+cd "$PROJECT_ROOT" || exit 1
+if ! cargo build --release 2>&1 | tail -3; then
+    echo "FATAL: cargo build --release failed"
+    exit 1
+fi
 echo ""
 
 preflight
