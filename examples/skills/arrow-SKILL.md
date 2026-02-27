@@ -53,7 +53,7 @@ a = arrow.get("2013-05-05 12:30:45", "YYYY-MM-DD HH:mm:ss")
 
 # Formatting with Arrow tokens
 s1 = a.format("YYYY-MM-DD")
-a2 = a.format("YYYY-MM-DD HH:mm:ss")
+s2 = a.format("YYYY-MM-DD HH:mm:ss")
 
 print(s1)
 print(s2)
