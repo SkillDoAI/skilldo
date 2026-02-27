@@ -118,7 +118,7 @@ jobs:
     # Only run on main pushes (not PRs) to conserve API credits.
     # Secrets aren't available on fork PRs anyway.
     if: github.event_name == 'push'
-    needs: [test]
+    needs: [check, fmt, clippy, test, coverage, audit]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
