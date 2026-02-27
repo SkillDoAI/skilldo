@@ -88,7 +88,16 @@ skilldo generate [PATH] [OPTIONS]
 | `--version <VER>` | Explicit version override, e.g. `"2.1.0"` |
 | `--version-from <STRATEGY>` | Version extraction strategy: `git-tag`, `package`, `branch`, `commit` |
 | `--config <PATH>` | Path to config file |
+| `--provider <PROVIDER>` | LLM provider: `anthropic`, `openai`, `gemini`, `openai-compatible` |
+| `--model <MODEL>` | Override LLM model (e.g., `gpt-4.1`, `claude-sonnet-4-5-20250929`) |
+| `--base-url <URL>` | Base URL for openai-compatible providers |
+| `--max-retries <N>` | Override max generation retries |
 | `--no-agent5` | Disable Agent 5 container validation |
+| `--agent5-mode <MODE>` | Agent 5 validation mode: `thorough`, `adaptive`, `minimal` |
+| `--agent5-model <MODEL>` | Override Agent 5 LLM model |
+| `--agent5-provider <PROVIDER>` | Override Agent 5 LLM provider |
+| `--runtime <RUNTIME>` | Container runtime: `docker` or `podman` |
+| `--timeout <SECONDS>` | Container execution timeout |
 | `--no-parallel` | Run agents 1–3 sequentially instead of in parallel (useful for local models) |
 | `-q, --quiet` | Suppress info messages, show warnings and errors only |
 | `-v, --verbose` | Show debug output |
@@ -97,8 +106,18 @@ skilldo generate [PATH] [OPTIONS]
 ### Examples
 
 ```bash
-# Basic generation with auto-detection
-skilldo generate /path/to/repo
+# Quick start — no config file needed (uses env vars for API key)
+skilldo generate /path/to/repo --provider openai --model gpt-4.1
+
+# With Anthropic
+skilldo generate /path/to/repo --provider anthropic --model claude-sonnet-4-5-20250929
+
+# With local Ollama model
+skilldo generate /path/to/repo --provider openai-compatible --model codestral:latest \
+  --base-url http://localhost:11434/v1 --no-parallel
+
+# Using a config file (recommended for repeated use)
+skilldo generate /path/to/repo --config my-config.toml -o click-SKILL.md
 
 # Force Python, custom output path
 skilldo generate /path/to/repo --language python -o rules/SKILL.md
@@ -106,8 +125,8 @@ skilldo generate /path/to/repo --language python -o rules/SKILL.md
 # Update an existing SKILL.md (reads it, regenerates, writes back)
 skilldo generate /path/to/repo -i SKILL.md -o SKILL.md
 
-# Extract version from git tags instead of package files
-skilldo generate /path/to/repo --version-from git-tag
+# Use Podman instead of Docker for Agent 5
+skilldo generate /path/to/repo --runtime podman
 
 # Skip Agent 5 validation (faster, no container needed)
 skilldo generate /path/to/repo --no-agent5
@@ -118,6 +137,18 @@ skilldo generate /path/to/repo --no-parallel
 # Dry run to test without an LLM
 skilldo generate /path/to/repo --dry-run
 ```
+
+### Lint
+
+Validate a generated SKILL.md for structural and security issues:
+
+```bash
+skilldo lint click-SKILL.md
+```
+
+Checks for: missing frontmatter, missing required sections, unclosed code blocks, degeneration patterns (repeated text, gibberish), prompt instruction leaks, and security violations (destructive commands, credential access, exfiltration URLs, reverse shells, obfuscated payloads).
+
+The linter runs automatically after generation and also in CI.
 
 ### Config Check
 
@@ -178,7 +209,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 # base_url = "http://localhost:11434/v1"
 
 # Override max output tokens per LLM request.
-# Defaults: anthropic=4096, openai=4096, openai-compatible=16384, gemini=8192
+# Defaults: anthropic=8192, openai=8192, openai-compatible=16384, gemini=8192
 # max_tokens = 8192
 
 # Extra fields merged into the LLM request body (for provider-specific params).
@@ -277,9 +308,9 @@ Ready-to-use configs for common setups:
 
 ## Example Output
 
-We've generated SKILL.md files for the **top 25 Python libraries** and counting. Browse them all in [`examples/skills/`](examples/skills/):
+We've generated SKILL.md files for **28 Python libraries** and counting. Browse them all in [`examples/skills/`](examples/skills/):
 
-aiohttp, arrow, boto3, celery, click, django, fastapi, flask, httpx, jinja2, keras, matplotlib, numpy, pandas, pillow, pydantic, pytest, pytorch, requests, rich, scikit-learn, scipy, sqlalchemy, transformers, typer
+aiohttp, arrow, beautifulsoup4, boto3, celery, click, cryptography, django, fastapi, flask, httpx, jinja2, keras, matplotlib, numpy, pandas, pillow, pydantic, pytest, pytorch, requests, rich, scikit-learn, scipy, sqlalchemy, transformers, typer, unstructured
 
 ## Tips and Model Experience
 

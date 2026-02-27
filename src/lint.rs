@@ -753,15 +753,18 @@ impl SkillLinter {
             ];
             for path in &credential_paths {
                 if line.contains(path) {
+                    // Warning (not Error) because libraries like boto3 legitimately
+                    // reference credential file paths in documentation. The exfiltration
+                    // combo check (section 2) catches actually dangerous patterns.
                     issues.push(LintIssue {
-                        severity: Severity::Error,
+                        severity: Severity::Warning,
                         category: "security".to_string(),
                         message: format!(
                             "Credential file access in prose: '{}'",
                             path
                         ),
                         suggestion: Some(
-                            "SKILL.md should not instruct agents to read credential or secret files."
+                            "Review: SKILL.md references a credential/secret file path. Ensure it documents usage, not exfiltration."
                                 .to_string(),
                         ),
                     });

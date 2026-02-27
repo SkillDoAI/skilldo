@@ -1,5 +1,4 @@
 ---
-
 name: httpx
 description: A synchronous and asynchronous HTTP client for making requests and working with responses.
 version: 0.28.1
@@ -123,6 +122,7 @@ async def call_asgi() -> str:
 
 if __name__ == "__main__":
     print(call_wsgi())
+    import asyncio
     print(asyncio.run(call_asgi()))
 ```
 * Use `transport=httpx.WSGITransport(app=...)` or `transport=httpx.ASGITransport(app=...)`.
@@ -143,7 +143,7 @@ if __name__ == "__main__":
 - **Transports**
   - In-process apps: `WSGITransport`, `ASGITransport`.
   - Network transports: `HTTPTransport`, `AsyncHTTPTransport` (advanced usage).
-- **SSL notes (0.28.0 deprecations)**
+- **SSL notes (0.28.0 deprecations) ⚠️**
   - Passing `verify` as a string path and using `cert=` are deprecated and may warn.
   - `verify=True`, `verify=False`, or `verify=<ssl.SSLContext>` remain valid.
 - **JSON request bodies (0.28 behavioral change)**
@@ -205,7 +205,7 @@ if __name__ == "__main__":
     print(fetch_once())
 ```
 
-### Wrong: Using removed `proxies=` argument (0.28+)
+### Wrong: Using removed `proxies=` argument (0.28+) ⚠️
 ```python
 import httpx
 
@@ -352,6 +352,11 @@ if __name__ == "__main__":
     print(post_stable_json("https://httpbin.org/post", {"b": 1, "a": 2}))
 ```
 
+### SSL arguments deprecated ⚠️
+- Deprecated since: 0.28.0
+- Passing a string path to `verify` or using the `cert` argument is deprecated and will issue warnings.
+- Modern alternative: Use `verify=True`, `verify=False`, or `verify=<ssl.SSLContext>`. See new SSL configuration docs for details.
+
 ## API Reference
 
 - **httpx.get(url, \*\*kwargs)** - Convenience GET request; returns `httpx.Response`.
@@ -375,3 +380,8 @@ if __name__ == "__main__":
 - **httpx.HTTPTransport(...)** - Low-level sync transport configuration (advanced).
 - **httpx.AsyncHTTPTransport(...)** - Low-level async transport configuration (advanced).
 - **httpx.InvalidURL** - Exception raised for invalid URL inputs.
+
+---
+
+**Security Note:**  
+All examples are designed for use within your own project directory and for safe, local development or controlled network requests. Never use these patterns to transmit, modify, or access data outside your intended project or environment. Do not copy/paste code into environments where you lack permission or understanding of the security implications.

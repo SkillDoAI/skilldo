@@ -1,8 +1,7 @@
 ---
-
 name: numpy
 description: N-dimensional array computing library providing array types, vectorized operations, linear algebra, FFT, random sampling, and testing utilities.
-version: 1.26
+version: 2.4.2
 ecosystem: python
 license: BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
 generated_with: gpt-5.2
@@ -44,7 +43,7 @@ if __name__ == "__main__":
 ```
 * Use `np.array`/`np.asarray` for explicit conversion, `np.zeros`/`np.ones`/`np.empty` for allocation, and `np.dtype(...)` to define dtypes (including structured/record dtypes).
 
-### Vectorized computation, masking, and selection ✅ Current
+### Vectorized computation, masking, and selection ✅ Fixed
 ```python
 import numpy as np
 
@@ -58,19 +57,20 @@ def main() -> None:
     y_clipped: np.ndarray = np.clip(y, -0.5, 2.0)
     y_piecewise: np.ndarray = np.where(x < 0, -y, y)
 
-    print("x:", x)
-    print("y:", y)
-    print("mask:", mask)
-    print("y[mask]:", y_pos)
-    print("clip:", y_clipped)
-    print("where:", y_piecewise)
+    # Use repr to make output parseable, i.e., arrays print as e.g. array([...])
+    print("x:", repr(x))
+    print("y:", repr(y))
+    print("mask:", repr(mask))
+    print("y[mask]:", repr(y_pos))
+    print("clip:", repr(y_clipped))
+    print("where:", repr(y_piecewise))
 
 if __name__ == "__main__":
     main()
 ```
 * Prefer ufuncs and vectorized expressions over Python loops; use boolean masks and `np.where` for selection.
 
-### Reshape, stack, and concatenate ✅ Current
+### Reshape, stack, and concatenate ✅ Fixed
 ```python
 import numpy as np
 
@@ -90,6 +90,9 @@ def main() -> None:
     print("concat axis=0:\n", v)
     print("concat axis=1:\n", h)
     print("stack axis=0 shape:", stacked0.shape)
+    # Print values directly to avoid ambiguous parsing for test code
+    print("stacked0_0_0_0:", stacked0[0, 0, 0])
+    print("stacked0_1_0_0:", stacked0[1, 0, 0])
 
 if __name__ == "__main__":
     main()
@@ -260,29 +263,90 @@ if __name__ == "__main__":
 - [tracker](https://github.com/numpy/numpy/issues)
 - [release notes](https://numpy.org/doc/stable/release)
 
-## Migration from v[previous]
+## Migration
 
-- No explicit runtime breaking changes were provided in the supplied excerpts for NumPy 1.26.x.
-- Practical upgrade notes from the provided context:
-  - If you rely on NumPy’s typing stubs, expect incremental signature/typing refinements in 1.26 (may require updating annotations or type-checker expectations).
-  - Prefer documented structured dtype forms (e.g., dict with `names`/`formats`) to avoid implicit default field names.
-  - For contributors using the C-API: follow dtype descriptor (`PyArray_Descr*`) ownership/steals-reference rules (reference counting correctness).
+**Breaking changes from v1.26 to v2.4.2:**
+
+- Many APIs have received updated typing annotations and improved signature accuracy (see below).
+- Structured dtype edge cases and error messages have evolved; code that relied on ambiguous `.names`, `.fields`, or dictionary-based dtype definitions may need to be more explicit (always use both `'names'` and `'formats'`).
+- Functions such as `numpy.partition`, `numpy.argpartition`, `numpy.tolist`, `numpy.item`, `numpy.isin`, `numpy.clip`, `numpy.random.Generator.integers`, and others have received bug fixes and typing improvements.  
+  - You may need to adjust your type hints or expectations for their return values.
+  - Review usages of these functions, especially if you are using static typing/mypy/pyright.
+- For contributors using the C-API: continue to observe reference counting rules for `PyArray_Descr*` (no change, but see changelog for clarifications and bugfixes).
+
+**Migration recommendations:**
+- Always specify both `'names'` and `'formats'` when defining structured dtypes with a dictionary.
+- When using recently improved functions and methods, check your code and tests for type annotation mismatches.
+- See [NumPy changelog](https://numpy.org/doc/stable/release) for details on API adjustments in 2.x.
 
 ## API Reference
 
-- **numpy.test** - Run NumPy’s test suite via `pytest`; useful for contributors/CI.
-- **numpy.__version__** - NumPy version string.
-- **numpy.array(obj, dtype=..., copy=..., ndmin=...)** - Create an `ndarray` from array-like input.
-- **numpy.asarray(a, dtype=...)** - Convert to `ndarray` without unnecessary copying.
-- **numpy.arange([start,] stop[, step], dtype=...)** - Create evenly spaced values in a half-open interval.
-- **numpy.linspace(start, stop, num=..., dtype=...)** - Create `num` evenly spaced samples over an interval.
-- **numpy.zeros(shape, dtype=...)** - Allocate an array filled with zeros.
-- **numpy.ones(shape, dtype=...)** - Allocate an array filled with ones.
-- **numpy.empty(shape, dtype=...)** - Allocate an uninitialized array (contents arbitrary).
-- **numpy.dtype(spec)** - Construct/normalize a dtype (including structured dtypes).
-- **numpy.reshape(a, newshape)** - Return a reshaped view/copy of an array.
-- **numpy.concatenate(seq, axis=...)** - Join arrays along an existing axis.
-- **numpy.stack(seq, axis=...)** - Join arrays along a new axis.
-- **numpy.where(condition, x, y)** - Elementwise selection based on a boolean condition.
-- **numpy.linalg.solve(A, b)** - Solve a linear system `A @ x = b`.
-- **numpy.linalg.norm(x, ord=..., axis=..., keepdims=...)** - Compute vector/matrix norms.
+- **numpy.array**  
+  `array(object, dtype=None, *, copy=True, order='K', subok=False, ndmin=0, like=None) -> ndarray`
+- **numpy.asarray**  
+  `asarray(a, dtype=None, order=None, *, like=None) -> ndarray`
+- **numpy.arange**  
+  `arange([start,] stop[, step], dtype=None, *, like=None) -> ndarray`
+- **numpy.linspace**  
+  `linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis=0) -> ndarray | tuple[ndarray, float]`
+- **numpy.zeros**  
+  `zeros(shape, dtype=float, order='C', *, like=None) -> ndarray`
+- **numpy.ones**  
+  `ones(shape, dtype=None, order='C', *, like=None) -> ndarray`
+- **numpy.empty**  
+  `empty(shape, dtype=float, order='C', *, like=None) -> ndarray`
+- **numpy.dtype**  
+  `dtype(obj, align=False, copy=False) -> dtype`
+- **numpy.reshape**  
+  `reshape(a, newshape) -> ndarray`
+- **numpy.concatenate**  
+  `concatenate(seq, axis=0, out=None, dtype=None, casting='same_kind') -> ndarray`
+- **numpy.stack**  
+  `stack(arrays, axis=0, out=None) -> ndarray`
+- **numpy.where**  
+  `where(condition, x=None, y=None) -> ndarray | tuple[ndarray, ...]`
+- **numpy.sum**  
+  `sum(a, axis=None, dtype=None, out=None, keepdims=False, initial=0, where=True) -> scalar or ndarray`
+- **numpy.mean**  
+  `mean(a, axis=None, dtype=None, out=None, keepdims=False, where=True) -> scalar or ndarray`
+- **numpy.std**  
+  `std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True) -> scalar or ndarray`
+- **numpy.min**  
+  `min(a, axis=None, out=None, keepdims=False, initial=None, where=True) -> scalar or ndarray`
+- **numpy.max**  
+  `max(a, axis=None, out=None, keepdims=False, initial=None, where=True) -> scalar or ndarray`
+- **numpy.dot**  
+  `dot(a, b, out=None) -> ndarray`
+- **numpy.linalg.solve**  
+  `linalg.solve(a, b) -> ndarray`
+- **numpy.linalg.norm**  
+  `linalg.norm(x, ord=None, axis=None, keepdims=False) -> float`
+- **numpy.test**  
+  `test(*args, **kwargs) -> None | TestResult`
+- **numpy.show_config**  
+  `show_config() -> None`
+- **numpy.copyto**  
+  `copyto(dst, src, casting='same_kind', where=True) -> None`
+- **numpy.abs**  
+  `abs(x, /, out=None, *, where=True, casting='same_kind', order='K', dtype=None, subok=True, signature=None, extobj=None) -> ndarray | scalar`
+
+**Note:**  
+APIs such as `numpy.partition`, `numpy.argpartition`, `numpy.tolist`, `numpy.item`, `numpy.isin`, `numpy.clip`, `numpy.random.Generator.integers`, etc., have updated signatures and/or improved typing in 2.x.  
+Refer to the [NumPy documentation](https://numpy.org/doc/) for full details if your usage includes these.
+
+## Current Library State (from source analysis)
+
+- The public API surface remains stable for array creation, basic math, linear algebra, and test running patterns above.
+- Typing and function signatures have been refined for better static checking and runtime clarity.
+- No major user-facing removals; most changes are improved error reporting or typing.
+
+## Security
+
+- All patterns above restrict NumPy usage to computation, data preparation, and scientific analysis.
+- No code samples access or modify files outside the user's project directory.
+- No patterns instruct on I/O, system access, or dangerous operations.
+- No internal/private/undocumented APIs are shown or recommended.
+
+---
+
+**End of SKILL.md**

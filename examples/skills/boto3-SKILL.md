@@ -1,8 +1,7 @@
 ---
-
 name: boto3
 description: AWS SDK for Python for creating service clients/resources and calling AWS APIs.
-version: 1.42.44
+version: 1.42.58
 ecosystem: python
 license: Apache-2.0
 generated_with: gpt-5.2
@@ -144,6 +143,112 @@ if __name__ == "__main__":
 * SES does not validate HTML; validate/format HTML yourself before calling `create_template`/`update_template`.
 * Template operations: `create_template`, `list_templates`, `get_template`, `update_template`, `delete_template`, `send_templated_email`.
 
+### Upload and download files to/from S3 ✅ Current
+```python
+import boto3
+from boto3.s3.transfer import TransferConfig
+
+def upload_file_to_s3(file_path: str, bucket: str, key: str, region_name: str = "us-east-1") -> None:
+    """Upload a file to S3 using the high-level upload_file method."""
+    s3 = boto3.client("s3", region_name=region_name)
+    
+    # Configure transfer options
+    config = TransferConfig(
+        multipart_threshold=8 * 1024 * 1024,  # 8MB
+        max_concurrency=10,
+        use_threads=True
+    )
+    
+    s3.upload_file(
+        Filename=file_path,
+        Bucket=bucket,
+        Key=key,
+        Config=config
+    )
+
+def download_file_from_s3(bucket: str, key: str, file_path: str, region_name: str = "us-east-1") -> None:
+    """Download a file from S3 using the high-level download_file method."""
+    s3 = boto3.client("s3", region_name=region_name)
+    
+    config = TransferConfig(
+        multipart_threshold=8 * 1024 * 1024,
+        max_concurrency=10,
+        use_threads=True
+    )
+    
+    s3.download_file(
+        Bucket=bucket,
+        Key=key,
+        Filename=file_path,
+        Config=config
+    )
+
+if __name__ == "__main__":
+    # Example usage (requires valid bucket and permissions)
+    # upload_file_to_s3("local_file.txt", "my-bucket", "uploads/file.txt")
+    # download_file_from_s3("my-bucket", "uploads/file.txt", "downloaded_file.txt")
+    pass
+```
+* Use `upload_file()` and `download_file()` for efficient file transfers with automatic multipart handling.
+* Configure `TransferConfig` to control multipart thresholds, concurrency, and threading behavior.
+
+### Use S3 resources for object-oriented operations ✅ Current
+```python
+import boto3
+
+def upload_with_resource(file_path: str, bucket_name: str, key: str, region_name: str = "us-east-1") -> None:
+    """Upload using the S3 Bucket resource."""
+    s3 = boto3.resource("s3", region_name=region_name)
+    bucket = s3.Bucket(bucket_name)
+    
+    bucket.upload_file(Filename=file_path, Key=key)
+
+def load_bucket_metadata(bucket_name: str, region_name: str = "us-east-1") -> dict:
+    """Load bucket metadata using resource."""
+    s3 = boto3.resource("s3", region_name=region_name)
+    bucket = s3.Bucket(bucket_name)
+    
+    # Calling load() fetches bucket metadata
+    bucket.load()
+    
+    return {
+        "name": bucket.name,
+        "creation_date": bucket.creation_date
+    }
+
+if __name__ == "__main__":
+    # Example usage (requires valid bucket)
+    # upload_with_resource("file.txt", "my-bucket", "uploads/file.txt")
+    # metadata = load_bucket_metadata("my-bucket")
+    pass
+```
+* S3 resources provide object-oriented interfaces: `Bucket.upload_file()`, `Object.download_file()`, etc.
+* Call `load()` on bucket/object resources to fetch metadata from AWS.
+
+### Use Session for custom credential and region configuration ✅ Current
+```python
+import boto3
+
+def create_session_with_profile(profile_name: str) -> boto3.Session:
+    """Create a session using a named profile from ~/.aws/config."""
+    return boto3.Session(profile_name=profile_name)
+
+def create_client_from_session(profile_name: str, service_name: str, region_name: str) -> boto3.client:
+    """Create a client using custom session configuration."""
+    session = boto3.Session(
+        profile_name=profile_name,
+        region_name=region_name
+    )
+    return session.client(service_name)
+
+if __name__ == "__main__":
+    # Use a specific profile and region
+    s3 = create_client_from_session("dev-profile", "s3", "us-west-2")
+    # s3.list_buckets()
+```
+* Use `boto3.Session()` to manage custom credential profiles and regions.
+* Create clients and resources from sessions to isolate configuration.
+
 ## Configuration
 
 - Preferred configuration is via shared config files (avoid hardcoding credentials):
@@ -283,32 +388,104 @@ ses.create_template(
 )
 ```
 
+### Wrong: Not handling AccessDenied when loading bucket metadata
+```python
+import boto3
+
+s3 = boto3.resource("s3", region_name="us-east-1")
+bucket = s3.Bucket("my-bucket")
+bucket.load()  # May raise ClientError if access denied
+print(bucket.creation_date)
+```
+
+### Right: Handle AccessDenied gracefully
+```python
+import boto3
+from botocore.exceptions import ClientError
+
+s3 = boto3.resource("s3", region_name="us-east-1")
+bucket = s3.Bucket("my-bucket")
+
+try:
+    bucket.load()
+    print(f"Bucket created: {bucket.creation_date}")
+except ClientError as e:
+    if e.response["Error"]["Code"] == "AccessDenied":
+        print("Access denied to bucket metadata")
+    else:
+        raise
+```
+
+### Wrong: Using threading with append mode file operations
+```python
+import boto3
+from boto3.s3.transfer import TransferConfig
+
+s3 = boto3.client("s3", region_name="us-east-1")
+
+config = TransferConfig(use_threads=True)
+
+# Opening file in append mode
+with open("file.txt", "ab") as f:
+    # Threading with append mode can cause corruption
+    s3.download_fileobj("my-bucket", "key", f, Config=config)
+```
+
+### Right: Disable threading for append mode operations
+```python
+import boto3
+from boto3.s3.transfer import TransferConfig
+
+s3 = boto3.client("s3", region_name="us-east-1")
+
+# Disable threading for append mode
+config = TransferConfig(use_threads=False)
+
+with open("file.txt", "ab") as f:
+    s3.download_fileobj("my-bucket", "key", f, Config=config)
+```
+
 ## References
 
 - Documentation: https://boto3.amazonaws.com/v1/documentation/api/latest/index.html
 - Source: https://github.com/boto/boto3
 
-## Migration from v[previous]
+## Migration from v1.42.44
 
-- No breaking changes were present in the provided documentation/changelog excerpt for v1.42.44.
-- Runtime support policy note from provided excerpt:
+- No breaking changes in core APIs between v1.42.44 and v1.42.58.
+- Runtime support policy note:
   - Python 3.8 support ended on 2025-04-22 (upgrade off 3.8).
   - Python 3.9 support ends on 2026-04-29 (plan upgrade before that date).
+- New capabilities in S3 transfer utilities documented in Core Patterns section.
 
 ## API Reference
 
 - **boto3.client(service_name, region_name=...)** - Create a low-level service client for explicit AWS API operations.
 - **boto3.resource(service_name, region_name=...)** - Create a high-level resource interface (OO-style) for supported services.
+- **boto3.Session(aws_access_key_id=..., aws_secret_access_key=..., aws_session_token=..., region_name=..., profile_name=...)** - Create a session to manage custom credential and region configuration.
+- **boto3.setup_default_session(**kwargs)** - Set up a default session with custom parameters.
+- **boto3.set_stream_logger(name='boto3', level=logging.DEBUG, format_string=None)** - Add a stream handler for logging.
+- **boto3.s3.transfer.S3Transfer(client=..., config=..., osutil=..., manager=...)** - S3 transfer manager for uploading and downloading files.
+- **boto3.s3.transfer.TransferConfig(multipart_threshold=..., max_concurrency=..., multipart_chunksize=..., num_download_attempts=..., max_io_queue=..., io_chunksize=..., use_threads=..., max_bandwidth=..., preferred_transfer_client=...)** - Configuration object for S3 transfers.
+- **S3.Client.upload_file(Filename=..., Bucket=..., Key=..., ExtraArgs=..., Callback=..., Config=...)** - Upload a file to S3.
+- **S3.Client.download_file(Bucket=..., Key=..., Filename=..., ExtraArgs=..., Callback=..., Config=...)** - Download a file from S3.
+- **S3.Bucket.upload_file(Filename=..., Key=..., ExtraArgs=..., Callback=..., Config=...)** - Upload a file to bucket (resource method).
+- **S3.Bucket.download_file(Key=..., Filename=..., ExtraArgs=..., Callback=..., Config=...)** - Download a file from bucket (resource method).
+- **S3.Bucket.load()** - Load bucket metadata from AWS (handles AccessDenied).
+- **S3.Object.upload_file(Filename=..., ExtraArgs=..., Callback=..., Config=...)** - Upload file to object (resource method).
+- **S3.Object.download_file(Filename=..., ExtraArgs=..., Callback=..., Config=...)** - Download file from object (resource method).
 - **EC2.Client.describe_addresses()** - Describe Elastic IP addresses allocated to the account (supports filters/queries via parameters).
 - **EC2.Client.allocate_address()** - Allocate a new Elastic IP address.
 - **EC2.Client.associate_address()** - Associate an Elastic IP address with an instance or network interface.
 - **EC2.Client.release_address()** - Release an Elastic IP address back to AWS.
-- **S3.Client.get_bucket_cors(Bucket=...)** - Fetch a bucket’s CORS rules; may raise `ClientError` with `NoSuchCORSConfiguration`.
-- **S3.Client.put_bucket_cors(Bucket=..., CORSConfiguration=...)** - Set a bucket’s CORS rules (must use `CORSRules` key).
+- **S3.Client.get_bucket_cors(Bucket=...)** - Fetch a bucket's CORS rules; may raise `ClientError` with `NoSuchCORSConfiguration`.
+- **S3.Client.put_bucket_cors(Bucket=..., CORSConfiguration=...)** - Set a bucket's CORS rules (must use `CORSRules` key).
 - **SES.Client.create_template(Template=...)** - Create an email template (SES does not validate HTML).
 - **SES.Client.list_templates()** - List template metadata (names).
-- **SES.Client.get_template(TemplateName=...)** - Retrieve a template’s full content.
+- **SES.Client.get_template(TemplateName=...)** - Retrieve a template's full content.
 - **SES.Client.update_template(Template=...)** - Update an existing template.
 - **SES.Client.delete_template(TemplateName=...)** - Delete a template.
 - **SES.Client.send_templated_email(Source=..., Destination=..., Template=..., TemplateData=...)** - Send an email using a stored template.
 - **botocore.exceptions.ClientError** - Exception type for AWS service API errors; inspect `e.response['Error']['Code']`.
+- **boto3.exceptions.RetriesExceededError** - Exception raised when transfer retries are exceeded.
+- **boto3.exceptions.S3UploadFailedError** - Exception raised when S3 upload fails.

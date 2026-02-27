@@ -12,6 +12,11 @@ debug
 
 # Dev configs (contain local paths, model preferences)
 dev/configs/
+!dev/configs/batch/claude-sonnet.toml
+!dev/configs/batch/gpt41.toml
+
+# Dev artifacts
+dev/bad-outputs/
 
 # Generated test outputs
 test-outputs/

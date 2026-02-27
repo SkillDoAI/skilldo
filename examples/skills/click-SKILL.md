@@ -1,5 +1,4 @@
 ---
-
 name: click
 description: A Python library for building command line interfaces with composable commands, options, and arguments.
 version: 8.3.1
@@ -337,8 +336,8 @@ if __name__ == "__main__":
   - **Change**: Click 8.2.0+ requires Python 3.10+ (3.7–3.9 dropped).
   - **Migration guidance**: upgrade runtime to Python 3.10+ or pin Click `<8.2.0`.
 
-- **`click.__version__` deprecated (8.2.0)** ⚠️ Soft Deprecation
-  - **Deprecated since**: 8.2.0
+- **`click.__version__` deprecated (8.2.0, ⚠️ hard deprecation in 8.3.1)** ⚠️
+  - **Deprecated since**: 8.2.0 (hard deprecation/removal in 9.1)
   - **Still works**: Yes (deprecated)
   - **Modern alternative**:
     ```python
@@ -349,14 +348,14 @@ if __name__ == "__main__":
     ```
   - **Migration guidance**: stop reading `click.__version__`; use `importlib.metadata.version("click")` or feature detection.
 
-- **`click.BaseCommand` deprecated (8.2.0)** ⚠️ Soft Deprecation
-  - **Deprecated since**: 8.2.0
+- **`click.BaseCommand` deprecated (8.2.0, ⚠️ hard deprecation in 8.3.1)** ⚠️
+  - **Deprecated since**: 8.2.0 (will be removed in 9.0)
   - **Still works**: Yes (deprecated)
   - **Modern alternative**: subclass `click.Command` (or `click.Group` for multi-command).
   - **Migration guidance**: update type checks and subclassing targets to `click.Command`.
 
-- **`click.MultiCommand` deprecated (8.2.0)** ⚠️ Soft Deprecation
-  - **Deprecated since**: 8.2.0
+- **`click.MultiCommand` deprecated (8.2.0, ⚠️ hard deprecation in 8.3.1)** ⚠️
+  - **Deprecated since**: 8.2.0 (will be removed in 9.0)
   - **Still works**: Yes (deprecated)
   - **Modern alternative**: use `click.Group`.
   - **Migration guidance**: prefer `Group` for custom multi-command behavior.
@@ -388,3 +387,23 @@ if __name__ == "__main__":
 - **`click.Context` / `click.get_current_context()`** - Runtime context; access params, obj, command, and manage resources via `Context.with_resource`.
 - **`click.Command.main()`** - CLI entry runner; key params: `args`, `prog_name`, `standalone_mode`.
 - **`click.testing.CliRunner.invoke()`** - Run a command in tests; key params: `args`, `input`, `env`, `catch_exceptions`.
+- ⚠️ **`click.BaseCommand`** (deprecated; will be removed in v9.0) — use `click.Command`.
+- ⚠️ **`click.MultiCommand`** (deprecated; will be removed in v9.0) — use `click.Group`.
+- ⚠️ **`click.OptionParser`** (deprecated; will be removed in v9.0).
+- ⚠️ **`click.__version__`** (deprecated; will be removed in v9.1) — use `importlib.metadata.version("click")`.
+
+## Migration
+
+**From Click v8.2.x to v8.3.1:**
+
+- **Flag option default handling**: In v8.3.0+, the `default` value for flag options (`is_flag=True`) is now preserved and passed through as-is to your callback/functions. For legacy code, review your usage of `default` and `flag_value` on flag options. If you relied on older transformations, update your logic and tests to expect the new behavior.
+- **Deprecations (hard)**: `BaseCommand`, `MultiCommand`, `OptionParser`, and `__version__` are now _hard_ deprecated and will be removed in Click 9.x. Update code to use `Command`, `Group`, and `importlib.metadata.version("click")` instead.
+- **Python compatibility**: You must use Python 3.10+ for Click 8.2.0 and newer.
+- **Sentinel/UNSET propagation (callbacks)**: If you use parameter callbacks, do not rely on Click's internal missing-value sentinels. Always treat missing values as `None` or another explicit value.
+
+See [Click's changelog](https://click.palletsprojects.com/page/changes/) for full migration details.
+
+---
+
+**Security note:**  
+All included patterns are safe for use by AI agents within the user's project directory. No destructive, exfiltrative, or privilege-modifying actions are present or permitted.

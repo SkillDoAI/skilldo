@@ -1,5 +1,4 @@
 ---
-
 name: sqlalchemy
 description: Python SQL toolkit and ORM for defining schemas and issuing SQL/ORM queries with explicit transaction control.
 version: 2.0
@@ -23,6 +22,10 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Column,
+    MetaData,
+    Table,
+    event,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -31,7 +34,9 @@ from sqlalchemy.orm import (
     relationship,
     Session,
     sessionmaker,
+    joinedload,
 )
+from sqlalchemy.ext.associationproxy import association_proxy
 ```
 
 ## Core Patterns
@@ -195,6 +200,136 @@ if __name__ == "__main__":
 * ORM changes are not durable until `Session.commit()` succeeds; structure code around clear unit-of-work boundaries.
 * Use `Session(...)` as a context manager to ensure resources are released.
 
+### Eager loading relationships ✅ Current
+```python
+from __future__ import annotations
+
+from typing import List
+
+from sqlalchemy import create_engine, ForeignKey, String, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, joinedload
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "user_account"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    addresses: Mapped[List["Address"]] = relationship(back_populates="user")
+
+class Address(Base):
+    __tablename__ = "address"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_account.id"), nullable=False)
+    user: Mapped[User] = relationship(back_populates="addresses")
+
+def main() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        session.add(User(name="alice", addresses=[Address(email="alice@example.com")]))
+        session.commit()
+
+    # Eager load addresses with JOIN to avoid N+1 queries
+    with Session(engine) as session:
+        stmt = select(User).options(joinedload(User.addresses)).order_by(User.id)
+        users = session.execute(stmt).scalars().unique().all()
+        print([(u.name, [a.email for a in u.addresses]) for u in users])
+
+if __name__ == "__main__":
+    main()
+```
+* Use `joinedload()` to eagerly load relationships using a JOIN, avoiding N+1 query problems.
+* Call `.unique()` after `.scalars()` when using `joinedload()` to deduplicate results.
+
+### Association proxy for simplified many-to-many access ✅ Current
+```python
+from __future__ import annotations
+
+from typing import List
+
+from sqlalchemy import create_engine, ForeignKey, String, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
+from sqlalchemy.ext.associationproxy import association_proxy
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "user_account"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    
+    user_keywords: Mapped[List["UserKeyword"]] = relationship(back_populates="user")
+    keywords: Mapped[List[str]] = association_proxy(
+        "user_keywords", "keyword", 
+        creator=lambda kw: UserKeyword(keyword=kw)
+    )
+
+class UserKeyword(Base):
+    __tablename__ = "user_keyword"
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_account.id"), primary_key=True)
+    keyword: Mapped[str] = mapped_column(String(50), primary_key=True)
+    user: Mapped[User] = relationship(back_populates="user_keywords")
+
+def main() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        u = User(name="alice", keywords=["python", "sql"])
+        session.add(u)
+        session.commit()
+
+    with Session(engine) as session:
+        user = session.execute(select(User)).scalars().first()
+        print(user.keywords)  # Access keywords directly without going through association table
+
+if __name__ == "__main__":
+    main()
+```
+* Use `association_proxy()` to simplify access to many-to-many relationships by hiding the association table.
+* Provide a `creator` function to construct association objects from scalar values.
+
+### Event listening ✅ Current
+```python
+from __future__ import annotations
+
+from sqlalchemy import create_engine, String, event, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "user_account"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+
+def after_insert_listener(mapper, connection, target):
+    """Called after an INSERT on User"""
+    print(f"Inserted user: {target.name}")
+
+# Register event listener
+event.listen(User, "after_insert", after_insert_listener)
+
+def main() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        session.add(User(name="alice"))
+        session.commit()  # Triggers the after_insert event
+
+if __name__ == "__main__":
+    main()
+```
+* Use `event.listen()` to register event listeners on ORM classes, engine connections, or sessions.
+* Common events include `before_insert`, `after_insert`, `before_update`, `after_update`, `before_delete`, `after_delete`.
+
 ## Configuration
 
 - **Database URL**: pass to `create_engine()` (sync) as `"dialect+driver://user:pass@host/dbname"`.
@@ -204,10 +339,12 @@ if __name__ == "__main__":
 - **Session configuration**:
   - Create ad-hoc sessions with `Session(engine)`.
   - Or create a factory with `sessionmaker(bind=engine)` for application-wide reuse.
+  - Configure session behavior: `autoflush=True` (default), `expire_on_commit=True` (default).
 - **Transactions**:
   - Core: prefer `with engine.begin() as conn: ...`
   - ORM: prefer `with Session(engine) as session: ...; session.commit()`
 - **Parameter binding**: always use bound parameters (`text("... :name")`, `bindparam("name")`) rather than interpolating literals into SQL strings.
+- **Eager loading**: use `joinedload()`, `selectinload()`, or `subqueryload()` to control relationship loading strategy.
 
 ## Pitfalls
 
@@ -367,6 +504,88 @@ with Session(engine) as session:
     print([u.name for u in users])
 ```
 
+### Wrong: not calling `.unique()` after `.scalars()` with `joinedload()`
+```python
+from __future__ import annotations
+
+from typing import List
+
+from sqlalchemy import create_engine, ForeignKey, String, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, joinedload
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "user_account"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    addresses: Mapped[List["Address"]] = relationship()
+
+class Address(Base):
+    __tablename__ = "address"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_account.id"), nullable=False)
+
+engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+Base.metadata.create_all(engine)
+
+with Session(engine) as session:
+    session.add(User(name="alice", addresses=[
+        Address(email="alice1@example.com"),
+        Address(email="alice2@example.com")
+    ]))
+    session.commit()
+
+with Session(engine) as session:
+    stmt = select(User).options(joinedload(User.addresses))
+    users = session.execute(stmt).scalars().all()
+    # Returns duplicate User objects (one per joined address row)
+    print(len(users))  # 2 instead of 1
+```
+
+### Right: call `.unique()` to deduplicate after `joinedload()`
+```python
+from __future__ import annotations
+
+from typing import List
+
+from sqlalchemy import create_engine, ForeignKey, String, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, joinedload
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "user_account"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    addresses: Mapped[List["Address"]] = relationship()
+
+class Address(Base):
+    __tablename__ = "address"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_account.id"), nullable=False)
+
+engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+Base.metadata.create_all(engine)
+
+with Session(engine) as session:
+    session.add(User(name="alice", addresses=[
+        Address(email="alice1@example.com"),
+        Address(email="alice2@example.com")
+    ]))
+    session.commit()
+
+with Session(engine) as session:
+    stmt = select(User).options(joinedload(User.addresses))
+    users = session.execute(stmt).scalars().unique().all()
+    print(len(users))  # 1 (deduplicated)
+    print(len(users[0].addresses))  # 2
+```
+
 ## References
 
 - [Homepage](https://www.sqlalchemy.org)
@@ -378,13 +597,13 @@ with Session(engine) as session:
 
 ## Migration from v1.4
 
-- SQLAlchemy 2.0 formalizes “2.0 style” usage that was available in 1.4:
+- SQLAlchemy 2.0 formalizes "2.0 style" usage that was available in 1.4:
   - Prefer `select()` constructs and `Session.execute(select(...))` over legacy `Query` patterns.
   - Prefer explicit transaction scopes: `engine.begin()` (Core) and `Session(...); commit()` (ORM).
   - Prefer typed ORM mappings: `DeclarativeBase`, `Mapped[...]`, `mapped_column()`.
 
 ### Legacy ORM query style ⚠️ Soft Deprecation
-* Deprecated since: 2.0 (legacy ORM `Query` patterns are considered legacy in 2.0-style code)
+* Deprecated since: 1.4 (2.0-style recommended)
 * Still works: True (in many configurations), but prefer 2.0 style for new code
 * Modern alternative: `Session.execute(select(...)).scalars()`
 * Migration guidance: replace `session.query(Model).filter(...)` with `session.execute(select(Model).where(...)).scalars()`
@@ -431,9 +650,53 @@ if __name__ == "__main__":
 - **sqlalchemy.update(table)** - Build an UPDATE statement.
 - **sqlalchemy.delete(table)** - Build a DELETE statement.
 - **sqlalchemy.bindparam(name)** - Define an explicit bound parameter for SQL constructs.
-- **sqlalchemy.orm.Session(bind=engine)** - ORM session (unit of work / identity map); use `commit()` to persist.
+- **sqlalchemy.Column(\*args, primary_key=False, nullable=True, \*\*kwargs)** - Define a table column (legacy Core API, prefer `mapped_column()` for ORM).
+- **sqlalchemy.ForeignKey(column, \*, onupdate=None, ondelete=None, \*\*kwargs)** - Define a foreign key constraint.
+- **sqlalchemy.Integer()** - Integer column type.
+- **sqlalchemy.String(length=None)** - String/VARCHAR column type.
+- **sqlalchemy.MetaData()** - Container object for schema constructs like `Table`.
+- **sqlalchemy.Table(name, metadata, \*columns, \*\*kwargs)** - Represent a database table in Core.
+- **sqlalchemy.event.listen(target, identifier, fn, \*\*kwargs)** - Register an event listener on a target object.
+- **sqlalchemy.orm.Session(bind=None, \*, autoflush=True, expire_on_commit=True, \*\*kwargs)** - ORM session (unit of work / identity map); use `commit()` to persist.
+- **sqlalchemy.orm.Session.add(instance)** - Add an object to the session.
+- **sqlalchemy.orm.Session.add_all(instances)** - Add multiple objects to the session.
+- **sqlalchemy.orm.Session.commit()** - Commit the current transaction.
+- **sqlalchemy.orm.Session.execute(statement, params=None, \*\*kwargs)** - Execute a SQL statement and return a `Result`.
+- **sqlalchemy.orm.Session.scalars(statement, params=None, \*\*kwargs)** - Execute a statement and return scalar results.
 - **sqlalchemy.orm.sessionmaker(bind=engine, \*\*kwargs)** - Factory for creating configured `Session` objects.
 - **sqlalchemy.orm.DeclarativeBase** - Base class for declarative ORM mappings (2.0 style).
 - **sqlalchemy.orm.Mapped[T]** - Typing annotation used for ORM-mapped attributes.
-- **sqlalchemy.orm.mapped_column(\*\*kwargs)** - Declare an ORM-mapped column with typing support.
-- **sqlalchemy.orm.relationship(\*\*kwargs)** - Define ORM relationships between mapped classes.
+- **sqlalchemy.orm.mapped_column(\*args, primary_key=False, nullable=None, default=None, \*\*kwargs)** - Declare an ORM-mapped column with typing support.
+- **sqlalchemy.orm.relationship(argument=None, \*, cascade=None, backref=None, lazy='select', \*\*kwargs)** - Define ORM relationships between mapped classes.
+- **sqlalchemy.orm.joinedload(attr, \*, innerjoin=False)** - Eager load a relationship using a JOIN.
+- **sqlalchemy.ext.associationproxy.association_proxy(target_collection, attr, \*\*kwargs)** - Create an association proxy for simplified many-to-many access.
+- **sqlalchemy.orm.Query** ⚠️ - Legacy query API (soft deprecation; prefer `select()` for 2.0 style).
+
+## Current Library State
+
+SQLAlchemy 2.0 is a mature, production-ready ORM and SQL toolkit following these core principles:
+
+### Philosophy
+- **Transactions as the norm**: Nothing persists until `commit()` is called explicitly.
+- **Bound parameters everywhere**: Never render literal values in SQL; use bound parameters to prevent SQL injection and enable query plan caching.
+- **Choose the right tool**: Use Core for SQL operations that don't need object mapping; use ORM when you need the data mapper pattern.
+- **Full SQL exposure**: SQLAlchemy exposes relational database functionality fully rather than hiding it.
+- **Developer control**: You control all design decisions regarding object model structure, schema design, and naming conventions.
+
+### Key Capabilities
+- **Identity map**: Session maintains a single instance per database identity within a session.
+- **Unit of work**: Changes are tracked and flushed to the database as a coordinated unit.
+- **Data mapper pattern**: Separates domain model from relational schema with explicit mappings.
+- **Declarative configuration**: Define ORM models with typed attributes using `DeclarativeBase` and `Mapped[...]`.
+- **Query construction**: Build SQL queries using Pythonic constructs that render to optimized SQL.
+- **Eager loading control**: Choose loading strategies (joined, selectin, subquery, lazy) per-query.
+- **Connection pooling**: Built-in connection pool management with configurable sizing and behavior.
+- **Schema metadata**: Reflect existing database schemas or define new ones programmatically.
+- **Event system**: Hook into ORM and Core operations with event listeners.
+
+### Common Pitfalls
+- **Transaction management**: Assuming changes persist without calling `commit()` - they don't.
+- **SQL injection**: Using string interpolation instead of bound parameters - always use bound parameters.
+- **Wrong tool selection**: Using ORM when Core would suffice - ORM adds overhead for simple operations.
+- **Query responsibility**: Blaming SQLAlchemy for bad queries - you control query structure including joins, subqueries, and correlation.
+- **Impedance mismatch**: Expecting databases to behave like object collections (or vice versa) - use SQLAlchemy's mediation patterns.

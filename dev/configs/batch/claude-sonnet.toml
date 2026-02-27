@@ -1,0 +1,20 @@
+# Claude Sonnet 4.5 (Anthropic)
+[llm]
+provider = "anthropic"
+model = "claude-sonnet-4-5-20250929"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[generation]
+max_retries = 10
+max_source_tokens = 100000
+enable_agent5 = true
+agent5_mode = "thorough"
+
+[generation.container]
+runtime = "podman"
+python_image = "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
+cleanup = true
+timeout = 1800
+
+[prompts]
+override_prompts = false
