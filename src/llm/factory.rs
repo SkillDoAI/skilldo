@@ -15,20 +15,31 @@ pub fn create_client_from_llm_config(
         return Ok(Box::new(MockLlmClient::new()));
     }
 
-    // Get API key from environment variable if specified
-    let api_key = if let Some(ref env_var) = llm_config.api_key_env {
-        if env_var.to_lowercase() == "none" || llm_config.provider == "openai-compatible" {
-            env::var(env_var).unwrap_or_default()
-        } else {
-            env::var(env_var).map_err(|_| {
-                anyhow::anyhow!("API key not found in environment variable: {}", env_var)
-            })?
-        }
+    // Get API key from environment variable (explicit or inferred from provider)
+    let env_var = match &llm_config.api_key_env {
+        Some(v) => v.clone(),
+        None => match llm_config.provider.as_str() {
+            "openai" => "OPENAI_API_KEY".to_string(),
+            "anthropic" => "ANTHROPIC_API_KEY".to_string(),
+            "gemini" => "GEMINI_API_KEY".to_string(),
+            "openai-compatible" => "OPENAI_API_KEY".to_string(),
+            _ => String::new(),
+        },
+    };
+    // openai-compatible providers (Ollama, vLLM, etc.) often don't need API keys,
+    // so missing/empty keys are silently accepted for that provider.
+    let api_key = if env_var.is_empty() || env_var.to_lowercase() == "none" {
+        String::new()
+    } else if llm_config.provider == "openai-compatible" {
+        env::var(&env_var).unwrap_or_default()
     } else {
-        String::new() // No API key needed (e.g., for local models)
+        env::var(&env_var).map_err(|_| {
+            anyhow::anyhow!("API key not found in environment variable: {}", env_var)
+        })?
     };
 
     let max_tokens = llm_config.get_max_tokens();
+    let extra_body = llm_config.resolve_extra_body()?;
 
     let client: Box<dyn LlmClient> = match llm_config.provider.as_str() {
         "anthropic" => Box::new(AnthropicClient::new(
@@ -37,11 +48,10 @@ pub fn create_client_from_llm_config(
             max_tokens,
         )),
 
-        "openai" => Box::new(OpenAIClient::new(
-            api_key,
-            llm_config.model.clone(),
-            max_tokens,
-        )),
+        "openai" => Box::new(
+            OpenAIClient::new(api_key, llm_config.model.clone(), max_tokens)
+                .with_extra_body(extra_body),
+        ),
 
         "openai-compatible" => {
             let base_url = llm_config
@@ -49,12 +59,15 @@ pub fn create_client_from_llm_config(
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434/v1".to_string());
 
-            Box::new(OpenAIClient::with_base_url(
-                api_key,
-                llm_config.model.clone(),
-                base_url,
-                max_tokens,
-            ))
+            Box::new(
+                OpenAIClient::with_base_url(
+                    api_key,
+                    llm_config.model.clone(),
+                    base_url,
+                    max_tokens,
+                )
+                .with_extra_body(extra_body),
+            )
         }
 
         "gemini" => Box::new(GeminiClient::new(
@@ -81,6 +94,7 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
 
     let api_key = config.get_api_key()?;
     let max_tokens = config.llm.get_max_tokens();
+    let extra_body = config.llm.resolve_extra_body()?;
 
     let client: Box<dyn LlmClient> = match config.llm.provider.as_str() {
         "anthropic" => Box::new(AnthropicClient::new(
@@ -89,11 +103,10 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
             max_tokens,
         )),
 
-        "openai" => Box::new(OpenAIClient::new(
-            api_key,
-            config.llm.model.clone(),
-            max_tokens,
-        )),
+        "openai" => Box::new(
+            OpenAIClient::new(api_key, config.llm.model.clone(), max_tokens)
+                .with_extra_body(extra_body),
+        ),
 
         "openai-compatible" => {
             let base_url = config
@@ -102,12 +115,15 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434/v1".to_string());
 
-            Box::new(OpenAIClient::with_base_url(
-                api_key,
-                config.llm.model.clone(),
-                base_url,
-                max_tokens,
-            ))
+            Box::new(
+                OpenAIClient::with_base_url(
+                    api_key,
+                    config.llm.model.clone(),
+                    base_url,
+                    max_tokens,
+                )
+                .with_extra_body(extra_body),
+            )
         }
 
         "gemini" => Box::new(GeminiClient::new(
@@ -140,37 +156,38 @@ mod tests {
 
     #[test]
     fn test_create_anthropic_client() {
-        env::set_var("AI_API_KEY", "test_key");
-        let config = Config::default(); // Defaults to anthropic
+        env::set_var("SKILLDO_TEST_FACTORY_ANTHRO", "test_key");
+        let mut config = Config::default();
+        config.llm.api_key_env = Some("SKILLDO_TEST_FACTORY_ANTHRO".to_string());
         let result = create_client(&config, false);
         assert!(result.is_ok());
-        env::remove_var("AI_API_KEY");
+        env::remove_var("SKILLDO_TEST_FACTORY_ANTHRO");
     }
 
     #[test]
     fn test_create_openai_client() {
-        env::set_var("AI_API_KEY", "test_key");
+        env::set_var("SKILLDO_TEST_FACTORY_OAI", "test_key");
         let mut config = Config::default();
         config.llm.provider = "openai".to_string();
+        config.llm.api_key_env = Some("SKILLDO_TEST_FACTORY_OAI".to_string());
         let result = create_client(&config, false);
         assert!(result.is_ok());
-        env::remove_var("AI_API_KEY");
+        env::remove_var("SKILLDO_TEST_FACTORY_OAI");
     }
 
     #[test]
     fn test_create_openai_compatible_client() {
-        env::set_var("AI_API_KEY", "test_key");
         let mut config = Config::default();
         config.llm.provider = "openai-compatible".to_string();
         config.llm.base_url = Some("http://localhost:11434/v1".to_string());
+        // openai-compatible doesn't error on missing key
         let result = create_client(&config, false);
         assert!(result.is_ok());
-        env::remove_var("AI_API_KEY");
     }
 
     #[test]
     fn test_create_client_with_unknown_provider() {
-        env::set_var("AI_API_KEY", "test_key");
+        // Unknown provider infers "none" for api_key_env, so no env var needed
         let mut config = Config::default();
         config.llm.provider = "unknown_provider".to_string();
         let result = create_client(&config, false);
@@ -178,18 +195,18 @@ mod tests {
         if let Err(e) = result {
             assert!(e.to_string().contains("Unknown LLM provider"));
         }
-        env::remove_var("AI_API_KEY");
     }
 
     #[test]
     fn test_create_gemini_client() {
-        env::set_var("AI_API_KEY", "test_key");
+        env::set_var("SKILLDO_TEST_FACTORY_GEMINI", "test_key");
         let mut config = Config::default();
         config.llm.provider = "gemini".to_string();
         config.llm.model = "gemini-pro".to_string();
+        config.llm.api_key_env = Some("SKILLDO_TEST_FACTORY_GEMINI".to_string());
         let result = create_client(&config, false);
         assert!(result.is_ok());
-        env::remove_var("AI_API_KEY");
+        env::remove_var("SKILLDO_TEST_FACTORY_GEMINI");
     }
 
     #[test]
@@ -222,6 +239,8 @@ mod tests {
             max_tokens: None,
             network_retries: 0,
             retry_delay: 1,
+            extra_body: std::collections::HashMap::new(),
+            extra_body_json: None,
         }
     }
 

@@ -372,6 +372,117 @@ x = os.getcwd()
     }
 
     #[test]
+    fn test_extract_py_fence_variant() {
+        let skill_md = "```py\nimport os\nx = os.getcwd()\n```\n";
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(code.contains("import os"), "Should parse ```py fences");
+    }
+
+    #[test]
+    fn test_extract_two_line_block_no_import_is_accepted() {
+        // Two lines, no import → accepted because code_lines.len() >= 2
+        let skill_md = "```python\nx = 1\ny = 2\n```\n";
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(
+            code.contains("x = 1"),
+            "Two-line block without import should be accepted"
+        );
+    }
+
+    #[test]
+    fn test_extract_block_of_only_comments_is_discarded() {
+        // Block containing only comments → code_lines stays empty
+        let skill_md = "```python\n# just a comment\n# another comment\n```\n";
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(code.is_empty(), "Block with only comments should be empty");
+    }
+
+    #[test]
+    fn test_extract_comments_and_blank_lines_stripped() {
+        let skill_md = "```python\nimport os\n# comment\n\nx = os.getcwd()\n```\n";
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(!code.contains("# comment"), "Comments should be stripped");
+        assert!(code.contains("import os"));
+        assert!(code.contains("os.getcwd()"));
+    }
+
+    #[test]
+    fn test_extract_from_import_sets_found_import() {
+        let skill_md = "```python\nfrom os import getcwd\nx = getcwd()\n```\n";
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(
+            code.contains("from os import getcwd"),
+            "'from' imports should be recognized"
+        );
+    }
+
+    #[test]
+    fn test_extract_code_with_assert_does_not_append_print() {
+        let skill_md = "```python\nimport os\nassert os.path.exists('.')\n```\n";
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(
+            !code.contains("Code executed successfully"),
+            "Should not append print when assert exists"
+        );
+    }
+
+    #[test]
+    fn test_extract_code_with_print_does_not_append_extra_print() {
+        let skill_md = "```python\nimport os\nprint(os.getcwd())\n```\n";
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        // Count occurrences of "print(" - should be exactly 1 (the original)
+        let count = code.matches("print(").count();
+        assert_eq!(count, 1, "Should not add extra print when one exists");
+    }
+
+    #[test]
+    fn test_extract_unclosed_code_block() {
+        // Code block never closed → code_lines accumulate through EOF
+        // After the loop, code_lines is non-empty so the code is returned
+        let skill_md = "```python\nimport os\nx = os.getcwd()\n";
+        let validator = FunctionalValidator::new();
+        let code = validator.extract_python_hello_world(skill_md).unwrap();
+        assert!(
+            code.contains("import os"),
+            "Unclosed code block should still return accumulated code"
+        );
+    }
+
+    #[test]
+    fn test_functional_validator_default_equals_new() {
+        let v1 = FunctionalValidator::new();
+        let v2 = FunctionalValidator::default();
+        assert_eq!(v1.use_docker, v2.use_docker);
+    }
+
+    #[test]
+    fn test_validate_empty_string_returns_skipped() {
+        let validator = FunctionalValidator::new();
+        let result = validator.validate("", "python").unwrap();
+        assert_eq!(
+            result,
+            ValidationResult::Skipped("No runnable code found in SKILL.md".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_whitespace_only_returns_skipped() {
+        let validator = FunctionalValidator::new();
+        let result = validator.validate("   \n\n  \n", "python").unwrap();
+        assert_eq!(
+            result,
+            ValidationResult::Skipped("No runnable code found in SKILL.md".to_string())
+        );
+    }
+
+    #[test]
     fn test_extract_multiple_code_blocks_prefers_imports() {
         let skill_md = r#"
 # SKILL.md

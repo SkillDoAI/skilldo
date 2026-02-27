@@ -37,12 +37,17 @@ fn strip_markdown_fences(content: &str) -> String {
 
 pub struct Generator {
     client: Box<dyn LlmClient>,
-    agent5_client: Option<Box<dyn LlmClient>>, // Optional separate client for Agent 5
+    agent1_client: Option<Box<dyn LlmClient>>,
+    agent2_client: Option<Box<dyn LlmClient>>,
+    agent3_client: Option<Box<dyn LlmClient>>,
+    agent4_client: Option<Box<dyn LlmClient>>,
+    agent5_client: Option<Box<dyn LlmClient>>,
     max_retries: usize,
     prompts_config: PromptsConfig,
     enable_agent5: bool,
     agent5_mode: ValidationMode,
     container_config: ContainerConfig,
+    parallel_extraction: bool,      // Run agents 1-3 in parallel
     existing_skill: Option<String>, // Existing SKILL.md for update mode
     model_name: Option<String>,     // For generated_with frontmatter field
 }
@@ -51,20 +56,59 @@ impl Generator {
     pub fn new(client: Box<dyn LlmClient>, max_retries: usize) -> Self {
         Self {
             client,
-            agent5_client: None, // Use main client by default
+            agent1_client: None,
+            agent2_client: None,
+            agent3_client: None,
+            agent4_client: None,
+            agent5_client: None,
             max_retries,
             prompts_config: PromptsConfig::default(),
             enable_agent5: true,                   // Default to enabled
             agent5_mode: ValidationMode::Thorough, // Default to thorough mode
             container_config: ContainerConfig::default(),
+            parallel_extraction: true,
             existing_skill: None,
             model_name: None,
         }
     }
 
+    pub fn with_agent1_client(mut self, client: Box<dyn LlmClient>) -> Self {
+        self.agent1_client = Some(client);
+        self
+    }
+
+    pub fn with_agent2_client(mut self, client: Box<dyn LlmClient>) -> Self {
+        self.agent2_client = Some(client);
+        self
+    }
+
+    pub fn with_agent3_client(mut self, client: Box<dyn LlmClient>) -> Self {
+        self.agent3_client = Some(client);
+        self
+    }
+
+    pub fn with_agent4_client(mut self, client: Box<dyn LlmClient>) -> Self {
+        self.agent4_client = Some(client);
+        self
+    }
+
     pub fn with_agent5_client(mut self, client: Box<dyn LlmClient>) -> Self {
         self.agent5_client = Some(client);
         self
+    }
+
+    /// Get the LLM client for a specific agent.
+    /// Returns the per-agent client if configured, otherwise the main client.
+    fn get_client(&self, agent: u8) -> &dyn LlmClient {
+        match agent {
+            1 => self.agent1_client.as_deref(),
+            2 => self.agent2_client.as_deref(),
+            3 => self.agent3_client.as_deref(),
+            4 => self.agent4_client.as_deref(),
+            5 => self.agent5_client.as_deref(),
+            _ => None,
+        }
+        .unwrap_or(self.client.as_ref())
     }
 
     pub fn with_prompts_config(mut self, config: PromptsConfig) -> Self {
@@ -84,6 +128,11 @@ impl Generator {
 
     pub fn with_container_config(mut self, config: ContainerConfig) -> Self {
         self.container_config = config;
+        self
+    }
+
+    pub fn with_parallel_extraction(mut self, parallel: bool) -> Self {
+        self.parallel_extraction = parallel;
         self
     }
 
@@ -113,8 +162,7 @@ impl Generator {
             data.test_content.clone()
         };
 
-        // Agent 1: Extract API surface (use source + examples + tests for comprehensive coverage)
-        info!("Agent 1: Extracting API surface...");
+        // Build source context for Agent 1 (source + examples or tests)
         let source_with_context = if !data.examples_content.is_empty() {
             // Prefer examples over tests
             format!(
@@ -130,43 +178,58 @@ impl Generator {
         } else {
             data.source_content.clone()
         };
-        let api_surface = self
-            .client
-            .complete(&prompts_v2::agent1_api_extractor_v2(
-                &data.package_name,
-                &data.version,
-                &source_with_context,
-                data.source_file_count,
-                self.prompts_config.agent1_custom.as_deref(),
-                self.prompts_config.is_overwrite(1),
-            ))
-            .await?;
 
-        // Agent 2: Extract patterns from examples + tests (examples are better than tests)
+        // Agents 1-3 are independent — run them in parallel
+        info!("Agent 1: Extracting API surface...");
         info!("Agent 2: Extracting usage patterns...");
-        let patterns = self
-            .client
-            .complete(&prompts_v2::agent2_pattern_extractor_v2(
-                &data.package_name,
-                &data.version,
-                &examples_and_tests,
-                self.prompts_config.agent2_custom.as_deref(),
-                self.prompts_config.is_overwrite(2),
-            ))
-            .await?;
-
-        // Agent 3: Extract context from docs
         info!("Agent 3: Extracting conventions and pitfalls...");
-        let context = self
-            .client
-            .complete(&prompts_v2::agent3_context_extractor_v2(
-                &data.package_name,
-                &data.version,
-                &docs_and_changelog,
-                self.prompts_config.agent3_custom.as_deref(),
-                self.prompts_config.is_overwrite(3),
-            ))
-            .await?;
+
+        let agent1_prompt = prompts_v2::agent1_api_extractor_v2(
+            &data.package_name,
+            &data.version,
+            &source_with_context,
+            data.source_file_count,
+            self.prompts_config.agent1_custom.as_deref(),
+            self.prompts_config.is_overwrite(1),
+        );
+        let agent2_prompt = prompts_v2::agent2_pattern_extractor_v2(
+            &data.package_name,
+            &data.version,
+            &examples_and_tests,
+            self.prompts_config.agent2_custom.as_deref(),
+            self.prompts_config.is_overwrite(2),
+        );
+        let agent3_prompt = prompts_v2::agent3_context_extractor_v2(
+            &data.package_name,
+            &data.version,
+            &docs_and_changelog,
+            self.prompts_config.agent3_custom.as_deref(),
+            self.prompts_config.is_overwrite(3),
+        );
+
+        let client1 = self.get_client(1);
+        let client2 = self.get_client(2);
+        let client3 = self.get_client(3);
+
+        let (api_surface, patterns, context) = if self.parallel_extraction {
+            info!("Running agents 1-3 in parallel...");
+            tokio::try_join!(
+                client1.complete(&agent1_prompt),
+                client2.complete(&agent2_prompt),
+                client3.complete(&agent3_prompt),
+            )?
+        } else {
+            info!("Running agents 1-3 sequentially...");
+            let api_surface = client1.complete(&agent1_prompt).await?;
+            info!("Agent 1 complete");
+            let patterns = client2.complete(&agent2_prompt).await?;
+            info!("Agent 2 complete");
+            let context = client3.complete(&agent3_prompt).await?;
+            info!("Agent 3 complete");
+            (api_surface, patterns, context)
+        };
+
+        info!("Agents 1-3: All extractions complete");
 
         // Agent 4: Synthesize SKILL.md
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
@@ -180,7 +243,7 @@ impl Generator {
                 &patterns,
                 &context,
             );
-            self.client.complete(&update_prompt).await?
+            self.get_client(4).complete(&update_prompt).await?
         } else {
             // Normal mode: synthesize from scratch
             info!("Agent 4: Synthesizing SKILL.md...");
@@ -196,7 +259,7 @@ impl Generator {
                 self.prompts_config.agent4_custom.as_deref(),
                 self.prompts_config.is_overwrite(4),
             );
-            self.client.complete(&synthesis_prompt).await?
+            self.get_client(4).complete(&synthesis_prompt).await?
         };
 
         // Strip markdown code fences if present (models sometimes wrap output)
@@ -228,19 +291,35 @@ impl Generator {
                     .collect();
                 warn!("  ✗ Format validation failed: {} errors", error_msgs.len());
 
+                // Security errors bail IMMEDIATELY — never sent back to the model.
+                // Sending security violations to the model for "fixing" lets it
+                // learn bypass strategies. Fail fast, fail hard.
+                let has_security_errors = lint_issues.iter().any(|i| i.category == "security");
+                if has_security_errors {
+                    let security_msgs: Vec<String> = lint_issues
+                        .iter()
+                        .filter(|i| i.category == "security")
+                        .map(|i| i.message.clone())
+                        .collect();
+                    anyhow::bail!(
+                        "SECURITY: Generated SKILL.md contains dangerous content that cannot be shipped:\n{}",
+                        security_msgs.join("\n")
+                    );
+                }
+
                 if attempt == validation_passes - 1 {
                     info!("Max retries reached, returning best attempt despite format issues");
                     break;
                 }
 
-                // Patch with format fix instructions
+                // Patch with format fix instructions (non-security errors only)
                 let fix_prompt = format!(
                     "Here is the current SKILL.md:\n\n{}\n\nFORMAT VALIDATION FAILED:\n{}\n\nPlease fix these format issues. Keep all content intact.",
                     skill_md,
                     error_msgs.join("\n")
                 );
 
-                skill_md = self.client.complete(&fix_prompt).await?;
+                skill_md = self.get_client(4).complete(&fix_prompt).await?;
                 skill_md = strip_markdown_fences(&skill_md);
                 continue;
             }
@@ -280,12 +359,7 @@ impl Generator {
                     if self.enable_agent5 && data.language.as_str() == "python" {
                         info!("Agent 5: Testing SKILL.md with code generation...");
 
-                        // Use agent5_client if configured, otherwise use main client
-                        let agent5_llm = self
-                            .agent5_client
-                            .as_ref()
-                            .map(|c| c.as_ref())
-                            .unwrap_or(self.client.as_ref());
+                        let agent5_llm = self.get_client(5);
 
                         let agent5 = Agent5CodeValidator::new_python_with_custom(
                             agent5_llm,
@@ -320,7 +394,8 @@ impl Generator {
                                                 skill_md, feedback
                                             );
 
-                                            skill_md = self.client.complete(&patch_prompt).await?;
+                                            skill_md =
+                                                self.get_client(4).complete(&patch_prompt).await?;
                                             skill_md = strip_markdown_fences(&skill_md);
                                             continue; // Retry with patched content
                                         }
@@ -346,6 +421,22 @@ impl Generator {
                     warn!("    Error: {}", error.lines().next().unwrap_or(""));
 
                     if attempt == validation_passes - 1 {
+                        // Final safety check: re-lint to catch any security issues
+                        // introduced during fix attempts
+                        let final_lint = linter.lint(&skill_md)?;
+                        let has_security_errors =
+                            final_lint.iter().any(|i| i.category == "security");
+                        if has_security_errors {
+                            let security_msgs: Vec<String> = final_lint
+                                .iter()
+                                .filter(|i| i.category == "security")
+                                .map(|i| i.message.clone())
+                                .collect();
+                            anyhow::bail!(
+                                "SECURITY: Generated SKILL.md contains dangerous content that cannot be shipped:\n{}",
+                                security_msgs.join("\n")
+                            );
+                        }
                         info!("Max retries reached, returning best attempt despite code issues");
                         break;
                     }
@@ -357,7 +448,7 @@ impl Generator {
                         error
                     );
 
-                    skill_md = self.client.complete(&fix_prompt).await?;
+                    skill_md = self.get_client(4).complete(&fix_prompt).await?;
                     skill_md = strip_markdown_fences(&skill_md);
                     continue;
                 }
@@ -432,6 +523,10 @@ mod tests {
         assert!(matches!(gen.agent5_mode, ValidationMode::Thorough));
         assert!(gen.existing_skill.is_none());
         assert!(gen.model_name.is_none());
+        assert!(gen.agent1_client.is_none());
+        assert!(gen.agent2_client.is_none());
+        assert!(gen.agent3_client.is_none());
+        assert!(gen.agent4_client.is_none());
         assert!(gen.agent5_client.is_none());
     }
 
@@ -570,5 +665,31 @@ mod tests {
             result.contains("ecosystem:"),
             "should have ecosystem in frontmatter"
         );
+    }
+
+    #[test]
+    fn test_get_client_returns_main_by_default() {
+        let client = Box::new(MockLlmClient::new());
+        let gen = Generator::new(client, 5);
+        // All agents should return the main client when no per-agent override
+        // We can't directly compare references, but we can verify the method doesn't panic
+        let _ = gen.get_client(1);
+        let _ = gen.get_client(2);
+        let _ = gen.get_client(3);
+        let _ = gen.get_client(4);
+        let _ = gen.get_client(5);
+    }
+
+    #[test]
+    fn test_per_agent_client_builders() {
+        let client = Box::new(MockLlmClient::new());
+        let gen = Generator::new(client, 5)
+            .with_agent1_client(Box::new(MockLlmClient::new()))
+            .with_agent5_client(Box::new(MockLlmClient::new()));
+        assert!(gen.agent1_client.is_some());
+        assert!(gen.agent2_client.is_none());
+        assert!(gen.agent3_client.is_none());
+        assert!(gen.agent4_client.is_none());
+        assert!(gen.agent5_client.is_some());
     }
 }

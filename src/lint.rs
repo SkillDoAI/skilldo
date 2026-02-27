@@ -45,6 +45,9 @@ impl SkillLinter {
         // Check for LLM degeneration
         issues.extend(self.check_degeneration(content));
 
+        // Check for security threats
+        issues.extend(self.check_security(content));
+
         Ok(issues)
     }
 
@@ -300,13 +303,18 @@ impl SkillLinter {
                 };
 
                 if clean.len() > 80 && !is_dotted_identifier {
+                    // Find a safe char boundary for the preview snippet
+                    let mut preview_end = 40;
+                    while preview_end > 0 && !clean.is_char_boundary(preview_end) {
+                        preview_end -= 1;
+                    }
                     issues.push(LintIssue {
                         severity: Severity::Error,
                         category: "degeneration".to_string(),
                         message: format!(
                             "Nonsense token detected ({} chars): '{}...'",
                             clean.len(),
-                            &clean[..40]
+                            &clean[..preview_end]
                         ),
                         suggestion: Some(
                             "LLM output contains gibberish. Regenerate this section.".to_string(),
@@ -358,6 +366,83 @@ impl SkillLinter {
             }
         }
 
+        // Check 3b: Meta-text / framing leak
+        // LLMs sometimes prefix output with framing text like "Here is the SKILL.md..."
+        // These should be stripped by the normalizer, but catch them here as a safety net.
+        let meta_text_patterns = [
+            "below is the",
+            "here is the",
+            "here's the",
+            "i've generated",
+            "i have generated",
+            "as requested",
+            "with exact sections",
+            "the following skill.md",
+            "generated skill.md",
+        ];
+        // Only check the first 5 non-empty lines after frontmatter (meta-text is always at the top)
+        let mut checked = 0;
+        let mut frontmatter_dashes = 0;
+        for line in &lines {
+            let trimmed = line.trim();
+            if trimmed == "---" {
+                frontmatter_dashes += 1;
+                continue;
+            }
+            // Skip lines inside frontmatter (between first and second ---)
+            if frontmatter_dashes < 2 {
+                continue;
+            }
+            if trimmed.is_empty() {
+                continue;
+            }
+            checked += 1;
+            if checked > 5 {
+                break;
+            }
+            let lower = trimmed.to_lowercase();
+            for pattern in &meta_text_patterns {
+                if lower.contains(pattern) {
+                    issues.push(LintIssue {
+                        severity: Severity::Warning,
+                        category: "degeneration".to_string(),
+                        message: format!("Meta-text leak in output: '{}'", trimmed),
+                        suggestion: Some(
+                            "LLM included framing text before the actual content. Remove this line."
+                                .to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+        }
+
+        // Check 3c: Duplicated frontmatter
+        // LLMs sometimes emit the frontmatter twice (normalizer adds one, LLM included one in body)
+        // Only check the first 50 lines to avoid false positives from Markdown horizontal rules (---)
+        let dash_lines: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .take(50)
+            .filter(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+            .collect();
+        if dash_lines.len() >= 4 {
+            // More than 2 frontmatter delimiters near the top = duplicated frontmatter
+            issues.push(LintIssue {
+                severity: Severity::Warning,
+                category: "degeneration".to_string(),
+                message: format!(
+                    "Duplicated frontmatter ({} delimiter lines found in first 50 lines, expected 2)",
+                    dash_lines.len()
+                ),
+                suggestion: Some(
+                    "LLM output contains duplicate YAML frontmatter. Remove the extra block."
+                        .to_string(),
+                ),
+            });
+        }
+
         // Check 4: Unclosed code blocks (truncated output)
         let fence_count = lines
             .iter()
@@ -402,6 +487,425 @@ impl SkillLinter {
         }
 
         issues
+    }
+
+    fn check_security(&self, content: &str) -> Vec<LintIssue> {
+        let mut issues = Vec::new();
+        let lines: Vec<&str> = content.lines().collect();
+
+        // Track code block boundaries — security checks only apply to prose
+        let mut in_code_block = false;
+        let mut code_block_lines: Vec<bool> = Vec::with_capacity(lines.len());
+        for line in &lines {
+            if line.trim_start().starts_with("```") {
+                in_code_block = !in_code_block;
+            }
+            code_block_lines.push(in_code_block);
+        }
+
+        // Check inside HTML comments — single-line and multi-line
+        let mut in_html_comment = false;
+        let mut html_comment_buf = String::new();
+        for (idx, line) in lines.iter().enumerate() {
+            if code_block_lines[idx] {
+                continue;
+            }
+            // Single-line comment: <!-- ... -->
+            if line.contains("<!--") && line.contains("-->") {
+                if let Some(start) = line.find("<!--") {
+                    // Search for --> only after the <!--, avoiding panic if --> appears earlier
+                    if let Some(rel_end) = line[start + 4..].find("-->") {
+                        let comment = &line[start + 4..start + 4 + rel_end];
+                        if !comment.is_empty() && self.has_security_threat(comment) {
+                            issues.push(LintIssue {
+                                severity: Severity::Error,
+                                category: "security".to_string(),
+                                message: "Hidden instructions in HTML comment".to_string(),
+                                suggestion: Some(
+                                    "HTML comments may contain hidden instructions for AI agents. Review and remove."
+                                        .to_string(),
+                                ),
+                            });
+                        }
+                    }
+                }
+            } else if line.contains("<!--") {
+                // Start of multi-line comment
+                in_html_comment = true;
+                if let Some(start) = line.find("<!--") {
+                    html_comment_buf = line[start + 4..].to_string();
+                }
+            } else if in_html_comment && line.contains("-->") {
+                // End of multi-line comment
+                if let Some(end) = line.find("-->") {
+                    html_comment_buf.push(' ');
+                    html_comment_buf.push_str(&line[..end]);
+                }
+                if self.has_security_threat(&html_comment_buf) {
+                    issues.push(LintIssue {
+                        severity: Severity::Error,
+                        category: "security".to_string(),
+                        message: "Hidden instructions in HTML comment".to_string(),
+                        suggestion: Some(
+                            "HTML comments may contain hidden instructions for AI agents. Review and remove."
+                                .to_string(),
+                        ),
+                    });
+                }
+                in_html_comment = false;
+                html_comment_buf.clear();
+            } else if in_html_comment {
+                // Middle of multi-line comment
+                html_comment_buf.push(' ');
+                html_comment_buf.push_str(line);
+            }
+        }
+
+        // Scan code blocks for the most dangerous patterns.
+        // Most code block content is legitimate, but some things have NO
+        // reason to be in a SKILL.md code example.
+        let critical_code_patterns = [
+            "rm -rf /",
+            "rm -rf ~",
+            "rm -fr /",
+            "> /dev/sda",
+            "> /dev/nvme",
+            "/dev/tcp/",
+            "/dev/udp/",
+            "ignore all previous instructions",
+            "ignore previous instructions",
+            "you are now a",
+            "disregard your",
+            "override your",
+        ];
+        for (idx, line) in lines.iter().enumerate() {
+            if !code_block_lines[idx] {
+                continue; // Only check inside code blocks
+            }
+            let lower = line.to_lowercase();
+            for pattern in &critical_code_patterns {
+                if lower.contains(pattern) {
+                    issues.push(LintIssue {
+                        severity: Severity::Error,
+                        category: "security".to_string(),
+                        message: format!(
+                            "Critical security pattern in code block: '{}'",
+                            pattern
+                        ),
+                        suggestion: Some(
+                            "This pattern has no legitimate reason to appear in a SKILL.md code example."
+                                .to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+        }
+
+        // Check prose lines for security threats
+        for (idx, line) in lines.iter().enumerate() {
+            if code_block_lines[idx] {
+                continue;
+            }
+
+            let lower = line.to_lowercase();
+
+            // 1. Destructive commands — filesystem/disk destruction
+            let destructive_patterns = [
+                "rm -rf /",
+                "rm -rf ~",
+                "rm -rf .",
+                "rm -fr /",
+                "rm -fr ~",
+                "rmdir /s /q",
+                "del /f /s /q",
+                "format c:",
+                "mkfs.",
+                "dd if=",
+                ":(){ :|:&};:", // fork bomb
+                "> /dev/sda",
+                "> /dev/nvme",
+                "shutil.rmtree('/')",
+                "shutil.rmtree(\"/\")",
+                "parted ",
+                "fdisk ",
+                "wipefs ",
+                "sgdisk ",
+                "blkdiscard ",
+                "hdparm --security-erase",
+            ];
+            for pattern in &destructive_patterns {
+                if lower.contains(&pattern.to_lowercase()) {
+                    issues.push(LintIssue {
+                        severity: Severity::Error,
+                        category: "security".to_string(),
+                        message: format!("Destructive command in prose: '{}'", pattern),
+                        suggestion: Some(
+                            "SKILL.md should not instruct agents to run destructive commands."
+                                .to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+
+            // 2. Data exfiltration — sending files/secrets to external URLs
+            let exfil_commands = [
+                "curl ",
+                "wget ",
+                "fetch ",
+                "nc ",
+                "netcat ",
+                "ncat ",
+                "requests.post(",
+                "requests.put(",
+                "httpx.post(",
+                "httpx.put(",
+                "urllib.request",
+                "http.client",
+            ];
+            let exfil_targets = [
+                ".ssh/",
+                ".aws/",
+                ".env",
+                "credentials",
+                "id_rsa",
+                "id_ed25519",
+                "api_key",
+                "api-key",
+                "secret",
+                "/etc/passwd",
+                "/etc/shadow",
+                ".gnupg",
+                ".npmrc",
+                ".pypirc",
+                ".netrc",
+                ".docker/config",
+                ".kube/config",
+            ];
+            for cmd in &exfil_commands {
+                if lower.contains(cmd) {
+                    for target in &exfil_targets {
+                        if lower.contains(target) {
+                            issues.push(LintIssue {
+                                severity: Severity::Error,
+                                category: "security".to_string(),
+                                message: format!(
+                                    "Possible data exfiltration: {} with {}",
+                                    cmd.trim(), target
+                                ),
+                                suggestion: Some(
+                                    "SKILL.md should not instruct agents to send sensitive files to external servers."
+                                        .to_string(),
+                                ),
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 3. Credential/secret file access in prose
+            let credential_paths = [
+                "~/.ssh/",
+                "~/.aws/credentials",
+                "~/.aws/config",
+                "~/.gnupg/",
+                "~/.npmrc",
+                "~/.pypirc",
+                "~/.netrc",
+                "~/.docker/config.json",
+                "~/.kube/config",
+                "/etc/shadow",
+            ];
+            for path in &credential_paths {
+                if line.contains(path) {
+                    issues.push(LintIssue {
+                        severity: Severity::Error,
+                        category: "security".to_string(),
+                        message: format!(
+                            "Credential file access in prose: '{}'",
+                            path
+                        ),
+                        suggestion: Some(
+                            "SKILL.md should not instruct agents to read credential or secret files."
+                                .to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+
+            // 4. Prompt injection
+            let injection_patterns = [
+                "ignore all previous instructions",
+                "ignore previous instructions",
+                "ignore your instructions",
+                "disregard your",
+                "disregard all previous",
+                "disregard safety",
+                "you are now a",
+                "you are now an",
+                "override your",
+                "forget your instructions",
+                "forget everything",
+                "new system prompt",
+                "act as a different",
+                "pretend you are",
+                "jailbreak",
+            ];
+            for pattern in &injection_patterns {
+                if lower.contains(pattern) {
+                    issues.push(LintIssue {
+                        severity: Severity::Error,
+                        category: "security".to_string(),
+                        message: format!(
+                            "Prompt injection attempt: '{}'",
+                            pattern
+                        ),
+                        suggestion: Some(
+                            "SKILL.md contains language that could manipulate AI agents into unsafe behavior."
+                                .to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+
+            // 5. System file modification
+            let system_paths = [
+                "~/.bashrc",
+                "~/.zshrc",
+                "~/.profile",
+                "~/.bash_profile",
+                "/etc/hosts",
+                "/etc/resolv.conf",
+                "/etc/crontab",
+                "~/.ssh/authorized_keys",
+                "~/.gitconfig",
+                "crontab -",
+            ];
+            for path in &system_paths {
+                if line.contains(path) {
+                    issues.push(LintIssue {
+                        severity: Severity::Error,
+                        category: "security".to_string(),
+                        message: format!(
+                            "System file modification in prose: '{}'",
+                            path
+                        ),
+                        suggestion: Some(
+                            "SKILL.md should not instruct agents to modify system configuration files."
+                                .to_string(),
+                        ),
+                    });
+                    break;
+                }
+            }
+
+            // 6. Obfuscated payloads — base64 decode piped to shell
+            if (lower.contains("base64")
+                && (lower.contains("| sh")
+                    || lower.contains("| bash")
+                    || lower.contains("|sh")
+                    || lower.contains("|bash")))
+                || (lower.contains("base64") && lower.contains("python -c"))
+            {
+                issues.push(LintIssue {
+                    severity: Severity::Error,
+                    category: "security".to_string(),
+                    message: "Obfuscated payload: base64 decode piped to shell".to_string(),
+                    suggestion: Some(
+                        "Encoded commands piped to shell interpreters can hide malicious payloads."
+                            .to_string(),
+                    ),
+                });
+            }
+
+            // 7. Reverse shells
+            if lower.contains("/dev/tcp/")
+                || lower.contains("/dev/udp/")
+                || (lower.contains("bash -i") && lower.contains(">&"))
+                || (lower.contains("nc -e") && lower.contains("/bin/"))
+                || (lower.contains("ncat") && lower.contains("-e"))
+            {
+                issues.push(LintIssue {
+                    severity: Severity::Error,
+                    category: "security".to_string(),
+                    message: "Reverse shell pattern detected".to_string(),
+                    suggestion: Some(
+                        "SKILL.md should not contain reverse shell connection instructions."
+                            .to_string(),
+                    ),
+                });
+            }
+
+            // 8. Remote script execution — pipe to shell
+            if (lower.contains("curl ") || lower.contains("wget ") || lower.contains("fetch "))
+                && (lower.contains("| sh")
+                    || lower.contains("| bash")
+                    || lower.contains("|sh")
+                    || lower.contains("|bash")
+                    || lower.contains("| sudo"))
+            {
+                issues.push(LintIssue {
+                    severity: Severity::Error,
+                    category: "security".to_string(),
+                    message: "Remote script execution: piping download to shell".to_string(),
+                    suggestion: Some(
+                        "Piping remote content directly to a shell interpreter is dangerous."
+                            .to_string(),
+                    ),
+                });
+            }
+
+            // 9. Privilege escalation
+            if lower.contains("chmod 777 /")
+                || lower.contains("chmod -r 777")
+                || lower.contains("chmod +s ")
+                || (lower.contains("sudo ") && lower.contains("chmod"))
+                || lower.contains("setuid")
+            {
+                issues.push(LintIssue {
+                    severity: Severity::Error,
+                    category: "security".to_string(),
+                    message: "Privilege escalation pattern detected".to_string(),
+                    suggestion: Some(
+                        "SKILL.md should not instruct agents to escalate system privileges."
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+
+        issues
+    }
+
+    /// Check if text contains any security threat patterns (used for HTML comments, etc.)
+    fn has_security_threat(&self, text: &str) -> bool {
+        let lower = text.to_lowercase();
+        let threat_patterns = [
+            "rm -rf",
+            "ignore previous instructions",
+            "ignore all previous",
+            "disregard",
+            "you are now",
+            "override your",
+            "curl ",
+            "wget ",
+            "fetch ",
+            "/dev/tcp",
+            "base64",
+            "~/.ssh",
+            "~/.aws",
+            "/etc/passwd",
+            "/etc/shadow",
+            "dd if=",
+            "mkfs",
+            "parted",
+            "fdisk",
+        ];
+        threat_patterns.iter().any(|p| lower.contains(p))
     }
 
     fn extract_frontmatter(&self, content: &str) -> HashMap<String, String> {
@@ -587,5 +1091,21 @@ test.do_something()
             .filter(|i| i.severity == Severity::Error)
             .count();
         assert_eq!(errors, 0);
+    }
+
+    #[test]
+    fn test_gibberish_check_multibyte_no_panic() {
+        let linter = SkillLinter::new();
+        // 30 × '─' (3 bytes each = 90 bytes, >80 threshold) — should not panic on slice
+        let long_dashes = "─".repeat(30);
+        let content = format!(
+            "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\nlicense: MIT\n---\n\n{}\n\n## Imports\n```python\nimport test\n```\n## Core Patterns\ncode\n## Pitfalls\nmistakes\n",
+            long_dashes
+        );
+        // Should not panic — and should flag degeneration
+        let issues = linter.lint(&content).unwrap();
+        assert!(issues
+            .iter()
+            .any(|i| i.category == "degeneration" && i.message.contains("Nonsense token")));
     }
 }

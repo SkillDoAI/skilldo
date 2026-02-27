@@ -21,6 +21,7 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
 pub struct Collector {
     repo_path: PathBuf,
     language: Language,
+    max_source_chars: usize,
 }
 
 impl Collector {
@@ -28,7 +29,15 @@ impl Collector {
         Self {
             repo_path: repo_path.to_path_buf(),
             language,
+            max_source_chars: 100_000, // default ~25K tokens
         }
+    }
+
+    /// Set the total character budget for collected source material.
+    /// Maps to config `max_source_tokens` (which is actually a char budget).
+    pub fn with_max_source_chars(mut self, budget: usize) -> Self {
+        self.max_source_chars = budget;
+        self
     }
 
     pub async fn collect(&self) -> Result<CollectedData> {
@@ -56,32 +65,37 @@ impl Collector {
         let license = handler.get_license();
         let project_urls = handler.get_project_urls();
 
-        // Smart token budget allocation (total ~100K chars = ~25K tokens)
-        // Priority: examples > tests > docs > source (read best stuff first)
+        // Smart token budget allocation scaled to max_source_chars.
+        // The total across all categories is capped at `budget`.
         //
-        // Budget allocation:
-        // - 30% examples (30K chars) - Real usage patterns
-        // - 30% tests (30K chars) - API usage in tests
-        // - 20% docs (20K chars) - Documentation and tutorials
-        // - 15-50% source (15K-100K chars) - Public API (__init__.py, main modules)
-        //   * Scales dynamically based on project size
-        // - 5% changelog (5K chars) - Version history
-        //
-        // This ensures large frameworks get their BEST content analyzed
-        let examples_content = Self::read_files(&example_paths, 30_000)?;
-        let test_content = Self::read_files(&test_paths, 30_000)?;
-        let docs_content = Self::read_files(&doc_paths, 20_000)?;
+        // Fixed categories get first claim, source gets the remainder:
+        // - 30% examples - Real usage patterns
+        // - 30% tests - API usage in tests
+        // - 20% docs - Documentation and tutorials
+        // - 5% changelog - Version history
+        // - remainder → source (15-100% depending on project scale, capped)
+        let budget = self.max_source_chars;
+        let examples_budget = budget * 30 / 100;
+        let test_budget = budget * 30 / 100;
+        let docs_budget = budget * 20 / 100;
+        let changelog_budget = budget * 5 / 100;
+        let fixed_total = examples_budget + test_budget + docs_budget + changelog_budget;
 
-        // Dynamic source budget based on project scale
+        let examples_content = Self::read_files(&example_paths, examples_budget)?;
+        let test_content = Self::read_files(&test_paths, test_budget)?;
+        let docs_content = Self::read_files(&doc_paths, docs_budget)?;
+
+        // Source budget = whatever remains after fixed categories, scaled by project size
+        let remaining = budget.saturating_sub(fixed_total);
         let source_budget = match source_paths.len() {
-            n if n > 2000 => 100_000, // Massive (TensorFlow, PyTorch, Django)
-            n if n > 1000 => 50_000,  // Very large
-            n if n > 300 => 30_000,   // Large
-            _ => 15_000,              // Medium/Small (current)
+            n if n > 2000 => remaining,            // Massive — use full remainder
+            n if n > 1000 => remaining * 60 / 100, // Very large
+            n if n > 300 => remaining * 40 / 100,  // Large
+            _ => remaining,                        // Small — use full remainder (it's only 15%)
         };
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
         let changelog_content = if let Some(path) = changelog_path {
-            Self::read_file_limited(&path, 5_000)?
+            Self::read_file_limited(&path, changelog_budget)?
         } else {
             String::new()
         };

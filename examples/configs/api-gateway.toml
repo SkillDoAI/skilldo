@@ -1,0 +1,30 @@
+# ── OpenAI-Compatible API Gateway ──────────────────────────────────
+# Many inference providers expose an OpenAI-compatible API with
+# additional request parameters. Use extra_body to pass them through.
+#
+# Examples: inference gateways, hosted model platforms, enterprise endpoints.
+# Replace base_url and model with your provider's values.
+
+[llm]
+provider = "openai-compatible"
+model = "meta/llama-3.1-70b-instruct"
+api_key_env = "GATEWAY_API_KEY"
+base_url = "https://api.your-gateway.com/v1"
+
+# Extra fields merged into the request body.
+# Any key/value here is added to the JSON payload sent to the API.
+# Check your provider's docs for available parameters.
+#
+# TOML table style (good for a few fields):
+[llm.extra_body.reasoning]
+effort = "high"
+
+# Or use extra_body_json for complex payloads (easy to copy from API docs):
+# extra_body_json = '{"reasoning": {"effort": "high"}, "truncate": "END", "top_p": 0.9}'
+#
+# If both extra_body and extra_body_json are set, they are merged.
+# On key conflicts, extra_body_json wins.
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000

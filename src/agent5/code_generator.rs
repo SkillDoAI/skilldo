@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::sync::Mutex;
 use tracing::debug;
 
 use super::{CodePattern, LanguageCodeGenerator};
@@ -8,6 +9,9 @@ use crate::llm::client::LlmClient;
 pub struct PythonCodeGenerator<'a> {
     llm_client: &'a dyn LlmClient,
     custom_instructions: Option<String>,
+    /// Package name to exclude from PEP 723 deps (for local-install/local-mount modes).
+    /// Uses Mutex so it can be set after construction (e.g., after parsing SKILL.md).
+    local_package: Mutex<Option<String>>,
 }
 
 impl<'a> PythonCodeGenerator<'a> {
@@ -15,6 +19,7 @@ impl<'a> PythonCodeGenerator<'a> {
         Self {
             llm_client,
             custom_instructions: None,
+            local_package: Mutex::new(None),
         }
     }
 
@@ -23,8 +28,18 @@ impl<'a> PythonCodeGenerator<'a> {
         self
     }
 
+    #[allow(dead_code)]
+    pub fn with_local_package(self, package: Option<String>) -> Self {
+        *self.local_package.lock().unwrap() = package;
+        self
+    }
+
     /// Generate the prompt for creating test code from a pattern
-    fn create_test_prompt(pattern: &CodePattern, custom_instructions: Option<&str>) -> String {
+    pub fn create_test_prompt(
+        pattern: &CodePattern,
+        custom_instructions: Option<&str>,
+        local_package: Option<&str>,
+    ) -> String {
         let mut prompt = format!(
             r#"You are validating a SKILL.md file by writing test code.
 
@@ -76,6 +91,13 @@ Write the complete test script now:"#,
             pattern.name, pattern.description, pattern.code, pattern.name
         );
 
+        if let Some(pkg) = local_package {
+            prompt.push_str(&format!(
+                "\n\nIMPORTANT: The library \"{}\" is installed locally, NOT from PyPI.\nDo NOT include \"{}\" (or its PyPI name) in the PEP 723 dependencies list.\nOnly include OTHER packages your test code needs.\n",
+                pkg, pkg
+            ));
+        }
+
         if let Some(custom) = custom_instructions {
             prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
         }
@@ -112,10 +134,19 @@ Write the complete test script now:"#,
 
 #[async_trait::async_trait]
 impl<'a> LanguageCodeGenerator for PythonCodeGenerator<'a> {
+    fn set_local_package(&self, package: Option<String>) {
+        *self.local_package.lock().unwrap() = package;
+    }
+
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String> {
         debug!("Generating test code for pattern: {}", pattern.name);
 
-        let prompt = Self::create_test_prompt(pattern, self.custom_instructions.as_deref());
+        let local_pkg = self.local_package.lock().unwrap().clone();
+        let prompt = Self::create_test_prompt(
+            pattern,
+            self.custom_instructions.as_deref(),
+            local_pkg.as_deref(),
+        );
         let response = self.llm_client.complete(&prompt).await?;
 
         let code = Self::extract_code_from_response(&response)?;
@@ -188,11 +219,39 @@ print(os.getcwd())
             category: super::super::PatternCategory::BasicUsage,
         };
 
-        let prompt = PythonCodeGenerator::create_test_prompt(&pattern, None);
+        let prompt = PythonCodeGenerator::create_test_prompt(&pattern, None, None);
 
         assert!(prompt.contains("Basic Click Command"));
         assert!(prompt.contains("Create a simple CLI command"));
         assert!(prompt.contains("import click"));
         assert!(prompt.contains("✓ Test passed: Basic Click Command"));
+    }
+
+    #[test]
+    fn test_create_test_prompt_local_package() {
+        let pattern = CodePattern {
+            name: "Basic Click Command".to_string(),
+            description: "Create a simple CLI command".to_string(),
+            code: "import click\n\n@click.command()\ndef hello():\n    pass".to_string(),
+            category: super::super::PatternCategory::BasicUsage,
+        };
+
+        let prompt = PythonCodeGenerator::create_test_prompt(&pattern, None, Some("click"));
+        assert!(prompt.contains("installed locally"));
+        assert!(prompt.contains("click"));
+        assert!(prompt.contains("Do NOT include"));
+    }
+
+    #[test]
+    fn test_create_test_prompt_no_local_package() {
+        let pattern = CodePattern {
+            name: "Test".to_string(),
+            description: "Test".to_string(),
+            code: "import requests".to_string(),
+            category: super::super::PatternCategory::BasicUsage,
+        };
+
+        let prompt = PythonCodeGenerator::create_test_prompt(&pattern, None, None);
+        assert!(!prompt.contains("installed locally"));
     }
 }

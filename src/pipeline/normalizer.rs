@@ -112,6 +112,125 @@ pub fn ensure_references(content: &str, project_urls: &[(String, String)]) -> St
     format!("{}{}", content, refs)
 }
 
+/// Strip meta-text preamble that LLMs sometimes emit before the real content.
+/// e.g., "Below is the generated SKILL.md file with exact sections as requested:"
+fn strip_meta_text(content: &str) -> String {
+    let meta_patterns = [
+        "below is the",
+        "here is the",
+        "here's the",
+        "i've generated",
+        "i have generated",
+        "as requested",
+        "with exact sections",
+        "the following skill.md",
+        "generated skill.md",
+    ];
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut start_idx = 0;
+    let mut frontmatter_dashes = 0;
+    let mut found_meta = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        if trimmed == "---" {
+            frontmatter_dashes += 1;
+            if frontmatter_dashes == 2 {
+                // Just passed the frontmatter — check lines after it
+                start_idx = i + 1;
+                continue;
+            }
+            continue;
+        }
+
+        // Only check lines immediately after frontmatter (skip empties)
+        if frontmatter_dashes >= 2 {
+            if trimmed.is_empty() {
+                start_idx = i + 1;
+                continue;
+            }
+
+            let lower = trimmed.to_lowercase();
+            if meta_patterns.iter().any(|p| lower.contains(p)) {
+                warn!("Stripping meta-text: '{}'", trimmed);
+                start_idx = i + 1;
+                found_meta = true;
+                continue;
+            }
+
+            // First real content line after frontmatter — stop checking
+            break;
+        }
+    }
+
+    // Only rebuild if we actually found meta-text to strip
+    if found_meta {
+        // Find where frontmatter ends (second ---)
+        let mut fm_end = 0;
+        let mut dashes = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim() == "---" {
+                dashes += 1;
+                if dashes == 2 {
+                    fm_end = i;
+                    break;
+                }
+            }
+        }
+
+        let mut result = lines[..=fm_end].join("\n");
+        result.push('\n');
+        // Skip empty lines right after meta-text
+        let remaining = &lines[start_idx..];
+        let content_start = remaining
+            .iter()
+            .position(|l| !l.trim().is_empty())
+            .unwrap_or(0);
+        result.push('\n');
+        result.push_str(&remaining[content_start..].join("\n"));
+        result.push('\n');
+        return result;
+    }
+
+    content.to_string()
+}
+
+/// Strip duplicated frontmatter blocks that LLMs sometimes emit in the body
+fn strip_duplicate_frontmatter(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Count --- lines
+    let dash_positions: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim() == "---")
+        .map(|(i, _)| i)
+        .collect();
+
+    // If 4+ dashes, there's a duplicate frontmatter block
+    if dash_positions.len() >= 4 {
+        warn!("Stripping duplicate frontmatter block");
+        // Keep first frontmatter (positions 0 and 1), skip second (positions 2 and 3)
+        let second_start = dash_positions[2];
+        let second_end = dash_positions[3];
+
+        let mut result: Vec<&str> = Vec::new();
+        result.extend_from_slice(&lines[..second_start]);
+        // Skip blank lines between meta-text and duplicate frontmatter
+        let after = &lines[second_end + 1..];
+        let content_start = after.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
+        result.extend_from_slice(&after[content_start..]);
+
+        let mut out = result.join("\n");
+        out.push('\n');
+        return out;
+    }
+
+    content.to_string()
+}
+
 /// Apply all normalizations (lightweight - only critical fixes)
 pub fn normalize_skill_md(
     content: &str,
@@ -134,7 +253,13 @@ pub fn normalize_skill_md(
         generated_with,
     );
 
-    // 2. Ensure References (if URLs exist)
+    // 2. Strip meta-text preamble (LLM framing text)
+    normalized = strip_meta_text(&normalized);
+
+    // 3. Strip duplicate frontmatter blocks
+    normalized = strip_duplicate_frontmatter(&normalized);
+
+    // 4. Ensure References (if URLs exist)
     normalized = ensure_references(&normalized, project_urls);
 
     normalized
@@ -258,6 +383,84 @@ mod tests {
         let result = normalize_skill_md(content, "torch", "2.0.0", "python", None, &[], None);
 
         assert!(!result.contains("generated_with"));
+    }
+
+    #[test]
+    fn test_strip_meta_text_below_is() {
+        let content = "---\nname: click\ndescription: python library\nversion: 8.0.0\necosystem: python\nlicense: MIT\n---\n\nBelow is the generated SKILL.md file with exact sections as requested:\n\n## Imports\n```python\nimport click\n```\n";
+        let result = strip_meta_text(content);
+        assert!(
+            !result.contains("Below is the"),
+            "Should strip 'Below is the' meta-text. Got: {}",
+            result
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve real content"
+        );
+    }
+
+    #[test]
+    fn test_strip_meta_text_here_is() {
+        let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\n---\n\nHere is the SKILL.md for the requests library:\n\n## Imports\n";
+        let result = strip_meta_text(content);
+        assert!(!result.contains("Here is the"));
+        assert!(result.contains("## Imports"));
+    }
+
+    #[test]
+    fn test_strip_meta_text_preserves_clean_content() {
+        let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n";
+        let result = strip_meta_text(content);
+        assert_eq!(result, content, "Clean content should not be modified");
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter() {
+        let content = "---\nname: click\ndescription: python library\nversion: 8.0.0\necosystem: python\nlicense: BSD\ngenerated_with: phi4\n---\n\nBelow is the generated SKILL.md:\n\n---\nname: click\ndescription: CLI library\nversion: 8.0.0\necosystem: python\nlicense: BSD\n---\n\n## Imports\n```python\nimport click\n```\n";
+        let result = strip_duplicate_frontmatter(content);
+
+        // Count --- lines — should be exactly 2 (one frontmatter block)
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(
+            dash_count, 2,
+            "Should have exactly 2 --- lines after stripping. Got: {}",
+            result
+        );
+        assert!(result.contains("## Imports"));
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_no_duplicate() {
+        let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\n---\n\n## Imports\n";
+        let result = strip_duplicate_frontmatter(content);
+        assert_eq!(result, content, "No duplicate should mean no changes");
+    }
+
+    #[test]
+    fn test_full_normalization_strips_meta_and_duplicate() {
+        // Simulates the phi4 output pattern exactly
+        let raw_llm_output = "Below is the generated SKILL.md file with exact sections as requested:\n\n---\nname: click\ndescription: A Python package for CLI.\nversion: 8.3.dev\necosystem: python\nlicense: BSD-3-Clause\n---\n\n## Imports\n```python\nimport click\n```\n";
+
+        let result = normalize_skill_md(
+            raw_llm_output,
+            "click",
+            "8.3.dev",
+            "python",
+            Some("BSD-3-Clause"),
+            &[],
+            Some("phi4-reasoning"),
+        );
+
+        // Should have clean frontmatter with generated_with
+        assert!(result.contains("generated_with: phi4-reasoning"));
+        // Should NOT have meta-text
+        assert!(!result.contains("Below is the"));
+        // Should NOT have duplicate frontmatter
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(dash_count, 2, "Should have exactly one frontmatter block");
+        // Should have real content
+        assert!(result.contains("## Imports"));
     }
 
     #[test]

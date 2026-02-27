@@ -1,4 +1,4 @@
-.PHONY: help build test clean install lint audit run-tests coverage release docker check-deps
+.PHONY: help build test clean install lint audit run-tests coverage release docker check-deps changelog
 
 # Default target
 help:
@@ -16,6 +16,7 @@ help:
 	@echo "  audit       - Check dependencies for known vulnerabilities"
 	@echo "  clean       - Remove build artifacts"
 	@echo "  install     - Install binary to ~/.cargo/bin"
+	@echo "  changelog   - Generate CHANGELOG.md from conventional commits (requires git-cliff)"
 	@echo "  check-deps  - Verify all development dependencies are installed"
 	@echo "  docker      - Build Docker container"
 	@echo "  run         - Run with example (make run ARGS='generate /path/to/repo')"
@@ -100,6 +101,15 @@ docker:
 # Docker run
 docker-run:
 	docker run --rm -v $(PWD):/workspace skilldo:latest generate /workspace/$(REPO)
+
+# Generate CHANGELOG.md from conventional commits (requires git-cliff)
+changelog:
+	@if ! git-cliff --version >/dev/null 2>&1; then \
+		echo "Installing git-cliff..."; \
+		cargo install git-cliff; \
+	fi
+	git-cliff -o CHANGELOG.md
+	@echo "✅ CHANGELOG.md updated"
 
 # Quick development cycle
 dev: fmt lint test

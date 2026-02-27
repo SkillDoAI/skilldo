@@ -105,6 +105,7 @@ pub struct OpenAIClient {
     model: String,
     base_url: String,
     max_tokens: u32,
+    extra_body: std::collections::HashMap<String, serde_json::Value>,
     client: Client,
 }
 
@@ -156,8 +157,17 @@ impl OpenAIClient {
             model,
             base_url,
             max_tokens,
+            extra_body: std::collections::HashMap::new(),
             client: Client::new(),
         }
+    }
+
+    pub fn with_extra_body(
+        mut self,
+        extra_body: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Self {
+        self.extra_body = extra_body;
+        self
     }
 }
 
@@ -189,11 +199,26 @@ impl LlmClient for OpenAIClient {
 
         let url = format!("{}/chat/completions", self.base_url);
 
+        // Merge extra_body fields into the request JSON.
+        // Intentional: extra_body may override core fields (e.g., temperature).
+        // This is user-controlled via TOML config, not untrusted input.
+        let body = if self.extra_body.is_empty() {
+            serde_json::to_value(&request).context("Failed to serialize request")?
+        } else {
+            let mut body = serde_json::to_value(&request).context("Failed to serialize request")?;
+            if let serde_json::Value::Object(ref mut map) = body {
+                for (key, value) in &self.extra_body {
+                    map.insert(key.clone(), value.clone());
+                }
+            }
+            body
+        };
+
         let mut req = self
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&request);
+            .json(&body);
 
         // Only add authorization if API key is not empty
         if !self.api_key.expose().is_empty() && self.api_key.expose().to_lowercase() != "none" {
@@ -441,6 +466,59 @@ mod tests {
 
         let response: OpenAIResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.choices[0].message.content, "Hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_openai_request_with_extra_body() {
+        let request = OpenAIRequest {
+            model: "openai/gpt-5.1-codex".to_string(),
+            messages: vec![OpenAIMessage {
+                role: "user".to_string(),
+                content: "test".to_string(),
+            }],
+            temperature: 0.7,
+            max_tokens: Some(4096),
+            max_completion_tokens: None,
+        };
+
+        let mut body = serde_json::to_value(&request).unwrap();
+        // Simulate extra_body merge
+        let mut extra = std::collections::HashMap::new();
+        extra.insert(
+            "reasoning".to_string(),
+            serde_json::json!({"effort": "high"}),
+        );
+        extra.insert("truncate".to_string(), serde_json::json!("END"));
+
+        if let serde_json::Value::Object(ref mut map) = body {
+            for (key, value) in &extra {
+                map.insert(key.clone(), value.clone());
+            }
+        }
+
+        assert_eq!(body["model"], "openai/gpt-5.1-codex");
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["truncate"], "END");
+        // Original fields preserved
+        assert_eq!(body["messages"][0]["content"], "test");
+    }
+
+    #[test]
+    fn test_openai_client_with_extra_body() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert(
+            "reasoning".to_string(),
+            serde_json::json!({"effort": "high"}),
+        );
+        let client = OpenAIClient::with_base_url(
+            "key".to_string(),
+            "model".to_string(),
+            "http://localhost".to_string(),
+            4096,
+        )
+        .with_extra_body(extra);
+        assert_eq!(client.extra_body.len(), 1);
+        assert!(client.extra_body.contains_key("reasoning"));
     }
 
     #[test]
