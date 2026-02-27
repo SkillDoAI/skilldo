@@ -2,7 +2,7 @@
 
 name: fastapi
 description: FastAPI is a modern, high-performance Python web framework for building APIs with automatic validation, documentation, and async support.
-version:  source
+version: 0.133.1
 ecosystem: python
 license: MIT
 generated_with: gpt-4.1

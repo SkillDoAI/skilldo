@@ -3,7 +3,7 @@ name: celery
 description: Distributed task queue for running Python callables asynchronously via a message broker.
 version: 5.6.2
 ecosystem: python
-license: BSD-3-Clause'
+license: BSD-3-Clause
 generated_with: gpt-5.2
 ---
 
@@ -247,10 +247,10 @@ app = Celery("prod_app", broker="amqp://guest@localhost//")
 
 ## References
 
-- [Documentation](https://docs.celeryq.dev/en/stable/")
-- [Changelog](https://docs.celeryq.dev/en/stable/changelog.html")
-- [Code](https://github.com/celery/celery")
-- [Tracker](https://github.com/celery/celery/issues")
+- [Documentation](https://docs.celeryq.dev/en/stable/)
+- [Changelog](https://docs.celeryq.dev/en/stable/changelog.html)
+- [Code](https://github.com/celery/celery)
+- [Tracker](https://github.com/celery/celery/issues)
 - [Funding](https://opencollective.com/celery)
 
 ## Migration from v5.6.x

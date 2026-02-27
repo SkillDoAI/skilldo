@@ -1,21 +1,11 @@
 ---
 name: typer
 description: python library
-version:  source
+version: 0.24.1
 ecosystem: python
 license: MIT
 generated_with: gpt-4.1
 ---
-
-Certainly! Here is your **SKILL.md** with all format issues fixed:
-
-- The frontmatter is now at the very top, with NO blank lines or content before it.
-- All code blocks are valid and properly closed.
-- No extraneous format validation messages.
-- All your content is preserved.
-
-```markdown
-# SKILL.md
 
 ## Imports
 
@@ -92,10 +82,6 @@ Document any common pitfalls or gotchas.
 
 **Tip:**  
 If you want to continue the `"Usage Patterns"` or add more examples, ensure every code block (```) and JSON array/object is properly closed. Each opening ``````` must be matched by a closing one.
-
-```
-
-This file is now fully compliant with your formatting requirements. If you need further changes or expansion, just let me know!
 
 ## References
 

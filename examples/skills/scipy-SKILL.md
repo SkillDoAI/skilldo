@@ -3,20 +3,9 @@ name: scipy
 description: python library
 version: 1.17.1
 ecosystem: python
-# license: Unknown
+license: BSD-3-Clause
 generated_with: claude-sonnet-4-5-20250929
 ---
-
-```markdown
-# SciPy
-
-SciPy is a comprehensive scientific computing library built on NumPy. It provides algorithms for optimization, integration, interpolation, eigenvalue problems, algebraic equations, differential equations, statistics, and many other classes of problems.
-
-## Installation
-
-```bash
-pip install scipy==1.17.1
-```
 
 ## Imports
 
@@ -969,7 +958,8 @@ value = csr[0, 0]
 from scipy import sparse
 row = [0, 1, 1]
 col = [0, 1, 1]
-data = [1, 2, 3
+data = [1, 2, 3]
+```
 
 ## References
 

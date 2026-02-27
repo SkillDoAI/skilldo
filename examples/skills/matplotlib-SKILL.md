@@ -1,7 +1,7 @@
 ---
 name: matplotlib
 description: Python library for creating static, animated, and interactive visualizations.
-version: release-branch-semver
+version: 3.10.8
 ecosystem: python
 license: MIT
 generated_with: gpt-5.2

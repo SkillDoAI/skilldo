@@ -1,237 +1,172 @@
 ---
 name: pillow
-description: python library
+description: Python Imaging Library fork for image processing, format conversion, and manipulation.
 version: 12.1.1
 ecosystem: python
 license: MIT-CMU
 generated_with: gpt-4.1
 ---
 
-Certainly! Here is your corrected SKILL.md.  
-**Corrections made:**  
-- **Frontmatter:** Confirmed present at the very top and only once.
-- **Code blocks:** Ensured all code blocks are properly opened and closed (even number of fences).
-- **Content:** All original content preserved.
-
-```markdown
 ## Imports
+
+```python
+from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageFilter
+from PIL import ImageEnhance
+from PIL import ImageCms
+from PIL import ExifTags
+```
 
 ## Core Patterns
 
+### Opening and Saving Images
+
+```python
+from PIL import Image
+
+img = Image.open("input.png")
+print(img.size, img.mode, img.format)
+
+img.save("output.jpg", quality=95)
+img.save("output.webp", lossless=True)
+```
+
+### Resizing and Thumbnails
+
+```python
+from PIL import Image
+
+img = Image.open("photo.jpg")
+
+resized = img.resize((800, 600), Image.Resampling.LANCZOS)
+
+thumbnail = img.copy()
+thumbnail.thumbnail((200, 200))
+thumbnail.save("thumb.jpg")
+```
+
+### Color Mode Conversion
+
+```python
+from PIL import Image
+
+img = Image.open("photo.jpg")
+
+grayscale = img.convert("L")
+rgba = img.convert("RGBA")
+```
+
+### Cropping and Rotating
+
+```python
+from PIL import Image
+
+img = Image.open("photo.jpg")
+
+cropped = img.crop((left, upper, right, lower))
+
+rotated = img.rotate(45, expand=True, fillcolor=(255, 255, 255))
+
+flipped = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+```
+
+### Drawing on Images
+
+```python
+from PIL import Image, ImageDraw, ImageFont
+
+img = Image.new("RGB", (400, 300), color="white")
+draw = ImageDraw.Draw(img)
+
+draw.rectangle([10, 10, 390, 290], outline="black", width=2)
+draw.ellipse([50, 50, 200, 200], fill="blue")
+draw.text((210, 100), "Hello", fill="black")
+
+img.save("drawn.png")
+```
+
+### Applying Filters
+
+```python
+from PIL import Image, ImageFilter
+
+img = Image.open("photo.jpg")
+
+blurred = img.filter(ImageFilter.GaussianBlur(radius=5))
+sharpened = img.filter(ImageFilter.SHARPEN)
+edges = img.filter(ImageFilter.FIND_EDGES)
+```
+
+### ICC Color Management
+
+```python
+from PIL import ImageCms
+
+srgb_profile = ImageCms.createProfile("sRGB")
+transform = ImageCms.buildTransform(
+    "input.icc", "output.icc", "RGB", "RGB"
+)
+corrected = ImageCms.applyTransform(img, transform)
+```
+
+## Configuration
+
+```python
+from PIL import Image
+
+Image.MAX_IMAGE_PIXELS = 200_000_000
+
+Image.warnings.simplefilter("error", Image.DecompressionBombWarning)
+```
+
 ## Pitfalls
 
-### Usage Patterns
+### Wrong: Not closing file handles
 
-```json
-[
-  {
-    "api": "ImageCms.profileToProfile",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "from .helper import hopper",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": "ImageCms.profileToProfile(hopper(), SRGB, SRGB)",
-    "assertions": [
-      "assert i is not None",
-      "assert_image(i, 'RGB', (128, 128))"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.profileToProfile (inPlace=True)",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "from .helper import hopper",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": "ImageCms.profileToProfile(i, SRGB, SRGB, inPlace=True)",
-    "assertions": [
-      "assert_image(i, 'RGB', (128, 128))"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.buildTransform / ImageCms.applyTransform",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "from .helper import hopper",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": [
-      "t = ImageCms.buildTransform(SRGB, SRGB, 'RGB', 'RGB')",
-      "i = ImageCms.applyTransform(hopper(), t)"
-    ],
-    "assertions": [
-      "assert i is not None",
-      "assert_image(i, 'RGB', (128, 128))"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.applyTransform (inPlace=True)",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "from .helper import hopper",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": [
-      "t = ImageCms.buildTransform(SRGB, SRGB, 'RGB', 'RGB')",
-      "ImageCms.applyTransform(hopper(), t, inPlace=True)"
-    ],
-    "assertions": [
-      "assert i is not None",
-      "assert_image(i, 'RGB', (128, 128))"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.buildTransformFromOpenProfiles / ImageCms.applyTransform",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "from .helper import hopper",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": [
-      "p = ImageCms.createProfile('sRGB')",
-      "o = ImageCms.getOpenProfile(SRGB)",
-      "t = ImageCms.buildTransformFromOpenProfiles(p, o, 'RGB', 'RGB')",
-      "i = ImageCms.applyTransform(hopper(), t)"
-    ],
-    "assertions": [
-      "assert i is not None",
-      "assert_image(i, 'RGB', (128, 128))"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.buildProofTransform",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "from .helper import hopper",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": [
-      "t = ImageCms.buildProofTransform(SRGB, SRGB, SRGB, 'RGB', 'RGB')"
-    ],
-    "assertions": [
-      "assert t.inputMode == 'RGB'",
-      "assert t.outputMode == 'RGB'"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "Image.point (with PointTransform)",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "from .helper import hopper",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'",
-      "t = ImageCms.buildProofTransform(SRGB, SRGB, SRGB, 'RGB', 'RGB')"
-    ],
-    "usage_pattern": [
-      "hopper().point(t)"
-    ],
-    "assertions": [],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.Flags",
-    "setup_code": [
-      "from PIL import ImageCms"
-    ],
-    "usage_pattern": [
-      "ImageCms.Flags.NONE.value",
-      "ImageCms.Flags.GRIDPOINTS(0)",
-      "ImageCms.Flags.GRIDPOINTS(256)",
-      "ImageCms.Flags.GRIDPOINTS(255)",
-      "ImageCms.Flags.GRIDPOINTS(-1)",
-      "ImageCms.Flags.GRIDPOINTS(511)"
-    ],
-    "assertions": [
-      "assert ImageCms.Flags.NONE.value == 0",
-      "assert ImageCms.Flags.GRIDPOINTS(0) == ImageCms.Flags.NONE",
-      "assert ImageCms.Flags.GRIDPOINTS(256) == ImageCms.Flags.NONE",
-      "assert ImageCms.Flags.GRIDPOINTS(255) == (255 << 16)",
-      "assert ImageCms.Flags.GRIDPOINTS(-1) == ImageCms.Flags.GRIDPOINTS(255)",
-      "assert ImageCms.Flags.GRIDPOINTS(511) == ImageCms.Flags.GRIDPOINTS(255)"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.getProfileName",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": "ImageCms.getProfileName(SRGB)",
-    "assertions": [
-      "assert ImageCms.getProfileName(SRGB).strip() == 'IEC 61966-2-1 Default RGB Colour Space - sRGB'"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.getProfileInfo",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": "ImageCms.getProfileInfo(SRGB)",
-    "assertions": [
-      "assert ImageCms.getProfileInfo(SRGB).splitlines() == [ 'sRGB IEC61966-2-1 black scaled', '', 'Copyright International Color Consortium, 2009', '', ]"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.getProfileCopyright",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": "ImageCms.getProfileCopyright(SRGB)",
-    "assertions": [
-      "assert ImageCms.getProfileCopyright(SRGB).strip() == 'Copyright International Color Consortium, 2009'"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.getProfileManufacturer",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": "ImageCms.getProfileManufacturer(SRGB)",
-    "assertions": [
-      "assert ImageCms.getProfileManufacturer(SRGB).strip() == ''"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  },
-  {
-    "api": "ImageCms.getProfileModel",
-    "setup_code": [
-      "from PIL import ImageCms",
-      "SRGB = 'Tests/icc/sRGB_IEC61966-2-1_black_scaled.icc'"
-    ],
-    "usage_pattern": "ImageCms.getProfileModel(SRGB)",
-    "assertions": [
-      "assert ImageCms.getProfileModel(SRGB).strip() == 'IEC 61966-2-1 Default RGB Colour Space - sRGB'"
-    ],
-    "test_infrastructure": [],
-    "deprecation_status": "current"
-  }
-]
-```
+```python
+img = Image.open("large.tiff")
+data = img.load()
 ```
 
-**This file now has valid frontmatter and all code blocks are properly closed.**
+### Right: Use context manager or explicit close
+
+```python
+with Image.open("large.tiff") as img:
+    data = img.load()
+    img.save("output.tiff")
+```
+
+### Wrong: Using deprecated resampling constants
+
+```python
+resized = img.resize((100, 100), Image.ANTIALIAS)
+```
+
+### Right: Use Image.Resampling enum
+
+```python
+resized = img.resize((100, 100), Image.Resampling.LANCZOS)
+```
+
+### Wrong: Saving RGBA as JPEG
+
+```python
+rgba_img = Image.open("logo.png")
+rgba_img.save("logo.jpg")
+```
+
+### Right: Convert to RGB first
+
+```python
+rgba_img = Image.open("logo.png")
+rgb_img = rgba_img.convert("RGB")
+rgb_img.save("logo.jpg")
+```
+
+## References
+
+- [Documentation](https://pillow.readthedocs.io/en/stable/)
+- [Source](https://github.com/python-pillow/Pillow)
+- [Changelog](https://pillow.readthedocs.io/en/stable/releasenotes/)
+- [PyPI](https://pypi.org/project/pillow/)

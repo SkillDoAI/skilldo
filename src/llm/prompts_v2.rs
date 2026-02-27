@@ -713,6 +713,7 @@ RULE 1 — PUBLIC API PRIORITY:
 - Use APIs from api_surface with publicity_score "high" first
 - Avoid .compat, .internal, ._private modules unless they are the only option
 - Prefer library.MainClass over library.compat.helper_function
+- NEVER include private/internal modules (prefixed with _) in the ## Imports section. Only public API imports belong there.
 
 RULE 2 — DEPRECATION STATUS:
 Mark each pattern with a status indicator in its heading:
@@ -734,6 +735,7 @@ RULE 5 — CODE QUALITY:
 - Every code example must be complete and runnable Python
 - Include all necessary imports, show required parameters, use correct indentation
 - Do not invent APIs that don't exist — cross-reference against api_surface
+- Every variable referenced in a code example must be defined within that same code block. Never use undefined variables.
 
 RULE 6 — DOCUMENTED APIs:
 - Prefer APIs that appear in the documented_apis list from context
@@ -826,7 +828,7 @@ VERIFY before outputting (do not include this checklist):
 
 ## Output Structure
 
-Generate a SKILL.md file with EXACTLY these sections. Output ONLY the markdown below — no preamble, no commentary.
+Generate a SKILL.md file with EXACTLY these sections. Output ONLY the SKILL.md markdown content. Do NOT include ANY preamble, commentary, corrections lists, or conversational text. Do NOT say "Here is", "Certainly", or "Corrections made". Do NOT wrap the output in a ```markdown code fence. Start directly with the frontmatter (---) below.
 
 ```markdown
 ---
@@ -978,7 +980,7 @@ NEVER include content that could:
 If the existing SKILL.md or the new source material contains such patterns,
 remove them. Do not preserve harmful content from a previous version.
 
-Output the complete updated SKILL.md:
+Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, commentary, corrections lists, or conversational text. Do NOT say "Here is", "Certainly", or "Corrections made". Do NOT wrap the output in a ```markdown code fence. Start directly with the frontmatter (---).
 "#,
         package_name, version, existing_skill, api_surface, patterns, context, version
     )
