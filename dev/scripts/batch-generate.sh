@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Batch regenerate all 28 example SKILL.md files with latest stable library versions.
+# Batch regenerate all 27 example SKILL.md files with latest stable library versions.
 # Uses frontier models, 10 retries, to surface bugs.
 #
 # Usage: ./dev/scripts/batch-generate.sh
@@ -31,7 +31,7 @@ _extract_key() {
 export OPENAI_API_KEY=$(_extract_key ~/.openai)
 export ANTHROPIC_API_KEY=$(_extract_key ~/.anthropic)
 
-# --- All 28 libraries with latest stable versions ---
+# --- All 27 libraries with latest stable versions ---
 # Format: name|github_org_repo|tag
 LIB_NAMES=()
 LIB_REPOS=()
@@ -41,7 +41,6 @@ add_lib() { LIB_NAMES+=("$1"); LIB_REPOS+=("$2"); LIB_TAGS+=("$3"); }
 
 add_lib "aiohttp"        "aio-libs/aiohttp"           "v3.13.3"
 add_lib "arrow"          "arrow-py/arrow"              "1.4.0"
-# beautifulsoup4: no GitHub repo, download from PyPI separately
 add_lib "boto3"          "boto/boto3"                  "1.42.58"
 add_lib "celery"         "celery/celery"               "v5.6.2"
 add_lib "click"          "pallets/click"               "8.3.1"
@@ -104,7 +103,6 @@ MODEL_CONFIGS[scipy]="gpt41"
 # See backlog: ollama sends max_tokens=16384 which exceeds context window for large prompts
 # and concurrent requests from reqwest cause ollama to stall (0% CPU)
 MODEL_CONFIGS[arrow]="claude-sonnet"
-MODEL_CONFIGS[beautifulsoup4]="claude-sonnet"
 MODEL_CONFIGS[click]="gpt41"
 MODEL_CONFIGS[pillow]="gpt41"
 MODEL_CONFIGS[pytest]="gpt41"
@@ -149,23 +147,7 @@ clone_repos() {
         local tag="${LIB_TAGS[$i]}"
         local dest="$CLONE_DIR/$name"
 
-        if [ "$name" = "beautifulsoup4" ]; then
-            # No GitHub repo — download from PyPI
-            if [ ! -d "$dest" ]; then
-                log "  Downloading beautifulsoup4 from PyPI..."
-                mkdir -p "$dest" /tmp/skilldo-pypi
-                pip download --no-binary :all: --no-deps -d /tmp/skilldo-pypi "beautifulsoup4==$tag" 2>/dev/null
-                tar xzf /tmp/skilldo-pypi/beautifulsoup4-"$tag".tar.gz -C /tmp/skilldo-pypi/ 2>/dev/null || true
-                if [ -d "/tmp/skilldo-pypi/beautifulsoup4-$tag" ]; then
-                    cp -r "/tmp/skilldo-pypi/beautifulsoup4-$tag/"* "$dest/"
-                    log "  OK: beautifulsoup4 $tag"
-                else
-                    log "  FAIL: beautifulsoup4 download"
-                fi
-            else
-                log "  Skip: beautifulsoup4 (exists)"
-            fi
-        elif [ -d "$dest" ]; then
+        if [ -d "$dest" ]; then
             log "  Skip: $name (exists)"
         else
             log "  Cloning $name@$tag..."
@@ -258,13 +240,13 @@ echo "  Max retries: 10"
 echo "========================================="
 echo ""
 
-preflight
-
-# Build
+# Build first so preflight can verify the binary
 echo "=== Building release binary ==="
 cd "$PROJECT_ROOT"
 cargo build --release 2>&1 | tail -3
 echo ""
+
+preflight
 
 # Clone all repos
 clone_repos
