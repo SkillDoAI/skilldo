@@ -29,6 +29,15 @@ impl SkillLinter {
         Self
     }
 
+    /// Token-aware check for root/home wipe commands.
+    /// Matches "rm -rf /" and "rm -rf ~" but NOT "rm -rf /tmp" etc.
+    fn is_root_wipe_command(text: &str) -> bool {
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        tokens.windows(3).any(|w| {
+            w[0] == "rm" && (w[1] == "-rf" || w[1] == "-fr") && (w[2] == "/" || w[2] == "~")
+        })
+    }
+
     /// Lint a SKILL.md file content
     pub fn lint(&self, content: &str) -> Result<Vec<LintIssue>> {
         let mut issues = Vec::new();
@@ -564,10 +573,9 @@ impl SkillLinter {
         // Scan code blocks for the most dangerous patterns.
         // Most code block content is legitimate, but some things have NO
         // reason to be in a SKILL.md code example.
-        let critical_code_patterns = [
-            "rm -rf /",
-            "rm -rf ~",
-            "rm -fr /",
+        // Destructive shell commands need token-aware matching to avoid
+        // false positives like "rm -rf /tmp/build".
+        let critical_code_substrs = [
             "> /dev/sda",
             "> /dev/nvme",
             "/dev/tcp/",
@@ -583,7 +591,23 @@ impl SkillLinter {
                 continue; // Only check inside code blocks
             }
             let lower = line.to_lowercase();
-            for pattern in &critical_code_patterns {
+
+            // Token-aware check for rm -rf / and rm -rf ~ (not /tmp, /var, etc.)
+            if Self::is_root_wipe_command(&lower) {
+                issues.push(LintIssue {
+                    severity: Severity::Error,
+                    category: "security".to_string(),
+                    message: "Critical security pattern in code block: root/home wipe command"
+                        .to_string(),
+                    suggestion: Some(
+                        "This pattern has no legitimate reason to appear in a SKILL.md code example."
+                            .to_string(),
+                    ),
+                });
+                continue;
+            }
+
+            for pattern in &critical_code_substrs {
                 if lower.contains(pattern) {
                     issues.push(LintIssue {
                         severity: Severity::Error,
@@ -611,12 +635,21 @@ impl SkillLinter {
             let lower = line.to_lowercase();
 
             // 1. Destructive commands — filesystem/disk destruction
+            // Token-aware check for rm -rf / and rm -rf ~ (not /tmp, /var, etc.)
+            if Self::is_root_wipe_command(&lower) {
+                issues.push(LintIssue {
+                    severity: Severity::Error,
+                    category: "security".to_string(),
+                    message: "Destructive command in prose: root/home wipe command".to_string(),
+                    suggestion: Some(
+                        "SKILL.md should not instruct agents to run destructive commands."
+                            .to_string(),
+                    ),
+                });
+                continue;
+            }
             let destructive_patterns = [
-                "rm -rf /",
-                "rm -rf ~",
                 "rm -rf .",
-                "rm -fr /",
-                "rm -fr ~",
                 "rmdir /s /q",
                 "del /f /s /q",
                 "format c:",

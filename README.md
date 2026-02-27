@@ -332,7 +332,7 @@ Full ecosystem handlers for JS/TS, Rust, and Go are planned.
 # Build release binary
 cargo build --release
 
-# Run tests (~930 passing, requires uv)
+# Run tests (requires uv)
 make test
 
 # Generate HTML coverage report

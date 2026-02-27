@@ -468,9 +468,24 @@ impl Generator {
 
         // Post-normalization lint check — catch any issues introduced by normalization
         let post_issues = linter.lint(&skill_md)?;
+
+        // Security errors are always fatal, even post-normalization
+        let post_security: Vec<_> = post_issues
+            .iter()
+            .filter(|i| i.category == "security" && matches!(i.severity, Severity::Error))
+            .collect();
+        if !post_security.is_empty() {
+            let security_msgs: Vec<String> =
+                post_security.iter().map(|i| i.message.clone()).collect();
+            anyhow::bail!(
+                "SECURITY: Post-normalization output contains dangerous content:\n{}",
+                security_msgs.join("\n")
+            );
+        }
+
         let post_errors: Vec<_> = post_issues
             .iter()
-            .filter(|i| matches!(i.severity, Severity::Error))
+            .filter(|i| matches!(i.severity, Severity::Error) && i.category != "security")
             .collect();
         if !post_errors.is_empty() {
             warn!(

@@ -245,7 +245,15 @@ impl LanguageExecutor for ContainerExecutor {
             cmd.arg("/bin/sh").arg("run.sh");
         }
 
-        debug!("Executing: {:?}", cmd);
+        if self.config.extra_env.is_empty() {
+            debug!("Executing: {:?}", cmd);
+        } else {
+            let env_keys: Vec<&String> = self.config.extra_env.keys().collect();
+            debug!(
+                "Executing container command (extra env keys: {:?}, values redacted)",
+                env_keys
+            );
+        }
 
         // Run with timeout
         let output = self.run_with_timeout(

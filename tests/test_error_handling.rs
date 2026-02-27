@@ -57,13 +57,13 @@ fn test_config_with_invalid_toml() {
 }
 
 #[test]
-fn test_openai_client_without_api_key() {
+fn test_openai_compatible_client_without_api_key() {
     env::set_var("SKILLDO_TEST_ERR_OAI_EMPTY", "");
     let mut config = Config::default();
-    config.llm.provider = "openai".to_string();
+    config.llm.provider = "openai-compatible".to_string();
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_OAI_EMPTY".to_string());
     let result = factory::create_client(&config, false);
-    // Empty API key should be accepted (for API-key-less providers)
+    // Empty API key should be accepted for openai-compatible providers (Ollama, etc.)
     assert!(result.is_ok());
     env::remove_var("SKILLDO_TEST_ERR_OAI_EMPTY");
 }

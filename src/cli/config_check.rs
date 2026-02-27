@@ -81,7 +81,7 @@ pub fn run(config_path: Option<String>) -> Result<()> {
             results.pass("Base URL configured for openai-compatible provider".to_string());
         } else {
             results.warn(
-                "openai-compatible provider without base_url — will use OpenAI default".to_string(),
+                "openai-compatible provider without base_url — will use default http://localhost:11434/v1".to_string(),
             );
         }
     }
@@ -242,18 +242,29 @@ fn check_api_key(
         Some(env_var) if env_var.to_lowercase() == "none" => {
             results.pass(format!("{}: no API key needed", label));
         }
-        Some(env_var) => {
-            if env::var(env_var).is_ok() {
+        Some(env_var) => match env::var(env_var) {
+            Ok(v) if !v.trim().is_empty() => {
                 results.pass(format!("{}: {} is set", label, env_var));
-            } else if provider == "openai-compatible" {
+            }
+            Ok(_) if provider == "openai-compatible" => {
+                results.warn(format!(
+                    "{}: {} is set but empty (OK for local models, needed for gateways)",
+                    label, env_var
+                ));
+            }
+            Ok(_) => {
+                results.error(format!("{}: {} is set but empty", label, env_var));
+            }
+            Err(_) if provider == "openai-compatible" => {
                 results.warn(format!(
                     "{}: {} is not set (OK for local models, needed for gateways)",
                     label, env_var
                 ));
-            } else {
+            }
+            Err(_) => {
                 results.error(format!("{}: {} is not set", label, env_var));
             }
-        }
+        },
         None => {
             // Infer the env var from provider (mirrors Config::get_api_key behavior)
             let inferred = match provider {
@@ -264,21 +275,37 @@ fn check_api_key(
                 _ => None,
             };
             if let Some(env_var) = inferred {
-                if env::var(env_var).is_ok() {
-                    results.pass(format!(
-                        "{}: {} is set (inferred from provider)",
-                        label, env_var
-                    ));
-                } else if provider == "openai-compatible" {
-                    results.warn(format!(
-                        "{}: {} is not set (OK for local models, needed for gateways)",
-                        label, env_var
-                    ));
-                } else {
-                    results.error(format!(
-                        "{}: {} is not set (inferred from provider)",
-                        label, env_var
-                    ));
+                match env::var(env_var) {
+                    Ok(v) if !v.trim().is_empty() => {
+                        results.pass(format!(
+                            "{}: {} is set (inferred from provider)",
+                            label, env_var
+                        ));
+                    }
+                    Ok(_) if provider == "openai-compatible" => {
+                        results.warn(format!(
+                            "{}: {} is set but empty (OK for local models, needed for gateways)",
+                            label, env_var
+                        ));
+                    }
+                    Ok(_) => {
+                        results.error(format!(
+                            "{}: {} is set but empty (inferred from provider)",
+                            label, env_var
+                        ));
+                    }
+                    Err(_) if provider == "openai-compatible" => {
+                        results.warn(format!(
+                            "{}: {} is not set (OK for local models, needed for gateways)",
+                            label, env_var
+                        ));
+                    }
+                    Err(_) => {
+                        results.error(format!(
+                            "{}: {} is not set (inferred from provider)",
+                            label, env_var
+                        ));
+                    }
                 }
             } else {
                 results.pass(format!("{}: no API key configured", label));

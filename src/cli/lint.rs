@@ -10,6 +10,9 @@ pub fn run(path: &str) -> Result<()> {
     if !file.exists() {
         bail!("File not found: {}", path);
     }
+    if !file.is_file() {
+        bail!("Path is not a file: {}", path);
+    }
 
     let content = fs::read_to_string(file)?;
     let linter = SkillLinter::new();

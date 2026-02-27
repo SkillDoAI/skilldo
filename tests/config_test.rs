@@ -147,6 +147,10 @@ fn test_config_get_api_key_when_no_env_var_specified() -> Result<()> {
 
 #[test]
 fn test_config_get_api_key_inferred_from_provider() -> Result<()> {
+    // Ensure ANTHROPIC_API_KEY is absent for this test (may be set in CI/dev)
+    let previous = std::env::var("ANTHROPIC_API_KEY").ok();
+    std::env::remove_var("ANTHROPIC_API_KEY");
+
     // Default provider (anthropic) with api_key_env = None should infer ANTHROPIC_API_KEY
     let config = Config::default();
     assert!(config.llm.api_key_env.is_none());
@@ -161,6 +165,11 @@ fn test_config_get_api_key_inferred_from_provider() -> Result<()> {
         err.contains("ANTHROPIC_API_KEY"),
         "Error should mention inferred env var"
     );
+
+    // Restore original value if it existed
+    if let Some(value) = previous {
+        std::env::set_var("ANTHROPIC_API_KEY", value);
+    }
 
     Ok(())
 }

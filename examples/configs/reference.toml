@@ -1,7 +1,9 @@
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Skilldo — Full Reference Configuration                         ║
 # ║                                                                  ║
-# ║  Every field, every default, every option. Copy what you need.   ║
+# ║  Every field, every option. Copy what you need.                  ║
+# ║  Values shown are illustrative — see Config::default() for      ║
+# ║  actual runtime defaults.                                       ║
 # ║  Most users only need [llm] + [generation]. The rest is tuning.  ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 #

@@ -123,8 +123,10 @@ pub async fn run(
         config.generation.container.source_path = Some(abs_path.to_string_lossy().to_string());
     }
 
-    // Agent 5 model/provider CLI overrides
-    if agent5_model_override.is_some() || agent5_provider_override.is_some() {
+    // Agent 5 model/provider CLI overrides (skip if agent5 is disabled)
+    if config.generation.enable_agent5
+        && (agent5_model_override.is_some() || agent5_provider_override.is_some())
+    {
         let mut agent5_llm = config.generation.agent5_llm.take().unwrap_or_else(|| {
             // Start from main LLM config if no agent5_llm configured
             config.llm.clone()
@@ -237,13 +239,15 @@ pub async fn run(
         );
         generator = generator.with_agent4_client(client);
     }
-    if let Some(ref agent5_config) = config.generation.agent5_llm {
-        let client = factory::create_client_from_llm_config(agent5_config, dry_run)?;
-        info!(
-            "Using {} for Agent 5: {}",
-            agent5_config.provider, agent5_config.model
-        );
-        generator = generator.with_agent5_client(client);
+    if config.generation.enable_agent5 {
+        if let Some(ref agent5_config) = config.generation.agent5_llm {
+            let client = factory::create_client_from_llm_config(agent5_config, dry_run)?;
+            info!(
+                "Using {} for Agent 5: {}",
+                agent5_config.provider, agent5_config.model
+            );
+            generator = generator.with_agent5_client(client);
+        }
     }
 
     // Detect existing SKILL.md for update mode
