@@ -25,8 +25,8 @@ pub struct LlmConfig {
 
     /// Optional: Override max_tokens for LLM requests
     /// If not specified, uses provider-specific defaults:
-    /// - anthropic: 4096
-    /// - openai: 4096
+    /// - anthropic: 8192
+    /// - openai: 8192
     /// - openai-compatible (ollama): 16384
     /// - gemini: 8192
     #[serde(default)]

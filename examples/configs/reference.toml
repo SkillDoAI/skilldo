@@ -37,11 +37,11 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 # Override max output tokens per LLM request.
 # If not set, uses provider-specific defaults:
-#   anthropic: 4096
-#   openai: 4096
+#   anthropic: 8192
+#   openai: 8192
 #   openai-compatible: 16384  (local models benefit from larger buffers)
 #   gemini: 8192
-# max_tokens = 4096
+# max_tokens = 8192
 
 # Max retries for transient network errors (connection drops, 429s, 5xx).
 # Set to 0 to disable retries entirely.
@@ -112,7 +112,7 @@ agent5_mode = "thorough"
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
 # base_url = ""
-# max_tokens = 4096
+# max_tokens = 8192
 # network_retries = 10
 # retry_delay = 120
 
