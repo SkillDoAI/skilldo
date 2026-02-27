@@ -152,7 +152,7 @@ jobs:
         run: |
           ./target/release/skilldo generate /tmp/click \
             --provider anthropic \
-            --model claude-sonnet-4-5-20250929 \
+            --model claude-sonnet-4-6 \
             --no-agent5 \
             --max-retries 3 \
             -o /tmp/click-SKILL.md
