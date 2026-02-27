@@ -122,7 +122,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      MODELS_SECRET: ${{ secrets.MODELS_SECRET }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v6
 
@@ -132,8 +132,8 @@ jobs:
       - name: Check API access
         id: check-secret
         run: |
-          if [ -z "$MODELS_SECRET" ]; then
-            echo "::warning::MODELS_SECRET not configured — skipping E2E"
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::warning::OPENAI_API_KEY not configured — skipping E2E"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -149,13 +149,10 @@ jobs:
 
       - name: Generate SKILL.md
         if: steps.check-secret.outputs.skip != 'true'
-        env:
-          OPENAI_API_KEY: ${{ env.MODELS_SECRET }}
         run: |
           ./target/release/skilldo generate /tmp/click \
-            --provider openai-compatible \
-            --model Phi-4-reasoning \
-            --base-url https://models.inference.ai.azure.com \
+            --provider openai \
+            --model gpt-4.1 \
             --no-agent5 \
             --max-retries 3 \
             -o /tmp/click-SKILL.md
@@ -182,7 +179,7 @@ jobs:
           fi
 
           # 3. Required frontmatter fields
-          for field in "package:" "version:" "ecosystem:"; do
+          for field in "name:" "version:" "ecosystem:"; do
             if ! head -20 "$FILE" | grep -q "$field"; then
               echo "::error::Missing frontmatter field: $field"
               ERRORS=$((ERRORS + 1))
