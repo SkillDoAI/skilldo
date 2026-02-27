@@ -145,7 +145,7 @@ jobs:
 
       - name: Clone test library (click)
         if: steps.check-secret.outputs.skip != 'true'
-        run: git clone --depth 1 https://github.com/pallets/click.git /tmp/click
+        run: git clone --branch 8.3.1 --depth 1 https://github.com/pallets/click.git /tmp/click
 
       - name: Generate SKILL.md
         if: steps.check-secret.outputs.skip != 'true'
@@ -223,7 +223,11 @@ jobs:
             exit 1
           fi
           echo ""
-          echo "=== E2E smoke test passed ==="
+          echo "=== E2E structural validation passed ==="
+
+      - name: Lint generated skill
+        if: steps.check-secret.outputs.skip != 'true'
+        run: ./target/release/skilldo lint /tmp/click-SKILL.md
 
       - name: Upload generated skill
         if: steps.check-secret.outputs.skip != 'true' && always()
