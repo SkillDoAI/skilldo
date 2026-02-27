@@ -131,16 +131,45 @@ fn test_config_get_api_key_when_env_var_not_set() -> Result<()> {
 
 #[test]
 fn test_config_get_api_key_when_no_env_var_specified() -> Result<()> {
-    // Create a config with no api_key_env (like Ollama)
+    // openai-compatible with no api_key_env: should return empty string (local models)
     let mut config = Config::default();
+    config.llm.provider = "openai-compatible".to_string();
     config.llm.api_key_env = None;
 
-    // Should succeed and return empty string for providers that don't need API keys
     let result = config.get_api_key()?;
     assert_eq!(
         result, "",
-        "Should return empty string when no API key needed"
+        "Should return empty string for openai-compatible without key"
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_config_get_api_key_inferred_from_provider() -> Result<()> {
+    // Ensure ANTHROPIC_API_KEY is absent for this test (may be set in CI/dev)
+    let previous = std::env::var("ANTHROPIC_API_KEY").ok();
+    std::env::remove_var("ANTHROPIC_API_KEY");
+
+    // Default provider (anthropic) with api_key_env = None should infer ANTHROPIC_API_KEY
+    let config = Config::default();
+    assert!(config.llm.api_key_env.is_none());
+    let result = config.get_api_key();
+    // Should error because ANTHROPIC_API_KEY isn't set in test env
+    assert!(
+        result.is_err(),
+        "Should error when inferred ANTHROPIC_API_KEY is not set"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("ANTHROPIC_API_KEY"),
+        "Error should mention inferred env var"
+    );
+
+    // Restore original value if it existed
+    if let Some(value) = previous {
+        std::env::set_var("ANTHROPIC_API_KEY", value);
+    }
 
     Ok(())
 }

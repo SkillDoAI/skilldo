@@ -1,0 +1,21 @@
+# GitHub Models — free tier via GitHub PAT
+#
+# Uses Azure-hosted models through GitHub's inference API.
+# Auth: Set MODELS_SECRET to a GitHub PAT with `models:read` scope.
+#
+# Free tier: ~50-150 requests/day depending on model.
+# Models: gpt-4o-mini, Phi-4, Meta-Llama-3.1-8B-Instruct, etc.
+#
+# Docs: https://docs.github.com/en/github-models
+
+[llm]
+provider = "openai-compatible"
+model = "Phi-4-reasoning"
+api_key_env = "MODELS_SECRET"
+base_url = "https://models.inference.ai.azure.com"
+
+[generation]
+max_retries = 3
+max_source_tokens = 100000
+enable_agent5 = false
+parallel_extraction = true

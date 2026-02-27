@@ -250,6 +250,42 @@ async fn test_collector_respects_max_source_tokens() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_collector_with_custom_budget() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let pkg_dir = temp_dir.path().join("large_pkg");
+    fs::create_dir_all(&pkg_dir)?;
+
+    let large_content = "# ".repeat(100000);
+    fs::write(
+        pkg_dir.join("__init__.py"),
+        format!("__version__ = '1.0.0'\n{}", large_content),
+    )?;
+    fs::write(
+        temp_dir.path().join("pyproject.toml"),
+        "[project]\nname = \"large-pkg\"\nversion = \"1.0.0\"\n",
+    )?;
+    let tests_dir = temp_dir.path().join("tests");
+    fs::create_dir_all(&tests_dir)?;
+    fs::write(
+        tests_dir.join("test_simple.py"),
+        "def test_pass():\n    assert True\n",
+    )?;
+
+    // Use a small budget — should reduce all category allocations
+    let collector = Collector::new(temp_dir.path(), Language::Python).with_max_source_chars(10_000);
+    let data = collector.collect().await?;
+
+    // Source budget = 10K * 15% = 1,500 chars for small project
+    assert!(
+        data.source_content.len() <= 2000,
+        "Source should respect custom budget (got {} chars)",
+        data.source_content.len()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_collector_prefers_examples_over_tests() -> Result<()> {
     let temp_dir = TempDir::new()?;
     create_test_package(&temp_dir)?;

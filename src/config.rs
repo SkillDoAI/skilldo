@@ -41,6 +41,20 @@ pub struct LlmConfig {
     /// Default: 120 (retries every 2 minutes, 10 attempts = 20 min max).
     #[serde(default = "default_retry_delay")]
     pub retry_delay: u64,
+
+    /// Extra fields merged into the LLM request body (TOML table style).
+    /// Use for provider-specific parameters not covered by standard fields.
+    /// Example: extra_body = { reasoning = { effort = "high" }, truncate = "END" }
+    #[serde(default)]
+    pub extra_body: std::collections::HashMap<String, serde_json::Value>,
+
+    /// Extra fields as a raw JSON string — alternative to extra_body for complex payloads.
+    /// Easier to copy/paste from provider docs. Validated at config load time.
+    /// Example: extra_body_json = '{"reasoning": {"effort": "high"}, "truncate": "END"}'
+    ///
+    /// If both extra_body and extra_body_json are set, they are merged (JSON wins on conflict).
+    #[serde(default)]
+    pub extra_body_json: Option<String>,
 }
 
 fn default_network_retries() -> usize {
@@ -67,12 +81,47 @@ impl LlmConfig {
             _ => 4096, // Safe default
         }
     }
+
+    /// Resolve extra_body by merging TOML table and JSON string sources.
+    /// Returns the merged map, or an error if extra_body_json is invalid JSON.
+    /// JSON keys win on conflict with TOML keys.
+    pub fn resolve_extra_body(
+        &self,
+    ) -> Result<std::collections::HashMap<String, serde_json::Value>> {
+        let mut merged = self.extra_body.clone();
+
+        if let Some(ref json_str) = self.extra_body_json {
+            let parsed: serde_json::Value = serde_json::from_str(json_str)
+                .map_err(|e| anyhow::anyhow!("Invalid JSON in extra_body_json: {}", e))?;
+
+            match parsed {
+                serde_json::Value::Object(map) => {
+                    for (key, value) in map {
+                        merged.insert(key, value);
+                    }
+                }
+                _ => {
+                    anyhow::bail!(
+                        "extra_body_json must be a JSON object ({{}}), got: {}",
+                        json_str.chars().take(50).collect::<String>()
+                    );
+                }
+            }
+        }
+
+        Ok(merged)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationConfig {
     pub max_retries: usize,
     pub max_source_tokens: usize,
+
+    /// Run agents 1-3 in parallel (default: true).
+    /// Disable for local models (Ollama) to avoid overloading the machine.
+    #[serde(default = "default_true")]
+    pub parallel_extraction: bool,
 
     /// Enable Agent 5 code generation validation (default: true)
     #[serde(default = "default_true")]
@@ -81,6 +130,22 @@ pub struct GenerationConfig {
     /// Agent 5 validation mode: "thorough", "adaptive", or "minimal" (default: "thorough")
     #[serde(default = "default_agent5_mode")]
     pub agent5_mode: String,
+
+    /// Optional: Override LLM for Agent 1 (API extraction)
+    #[serde(default)]
+    pub agent1_llm: Option<LlmConfig>,
+
+    /// Optional: Override LLM for Agent 2 (pattern extraction)
+    #[serde(default)]
+    pub agent2_llm: Option<LlmConfig>,
+
+    /// Optional: Override LLM for Agent 3 (context extraction)
+    #[serde(default)]
+    pub agent3_llm: Option<LlmConfig>,
+
+    /// Optional: Override LLM for Agent 4 (synthesis)
+    #[serde(default)]
+    pub agent4_llm: Option<LlmConfig>,
 
     /// Optional: Override LLM model for Agent 5 only (default: use main llm.model)
     #[serde(default)]
@@ -120,6 +185,25 @@ pub struct ContainerConfig {
     /// Timeout for code execution in seconds (default: 60)
     #[serde(default = "default_timeout")]
     pub timeout: u64,
+
+    /// Library install source for Agent 5 validation:
+    ///   "registry"       — install from PyPI (default)
+    ///   "local-install"  — mount local repo, pip install /src
+    ///   "local-mount"    — mount local repo, PYTHONPATH=/src
+    #[serde(default = "default_install_source")]
+    pub install_source: String,
+
+    /// Path to local source repo for local-install or local-mount modes.
+    /// Only used when install_source is not "registry".
+    /// If not set, defaults to the repo path passed to `skilldo generate`.
+    #[serde(default)]
+    pub source_path: Option<String>,
+
+    /// Extra environment variables to pass into the container.
+    /// Use for private registries, proxies, or any ecosystem-specific config.
+    /// Example: { UV_EXTRA_INDEX_URL = "https://pypi.corp.com/simple/", HTTP_PROXY = "http://proxy:8080" }
+    #[serde(default)]
+    pub extra_env: std::collections::HashMap<String, String>,
 }
 
 impl Default for ContainerConfig {
@@ -132,6 +216,9 @@ impl Default for ContainerConfig {
             go_image: default_go_image(),
             cleanup: true,
             timeout: 60,
+            install_source: default_install_source(),
+            source_path: None,
+            extra_env: std::collections::HashMap::new(),
         }
     }
 }
@@ -158,6 +245,10 @@ fn default_go_image() -> String {
 
 fn default_timeout() -> u64 {
     60
+}
+
+fn default_install_source() -> String {
+    "registry".to_string()
 }
 
 fn default_true() -> bool {
@@ -271,26 +362,42 @@ impl Config {
         Ok(config)
     }
 
-    /// Get API key from environment variable specified in config
+    /// Get API key from environment variable specified in config.
+    /// If `api_key_env` is not set, infers the canonical env var from provider:
+    ///   openai → OPENAI_API_KEY, anthropic → ANTHROPIC_API_KEY,
+    ///   gemini → GEMINI_API_KEY, openai-compatible → optional (no error if missing).
     pub fn get_api_key(&self) -> Result<String> {
-        match &self.llm.api_key_env {
-            Some(env_var) => {
-                // Special case: "none" means no API key needed (e.g., Ollama)
-                if env_var.to_lowercase() == "none" {
-                    return Ok(String::new());
-                }
+        let env_var = match &self.llm.api_key_env {
+            Some(v) => v.clone(),
+            None => self.default_api_key_env().to_string(),
+        };
 
-                // openai-compatible: try env var but don't error if missing
-                // (local models like Ollama don't need keys, but gateways like OpenRouter do)
-                if self.llm.provider == "openai-compatible" {
-                    return Ok(env::var(env_var).unwrap_or_default());
-                }
+        // Special case: "none" means no API key needed (e.g., Ollama)
+        if env_var.to_lowercase() == "none" || env_var.is_empty() {
+            return Ok(String::new());
+        }
 
-                env::var(env_var).map_err(|_| {
-                    anyhow::anyhow!("API key not found in environment variable: {}", env_var)
-                })
-            }
-            None => Ok(String::new()), // No API key needed
+        // openai-compatible: try env var but don't error if missing
+        // (local models like Ollama don't need keys, but gateways like OpenRouter do)
+        if self.llm.provider == "openai-compatible" {
+            return Ok(env::var(&env_var).unwrap_or_default());
+        }
+
+        env::var(&env_var)
+            .map_err(|_| anyhow::anyhow!("API key not found in environment variable: {}", env_var))
+    }
+
+    /// Canonical env var name for each provider.
+    /// Unknown providers return "none" — this is intentional because custom
+    /// openai-compatible setups may use arbitrary provider names and often
+    /// don't need API keys (e.g., Ollama). The caller treats "none" as "no key required".
+    fn default_api_key_env(&self) -> &str {
+        match self.llm.provider.as_str() {
+            "openai" => "OPENAI_API_KEY",
+            "anthropic" => "ANTHROPIC_API_KEY",
+            "gemini" => "GEMINI_API_KEY",
+            "openai-compatible" => "OPENAI_API_KEY", // Best guess; won't error if missing
+            _ => "none",
         }
     }
 }
@@ -301,17 +408,24 @@ impl Default for Config {
             llm: LlmConfig {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet-4-20250514".to_string(),
-                api_key_env: Some("AI_API_KEY".to_string()),
+                api_key_env: None, // Inferred from provider in get_api_key()
                 base_url: None,
                 max_tokens: None, // Use provider default (4096 for anthropic)
                 network_retries: default_network_retries(),
                 retry_delay: default_retry_delay(),
+                extra_body: std::collections::HashMap::new(),
+                extra_body_json: None,
             },
             generation: GenerationConfig {
                 max_retries: 5,
                 max_source_tokens: 100000,
+                parallel_extraction: true,
                 enable_agent5: true,
                 agent5_mode: "thorough".to_string(),
+                agent1_llm: None,
+                agent2_llm: None,
+                agent3_llm: None,
+                agent4_llm: None,
                 agent5_llm: None,
                 container: ContainerConfig::default(),
             },
@@ -328,7 +442,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.llm.provider, "anthropic");
-        assert_eq!(config.llm.api_key_env, Some("AI_API_KEY".to_string()));
+        assert_eq!(config.llm.api_key_env, None); // Inferred from provider
         assert_eq!(config.generation.max_retries, 5);
         assert!(!config.prompts.override_prompts);
     }
@@ -338,7 +452,8 @@ mod tests {
         let config = Config::default();
         let toml_str = toml::to_string(&config).unwrap();
         assert!(toml_str.contains("provider = \"anthropic\""));
-        assert!(toml_str.contains("AI_API_KEY"));
+        // api_key_env is None by default, so it won't appear in serialized TOML
+        assert!(!toml_str.contains("AI_API_KEY"));
     }
 
     #[test]
@@ -394,6 +509,8 @@ mod tests {
             max_tokens: None,
             network_retries: 10,
             retry_delay: 120,
+            extra_body: std::collections::HashMap::new(),
+            extra_body_json: None,
         };
         assert_eq!(llm.get_max_tokens(), 4096);
 
@@ -416,8 +533,13 @@ mod tests {
         let mut gen = GenerationConfig {
             max_retries: 5,
             max_source_tokens: 100000,
+            parallel_extraction: true,
             enable_agent5: true,
             agent5_mode: "thorough".to_string(),
+            agent1_llm: None,
+            agent2_llm: None,
+            agent3_llm: None,
+            agent4_llm: None,
             agent5_llm: None,
             container: ContainerConfig::default(),
         };
@@ -472,5 +594,286 @@ mod tests {
         let key = config.get_api_key().unwrap();
         assert_eq!(key, "test_gateway_key");
         env::remove_var("SKILLDO_TEST_OAI_COMPAT_KEY");
+    }
+
+    #[test]
+    fn test_install_source_defaults() {
+        let config = ContainerConfig::default();
+        assert_eq!(config.install_source, "registry");
+        assert!(config.source_path.is_none());
+    }
+
+    #[test]
+    fn test_install_source_from_toml() {
+        let toml = r#"
+[llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+
+[generation.container]
+runtime = "podman"
+install_source = "local-install"
+source_path = "/tmp/my-lib"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.generation.container.install_source, "local-install");
+        assert_eq!(
+            config.generation.container.source_path,
+            Some("/tmp/my-lib".to_string())
+        );
+    }
+
+    #[test]
+    fn test_install_source_local_mount() {
+        let toml = r#"
+[llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+
+[generation.container]
+install_source = "local-mount"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.generation.container.install_source, "local-mount");
+        assert!(config.generation.container.source_path.is_none());
+    }
+
+    #[test]
+    fn test_per_agent_llm_defaults_to_none() {
+        let config = Config::default();
+        assert!(config.generation.agent1_llm.is_none());
+        assert!(config.generation.agent2_llm.is_none());
+        assert!(config.generation.agent3_llm.is_none());
+        assert!(config.generation.agent4_llm.is_none());
+        assert!(config.generation.agent5_llm.is_none());
+    }
+
+    #[test]
+    fn test_per_agent_llm_from_toml() {
+        let toml = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet-4-5"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+
+[generation.agent1_llm]
+provider = "openai-compatible"
+model = "qwen3-coder:latest"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.agent5_llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.generation.agent1_llm.is_some());
+        assert!(config.generation.agent2_llm.is_none());
+        assert!(config.generation.agent3_llm.is_none());
+        assert!(config.generation.agent4_llm.is_none());
+        assert!(config.generation.agent5_llm.is_some());
+
+        let agent1 = config.generation.agent1_llm.unwrap();
+        assert_eq!(agent1.provider, "openai-compatible");
+        assert_eq!(agent1.model, "qwen3-coder:latest");
+        assert_eq!(agent1.base_url.unwrap(), "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn test_all_agents_different_providers() {
+        let toml = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+
+[generation.agent1_llm]
+provider = "openai-compatible"
+model = "qwen3-coder"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.agent2_llm]
+provider = "openai-compatible"
+model = "qwen3-coder"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.agent3_llm]
+provider = "openai-compatible"
+model = "qwen3-coder"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.agent4_llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+
+[generation.agent5_llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.generation.agent1_llm.is_some());
+        assert!(config.generation.agent2_llm.is_some());
+        assert!(config.generation.agent3_llm.is_some());
+        assert!(config.generation.agent4_llm.is_some());
+        assert!(config.generation.agent5_llm.is_some());
+    }
+
+    #[test]
+    fn test_extra_body_defaults_to_empty() {
+        let config = Config::default();
+        assert!(config.llm.extra_body.is_empty());
+    }
+
+    #[test]
+    fn test_extra_body_from_toml() {
+        let toml = r#"
+[llm]
+provider = "openai-compatible"
+model = "openai/gpt-5.1-codex"
+api_key_env = "NVIDIA_API_KEY"
+base_url = "https://inference-api.nvidia.com/v1/responses"
+
+[llm.extra_body]
+truncate = "\"END\""
+
+[llm.extra_body.reasoning]
+effort = "high"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.llm.extra_body.len(), 2);
+        assert!(config.llm.extra_body.contains_key("reasoning"));
+        assert!(config.llm.extra_body.contains_key("truncate"));
+    }
+
+    #[test]
+    fn test_per_agent_extra_body_from_toml() {
+        let toml = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+
+[generation.agent4_llm]
+provider = "openai-compatible"
+model = "openai/gpt-5.1-codex"
+api_key_env = "NVIDIA_API_KEY"
+base_url = "https://inference-api.nvidia.com/v1/responses"
+
+[generation.agent4_llm.extra_body.reasoning]
+effort = "high"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let agent4 = config.generation.agent4_llm.unwrap();
+        assert!(!agent4.extra_body.is_empty());
+        assert!(agent4.extra_body.contains_key("reasoning"));
+    }
+
+    #[test]
+    fn test_extra_body_json_parsed() {
+        let toml = r#"
+[llm]
+provider = "openai-compatible"
+model = "test"
+api_key_env = "none"
+extra_body_json = '{"reasoning": {"effort": "high"}, "truncate": "END", "top_p": 0.9}'
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let resolved = config.llm.resolve_extra_body().unwrap();
+        assert_eq!(resolved.len(), 3);
+        assert_eq!(resolved["reasoning"]["effort"], "high");
+        assert_eq!(resolved["truncate"], "END");
+        assert_eq!(resolved["top_p"], 0.9);
+    }
+
+    #[test]
+    fn test_extra_body_json_invalid_errors() {
+        let mut config = Config::default();
+        config.llm.extra_body_json = Some("not valid json!!!".to_string());
+        let result = config.llm.resolve_extra_body();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid JSON"));
+    }
+
+    #[test]
+    fn test_extra_body_json_not_object_errors() {
+        let mut config = Config::default();
+        config.llm.extra_body_json = Some("[1, 2, 3]".to_string());
+        let result = config.llm.resolve_extra_body();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be a JSON object"));
+    }
+
+    #[test]
+    fn test_extra_body_json_wins_on_conflict() {
+        let mut config = Config::default();
+        // TOML sets truncate = "START"
+        config
+            .llm
+            .extra_body
+            .insert("truncate".to_string(), serde_json::json!("START"));
+        // JSON sets truncate = "END"
+        config.llm.extra_body_json = Some(r#"{"truncate": "END"}"#.to_string());
+        let resolved = config.llm.resolve_extra_body().unwrap();
+        assert_eq!(resolved["truncate"], "END");
+    }
+
+    #[test]
+    fn test_extra_body_json_merges_with_toml() {
+        let mut config = Config::default();
+        config
+            .llm
+            .extra_body
+            .insert("top_p".to_string(), serde_json::json!(0.9));
+        config.llm.extra_body_json = Some(r#"{"truncate": "END"}"#.to_string());
+        let resolved = config.llm.resolve_extra_body().unwrap();
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved["top_p"], 0.9);
+        assert_eq!(resolved["truncate"], "END");
+    }
+
+    #[test]
+    fn test_resolve_extra_body_empty() {
+        let config = Config::default();
+        let resolved = config.llm.resolve_extra_body().unwrap();
+        assert!(resolved.is_empty());
     }
 }

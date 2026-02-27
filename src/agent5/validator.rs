@@ -107,17 +107,21 @@ pub struct Agent5CodeValidator<'a> {
     code_generator: Box<dyn LanguageCodeGenerator + 'a>,
     executor: Box<dyn LanguageExecutor>,
     mode: ValidationMode,
+    /// Install source from config; when not "registry", local_package is set on code_generator
+    install_source: String,
 }
 
 impl<'a> Agent5CodeValidator<'a> {
     /// Create a new Agent 5 validator for Python
     #[allow(dead_code)]
     pub fn new_python(llm_client: &'a dyn LlmClient, config: ContainerConfig) -> Self {
+        let install_source = config.install_source.clone();
         Self {
             parser: Box::new(PythonParser),
             code_generator: Box::new(PythonCodeGenerator::new(llm_client)),
             executor: Box::new(ContainerExecutor::new(config, "python")),
             mode: ValidationMode::default(),
+            install_source,
         }
     }
 
@@ -127,6 +131,7 @@ impl<'a> Agent5CodeValidator<'a> {
         config: ContainerConfig,
         custom_instructions: Option<String>,
     ) -> Self {
+        let install_source = config.install_source.clone();
         Self {
             parser: Box::new(PythonParser),
             code_generator: Box::new(
@@ -134,6 +139,7 @@ impl<'a> Agent5CodeValidator<'a> {
             ),
             executor: Box::new(ContainerExecutor::new(config, "python")),
             mode: ValidationMode::default(),
+            install_source,
         }
     }
 
@@ -213,6 +219,17 @@ impl<'a> Agent5CodeValidator<'a> {
         }
         if let Some(ref v) = version {
             info!("  Package version: {}", v);
+        }
+
+        // For local modes, tell the code generator to exclude the main package from PEP 723 deps
+        if self.install_source != "registry" {
+            if let Some(ref name) = package_name {
+                debug!(
+                    "  Local mode ({}): excluding \"{}\" from PEP 723 deps",
+                    self.install_source, name
+                );
+                self.code_generator.set_local_package(Some(name.clone()));
+            }
         }
         info!(
             "  Found {} patterns and {} dependencies",

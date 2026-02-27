@@ -21,7 +21,18 @@ pub async fn run(
     version_from: Option<String>,
     config_path: Option<String>,
     model_override: Option<String>,
+    provider_override: Option<String>,
+    base_url_override: Option<String>,
     max_retries_override: Option<usize>,
+    agent5_model_override: Option<String>,
+    agent5_provider_override: Option<String>,
+    no_agent5: bool,
+    agent5_mode_override: Option<String>,
+    runtime_override: Option<String>,
+    timeout_override: Option<u64>,
+    install_source_override: Option<String>,
+    source_path_override: Option<String>,
+    no_parallel: bool,
     dry_run: bool,
 ) -> Result<()> {
     let repo_path = Path::new(&path);
@@ -48,18 +59,133 @@ pub async fn run(
     let mut config = Config::load_with_path(config_path)?;
 
     // Apply CLI overrides
+    if let Some(ref provider) = provider_override {
+        info!("CLI override: provider = {}", provider);
+        config.llm.provider = provider.clone();
+    }
     if let Some(ref model) = model_override {
         info!("CLI override: model = {}", model);
         config.llm.model = model.clone();
+    }
+    if let Some(ref base_url) = base_url_override {
+        info!("CLI override: base_url = {}", base_url);
+        config.llm.base_url = Some(base_url.clone());
     }
     if let Some(retries) = max_retries_override {
         info!("CLI override: max_retries = {}", retries);
         config.generation.max_retries = retries;
     }
+    if no_agent5 {
+        info!("CLI override: Agent 5 disabled");
+        config.generation.enable_agent5 = false;
+        if agent5_model_override.is_some() || agent5_provider_override.is_some() {
+            tracing::warn!(
+                "--no-agent5 is set; --agent5-model/--agent5-provider will have no effect"
+            );
+        }
+    }
+    if let Some(ref mode) = agent5_mode_override {
+        info!("CLI override: agent5_mode = {}", mode);
+        config.generation.agent5_mode = mode.clone();
+    }
+    if let Some(ref runtime) = runtime_override {
+        info!("CLI override: runtime = {}", runtime);
+        config.generation.container.runtime = runtime.clone();
+    }
+    if let Some(timeout) = timeout_override {
+        info!("CLI override: timeout = {}s", timeout);
+        config.generation.container.timeout = timeout;
+    }
+    if let Some(ref source) = install_source_override {
+        info!("CLI override: install_source = {}", source);
+        config.generation.container.install_source = source.clone();
+    }
+    if let Some(ref path) = source_path_override {
+        info!("CLI override: source_path = {}", path);
+        config.generation.container.source_path = Some(path.clone());
+    }
+    if no_parallel {
+        info!("CLI override: parallel_extraction = false");
+        config.generation.parallel_extraction = false;
+    }
+
+    // Default source_path to the repo path (not CWD) for local install/mount modes
+    if config.generation.container.source_path.is_none()
+        && config.generation.container.install_source != "registry"
+    {
+        let abs_path = repo_path
+            .canonicalize()
+            .unwrap_or_else(|_| repo_path.to_path_buf());
+        info!(
+            "Defaulting source_path to repo path: {}",
+            abs_path.display()
+        );
+        config.generation.container.source_path = Some(abs_path.to_string_lossy().to_string());
+    }
+
+    // Agent 5 model/provider CLI overrides (skip if agent5 is disabled)
+    if config.generation.enable_agent5
+        && (agent5_model_override.is_some() || agent5_provider_override.is_some())
+    {
+        let mut agent5_llm = config.generation.agent5_llm.take().unwrap_or_else(|| {
+            // Start from main LLM config if no agent5_llm configured
+            config.llm.clone()
+        });
+        if let Some(ref model) = agent5_model_override {
+            info!("CLI override: agent5 model = {}", model);
+            agent5_llm.model = model.clone();
+        }
+        if let Some(ref provider) = agent5_provider_override {
+            info!("CLI override: agent5 provider = {}", provider);
+            agent5_llm.provider = provider.clone();
+        }
+        config.generation.agent5_llm = Some(agent5_llm);
+    }
+
+    // Log per-agent override info so users know what's being used
+    if model_override.is_some() || provider_override.is_some() {
+        let agent_overrides: Vec<String> = [
+            config
+                .generation
+                .agent1_llm
+                .as_ref()
+                .map(|c| format!("agent 1: {}/{}", c.provider, c.model)),
+            config
+                .generation
+                .agent2_llm
+                .as_ref()
+                .map(|c| format!("agent 2: {}/{}", c.provider, c.model)),
+            config
+                .generation
+                .agent3_llm
+                .as_ref()
+                .map(|c| format!("agent 3: {}/{}", c.provider, c.model)),
+            config
+                .generation
+                .agent4_llm
+                .as_ref()
+                .map(|c| format!("agent 4: {}/{}", c.provider, c.model)),
+            config
+                .generation
+                .agent5_llm
+                .as_ref()
+                .map(|c| format!("agent 5: {}/{}", c.provider, c.model)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !agent_overrides.is_empty() {
+            info!("Per-agent LLM overrides from config (not affected by --model/--provider):");
+            for o in &agent_overrides {
+                info!("  {}", o);
+            }
+        }
+    }
 
     // Collect files
     info!("Collecting files...");
-    let collector = Collector::new(repo_path, detected_language);
+    let collector = Collector::new(repo_path, detected_language)
+        .with_max_source_chars(config.generation.max_source_tokens);
     let mut collected_data = collector.collect().await?;
 
     // Override version if CLI args provided
@@ -79,15 +205,49 @@ pub async fn run(
         info!("Using {} LLM provider", config.llm.provider);
     }
 
-    // Create separate Agent 5 client if configured
+    // Create per-agent LLM clients if configured
     let mut generator = Generator::new(client, config.generation.max_retries);
-    if let Some(ref agent5_config) = config.generation.agent5_llm {
-        let agent5_client = factory::create_client_from_llm_config(agent5_config, dry_run)?;
+    if let Some(ref agent1_config) = config.generation.agent1_llm {
+        let client = factory::create_client_from_llm_config(agent1_config, dry_run)?;
         info!(
-            "Using separate {} LLM for Agent 5: {}",
-            agent5_config.provider, agent5_config.model
+            "Using {} for Agent 1: {}",
+            agent1_config.provider, agent1_config.model
         );
-        generator = generator.with_agent5_client(agent5_client);
+        generator = generator.with_agent1_client(client);
+    }
+    if let Some(ref agent2_config) = config.generation.agent2_llm {
+        let client = factory::create_client_from_llm_config(agent2_config, dry_run)?;
+        info!(
+            "Using {} for Agent 2: {}",
+            agent2_config.provider, agent2_config.model
+        );
+        generator = generator.with_agent2_client(client);
+    }
+    if let Some(ref agent3_config) = config.generation.agent3_llm {
+        let client = factory::create_client_from_llm_config(agent3_config, dry_run)?;
+        info!(
+            "Using {} for Agent 3: {}",
+            agent3_config.provider, agent3_config.model
+        );
+        generator = generator.with_agent3_client(client);
+    }
+    if let Some(ref agent4_config) = config.generation.agent4_llm {
+        let client = factory::create_client_from_llm_config(agent4_config, dry_run)?;
+        info!(
+            "Using {} for Agent 4: {}",
+            agent4_config.provider, agent4_config.model
+        );
+        generator = generator.with_agent4_client(client);
+    }
+    if config.generation.enable_agent5 {
+        if let Some(ref agent5_config) = config.generation.agent5_llm {
+            let client = factory::create_client_from_llm_config(agent5_config, dry_run)?;
+            info!(
+                "Using {} for Agent 5: {}",
+                agent5_config.provider, agent5_config.model
+            );
+            generator = generator.with_agent5_client(client);
+        }
     }
 
     // Detect existing SKILL.md for update mode
@@ -102,10 +262,42 @@ pub async fn run(
     };
 
     // Build model name for generated_with metadata
-    let model_name = if let Some(ref agent5_config) = config.generation.agent5_llm {
-        format!("{} + {} (agent5)", config.llm.model, agent5_config.model)
-    } else {
-        config.llm.model.clone()
+    let model_name = {
+        let mut name = config.llm.model.clone();
+        let overrides: Vec<String> = [
+            config
+                .generation
+                .agent1_llm
+                .as_ref()
+                .map(|c| format!("agent1:{}", c.model)),
+            config
+                .generation
+                .agent2_llm
+                .as_ref()
+                .map(|c| format!("agent2:{}", c.model)),
+            config
+                .generation
+                .agent3_llm
+                .as_ref()
+                .map(|c| format!("agent3:{}", c.model)),
+            config
+                .generation
+                .agent4_llm
+                .as_ref()
+                .map(|c| format!("agent4:{}", c.model)),
+            config
+                .generation
+                .agent5_llm
+                .as_ref()
+                .map(|c| format!("agent5:{}", c.model)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !overrides.is_empty() {
+            name = format!("{} + {}", name, overrides.join(", "));
+        }
+        name
     };
 
     // Generate SKILL.md
@@ -115,7 +307,8 @@ pub async fn run(
         .with_prompts_config(config.prompts.clone())
         .with_agent5(config.generation.enable_agent5)
         .with_agent5_mode(config.generation.get_agent5_mode())
-        .with_container_config(config.generation.container.clone());
+        .with_container_config(config.generation.container.clone())
+        .with_parallel_extraction(config.generation.parallel_extraction);
 
     if let Some(ref skill) = existing_skill {
         generator = generator.with_existing_skill(skill.clone());
@@ -184,6 +377,17 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
             true, // dry_run
         )
         .await;
@@ -208,6 +412,17 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
             true,
         )
         .await;
@@ -228,6 +443,17 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
             true,
         )
         .await;
@@ -249,6 +475,17 @@ setup(name="testpkg", version="1.0.0")
             None,
             Some("custom-model-v1".to_string()),
             None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
             true,
         )
         .await;
@@ -268,7 +505,18 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            None,
+            None,
             Some(10),
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
             true,
         )
         .await;
@@ -298,6 +546,17 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
             true,
         )
         .await;
@@ -325,6 +584,17 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
             true,
         )
         .await;
@@ -345,9 +615,330 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
             true,
         )
         .await;
         assert!(result.is_err(), "should reject unknown language");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_provider_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            Some("openai".to_string()), // provider
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_base_url_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("http://localhost:11434/v1".to_string()), // base_url
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_no_agent5() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true, // no_agent5
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_agent5_mode_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            Some("minimal".to_string()), // agent5_mode
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_runtime_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            Some("podman".to_string()), // runtime
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_timeout_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            Some(300), // timeout
+            None,
+            None,
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_install_source_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            Some("local-mount".to_string()), // install_source
+            None,
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_source_path_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            Some("/tmp/test".to_string()), // source_path
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_agent5_model_provider_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("gpt-5.2".to_string()), // agent5_model
+            Some("openai".to_string()),  // agent5_provider
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_all_overrides() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            Some("python".to_string()),
+            None,
+            output.to_str().unwrap().to_string(),
+            Some("1.2.3".to_string()),                     // version
+            None,                                          // version_from
+            None,                                          // config
+            Some("gpt-4".to_string()),                     // model
+            Some("openai".to_string()),                    // provider
+            Some("http://localhost:11434/v1".to_string()), // base_url
+            Some(5),                                       // max_retries
+            Some("gpt-5.2".to_string()),                   // agent5_model
+            Some("openai".to_string()),                    // agent5_provider
+            true,                                          // no_agent5
+            Some("minimal".to_string()),                   // agent5_mode
+            Some("podman".to_string()),                    // runtime
+            Some(300),                                     // timeout
+            Some("local-mount".to_string()),               // install_source
+            Some("/tmp/test".to_string()),                 // source_path
+            true,                                          // no_parallel
+            true,                                          // dry_run
+        )
+        .await;
+        assert!(result.is_ok());
     }
 }

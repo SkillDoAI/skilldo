@@ -40,6 +40,11 @@ pub trait LanguageParser: Send + Sync {
 pub trait LanguageCodeGenerator: Send + Sync {
     /// Generate a complete, runnable test script for a pattern
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String>;
+
+    /// Set the local package name to exclude from dependency lists.
+    /// Used for local-install/local-mount modes where the package is mounted, not from PyPI.
+    /// Default implementation is a no-op for generators that don't support this.
+    fn set_local_package(&self, _package: Option<String>) {}
 }
 
 /// Core trait for executing code in isolated environments

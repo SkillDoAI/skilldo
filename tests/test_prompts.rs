@@ -1,6 +1,6 @@
 use skilldo::llm::prompts_v2::{
     agent1_api_extractor_v2, agent2_pattern_extractor_v2, agent3_context_extractor_v2,
-    agent4_synthesizer_v2, agent4_update_v2, agent5_reviewer_v2,
+    agent4_synthesizer_v2, agent4_update_v2,
 };
 
 #[test]
@@ -672,123 +672,6 @@ fn test_agent4_parameter_order() {
 }
 
 #[test]
-fn test_agent5_reviewer_basic() {
-    let prompt = agent5_reviewer_v2("flask", "3.0.0", "def Flask(): pass", "# SKILL.md content");
-
-    assert!(prompt.contains("flask"));
-    assert!(prompt.contains("3.0.0"));
-    assert!(prompt.contains("def Flask(): pass"));
-    assert!(prompt.contains("# SKILL.md content"));
-}
-
-#[test]
-fn test_agent5_includes_review_checklist() {
-    let prompt = agent5_reviewer_v2("package", "1.0.0", "", "");
-
-    assert!(prompt.contains("Review Checklist"));
-    assert!(prompt.contains("API Accuracy"));
-    assert!(prompt.contains("Code Completeness"));
-    assert!(prompt.contains("Library-Specific Validation"));
-    assert!(prompt.contains("Pattern Correctness"));
-    assert!(prompt.contains("Pitfalls Section"));
-    assert!(prompt.contains("Factual Accuracy"));
-    assert!(prompt.contains("Completeness"));
-}
-
-#[test]
-fn test_agent5_api_accuracy_checks() {
-    let prompt = agent5_reviewer_v2("django", "4.2.0", "", "");
-
-    assert!(prompt.contains("hallucinated API"));
-    assert!(prompt.contains("API signatures correct"));
-    assert!(prompt.contains("Parameter names must match"));
-    assert!(prompt.contains("Type hints must match"));
-    assert!(prompt.contains("Default values must match"));
-}
-
-#[test]
-fn test_agent5_code_completeness_checks() {
-    let prompt = agent5_reviewer_v2("requests", "2.31.0", "", "");
-
-    assert!(prompt.contains("run standalone"));
-    assert!(prompt.contains("All imports present"));
-    assert!(prompt.contains("All required parameters"));
-    assert!(prompt.contains("Valid Python syntax"));
-    assert!(prompt.contains("No placeholder names"));
-}
-
-#[test]
-fn test_agent5_library_specific_validation() {
-    let prompt = agent5_reviewer_v2("fastapi", "0.100.0", "", "");
-
-    assert!(prompt.contains("Web framework MUST show routing"));
-    assert!(prompt.contains("CLI tool MUST show command"));
-    assert!(prompt.contains("ORM MUST show model"));
-    assert!(prompt.contains("HTTP client MUST show request"));
-}
-
-#[test]
-fn test_agent5_pattern_correctness_checks() {
-    let prompt = agent5_reviewer_v2("httpx", "0.24.0", "", "");
-
-    assert!(prompt.contains("async functions use await"));
-    assert!(prompt.contains("decorators in the right order"));
-    assert!(prompt.contains("error handling shown correctly"));
-    assert!(prompt.contains("type hints used correctly"));
-}
-
-#[test]
-fn test_agent5_pitfalls_section_requirements() {
-    let prompt = agent5_reviewer_v2("package", "1.0.0", "", "");
-
-    assert!(prompt.contains("Do \"Wrong\" examples actually demonstrate"));
-    assert!(prompt.contains("Do \"Right\" examples actually solve"));
-    assert!(prompt.contains("At least 3 pitfalls"));
-    assert!(prompt.contains("Fewer than 3 = FAIL"));
-}
-
-#[test]
-fn test_agent5_strict_failure_criteria() {
-    let prompt = agent5_reviewer_v2("click", "8.1.0", "", "");
-
-    assert!(prompt.contains("STRICT FAILURE CRITERIA"));
-    assert!(prompt.contains("MUST FAIL the review"));
-    assert!(prompt.contains("ANY API used that is NOT in api_surface"));
-    assert!(prompt.contains("Generic placeholder names"));
-    assert!(prompt.contains("Pitfalls section has fewer than 3"));
-}
-
-#[test]
-fn test_agent5_output_format_pass() {
-    let prompt = agent5_reviewer_v2("numpy", "1.24.0", "", "");
-
-    assert!(prompt.contains("If ALL checks pass"));
-    assert!(prompt.contains(r#"{"status": "pass"}"#));
-}
-
-#[test]
-fn test_agent5_output_format_fail() {
-    let prompt = agent5_reviewer_v2("pandas", "2.0.0", "", "");
-
-    assert!(prompt.contains("If ANY fail"));
-    assert!(prompt.contains(r#""status": "fail""#));
-    assert!(prompt.contains(r#""issues""#));
-    assert!(prompt.contains(r#""type""#));
-    assert!(prompt.contains(r#""location""#));
-    assert!(prompt.contains(r#""problem""#));
-    assert!(prompt.contains(r#""fix""#));
-}
-
-#[test]
-fn test_agent5_issue_types() {
-    let prompt = agent5_reviewer_v2("package", "1.0.0", "", "");
-
-    assert!(prompt.contains("hallucinated_api"));
-    assert!(prompt.contains("incomplete_code"));
-    assert!(prompt.contains("incorrect_syntax"));
-}
-
-#[test]
 fn test_all_agents_include_package_name_and_version() {
     let package = "testpkg";
     let version = "1.2.3";
@@ -808,9 +691,7 @@ fn test_all_agents_include_package_name_and_version() {
         None,
         false,
     );
-    let p5 = agent5_reviewer_v2(package, version, "", "");
-
-    for prompt in [p1, p2, p3, p4, p5] {
+    for prompt in [p1, p2, p3, p4] {
         assert!(prompt.contains(package));
         assert!(prompt.contains(version));
     }
@@ -887,14 +768,11 @@ fn test_empty_inputs_handled_gracefully() {
     let p2 = agent2_pattern_extractor_v2("", "", "", None, false);
     let p3 = agent3_context_extractor_v2("", "", "", None, false);
     let p4 = agent4_synthesizer_v2("", "", None, &[], "", "", "", "", None, false);
-    let p5 = agent5_reviewer_v2("", "", "", "");
-
     // All should produce valid strings without panicking
     assert!(!p1.is_empty());
     assert!(!p2.is_empty());
     assert!(!p3.is_empty());
     assert!(!p4.is_empty());
-    assert!(!p5.is_empty());
 }
 
 #[test]
@@ -918,15 +796,6 @@ fn test_agent2_json_structure_validity() {
 #[test]
 fn test_agent3_json_structure_validity() {
     let prompt = agent3_context_extractor_v2("package", "1.0", "", None, false);
-
-    // Should have JSON structure with braces
-    assert!(prompt.contains(r#"{"#));
-    assert!(prompt.contains(r#"}"#));
-}
-
-#[test]
-fn test_agent5_json_structure_validity() {
-    let prompt = agent5_reviewer_v2("package", "1.0", "", "");
 
     // Should have JSON structure with braces
     assert!(prompt.contains(r#"{"#));
@@ -1049,27 +918,6 @@ fn test_comprehensive_coverage_agent4() {
     }
 }
 
-#[test]
-fn test_comprehensive_coverage_agent5() {
-    let prompt = agent5_reviewer_v2("comprehensive_test", "1.0.0", "api", "rules");
-
-    let required_sections = [
-        "API Accuracy",
-        "Code Completeness",
-        "Library-Specific Validation",
-        "Pattern Correctness",
-        "Pitfalls Section",
-        "Factual Accuracy",
-        "Completeness",
-        "STRICT FAILURE CRITERIA",
-        "Output Format",
-    ];
-
-    for section in &required_sections {
-        assert!(prompt.contains(section), "Missing section: {}", section);
-    }
-}
-
 // --- Overwrite mode and custom instructions ---
 
 #[test]
@@ -1182,4 +1030,165 @@ fn test_agent4_update_v2_basic() {
     assert!(prompt.contains("2.32.0"));
     assert!(prompt.contains("# Existing SKILL.md content"));
     assert!(prompt.contains("API surface"));
+}
+
+// ============================================================================
+// SECURITY CLAUSE REGRESSION TESTS
+// ============================================================================
+
+#[test]
+fn test_agent4_synthesizer_contains_security_rule() {
+    let prompt = agent4_synthesizer_v2(
+        "test",
+        "1.0",
+        None,
+        &[],
+        "python",
+        "apis",
+        "patterns",
+        "context",
+        None,
+        false,
+    );
+    // Core security rule exists
+    assert!(
+        prompt.contains("RULE 8") && prompt.contains("SECURITY"),
+        "Agent 4 synthesizer must contain RULE 8 SECURITY"
+    );
+    // Key threat categories present
+    assert!(
+        prompt.contains("DESTROY or corrupt data"),
+        "Missing destruction category"
+    );
+    assert!(
+        prompt.contains("EXFILTRATE"),
+        "Missing exfiltration category"
+    );
+    assert!(prompt.contains("backdoors"), "Missing backdoor category");
+    assert!(
+        prompt.contains("bypass authentication"),
+        "Missing auth bypass category"
+    );
+    assert!(
+        prompt.contains("ESCALATE privileges"),
+        "Missing privilege escalation category"
+    );
+    assert!(
+        prompt.contains("MANIPULATE AI agents"),
+        "Missing prompt injection category"
+    );
+    assert!(
+        prompt.contains("supply chain"),
+        "Missing supply chain category"
+    );
+    assert!(prompt.contains("PAM modules"), "Missing PAM module mention");
+    assert!(
+        prompt.contains("sshd plugins"),
+        "Missing sshd plugin mention"
+    );
+    assert!(
+        prompt.contains("outside the user's project directory"),
+        "Missing project boundary rule"
+    );
+}
+
+#[test]
+fn test_agent4_update_contains_security_rule() {
+    let prompt = agent4_update_v2(
+        "test",
+        "1.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+    );
+    // Security section exists in update prompt too
+    assert!(
+        prompt.contains("Security (CRITICAL)"),
+        "Agent 4 update prompt must contain Security section"
+    );
+    assert!(
+        prompt.contains("weaponized"),
+        "Missing weaponization warning in update prompt"
+    );
+    assert!(
+        prompt.contains("bypass authentication"),
+        "Missing auth bypass in update prompt"
+    );
+    assert!(
+        prompt.contains("Do not preserve harmful content"),
+        "Update prompt must explicitly say not to preserve harmful content from previous versions"
+    );
+}
+
+#[test]
+fn test_agent4_overwrite_mode_bypasses_security() {
+    // Document the known limitation: overwrite mode replaces the entire prompt
+    let prompt = agent4_synthesizer_v2(
+        "test",
+        "1.0",
+        None,
+        &[],
+        "python",
+        "apis",
+        "patterns",
+        "context",
+        Some("custom prompt"),
+        true,
+    );
+    // In overwrite mode, the security rules are NOT present (by design)
+    assert!(
+        !prompt.contains("RULE 8"),
+        "Overwrite mode should replace entire prompt including security rules"
+    );
+    assert_eq!(
+        prompt, "custom prompt",
+        "Overwrite mode should return custom prompt verbatim"
+    );
+}
+
+#[test]
+fn test_agent4_synthesizer_security_in_verify_checklist() {
+    let prompt = agent4_synthesizer_v2(
+        "test",
+        "1.0",
+        None,
+        &[],
+        "python",
+        "apis",
+        "patterns",
+        "context",
+        None,
+        false,
+    );
+    assert!(
+        prompt
+            .contains("NO destructive commands, data exfiltration, backdoors, or prompt injection"),
+        "Security check must be in the VERIFY checklist"
+    );
+}
+
+#[test]
+fn test_agent4_security_behavior_not_filename_based() {
+    let prompt = agent4_synthesizer_v2(
+        "test",
+        "1.0",
+        None,
+        &[],
+        "python",
+        "apis",
+        "patterns",
+        "context",
+        None,
+        false,
+    );
+    // Ensure the prompt uses behavior-level rules, not just filename lists
+    assert!(
+        prompt.contains("by any mechanism"),
+        "Security rules must be mechanism-agnostic, not limited to specific tools/filenames"
+    );
+    assert!(
+        prompt.contains("Reading any file outside the project directory"),
+        "Must have broad file access rule, not just specific paths"
+    );
 }

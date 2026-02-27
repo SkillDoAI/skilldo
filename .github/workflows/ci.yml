@@ -11,6 +11,40 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
+  commit-lint:
+    name: commit lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate PR commits
+        shell: bash
+        run: |
+          # Check all commits in the PR follow conventional format
+          MERGE_BASE=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          ERRORS=0
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?: .+'
+
+          while IFS= read -r sha; do
+            MSG=$(git log --format='%s' -n1 "$sha")
+            if ! [[ "$MSG" =~ $PATTERN ]]; then
+              echo "::error::Bad commit message: $MSG"
+              echo "  Expected: <type>[(scope)][!]: <description>"
+              echo "  Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done < <(git rev-list --no-merges "$MERGE_BASE"..HEAD)
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo ""
+            echo "::error::$ERRORS commit(s) do not follow conventional commit format"
+            echo "See: https://www.conventionalcommits.org/"
+            exit 1
+          fi
+          echo "All commits follow conventional commit format"
+
   check:
     name: cargo check
     runs-on: ubuntu-latest
@@ -63,12 +97,12 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Generate coverage
-        run: cargo llvm-cov --fail-under-lines 90 --lcov --output-path lcov.info
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v6
+        run: cargo llvm-cov --fail-under-lines 93 --lcov --output-path lcov.info
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
         with:
-          name: lcov.info
-          path: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
 
   audit:
     name: security audit
@@ -78,3 +112,127 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
+
+  e2e:
+    name: e2e smoke test
+    # Only run on main pushes (not PRs) to conserve API credits.
+    # Secrets aren't available on fork PRs anyway.
+    if: github.event_name == 'push'
+    needs: [check, fmt, clippy, test, coverage, audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check API access
+        id: check-secret
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY not configured — skipping E2E"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release binary
+        if: steps.check-secret.outputs.skip != 'true'
+        run: cargo build --release
+
+      - name: Clone test library (click)
+        if: steps.check-secret.outputs.skip != 'true'
+        run: git clone --branch 8.3.1 --depth 1 https://github.com/pallets/click.git /tmp/click
+
+      - name: Generate SKILL.md
+        if: steps.check-secret.outputs.skip != 'true'
+        run: |
+          ./target/release/skilldo generate /tmp/click \
+            --provider anthropic \
+            --model claude-sonnet-4-6 \
+            --no-agent5 \
+            --max-retries 3 \
+            -o /tmp/click-SKILL.md
+
+      - name: Validate output
+        if: steps.check-secret.outputs.skip != 'true'
+        run: |
+          FILE="/tmp/click-SKILL.md"
+          ERRORS=0
+
+          # 1. File exists and is non-empty
+          if [ ! -s "$FILE" ]; then
+            echo "::error::SKILL.md is empty or missing"
+            exit 1
+          fi
+          echo "✓ File exists ($(wc -c < "$FILE") bytes)"
+
+          # 2. Has YAML frontmatter
+          if ! head -1 "$FILE" | grep -q '^---'; then
+            echo "::error::Missing YAML frontmatter (no opening ---)"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ Has YAML frontmatter"
+          fi
+
+          # 3. Required frontmatter fields
+          for field in "name:" "version:" "ecosystem:"; do
+            if ! head -20 "$FILE" | grep -q "$field"; then
+              echo "::error::Missing frontmatter field: $field"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "✓ Frontmatter has $field"
+            fi
+          done
+
+          # 4. Required sections
+          for section in "## Imports" "## Core Patterns" "## Pitfalls"; do
+            if ! grep -q "$section" "$FILE"; then
+              echo "::error::Missing required section: $section"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "✓ Has section: $section"
+            fi
+          done
+
+          # 5. No security lint keywords in prose (basic sanity check)
+          if grep -Pn '(?<!`)rm -rf /(?!tmp)' "$FILE"; then
+            echo "::error::Security: destructive command found in output"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ No destructive commands in prose"
+          fi
+
+          # 6. Reasonable size (>500 bytes, <500KB)
+          SIZE=$(wc -c < "$FILE")
+          if [ "$SIZE" -lt 500 ]; then
+            echo "::error::SKILL.md suspiciously small ($SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          elif [ "$SIZE" -gt 512000 ]; then
+            echo "::error::SKILL.md suspiciously large ($SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ Reasonable size ($SIZE bytes)"
+          fi
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::E2E validation failed with $ERRORS error(s)"
+            exit 1
+          fi
+          echo ""
+          echo "=== E2E structural validation passed ==="
+
+      - name: Lint generated skill
+        if: steps.check-secret.outputs.skip != 'true'
+        run: ./target/release/skilldo lint /tmp/click-SKILL.md
+
+      - name: Upload generated skill
+        if: steps.check-secret.outputs.skip != 'true' && always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-click-SKILL.md
+          path: /tmp/click-SKILL.md
+          if-no-files-found: ignore

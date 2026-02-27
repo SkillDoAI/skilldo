@@ -197,21 +197,63 @@ impl LanguageExecutor for ContainerExecutor {
         cmd.arg("--name")
             .arg(container_name)
             .arg("-v")
-            .arg(format!("{}:/workspace", env.temp_dir.path().display()))
-            .arg("-w")
-            .arg("/workspace")
-            .arg(image);
+            .arg(format!("{}:/workspace", env.temp_dir.path().display()));
+
+        // Mount source repo for local modes (local-install, local-mount).
+        // No allowlist check here — install_source is a user-controlled TOML config
+        // value, not untrusted input. Invalid values simply skip the PYTHONPATH
+        // optimization but still require source_path, so misconfigs surface early.
+        if self.config.install_source != "registry" {
+            let source = self.config.source_path.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "source_path is required when install_source is '{}'",
+                    self.config.install_source
+                )
+            })?;
+            cmd.arg("-v").arg(format!("{}:/src:ro", source));
+        }
+
+        // Set PYTHONPATH for local-mount mode
+        if self.config.install_source == "local-mount" {
+            cmd.arg("-e").arg("PYTHONPATH=/src");
+        }
+
+        // Pass extra environment variables (private registries, proxies, etc.)
+        for (key, value) in &self.config.extra_env {
+            cmd.arg("-e").arg(format!("{}={}", key, value));
+        }
+
+        cmd.arg("-w").arg("/workspace").arg(image);
 
         // Python: use `uv run test.py` (default image has uv pre-installed)
         //   uv reads PEP 723 inline script metadata for deps
+        //   local-install: pip install /src first, then run
         // Other languages: `sh run.sh` — traditional install + run
         if is_python {
-            cmd.arg("uv").arg("run").arg("test.py");
+            match self.config.install_source.as_str() {
+                "local-install" => {
+                    cmd.arg("sh")
+                        .arg("-c")
+                        .arg("cd /workspace && uv pip install --system /src && uv run test.py");
+                }
+                _ => {
+                    // registry and local-mount: uv handles deps via PEP 723
+                    cmd.arg("uv").arg("run").arg("test.py");
+                }
+            }
         } else {
             cmd.arg("/bin/sh").arg("run.sh");
         }
 
-        debug!("Executing: {:?}", cmd);
+        if self.config.extra_env.is_empty() {
+            debug!("Executing: {:?}", cmd);
+        } else {
+            let env_keys: Vec<&String> = self.config.extra_env.keys().collect();
+            debug!(
+                "Executing container command (extra env keys: {:?}, values redacted)",
+                env_keys
+            );
+        }
 
         // Run with timeout
         let output = self.run_with_timeout(
@@ -300,6 +342,9 @@ mod tests {
             go_image: "golang:1.20-alpine".to_string(),
             timeout: 60,
             cleanup: true,
+            install_source: "registry".to_string(),
+            source_path: None,
+            extra_env: std::collections::HashMap::new(),
         };
 
         let executor = ContainerExecutor::new(config, "javascript");
@@ -328,6 +373,9 @@ mod tests {
             go_image: "golang:1.20-alpine".to_string(),
             timeout: 60,
             cleanup: true,
+            install_source: "registry".to_string(),
+            source_path: None,
+            extra_env: std::collections::HashMap::new(),
         }
     }
 
@@ -455,5 +503,51 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Container name not set"));
+    }
+
+    #[test]
+    fn test_make_config_has_install_source() {
+        let config = make_config();
+        assert_eq!(config.install_source, "registry");
+        assert!(config.source_path.is_none());
+    }
+
+    #[test]
+    fn test_local_install_config() {
+        let mut config = make_config();
+        config.install_source = "local-install".to_string();
+        config.source_path = Some("/tmp/my-lib".to_string());
+        let executor = ContainerExecutor::new(config, "python");
+        assert_eq!(executor.config.install_source, "local-install");
+    }
+
+    #[test]
+    fn test_run_code_local_install_missing_source_path() {
+        let mut config = make_config();
+        config.install_source = "local-install".to_string();
+        config.source_path = None;
+        let executor = ContainerExecutor::new(config, "python");
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: Some("test-container".to_string()),
+            dependencies: vec![],
+        };
+        let result = executor.run_code(&env, "print('hello')");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("source_path is required"));
+    }
+
+    #[test]
+    fn test_local_mount_config() {
+        let mut config = make_config();
+        config.install_source = "local-mount".to_string();
+        config.source_path = Some("/tmp/my-lib".to_string());
+        let executor = ContainerExecutor::new(config, "python");
+        assert_eq!(executor.config.install_source, "local-mount");
     }
 }

@@ -2,9 +2,9 @@
 
 *Pronounced "skill-do"* — The artificial skill generator.
 
-Skilldo is a Rust CLI that automatically generates `SKILL.md` files for open source libraries. It reads your source code, tests, docs, and changelogs, then uses a multi-agent LLM pipeline to produce structured agent rules that help AI coding assistants (Claude, Cursor, Copilot, etc.) use your library correctly.
+Skilldo is a Rust CLI that automatically generates `SKILL.md` files for open-source libraries. It reads your source code, tests, docs, and changelogs, then uses a multi-agent LLM pipeline to produce structured agent rules that help AI coding assistants (Claude, Cursor, Copilot, etc.) use your library correctly.
 
-The goal: make agent rules a standard part of every open source package — like README.md or .gitignore.
+The goal: make agent rules a standard part of every open-source package — like README.md or .gitignore.
 
 ## How It Works
 
@@ -88,6 +88,10 @@ skilldo generate [PATH] [OPTIONS]
 | `--version <VER>` | Explicit version override, e.g. `"2.1.0"` |
 | `--version-from <STRATEGY>` | Version extraction strategy: `git-tag`, `package`, `branch`, `commit` |
 | `--config <PATH>` | Path to config file |
+| `--no-agent5` | Disable Agent 5 container validation |
+| `--no-parallel` | Run agents 1–3 sequentially instead of in parallel (useful for local models) |
+| `-q, --quiet` | Suppress info messages, show warnings and errors only |
+| `-v, --verbose` | Show debug output |
 | `--dry-run` | Use a mock LLM client (no API key needed, for testing) |
 
 ### Examples
@@ -105,9 +109,25 @@ skilldo generate /path/to/repo -i SKILL.md -o SKILL.md
 # Extract version from git tags instead of package files
 skilldo generate /path/to/repo --version-from git-tag
 
+# Skip Agent 5 validation (faster, no container needed)
+skilldo generate /path/to/repo --no-agent5
+
+# Run agents sequentially (for local models that can't handle parallel requests)
+skilldo generate /path/to/repo --no-parallel
+
 # Dry run to test without an LLM
 skilldo generate /path/to/repo --dry-run
 ```
+
+### Config Check
+
+Validate your configuration file without running a generation:
+
+```bash
+skilldo config check --config my-config.toml
+```
+
+Reports missing fields, invalid provider names, unreachable base URLs, and malformed `extra_body_json` before you burn API credits.
 
 ## Configuration
 
@@ -161,15 +181,25 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Defaults: anthropic=4096, openai=4096, openai-compatible=16384, gemini=8192
 # max_tokens = 8192
 
+# Extra fields merged into the LLM request body (for provider-specific params).
+# TOML table style:
+# [llm.extra_body]
+# truncate = "END"
+# Or raw JSON string:
+# extra_body_json = '{"reasoning": {"effort": "high"}, "truncate": "END"}'
+
 # ── Generation Settings ───────────────────────────────────────
 [generation]
 # Max retry attempts for the generate→validate loop (default: 5)
 max_retries = 5
 
+# Run agents 1-3 in parallel (default: true). CLI: --no-parallel
+parallel_extraction = true
+
 # Approximate token budget for source code sent to agents (default: 100000)
 max_source_tokens = 100000
 
-# Enable Agent 5 code validation in containers (default: true)
+# Enable Agent 5 code validation in containers (default: true). CLI: --no-agent5
 enable_agent5 = true
 
 # Agent 5 validation mode (default: "thorough")
@@ -178,15 +208,17 @@ enable_agent5 = true
 #   "minimal"   — test only core import + one pattern
 agent5_mode = "thorough"
 
-# ── Agent 5 LLM Override (Optional) ──────────────────────────
-# Use a different (typically stronger) model for Agent 5 code generation.
-# This is the "hybrid" setup — cheap local model for extraction, strong
-# cloud model for validation.
+# ── Per-Agent LLM Overrides (Optional) ────────────────────────
+# Run individual agents on different providers/models.
+# Each is optional — if not set, the agent uses [llm].
 #
-# [generation.agent5_llm]
+# [generation.agent5_llm]           # Agent 5 (code validation)
 # provider = "openai"
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
+#
+# Also available: agent1_llm, agent2_llm, agent3_llm, agent4_llm
+# See examples/configs/reference.toml for the full list.
 
 # ── Container Settings ────────────────────────────────────────
 # Agent 5 runs generated test code inside containers for safety.
@@ -238,6 +270,10 @@ Ready-to-use configs for common setups:
 - [`examples/configs/ollama.toml`](examples/configs/ollama.toml) — Qwen3-Coder via Ollama (local, no API key)
 - [`examples/configs/hybrid.toml`](examples/configs/hybrid.toml) — Local extraction + cloud validation (best of both worlds)
 - [`examples/configs/deepseek.toml`](examples/configs/deepseek.toml) — DeepSeek (OpenAI-compatible cloud)
+- [`examples/configs/api-gateway.toml`](examples/configs/api-gateway.toml) — OpenAI-compatible API gateway with `extra_body` parameters
+- [`examples/configs/per-agent-extra-body.toml`](examples/configs/per-agent-extra-body.toml) — Per-agent `extra_body` overrides (e.g., different reasoning effort per agent)
+- [`examples/configs/github-models.toml`](examples/configs/github-models.toml) — GitHub Models free tier (for CI/testing)
+- [`examples/configs/reference.toml`](examples/configs/reference.toml) — **Every field documented** (copy what you need)
 
 ## Example Output
 
@@ -276,7 +312,7 @@ Generation gets you 90-95% of the way to a good SKILL.md — a validated, well-s
 - **Increase `max_retries`** for local models (10+) — they sometimes need several passes to get formatting right.
 - **Increase `container.timeout`** for libraries with heavy C dependencies (numpy, scipy, pytorch) — pip install takes time.
 - **Review the output.** Generation is a starting point, not a finished product. Tweak patterns for your specific needs, remove anything that doesn't look right.
-- **The linter runs automatically** after generation and will flag issues like unclosed code blocks, missing sections, or prompt instruction leaks. These are hints, not hard failures.
+- **The linter runs automatically** after generation and will flag issues like unclosed code blocks, missing sections, or prompt instruction leaks. Security violations (e.g. prompt leaks, destructive commands) cause a hard failure; formatting issues are retried up to `max_retries`.
 - **Update mode** (`-i SKILL.md -o SKILL.md`) preserves your manual edits where possible while regenerating from the latest source.
 
 ## Language Support
@@ -296,7 +332,7 @@ Full ecosystem handlers for JS/TS, Rust, and Go are planned.
 # Build release binary
 cargo build --release
 
-# Run tests (~789 passing, requires uv)
+# Run tests (requires uv)
 make test
 
 # Generate HTML coverage report
