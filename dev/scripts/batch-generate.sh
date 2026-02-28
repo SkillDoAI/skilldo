@@ -20,17 +20,9 @@ SUMMARY="/tmp/skilldo-batch/summary.md"
 
 mkdir -p "$LOG_DIR" "$BAD_DIR" "$CLONE_DIR"
 
-# --- API Keys ---
-_extract_key() {
-    local raw
-    raw=$(cat "$1" 2>/dev/null | head -1) || return
-    raw=$(echo "$raw" | sed 's/^export [^=]*=//')
-    raw="${raw%\"}" ; raw="${raw#\"}"
-    raw="${raw%\'}" ; raw="${raw#\'}"
-    echo "$raw"
-}
-export OPENAI_API_KEY=$(_extract_key ~/.openai)
-export ANTHROPIC_API_KEY=$(_extract_key ~/.anthropic)
+# --- API Keys (both files are `export VAR=value` format) ---
+source ~/.openai
+source ~/.anthropic
 
 # --- All 27 libraries with latest stable versions ---
 # Format: name|github_org_repo|tag

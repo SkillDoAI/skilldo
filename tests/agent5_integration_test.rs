@@ -301,56 +301,31 @@ async fn test_validator_selects_patterns_thorough_mode() {
 }
 
 #[tokio::test]
-#[ignore] // Requires Docker/Podman container runtime
+#[ignore] // Requires container runtime (docker or podman)
 async fn test_full_agent5_flow_with_click() -> Result<()> {
     use skilldo::agent5::Agent5CodeValidator;
 
-    // Mock LLM that returns valid test code
+    // PEP 723 header so `uv run` installs click in the container
+    let pep723 =
+        "# /// script\n# requires-python = \">=3.11\"\n# dependencies = [\"click\"]\n# ///\n";
+
+    // Mock LLM that returns valid test code (with PEP 723 metadata)
     let mock_client = MockLlmClient::new(vec![
         // Test code for pattern 1
-        r#"
-```python
-import click
-
-@click.command()
-def hello():
-    click.echo('✓ Test passed: Basic Command')
-
-if __name__ == '__main__':
-    hello()
-```
-"#
-        .to_string(),
+        format!(
+            "\n```python\n{}import click\n\n@click.command()\ndef hello():\n    click.echo('✓ Test passed: Basic Command')\n\nif __name__ == '__main__':\n    hello(standalone_mode=False)\n```\n",
+            pep723
+        ),
         // Test code for pattern 2
-        r#"
-```python
-import click
-
-@click.command()
-@click.option('--name', default='World')
-def hello(name):
-    click.echo(f'✓ Test passed: Command with Options')
-
-if __name__ == '__main__':
-    hello()
-```
-"#
-        .to_string(),
+        format!(
+            "\n```python\n{}import click\n\n@click.command()\n@click.option('--name', default='World')\ndef hello(name):\n    click.echo(f'✓ Test passed: Command with Options')\n\nif __name__ == '__main__':\n    hello(standalone_mode=False)\n```\n",
+            pep723
+        ),
         // Test code for pattern 3
-        r#"
-```python
-import click
-
-@click.command()
-@click.argument('name')
-def hello(name):
-    click.echo(f'✓ Test passed: Command with Arguments')
-
-if __name__ == '__main__':
-    hello(['test'])
-```
-"#
-        .to_string(),
+        format!(
+            "\n```python\n{}import click\nfrom click.testing import CliRunner\n\n@click.command()\n@click.argument('name')\ndef hello(name):\n    click.echo(f'✓ Test passed: Command with Arguments')\n\nif __name__ == '__main__':\n    runner = CliRunner()\n    result = runner.invoke(hello, ['test'])\n    print(result.output)\n```\n",
+            pep723
+        ),
     ]);
 
     let validator =

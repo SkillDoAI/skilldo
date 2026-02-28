@@ -1,12 +1,10 @@
 use skilldo::llm::prompts_v2::{
-    agent1_api_extractor_v2, agent2_pattern_extractor_v2, agent3_context_extractor_v2,
-    agent4_synthesizer_v2, agent4_update_v2,
+    create_prompt, create_update_prompt, extract_prompt, learn_prompt, map_prompt,
 };
 
 #[test]
 fn test_agent1_api_extractor_basic() {
-    let prompt =
-        agent1_api_extractor_v2("fastapi", "0.100.0", "class FastAPI: pass", 1, None, false);
+    let prompt = extract_prompt("fastapi", "0.100.0", "class FastAPI: pass", 1, None, false);
 
     assert!(prompt.contains("fastapi"));
     assert!(prompt.contains("0.100.0"));
@@ -15,7 +13,7 @@ fn test_agent1_api_extractor_basic() {
 
 #[test]
 fn test_agent1_includes_library_category_instructions() {
-    let prompt = agent1_api_extractor_v2("requests", "2.31.0", "def get(): pass", 1, None, false);
+    let prompt = extract_prompt("requests", "2.31.0", "def get(): pass", 1, None, false);
 
     assert!(prompt.contains("library_category"));
     assert!(prompt.contains("web_framework"));
@@ -29,7 +27,7 @@ fn test_agent1_includes_library_category_instructions() {
 
 #[test]
 fn test_agent1_includes_extraction_requirements() {
-    let prompt = agent1_api_extractor_v2("click", "8.1.0", "", 1, None, false);
+    let prompt = extract_prompt("click", "8.1.0", "", 1, None, false);
 
     assert!(prompt.contains("Name"));
     assert!(prompt.contains("Type"));
@@ -42,7 +40,7 @@ fn test_agent1_includes_extraction_requirements() {
 
 #[test]
 fn test_agent1_includes_signature_handling() {
-    let prompt = agent1_api_extractor_v2("django", "4.2.0", "", 1, None, false);
+    let prompt = extract_prompt("django", "4.2.0", "", 1, None, false);
 
     assert!(prompt.contains("120 characters"));
     assert!(prompt.contains("signature_truncated"));
@@ -51,7 +49,7 @@ fn test_agent1_includes_signature_handling() {
 
 #[test]
 fn test_agent1_includes_method_type_classification() {
-    let prompt = agent1_api_extractor_v2("sqlalchemy", "2.0.0", "", 1, None, false);
+    let prompt = extract_prompt("sqlalchemy", "2.0.0", "", 1, None, false);
 
     assert!(prompt.contains("function"));
     assert!(prompt.contains("method"));
@@ -63,7 +61,7 @@ fn test_agent1_includes_method_type_classification() {
 
 #[test]
 fn test_agent1_includes_type_hint_handling() {
-    let prompt = agent1_api_extractor_v2("pydantic", "2.0.0", "", 1, None, false);
+    let prompt = extract_prompt("pydantic", "2.0.0", "", 1, None, false);
 
     assert!(prompt.contains("Annotated"));
     assert!(prompt.contains("Union"));
@@ -74,7 +72,7 @@ fn test_agent1_includes_type_hint_handling() {
 
 #[test]
 fn test_agent1_includes_deprecation_tracking() {
-    let prompt = agent1_api_extractor_v2("flask", "3.0.0", "", 1, None, false);
+    let prompt = extract_prompt("flask", "3.0.0", "", 1, None, false);
 
     assert!(prompt.contains("@deprecated"));
     assert!(prompt.contains("DeprecationWarning"));
@@ -85,7 +83,7 @@ fn test_agent1_includes_deprecation_tracking() {
 
 #[test]
 fn test_agent1_includes_library_specific_patterns() {
-    let prompt = agent1_api_extractor_v2("fastapi", "0.100.0", "", 1, None, false);
+    let prompt = extract_prompt("fastapi", "0.100.0", "", 1, None, false);
 
     assert!(prompt.contains("Web Frameworks"));
     assert!(prompt.contains("CLI Tools"));
@@ -95,7 +93,7 @@ fn test_agent1_includes_library_specific_patterns() {
 
 #[test]
 fn test_agent1_excludes_private_apis() {
-    let prompt = agent1_api_extractor_v2("package", "1.0.0", "", 1, None, false);
+    let prompt = extract_prompt("package", "1.0.0", "", 1, None, false);
 
     // Verify prompt excludes private APIs
     assert!(prompt.contains("starting with `_`"));
@@ -104,7 +102,7 @@ fn test_agent1_excludes_private_apis() {
 
 #[test]
 fn test_agent1_output_format() {
-    let prompt = agent1_api_extractor_v2("numpy", "1.24.0", "", 1, None, false);
+    let prompt = extract_prompt("numpy", "1.24.0", "", 1, None, false);
 
     assert!(prompt.contains("Return JSON"));
     assert!(prompt.contains(r#""library_category""#));
@@ -116,7 +114,7 @@ fn test_agent1_output_format() {
 
 #[test]
 fn test_agent2_pattern_extractor_basic() {
-    let prompt = agent2_pattern_extractor_v2(
+    let prompt = map_prompt(
         "pytest",
         "7.4.0",
         "def test_something(): assert True",
@@ -131,7 +129,7 @@ fn test_agent2_pattern_extractor_basic() {
 
 #[test]
 fn test_agent2_includes_extraction_requirements() {
-    let prompt = agent2_pattern_extractor_v2("click", "8.1.0", "", None, false);
+    let prompt = map_prompt("click", "8.1.0", "", None, false);
 
     assert!(prompt.contains("API Being Tested"));
     assert!(prompt.contains("Setup Code"));
@@ -142,7 +140,7 @@ fn test_agent2_includes_extraction_requirements() {
 
 #[test]
 fn test_agent2_includes_test_client_patterns() {
-    let prompt = agent2_pattern_extractor_v2("fastapi", "0.100.0", "", None, false);
+    let prompt = map_prompt("fastapi", "0.100.0", "", None, false);
 
     assert!(prompt.contains("TestClient"));
     assert!(prompt.contains("CliRunner"));
@@ -151,7 +149,7 @@ fn test_agent2_includes_test_client_patterns() {
 
 #[test]
 fn test_agent2_includes_parametrized_tests() {
-    let prompt = agent2_pattern_extractor_v2("package", "1.0.0", "", None, false);
+    let prompt = map_prompt("package", "1.0.0", "", None, false);
 
     assert!(prompt.contains("@pytest.mark.parametrize"));
     assert!(prompt.contains("parameter combinations"));
@@ -159,7 +157,7 @@ fn test_agent2_includes_parametrized_tests() {
 
 #[test]
 fn test_agent2_includes_async_patterns() {
-    let prompt = agent2_pattern_extractor_v2("httpx", "0.24.0", "", None, false);
+    let prompt = map_prompt("httpx", "0.24.0", "", None, false);
 
     assert!(prompt.contains("async def test_async"));
     assert!(prompt.contains("await"));
@@ -168,7 +166,7 @@ fn test_agent2_includes_async_patterns() {
 
 #[test]
 fn test_agent2_includes_dependency_injection() {
-    let prompt = agent2_pattern_extractor_v2("fastapi", "0.100.0", "", None, false);
+    let prompt = map_prompt("fastapi", "0.100.0", "", None, false);
 
     assert!(prompt.contains("Depends"));
     assert!(prompt.contains("dependency patterns"));
@@ -176,7 +174,7 @@ fn test_agent2_includes_dependency_injection() {
 
 #[test]
 fn test_agent2_includes_error_handling() {
-    let prompt = agent2_pattern_extractor_v2("requests", "2.31.0", "", None, false);
+    let prompt = map_prompt("requests", "2.31.0", "", None, false);
 
     assert!(prompt.contains("Error Handling"));
     assert!(prompt.contains("expected error responses"));
@@ -185,7 +183,7 @@ fn test_agent2_includes_error_handling() {
 
 #[test]
 fn test_agent2_output_format() {
-    let prompt = agent2_pattern_extractor_v2("django", "4.2.0", "", None, false);
+    let prompt = map_prompt("django", "4.2.0", "", None, false);
 
     assert!(prompt.contains("Return JSON"));
     assert!(prompt.contains("pattern"));
@@ -195,7 +193,7 @@ fn test_agent2_output_format() {
 
 #[test]
 fn test_agent3_context_extractor_basic() {
-    let prompt = agent3_context_extractor_v2(
+    let prompt = learn_prompt(
         "flask",
         "3.0.0",
         "# Breaking Changes\n- Removed old API",
@@ -210,7 +208,7 @@ fn test_agent3_context_extractor_basic() {
 
 #[test]
 fn test_agent3_includes_extraction_requirements() {
-    let prompt = agent3_context_extractor_v2("django", "4.2.0", "", None, false);
+    let prompt = learn_prompt("django", "4.2.0", "", None, false);
 
     assert!(prompt.contains("CONVENTIONS"));
     assert!(prompt.contains("PITFALLS"));
@@ -220,7 +218,7 @@ fn test_agent3_includes_extraction_requirements() {
 
 #[test]
 fn test_agent3_includes_pitfall_structure() {
-    let prompt = agent3_context_extractor_v2("package", "1.0.0", "", None, false);
+    let prompt = learn_prompt("package", "1.0.0", "", None, false);
 
     assert!(prompt.contains("Wrong:"));
     assert!(prompt.contains("Why it fails:"));
@@ -229,7 +227,7 @@ fn test_agent3_includes_pitfall_structure() {
 
 #[test]
 fn test_agent3_includes_breaking_change_structure() {
-    let prompt = agent3_context_extractor_v2("sqlalchemy", "2.0.0", "", None, false);
+    let prompt = learn_prompt("sqlalchemy", "2.0.0", "", None, false);
 
     assert!(prompt.contains("version_from"));
     assert!(prompt.contains("version_to"));
@@ -239,7 +237,7 @@ fn test_agent3_includes_breaking_change_structure() {
 
 #[test]
 fn test_agent3_includes_docstring_styles() {
-    let prompt = agent3_context_extractor_v2("numpy", "1.24.0", "", None, false);
+    let prompt = learn_prompt("numpy", "1.24.0", "", None, false);
 
     assert!(prompt.contains("ReStructuredText"));
     assert!(prompt.contains("Google style"));
@@ -248,7 +246,7 @@ fn test_agent3_includes_docstring_styles() {
 
 #[test]
 fn test_agent3_includes_framework_specific_considerations() {
-    let prompt = agent3_context_extractor_v2("django", "4.2.0", "", None, false);
+    let prompt = learn_prompt("django", "4.2.0", "", None, false);
 
     assert!(prompt.contains("Large Frameworks"));
     assert!(prompt.contains("CLI Tools"));
@@ -257,7 +255,7 @@ fn test_agent3_includes_framework_specific_considerations() {
 
 #[test]
 fn test_agent3_output_format() {
-    let prompt = agent3_context_extractor_v2("click", "8.1.0", "", None, false);
+    let prompt = learn_prompt("click", "8.1.0", "", None, false);
 
     assert!(prompt.contains("Return JSON"));
     assert!(prompt.contains(r#""conventions""#));
@@ -268,7 +266,7 @@ fn test_agent3_output_format() {
 
 #[test]
 fn test_agent4_synthesizer_basic() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "requests",
         "2.31.0",
         Some("Apache-2.0"),
@@ -291,7 +289,7 @@ fn test_agent4_synthesizer_basic() {
 
 #[test]
 fn test_agent4_license_field_with_value() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "django",
         "4.2.0",
         Some("BSD-3-Clause"),
@@ -309,7 +307,7 @@ fn test_agent4_license_field_with_value() {
 
 #[test]
 fn test_agent4_license_field_without_value() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "mypackage",
         "1.0.0",
         None,
@@ -327,7 +325,7 @@ fn test_agent4_license_field_without_value() {
 
 #[test]
 fn test_agent4_project_urls_empty() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package",
         "1.0.0",
         None,
@@ -351,7 +349,7 @@ fn test_agent4_project_urls_single() {
         "https://docs.example.com".to_string(),
     )];
 
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package", "1.0.0", None, &urls, "python", "", "", "", None, false,
     );
 
@@ -376,7 +374,7 @@ fn test_agent4_project_urls_multiple() {
         ),
     ];
 
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package", "1.0.0", None, &urls, "python", "", "", "", None, false,
     );
 
@@ -387,7 +385,7 @@ fn test_agent4_project_urls_multiple() {
 
 #[test]
 fn test_agent4_custom_instructions_none() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package",
         "1.0.0",
         None,
@@ -407,7 +405,7 @@ fn test_agent4_custom_instructions_none() {
 fn test_agent4_custom_instructions_present() {
     let custom = "Always use type hints\nPrefer async functions";
 
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package",
         "1.0.0",
         None,
@@ -427,7 +425,7 @@ fn test_agent4_custom_instructions_present() {
 
 #[test]
 fn test_agent4_includes_skill_md_structure() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "fastapi",
         "0.100.0",
         None,
@@ -451,7 +449,7 @@ fn test_agent4_includes_skill_md_structure() {
 
 #[test]
 fn test_agent4_includes_library_specific_sections() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "django",
         "4.2.0",
         None,
@@ -474,7 +472,7 @@ fn test_agent4_includes_library_specific_sections() {
 
 #[test]
 fn test_agent4_includes_validation_rules() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "requests",
         "2.31.0",
         None,
@@ -496,7 +494,7 @@ fn test_agent4_includes_validation_rules() {
 
 #[test]
 fn test_agent4_includes_pitfall_requirements() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package",
         "1.0.0",
         None,
@@ -518,7 +516,7 @@ fn test_agent4_includes_pitfall_requirements() {
 
 #[test]
 fn test_agent4_includes_references_requirement() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package",
         "1.0.0",
         None,
@@ -538,7 +536,7 @@ fn test_agent4_includes_references_requirement() {
 
 #[test]
 fn test_agent4_web_framework_patterns() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "fastapi",
         "0.100.0",
         None,
@@ -559,7 +557,7 @@ fn test_agent4_web_framework_patterns() {
 
 #[test]
 fn test_agent4_cli_patterns() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "click",
         "8.1.0",
         None,
@@ -580,7 +578,7 @@ fn test_agent4_cli_patterns() {
 
 #[test]
 fn test_agent4_orm_patterns() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "sqlalchemy",
         "2.0.0",
         None,
@@ -602,7 +600,7 @@ fn test_agent4_orm_patterns() {
 
 #[test]
 fn test_agent4_http_client_patterns() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "requests",
         "2.31.0",
         None,
@@ -624,7 +622,7 @@ fn test_agent4_http_client_patterns() {
 
 #[test]
 fn test_agent4_async_framework_patterns() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "httpx",
         "0.24.0",
         None,
@@ -647,7 +645,7 @@ fn test_agent4_async_framework_patterns() {
 fn test_agent4_parameter_order() {
     let urls = vec![("Docs".to_string(), "https://docs.example.com".to_string())];
 
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "mypackage",
         "1.2.3",
         Some("GPL-3.0"),
@@ -676,10 +674,10 @@ fn test_all_agents_include_package_name_and_version() {
     let package = "testpkg";
     let version = "1.2.3";
 
-    let p1 = agent1_api_extractor_v2(package, version, "", 1, None, false);
-    let p2 = agent2_pattern_extractor_v2(package, version, "", None, false);
-    let p3 = agent3_context_extractor_v2(package, version, "", None, false);
-    let p4 = agent4_synthesizer_v2(
+    let p1 = extract_prompt(package, version, "", 1, None, false);
+    let p2 = map_prompt(package, version, "", None, false);
+    let p3 = learn_prompt(package, version, "", None, false);
+    let p4 = create_prompt(
         package,
         version,
         None,
@@ -700,14 +698,14 @@ fn test_all_agents_include_package_name_and_version() {
 #[test]
 fn test_template_rendering_with_special_characters() {
     let source = "def func():\n    '''Docstring with \"quotes\" and {braces}'''";
-    let prompt = agent1_api_extractor_v2("pkg", "1.0", source, 1, None, false);
+    let prompt = extract_prompt("pkg", "1.0", source, 1, None, false);
 
     assert!(prompt.contains(source));
 }
 
 #[test]
 fn test_agent4_escapes_braces_in_format_string() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "fastapi",
         "0.100.0",
         None,
@@ -728,7 +726,7 @@ fn test_agent4_escapes_braces_in_format_string() {
 fn test_agent4_references_section_formatting() {
     let urls = vec![("Home".to_string(), "https://home.example.com".to_string())];
 
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package", "1.0.0", None, &urls, "python", "", "", "", None, false,
     );
 
@@ -738,7 +736,7 @@ fn test_agent4_references_section_formatting() {
 
 #[test]
 fn test_agent4_includes_ecosystem_in_frontmatter() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "package",
         "1.0.0",
         None,
@@ -756,18 +754,17 @@ fn test_agent4_includes_ecosystem_in_frontmatter() {
 
 #[test]
 fn test_agent4_includes_version_in_frontmatter() {
-    let prompt =
-        agent4_synthesizer_v2("mylib", "2.5.8", None, &[], "rust", "", "", "", None, false);
+    let prompt = create_prompt("mylib", "2.5.8", None, &[], "rust", "", "", "", None, false);
 
     assert!(prompt.contains("version: 2.5.8"));
 }
 
 #[test]
 fn test_empty_inputs_handled_gracefully() {
-    let p1 = agent1_api_extractor_v2("", "", "", 1, None, false);
-    let p2 = agent2_pattern_extractor_v2("", "", "", None, false);
-    let p3 = agent3_context_extractor_v2("", "", "", None, false);
-    let p4 = agent4_synthesizer_v2("", "", None, &[], "", "", "", "", None, false);
+    let p1 = extract_prompt("", "", "", 1, None, false);
+    let p2 = map_prompt("", "", "", None, false);
+    let p3 = learn_prompt("", "", "", None, false);
+    let p4 = create_prompt("", "", None, &[], "", "", "", "", None, false);
     // All should produce valid strings without panicking
     assert!(!p1.is_empty());
     assert!(!p2.is_empty());
@@ -777,7 +774,7 @@ fn test_empty_inputs_handled_gracefully() {
 
 #[test]
 fn test_agent1_json_structure_validity() {
-    let prompt = agent1_api_extractor_v2("package", "1.0", "", 1, None, false);
+    let prompt = extract_prompt("package", "1.0", "", 1, None, false);
 
     // Should have JSON structure with braces
     assert!(prompt.contains(r#"{"#));
@@ -786,7 +783,7 @@ fn test_agent1_json_structure_validity() {
 
 #[test]
 fn test_agent2_json_structure_validity() {
-    let prompt = agent2_pattern_extractor_v2("package", "1.0", "", None, false);
+    let prompt = map_prompt("package", "1.0", "", None, false);
 
     // Should have JSON structure with braces
     assert!(prompt.contains(r#"{"#));
@@ -795,7 +792,7 @@ fn test_agent2_json_structure_validity() {
 
 #[test]
 fn test_agent3_json_structure_validity() {
-    let prompt = agent3_context_extractor_v2("package", "1.0", "", None, false);
+    let prompt = learn_prompt("package", "1.0", "", None, false);
 
     // Should have JSON structure with braces
     assert!(prompt.contains(r#"{"#));
@@ -804,7 +801,7 @@ fn test_agent3_json_structure_validity() {
 
 #[test]
 fn test_agent4_default_license_is_mit() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "unlicensed",
         "1.0.0",
         None,
@@ -824,8 +821,7 @@ fn test_agent4_default_license_is_mit() {
 
 #[test]
 fn test_comprehensive_coverage_agent1() {
-    let prompt =
-        agent1_api_extractor_v2("comprehensive_test", "1.0.0", "test_code", 1, None, false);
+    let prompt = extract_prompt("comprehensive_test", "1.0.0", "test_code", 1, None, false);
 
     // Ensure all major sections are covered
     let required_sections = [
@@ -849,8 +845,7 @@ fn test_comprehensive_coverage_agent1() {
 
 #[test]
 fn test_comprehensive_coverage_agent2() {
-    let prompt =
-        agent2_pattern_extractor_v2("comprehensive_test", "1.0.0", "test_code", None, false);
+    let prompt = map_prompt("comprehensive_test", "1.0.0", "test_code", None, false);
 
     let required_sections = [
         "What to Extract",
@@ -870,7 +865,7 @@ fn test_comprehensive_coverage_agent2() {
 
 #[test]
 fn test_comprehensive_coverage_agent3() {
-    let prompt = agent3_context_extractor_v2("comprehensive_test", "1.0.0", "docs", None, false);
+    let prompt = learn_prompt("comprehensive_test", "1.0.0", "docs", None, false);
 
     let required_sections = [
         "CONVENTIONS",
@@ -889,7 +884,7 @@ fn test_comprehensive_coverage_agent3() {
 
 #[test]
 fn test_comprehensive_coverage_agent4() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "comprehensive_test",
         "1.0.0",
         Some("MIT"),
@@ -923,13 +918,13 @@ fn test_comprehensive_coverage_agent4() {
 #[test]
 fn test_agent1_overwrite_with_custom() {
     let custom = "My custom agent1 prompt";
-    let prompt = agent1_api_extractor_v2("pkg", "1.0", "source", 1, Some(custom), true);
+    let prompt = extract_prompt("pkg", "1.0", "source", 1, Some(custom), true);
     assert_eq!(prompt, custom);
 }
 
 #[test]
 fn test_agent1_overwrite_without_custom_uses_default() {
-    let prompt = agent1_api_extractor_v2("pkg", "1.0", "source", 1, None, true);
+    let prompt = extract_prompt("pkg", "1.0", "source", 1, None, true);
     // No custom provided, should fall through to default prompt
     assert!(prompt.contains("pkg"));
     assert!(prompt.contains("Extract"));
@@ -938,7 +933,7 @@ fn test_agent1_overwrite_without_custom_uses_default() {
 #[test]
 fn test_agent1_append_custom() {
     let custom = "Also extract internal APIs";
-    let prompt = agent1_api_extractor_v2("pkg", "1.0", "source", 1, Some(custom), false);
+    let prompt = extract_prompt("pkg", "1.0", "source", 1, Some(custom), false);
     // Custom should be appended, default prompt still present
     assert!(prompt.contains("pkg"));
     assert!(prompt.contains("Also extract internal APIs"));
@@ -947,14 +942,14 @@ fn test_agent1_append_custom() {
 #[test]
 fn test_agent2_overwrite_with_custom() {
     let custom = "My custom agent2 prompt";
-    let prompt = agent2_pattern_extractor_v2("pkg", "1.0", "tests", Some(custom), true);
+    let prompt = map_prompt("pkg", "1.0", "tests", Some(custom), true);
     assert_eq!(prompt, custom);
 }
 
 #[test]
 fn test_agent2_append_custom() {
     let custom = "Focus on error patterns";
-    let prompt = agent2_pattern_extractor_v2("pkg", "1.0", "tests", Some(custom), false);
+    let prompt = map_prompt("pkg", "1.0", "tests", Some(custom), false);
     assert!(prompt.contains("pkg"));
     assert!(prompt.contains("Focus on error patterns"));
 }
@@ -962,14 +957,14 @@ fn test_agent2_append_custom() {
 #[test]
 fn test_agent3_overwrite_with_custom() {
     let custom = "My custom agent3 prompt";
-    let prompt = agent3_context_extractor_v2("pkg", "1.0", "docs", Some(custom), true);
+    let prompt = learn_prompt("pkg", "1.0", "docs", Some(custom), true);
     assert_eq!(prompt, custom);
 }
 
 #[test]
 fn test_agent3_append_custom() {
     let custom = "Include performance tips";
-    let prompt = agent3_context_extractor_v2("pkg", "1.0", "docs", Some(custom), false);
+    let prompt = learn_prompt("pkg", "1.0", "docs", Some(custom), false);
     assert!(prompt.contains("pkg"));
     assert!(prompt.contains("Include performance tips"));
 }
@@ -977,7 +972,7 @@ fn test_agent3_append_custom() {
 #[test]
 fn test_agent4_overwrite_with_custom() {
     let custom = "My custom agent4 prompt";
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "pkg",
         "1.0",
         None,
@@ -996,29 +991,29 @@ fn test_agent4_overwrite_with_custom() {
 
 #[test]
 fn test_agent1_scale_hint_large_library() {
-    let prompt = agent1_api_extractor_v2("biglib", "1.0", "source", 1500, None, false);
+    let prompt = extract_prompt("biglib", "1.0", "source", 1500, None, false);
     assert!(prompt.contains("LARGE LIBRARY"));
     assert!(prompt.contains("1000+ files"));
 }
 
 #[test]
 fn test_agent1_scale_hint_very_large_library() {
-    let prompt = agent1_api_extractor_v2("hugelib", "1.0", "source", 3000, None, false);
+    let prompt = extract_prompt("hugelib", "1.0", "source", 3000, None, false);
     assert!(prompt.contains("LARGE LIBRARY ALERT"));
     assert!(prompt.contains("2000+ files"));
 }
 
 #[test]
 fn test_agent1_no_scale_hint_small_library() {
-    let prompt = agent1_api_extractor_v2("smalllib", "1.0", "source", 50, None, false);
+    let prompt = extract_prompt("smalllib", "1.0", "source", 50, None, false);
     assert!(!prompt.contains("LARGE LIBRARY"));
 }
 
 // --- Agent 4 update mode ---
 
 #[test]
-fn test_agent4_update_v2_basic() {
-    let prompt = agent4_update_v2(
+fn test_create_update_prompt_basic() {
+    let prompt = create_update_prompt(
         "requests",
         "2.32.0",
         "# Existing SKILL.md content",
@@ -1038,7 +1033,7 @@ fn test_agent4_update_v2_basic() {
 
 #[test]
 fn test_agent4_synthesizer_contains_security_rule() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "test",
         "1.0",
         None,
@@ -1094,7 +1089,7 @@ fn test_agent4_synthesizer_contains_security_rule() {
 
 #[test]
 fn test_agent4_update_contains_security_rule() {
-    let prompt = agent4_update_v2(
+    let prompt = create_update_prompt(
         "test",
         "1.0",
         "existing skill",
@@ -1124,7 +1119,7 @@ fn test_agent4_update_contains_security_rule() {
 #[test]
 fn test_agent4_overwrite_mode_bypasses_security() {
     // Document the known limitation: overwrite mode replaces the entire prompt
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "test",
         "1.0",
         None,
@@ -1149,7 +1144,7 @@ fn test_agent4_overwrite_mode_bypasses_security() {
 
 #[test]
 fn test_agent4_synthesizer_security_in_verify_checklist() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "test",
         "1.0",
         None,
@@ -1170,7 +1165,7 @@ fn test_agent4_synthesizer_security_in_verify_checklist() {
 
 #[test]
 fn test_agent4_security_behavior_not_filename_based() {
-    let prompt = agent4_synthesizer_v2(
+    let prompt = create_prompt(
         "test",
         "1.0",
         None,

@@ -1,6 +1,0 @@
-reviews:
-  path_filters:
-    - '!*.md'
-    - '!examples/skills/**'
-    - '!examples/configs/**'
-    - 'README.md'

@@ -10,6 +10,7 @@ mod ecosystems;
 mod lint;
 mod llm;
 mod pipeline;
+mod review;
 mod util;
 mod validator;
 
@@ -78,21 +79,21 @@ enum Commands {
         #[arg(long)]
         max_retries: Option<usize>,
 
-        /// Override Agent 5 LLM model
-        #[arg(long)]
-        agent5_model: Option<String>,
+        /// Override test stage LLM model (alias: --agent5-model)
+        #[arg(long = "test-model", visible_alias = "agent5-model")]
+        test_model: Option<String>,
 
-        /// Override Agent 5 LLM provider
-        #[arg(long)]
-        agent5_provider: Option<String>,
+        /// Override test stage LLM provider (alias: --agent5-provider)
+        #[arg(long = "test-provider", visible_alias = "agent5-provider")]
+        test_provider: Option<String>,
 
-        /// Disable Agent 5 validation
-        #[arg(long)]
-        no_agent5: bool,
+        /// Disable test stage validation (alias: --no-agent5)
+        #[arg(long = "no-test", visible_alias = "no-agent5")]
+        no_test: bool,
 
-        /// Agent 5 validation mode: thorough, adaptive, minimal
-        #[arg(long)]
-        agent5_mode: Option<String>,
+        /// Test stage validation mode: thorough, adaptive, minimal (alias: --agent5-mode)
+        #[arg(long = "test-mode", visible_alias = "agent5-mode")]
+        test_mode: Option<String>,
 
         /// Container runtime: docker or podman
         #[arg(long)]
@@ -102,7 +103,7 @@ enum Commands {
         #[arg(long)]
         timeout: Option<u64>,
 
-        /// Agent 5 install source: registry, local-install, local-mount
+        /// Test stage install source: registry, local-install, local-mount
         #[arg(long)]
         install_source: Option<String>,
 
@@ -123,6 +124,44 @@ enum Commands {
     Lint {
         /// Path to SKILL.md file
         path: String,
+    },
+
+    /// Review an existing SKILL.md for accuracy and safety issues
+    Review {
+        /// Path to SKILL.md file
+        path: String,
+
+        /// Path to config file
+        #[arg(long)]
+        config: Option<String>,
+
+        /// Override LLM model
+        #[arg(long)]
+        model: Option<String>,
+
+        /// LLM provider: anthropic, openai, gemini, openai-compatible
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Base URL for openai-compatible providers
+        #[arg(long)]
+        base_url: Option<String>,
+
+        /// Container runtime: docker or podman
+        #[arg(long)]
+        runtime: Option<String>,
+
+        /// Container execution timeout in seconds
+        #[arg(long)]
+        timeout: Option<u64>,
+
+        /// Skip container introspection (LLM-only review)
+        #[arg(long)]
+        no_container: bool,
+
+        /// Use mock LLM client for testing
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Validate configuration file
@@ -170,10 +209,10 @@ async fn main() -> Result<()> {
             provider,
             base_url,
             max_retries,
-            agent5_model,
-            agent5_provider,
-            no_agent5,
-            agent5_mode,
+            test_model,
+            test_provider,
+            no_test,
+            test_mode,
             runtime,
             timeout,
             install_source,
@@ -193,10 +232,10 @@ async fn main() -> Result<()> {
                 provider,
                 base_url,
                 max_retries,
-                agent5_model,
-                agent5_provider,
-                no_agent5,
-                agent5_mode,
+                test_model,
+                test_provider,
+                no_test,
+                test_mode,
                 runtime,
                 timeout,
                 install_source,
@@ -208,6 +247,30 @@ async fn main() -> Result<()> {
         }
         Commands::Lint { path } => {
             cli::lint::run(&path)?;
+        }
+        Commands::Review {
+            path,
+            config,
+            model,
+            provider,
+            base_url,
+            runtime,
+            timeout,
+            no_container,
+            dry_run,
+        } => {
+            cli::review::run(
+                path,
+                config,
+                model,
+                provider,
+                base_url,
+                runtime,
+                timeout,
+                no_container,
+                dry_run,
+            )
+            .await?;
         }
         Commands::Config { action } => match action {
             ConfigAction::Check { config } => {
@@ -224,24 +287,55 @@ mod tests {
     use super::*;
     use clap::Parser;
 
+    // Helper macros: extract enum fields or panic. Using macros avoids
+    // per-test `_ => panic!()` / `let...else` branches that llvm-cov counts
+    // as uncoverable lines.
+    macro_rules! assert_generate {
+        ($cli:expr, |$($field:ident),+ $(,)?| $body:block) => {
+            let Commands::Generate { $($field),+, .. } = $cli.command else {
+                panic!("Expected Generate command");
+            };
+            $body
+        };
+    }
+
+    macro_rules! assert_review {
+        ($cli:expr, |$($field:ident),+ $(,)?| $body:block) => {
+            let Commands::Review { $($field),+, .. } = $cli.command else {
+                panic!("Expected Review command");
+            };
+            $body
+        };
+    }
+
+    macro_rules! assert_lint {
+        ($cli:expr, |$($field:ident),+ $(,)?| $body:block) => {
+            let Commands::Lint { $($field),+ } = $cli.command else {
+                panic!("Expected Lint command");
+            };
+            $body
+        };
+    }
+
+    macro_rules! assert_config_check {
+        ($cli:expr, |$field:ident| $body:block) => {
+            let Commands::Config { action } = $cli.command else {
+                panic!("Expected Config command");
+            };
+            let ConfigAction::Check { $field } = action;
+            $body
+        };
+    }
+
     #[test]
     fn test_parse_generate_defaults() {
         let cli = Cli::try_parse_from(["skilldo", "generate"]).unwrap();
-        match cli.command {
-            Commands::Generate {
-                path,
-                language,
-                output,
-                dry_run,
-                ..
-            } => {
-                assert_eq!(path, ".");
-                assert!(language.is_none());
-                assert_eq!(output, "SKILL.md");
-                assert!(!dry_run);
-            }
-            _ => panic!("Expected Generate command"),
-        }
+        assert_generate!(cli, |path, language, output, dry_run| {
+            assert_eq!(path, ".");
+            assert!(language.is_none());
+            assert_eq!(output, "SKILL.md");
+            assert!(!dry_run);
+        });
     }
 
     #[test]
@@ -263,27 +357,21 @@ mod tests {
             "--dry-run",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate {
-                path,
-                language,
-                output,
-                model,
-                max_retries,
-                version,
-                dry_run,
-                ..
-            } => {
-                assert_eq!(path, "/tmp/repo");
-                assert_eq!(language.unwrap(), "python");
-                assert_eq!(output, "out.md");
-                assert_eq!(model.unwrap(), "gpt-5.2");
-                assert_eq!(max_retries.unwrap(), 5);
-                assert_eq!(version.unwrap(), "2.0.0");
-                assert!(dry_run);
-            }
-            _ => panic!("Expected Generate command"),
-        }
+        assert_generate!(cli, |path,
+                               language,
+                               output,
+                               model,
+                               max_retries,
+                               version,
+                               dry_run| {
+            assert_eq!(path, "/tmp/repo");
+            assert_eq!(language.unwrap(), "python");
+            assert_eq!(output, "out.md");
+            assert_eq!(model.unwrap(), "gpt-5.2");
+            assert_eq!(max_retries.unwrap(), 5);
+            assert_eq!(version.unwrap(), "2.0.0");
+            assert!(dry_run);
+        });
     }
 
     #[test]
@@ -298,25 +386,19 @@ mod tests {
             "new-SKILL.md",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate { input, output, .. } => {
-                assert_eq!(input.unwrap(), "old-SKILL.md");
-                assert_eq!(output, "new-SKILL.md");
-            }
-            _ => panic!("Expected Generate command"),
-        }
+        assert_generate!(cli, |input, output| {
+            assert_eq!(input.unwrap(), "old-SKILL.md");
+            assert_eq!(output, "new-SKILL.md");
+        });
     }
 
     #[test]
     fn test_parse_generate_version_from() {
         let cli =
             Cli::try_parse_from(["skilldo", "generate", "--version-from", "git-tag"]).unwrap();
-        match cli.command {
-            Commands::Generate { version_from, .. } => {
-                assert_eq!(version_from.unwrap(), "git-tag");
-            }
-            _ => panic!("Expected Generate command"),
-        }
+        assert_generate!(cli, |version_from| {
+            assert_eq!(version_from.unwrap(), "git-tag");
+        });
     }
 
     #[test]
@@ -334,12 +416,9 @@ mod tests {
     #[test]
     fn test_parse_lint() {
         let cli = Cli::try_parse_from(["skilldo", "lint", "SKILL.md"]).unwrap();
-        match cli.command {
-            Commands::Lint { path } => {
-                assert_eq!(path, "SKILL.md");
-            }
-            _ => panic!("Expected Lint command"),
-        }
+        assert_lint!(cli, |path| {
+            assert_eq!(path, "SKILL.md");
+        });
     }
 
     #[test]
@@ -351,28 +430,18 @@ mod tests {
     #[test]
     fn test_parse_config_check() {
         let cli = Cli::try_parse_from(["skilldo", "config", "check"]).unwrap();
-        match cli.command {
-            Commands::Config { action } => match action {
-                ConfigAction::Check { config } => {
-                    assert!(config.is_none());
-                }
-            },
-            _ => panic!("Expected Config command"),
-        }
+        assert_config_check!(cli, |config| {
+            assert!(config.is_none());
+        });
     }
 
     #[test]
     fn test_parse_config_check_with_path() {
         let cli =
             Cli::try_parse_from(["skilldo", "config", "check", "--config", "my.toml"]).unwrap();
-        match cli.command {
-            Commands::Config { action } => match action {
-                ConfigAction::Check { config } => {
-                    assert_eq!(config.unwrap(), "my.toml");
-                }
-            },
-            _ => panic!("Expected Config command"),
-        }
+        assert_config_check!(cli, |config| {
+            assert_eq!(config.unwrap(), "my.toml");
+        });
     }
 
     #[test]
@@ -400,50 +469,35 @@ mod tests {
             "http://localhost:11434/v1",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate {
-                provider, base_url, ..
-            } => {
-                assert_eq!(provider.unwrap(), "openai");
-                assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |provider, base_url| {
+            assert_eq!(provider.unwrap(), "openai");
+            assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
+        });
     }
 
     #[test]
-    fn test_parse_generate_no_agent5() {
-        let cli = Cli::try_parse_from(["skilldo", "generate", "--no-agent5"]).unwrap();
-        match cli.command {
-            Commands::Generate { no_agent5, .. } => {
-                assert!(no_agent5);
-            }
-            _ => panic!("Expected Generate"),
-        }
+    fn test_parse_generate_no_test() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--no-test"]).unwrap();
+        assert_generate!(cli, |no_test| {
+            assert!(no_test);
+        });
     }
 
     #[test]
-    fn test_parse_generate_agent5_overrides() {
+    fn test_parse_generate_test_overrides() {
         let cli = Cli::try_parse_from([
             "skilldo",
             "generate",
-            "--agent5-model",
+            "--test-model",
             "gpt-5.2",
-            "--agent5-provider",
+            "--test-provider",
             "openai",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate {
-                agent5_model,
-                agent5_provider,
-                ..
-            } => {
-                assert_eq!(agent5_model.unwrap(), "gpt-5.2");
-                assert_eq!(agent5_provider.unwrap(), "openai");
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |test_model, test_provider| {
+            assert_eq!(test_model.unwrap(), "gpt-5.2");
+            assert_eq!(test_provider.unwrap(), "openai");
+        });
     }
 
     #[test]
@@ -457,15 +511,10 @@ mod tests {
             "300",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate {
-                runtime, timeout, ..
-            } => {
-                assert_eq!(runtime.unwrap(), "podman");
-                assert_eq!(timeout.unwrap(), 300);
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |runtime, timeout| {
+            assert_eq!(runtime.unwrap(), "podman");
+            assert_eq!(timeout.unwrap(), 300);
+        });
     }
 
     #[test]
@@ -479,17 +528,10 @@ mod tests {
             "/tmp/mylib",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate {
-                install_source,
-                source_path,
-                ..
-            } => {
-                assert_eq!(install_source.unwrap(), "local-mount");
-                assert_eq!(source_path.unwrap(), "/tmp/mylib");
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |install_source, source_path| {
+            assert_eq!(install_source.unwrap(), "local-mount");
+            assert_eq!(source_path.unwrap(), "/tmp/mylib");
+        });
     }
 
     #[test]
@@ -508,12 +550,12 @@ mod tests {
             "http://localhost:11434/v1",
             "--max-retries",
             "10",
-            "--agent5-model",
+            "--test-model",
             "gpt-5.2",
-            "--agent5-provider",
+            "--test-provider",
             "openai",
-            "--no-agent5",
-            "--agent5-mode",
+            "--no-test",
+            "--test-mode",
             "minimal",
             "--runtime",
             "podman",
@@ -527,66 +569,58 @@ mod tests {
             "--dry-run",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate {
-                path,
-                language,
-                input,
-                output,
-                version,
-                version_from,
-                config,
-                model,
-                provider,
-                base_url,
-                max_retries,
-                agent5_model,
-                agent5_provider,
-                no_agent5,
-                agent5_mode,
-                runtime,
-                timeout,
-                install_source,
-                source_path,
-                no_parallel,
-                dry_run,
-            } => {
-                assert_eq!(path, "/tmp/repo");
-                assert_eq!(language.unwrap(), "python");
-                assert!(input.is_none());
-                assert_eq!(output, "SKILL.md");
-                assert!(version.is_none());
-                assert!(version_from.is_none());
-                assert!(config.is_none());
-                assert_eq!(model.unwrap(), "gpt-5.2");
-                assert_eq!(provider.unwrap(), "openai");
-                assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
-                assert_eq!(max_retries.unwrap(), 10);
-                assert_eq!(agent5_model.unwrap(), "gpt-5.2");
-                assert_eq!(agent5_provider.unwrap(), "openai");
-                assert!(no_agent5);
-                assert_eq!(agent5_mode.unwrap(), "minimal");
-                assert_eq!(runtime.unwrap(), "podman");
-                assert_eq!(timeout.unwrap(), 300);
-                assert_eq!(install_source.unwrap(), "local-mount");
-                assert!(no_parallel);
-                assert_eq!(source_path.unwrap(), "/tmp/mylib");
-                assert!(dry_run);
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |path,
+                               language,
+                               input,
+                               output,
+                               version,
+                               version_from,
+                               config,
+                               model,
+                               provider,
+                               base_url,
+                               max_retries,
+                               test_model,
+                               test_provider,
+                               no_test,
+                               test_mode,
+                               runtime,
+                               timeout,
+                               install_source,
+                               source_path,
+                               no_parallel,
+                               dry_run| {
+            assert_eq!(path, "/tmp/repo");
+            assert_eq!(language.unwrap(), "python");
+            assert!(input.is_none());
+            assert_eq!(output, "SKILL.md");
+            assert!(version.is_none());
+            assert!(version_from.is_none());
+            assert!(config.is_none());
+            assert_eq!(model.unwrap(), "gpt-5.2");
+            assert_eq!(provider.unwrap(), "openai");
+            assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
+            assert_eq!(max_retries.unwrap(), 10);
+            assert_eq!(test_model.unwrap(), "gpt-5.2");
+            assert_eq!(test_provider.unwrap(), "openai");
+            assert!(no_test);
+            assert_eq!(test_mode.unwrap(), "minimal");
+            assert_eq!(runtime.unwrap(), "podman");
+            assert_eq!(timeout.unwrap(), 300);
+            assert_eq!(install_source.unwrap(), "local-mount");
+            assert!(no_parallel);
+            assert_eq!(source_path.unwrap(), "/tmp/mylib");
+            assert!(dry_run);
+        });
     }
 
     #[test]
     fn test_parse_generate_provider_only() {
         let cli = Cli::try_parse_from(["skilldo", "generate", "--provider", "openai-compatible"])
             .unwrap();
-        match cli.command {
-            Commands::Generate { provider, .. } => {
-                assert_eq!(provider.unwrap(), "openai-compatible");
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |provider| {
+            assert_eq!(provider.unwrap(), "openai-compatible");
+        });
     }
 
     #[test]
@@ -598,38 +632,26 @@ mod tests {
             "http://localhost:11434/v1",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate { base_url, .. } => {
-                assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |base_url| {
+            assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
+        });
     }
 
     #[test]
-    fn test_parse_generate_agent5_model_only() {
-        let cli =
-            Cli::try_parse_from(["skilldo", "generate", "--agent5-model", "gpt-5.2"]).unwrap();
-        match cli.command {
-            Commands::Generate { agent5_model, .. } => {
-                assert_eq!(agent5_model.unwrap(), "gpt-5.2");
-            }
-            _ => panic!("Expected Generate"),
-        }
+    fn test_parse_generate_test_model_only() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--test-model", "gpt-5.2"]).unwrap();
+        assert_generate!(cli, |test_model| {
+            assert_eq!(test_model.unwrap(), "gpt-5.2");
+        });
     }
 
     #[test]
-    fn test_parse_generate_agent5_provider_only() {
+    fn test_parse_generate_test_provider_only() {
         let cli =
-            Cli::try_parse_from(["skilldo", "generate", "--agent5-provider", "anthropic"]).unwrap();
-        match cli.command {
-            Commands::Generate {
-                agent5_provider, ..
-            } => {
-                assert_eq!(agent5_provider.unwrap(), "anthropic");
-            }
-            _ => panic!("Expected Generate"),
-        }
+            Cli::try_parse_from(["skilldo", "generate", "--test-provider", "anthropic"]).unwrap();
+        assert_generate!(cli, |test_provider| {
+            assert_eq!(test_provider.unwrap(), "anthropic");
+        });
     }
 
     #[test]
@@ -643,40 +665,26 @@ mod tests {
             "/tmp/lib",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Generate {
-                install_source,
-                source_path,
-                ..
-            } => {
-                assert_eq!(install_source.unwrap(), "local-install");
-                assert_eq!(source_path.unwrap(), "/tmp/lib");
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |install_source, source_path| {
+            assert_eq!(install_source.unwrap(), "local-install");
+            assert_eq!(source_path.unwrap(), "/tmp/lib");
+        });
     }
 
     #[test]
     fn test_parse_generate_timeout_only() {
         let cli = Cli::try_parse_from(["skilldo", "generate", "--timeout", "600"]).unwrap();
-        match cli.command {
-            Commands::Generate { timeout, .. } => {
-                assert_eq!(timeout.unwrap(), 600);
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert_generate!(cli, |timeout| {
+            assert_eq!(timeout.unwrap(), 600);
+        });
     }
 
     #[test]
-    fn test_parse_generate_agent5_mode_only() {
-        let cli =
-            Cli::try_parse_from(["skilldo", "generate", "--agent5-mode", "adaptive"]).unwrap();
-        match cli.command {
-            Commands::Generate { agent5_mode, .. } => {
-                assert_eq!(agent5_mode.unwrap(), "adaptive");
-            }
-            _ => panic!("Expected Generate"),
-        }
+    fn test_parse_generate_test_mode_only() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--test-mode", "adaptive"]).unwrap();
+        assert_generate!(cli, |test_mode| {
+            assert_eq!(test_mode.unwrap(), "adaptive");
+        });
     }
 
     #[test]
@@ -684,12 +692,7 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "-q", "generate"]).unwrap();
         assert!(cli.quiet);
         assert!(!cli.verbose);
-        match cli.command {
-            Commands::Generate { path, .. } => {
-                assert_eq!(path, ".");
-            }
-            _ => panic!("Expected Generate"),
-        }
+        assert!(matches!(cli.command, Commands::Generate { .. }));
     }
 
     #[test]
@@ -697,14 +700,9 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "-v", "config", "check"]).unwrap();
         assert!(cli.verbose);
         assert!(!cli.quiet);
-        match cli.command {
-            Commands::Config { action } => match action {
-                ConfigAction::Check { config } => {
-                    assert!(config.is_none());
-                }
-            },
-            _ => panic!("Expected Config"),
-        }
+        assert_config_check!(cli, |config| {
+            assert!(config.is_none());
+        });
     }
 
     #[test]
@@ -712,5 +710,478 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "-q", "-v", "generate"]).unwrap();
         assert!(cli.quiet);
         assert!(cli.verbose);
+    }
+
+    #[test]
+    fn test_parse_review() {
+        let cli = Cli::try_parse_from(["skilldo", "review", "SKILL.md"]).unwrap();
+        assert_review!(cli, |path,
+                             config,
+                             model,
+                             provider,
+                             base_url,
+                             runtime,
+                             timeout,
+                             no_container,
+                             dry_run| {
+            assert_eq!(path, "SKILL.md");
+            assert!(config.is_none());
+            assert!(model.is_none());
+            assert!(provider.is_none());
+            assert!(base_url.is_none());
+            assert!(runtime.is_none());
+            assert!(timeout.is_none());
+            assert!(!no_container);
+            assert!(!dry_run);
+        });
+    }
+
+    #[test]
+    fn test_parse_review_missing_path() {
+        let result = Cli::try_parse_from(["skilldo", "review"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_review_with_all_flags() {
+        let cli = Cli::try_parse_from([
+            "skilldo",
+            "review",
+            "test.md",
+            "--config",
+            "my.toml",
+            "--model",
+            "codestral:latest",
+            "--provider",
+            "openai-compatible",
+            "--base-url",
+            "http://localhost:11434/v1",
+            "--runtime",
+            "podman",
+            "--timeout",
+            "120",
+            "--no-container",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert_review!(cli, |path,
+                             config,
+                             model,
+                             provider,
+                             base_url,
+                             runtime,
+                             timeout,
+                             no_container,
+                             dry_run| {
+            assert_eq!(path, "test.md");
+            assert_eq!(config.unwrap(), "my.toml");
+            assert_eq!(model.unwrap(), "codestral:latest");
+            assert_eq!(provider.unwrap(), "openai-compatible");
+            assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
+            assert_eq!(runtime.unwrap(), "podman");
+            assert_eq!(timeout.unwrap(), 120);
+            assert!(no_container);
+            assert!(dry_run);
+        });
+    }
+
+    #[test]
+    fn test_parse_review_dry_run_only() {
+        let cli = Cli::try_parse_from(["skilldo", "review", "SKILL.md", "--dry-run"]).unwrap();
+        assert_review!(cli, |dry_run| {
+            assert!(dry_run);
+        });
+    }
+
+    // --- Alias tests: --no-agent5, --agent5-model, --agent5-provider, --agent5-mode ---
+
+    #[test]
+    fn test_parse_generate_no_agent5_alias() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--no-agent5"]).unwrap();
+        assert_generate!(cli, |no_test| {
+            assert!(no_test);
+        });
+    }
+
+    #[test]
+    fn test_parse_generate_agent5_model_alias() {
+        let cli =
+            Cli::try_parse_from(["skilldo", "generate", "--agent5-model", "gpt-5.2"]).unwrap();
+        assert_generate!(cli, |test_model| {
+            assert_eq!(test_model.unwrap(), "gpt-5.2");
+        });
+    }
+
+    #[test]
+    fn test_parse_generate_agent5_provider_alias() {
+        let cli =
+            Cli::try_parse_from(["skilldo", "generate", "--agent5-provider", "anthropic"]).unwrap();
+        assert_generate!(cli, |test_provider| {
+            assert_eq!(test_provider.unwrap(), "anthropic");
+        });
+    }
+
+    #[test]
+    fn test_parse_generate_agent5_mode_alias() {
+        let cli =
+            Cli::try_parse_from(["skilldo", "generate", "--agent5-mode", "thorough"]).unwrap();
+        assert_generate!(cli, |test_mode| {
+            assert_eq!(test_mode.unwrap(), "thorough");
+        });
+    }
+
+    // --- Global flags after subcommand ---
+
+    #[test]
+    fn test_parse_quiet_after_subcommand() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "-q"]).unwrap();
+        assert!(cli.quiet);
+        assert!(!cli.verbose);
+    }
+
+    #[test]
+    fn test_parse_verbose_after_subcommand() {
+        let cli = Cli::try_parse_from(["skilldo", "lint", "x.md", "--verbose"]).unwrap();
+        assert!(cli.verbose);
+        assert!(!cli.quiet);
+    }
+
+    #[test]
+    fn test_parse_quiet_after_review() {
+        let cli = Cli::try_parse_from(["skilldo", "review", "SKILL.md", "-q"]).unwrap();
+        assert!(cli.quiet);
+    }
+
+    // --- Generate --config flag ---
+
+    #[test]
+    fn test_parse_generate_config_flag() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--config", "/tmp/my.toml"]).unwrap();
+        assert_generate!(cli, |config| {
+            assert_eq!(config.unwrap(), "/tmp/my.toml");
+        });
+    }
+
+    // --- Generate --no-parallel alone ---
+
+    #[test]
+    fn test_parse_generate_no_parallel_alone() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--no-parallel"]).unwrap();
+        assert_generate!(cli, |no_parallel| {
+            assert!(no_parallel);
+        });
+    }
+
+    // --- Generate boolean defaults are false ---
+
+    #[test]
+    fn test_parse_generate_boolean_defaults() {
+        let cli = Cli::try_parse_from(["skilldo", "generate"]).unwrap();
+        assert!(!cli.quiet);
+        assert!(!cli.verbose);
+        assert_generate!(cli, |no_test, no_parallel, dry_run| {
+            assert!(!no_test);
+            assert!(!no_parallel);
+            assert!(!dry_run);
+        });
+    }
+
+    // --- Generate all Option fields default to None ---
+
+    #[test]
+    fn test_parse_generate_option_defaults_are_none() {
+        let cli = Cli::try_parse_from(["skilldo", "generate"]).unwrap();
+        assert_generate!(cli, |language,
+                               input,
+                               version,
+                               version_from,
+                               config,
+                               model,
+                               provider,
+                               base_url,
+                               max_retries,
+                               test_model,
+                               test_provider,
+                               test_mode,
+                               runtime,
+                               timeout,
+                               install_source,
+                               source_path| {
+            assert!(language.is_none());
+            assert!(input.is_none());
+            assert!(version.is_none());
+            assert!(version_from.is_none());
+            assert!(config.is_none());
+            assert!(model.is_none());
+            assert!(provider.is_none());
+            assert!(base_url.is_none());
+            assert!(max_retries.is_none());
+            assert!(test_model.is_none());
+            assert!(test_provider.is_none());
+            assert!(test_mode.is_none());
+            assert!(runtime.is_none());
+            assert!(timeout.is_none());
+            assert!(install_source.is_none());
+            assert!(source_path.is_none());
+        });
+    }
+
+    // --- Invalid type arguments ---
+
+    #[test]
+    fn test_parse_generate_invalid_timeout_type() {
+        let result = Cli::try_parse_from(["skilldo", "generate", "--timeout", "abc"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_generate_invalid_max_retries_type() {
+        let result = Cli::try_parse_from(["skilldo", "generate", "--max-retries", "xyz"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_review_invalid_timeout_type() {
+        let result = Cli::try_parse_from(["skilldo", "review", "x.md", "--timeout", "not-num"]);
+        assert!(result.is_err());
+    }
+
+    // --- Config without subaction ---
+
+    #[test]
+    fn test_parse_config_missing_subaction() {
+        let result = Cli::try_parse_from(["skilldo", "config"]);
+        assert!(result.is_err());
+    }
+
+    // --- Review individual optional flags ---
+
+    #[test]
+    fn test_parse_review_with_config_only() {
+        let cli = Cli::try_parse_from(["skilldo", "review", "s.md", "--config", "c.toml"]).unwrap();
+        assert_review!(cli, |config| {
+            assert_eq!(config.unwrap(), "c.toml");
+        });
+    }
+
+    #[test]
+    fn test_parse_review_with_model_only() {
+        let cli = Cli::try_parse_from(["skilldo", "review", "s.md", "--model", "gpt-5"]).unwrap();
+        assert_review!(cli, |model| {
+            assert_eq!(model.unwrap(), "gpt-5");
+        });
+    }
+
+    #[test]
+    fn test_parse_review_no_container_only() {
+        let cli = Cli::try_parse_from(["skilldo", "review", "s.md", "--no-container"]).unwrap();
+        assert_review!(cli, |no_container| {
+            assert!(no_container);
+        });
+    }
+
+    #[test]
+    fn test_parse_review_no_container_default() {
+        let cli = Cli::try_parse_from(["skilldo", "review", "s.md"]).unwrap();
+        assert_review!(cli, |no_container| {
+            assert!(!no_container);
+        });
+    }
+
+    // --- Verify command metadata via CommandFactory ---
+
+    #[test]
+    fn test_cli_command_name() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        assert_eq!(cmd.get_name(), "skilldo");
+    }
+
+    #[test]
+    fn test_cli_has_version() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        assert!(cmd.get_version().is_some());
+    }
+
+    #[test]
+    fn test_cli_subcommands_exist() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+        assert!(names.contains(&"generate"));
+        assert!(names.contains(&"lint"));
+        assert!(names.contains(&"review"));
+        assert!(names.contains(&"config"));
+    }
+
+    // --- Generate with --dry-run alone ---
+
+    #[test]
+    fn test_parse_generate_dry_run_alone() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--dry-run"]).unwrap();
+        assert_generate!(cli, |dry_run| {
+            assert!(dry_run);
+        });
+    }
+
+    // --- Generate with explicit path ---
+
+    #[test]
+    fn test_parse_generate_explicit_path() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "/some/repo"]).unwrap();
+        assert_generate!(cli, |path| {
+            assert_eq!(path, "/some/repo");
+        });
+    }
+
+    // --- Unknown flags rejected ---
+
+    #[test]
+    fn test_parse_generate_unknown_flag() {
+        let result = Cli::try_parse_from(["skilldo", "generate", "--nonexistent"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_review_unknown_flag() {
+        let result = Cli::try_parse_from(["skilldo", "review", "s.md", "--badarg"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_lint_unknown_flag() {
+        let result = Cli::try_parse_from(["skilldo", "lint", "s.md", "--extra"]);
+        assert!(result.is_err());
+    }
+
+    // --- Review with provider and base_url ---
+
+    #[test]
+    fn test_parse_review_provider_base_url() {
+        let cli = Cli::try_parse_from([
+            "skilldo",
+            "review",
+            "s.md",
+            "--provider",
+            "openai-compatible",
+            "--base-url",
+            "http://localhost:8080/v1",
+        ])
+        .unwrap();
+        assert_review!(cli, |provider, base_url| {
+            assert_eq!(provider.unwrap(), "openai-compatible");
+            assert_eq!(base_url.unwrap(), "http://localhost:8080/v1");
+        });
+    }
+
+    // --- Review with runtime and timeout ---
+
+    #[test]
+    fn test_parse_review_runtime_timeout() {
+        let cli = Cli::try_parse_from([
+            "skilldo",
+            "review",
+            "s.md",
+            "--runtime",
+            "podman",
+            "--timeout",
+            "60",
+        ])
+        .unwrap();
+        assert_review!(cli, |runtime, timeout| {
+            assert_eq!(runtime.unwrap(), "podman");
+            assert_eq!(timeout.unwrap(), 60);
+        });
+    }
+
+    // --- Lint with various paths ---
+
+    #[test]
+    fn test_parse_lint_absolute_path() {
+        let cli = Cli::try_parse_from(["skilldo", "lint", "/tmp/skills/foo.md"]).unwrap();
+        assert_lint!(cli, |path| {
+            assert_eq!(path, "/tmp/skills/foo.md");
+        });
+    }
+
+    // --- Generate with all aliases combined ---
+
+    #[test]
+    fn test_parse_generate_all_aliases() {
+        let cli = Cli::try_parse_from([
+            "skilldo",
+            "generate",
+            "--no-agent5",
+            "--agent5-model",
+            "claude-3",
+            "--agent5-provider",
+            "anthropic",
+            "--agent5-mode",
+            "minimal",
+        ])
+        .unwrap();
+        assert_generate!(cli, |no_test, test_model, test_provider, test_mode| {
+            assert!(no_test);
+            assert_eq!(test_model.unwrap(), "claude-3");
+            assert_eq!(test_provider.unwrap(), "anthropic");
+            assert_eq!(test_mode.unwrap(), "minimal");
+        });
+    }
+
+    // --- Generate: --version-from strategies ---
+
+    #[test]
+    fn test_parse_generate_version_from_package() {
+        let cli =
+            Cli::try_parse_from(["skilldo", "generate", "--version-from", "package"]).unwrap();
+        assert_generate!(cli, |version_from| {
+            assert_eq!(version_from.unwrap(), "package");
+        });
+    }
+
+    #[test]
+    fn test_parse_generate_version_from_branch() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--version-from", "branch"]).unwrap();
+        assert_generate!(cli, |version_from| {
+            assert_eq!(version_from.unwrap(), "branch");
+        });
+    }
+
+    #[test]
+    fn test_parse_generate_version_from_commit() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--version-from", "commit"]).unwrap();
+        assert_generate!(cli, |version_from| {
+            assert_eq!(version_from.unwrap(), "commit");
+        });
+    }
+
+    // --- Command dispatch variant matching (mirrors main() match arms) ---
+
+    #[test]
+    fn test_dispatch_generate_variant() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Generate { dry_run: true, .. }
+        ));
+    }
+
+    #[test]
+    fn test_dispatch_lint_variant() {
+        let cli = Cli::try_parse_from(["skilldo", "lint", "test.md"]).unwrap();
+        assert!(matches!(cli.command, Commands::Lint { .. }));
+    }
+
+    #[test]
+    fn test_dispatch_review_variant() {
+        let cli = Cli::try_parse_from(["skilldo", "review", "test.md"]).unwrap();
+        assert!(matches!(cli.command, Commands::Review { .. }));
+    }
+
+    #[test]
+    fn test_dispatch_config_variant() {
+        let cli = Cli::try_parse_from(["skilldo", "config", "check"]).unwrap();
+        assert!(matches!(cli.command, Commands::Config { .. }));
     }
 }

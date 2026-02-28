@@ -92,52 +92,77 @@ pub fn run(config_path: Option<String>) -> Result<()> {
         config.generation.max_retries, config.generation.max_source_tokens
     ));
 
-    // 6. Check Agent 5
-    if config.generation.enable_agent5 {
+    // 6. Check test agent
+    if config.generation.enable_test {
         results.pass(format!(
-            "Agent 5 enabled (mode: {})",
-            config.generation.agent5_mode
+            "test agent enabled (mode: {})",
+            config.generation.test_mode
         ));
 
-        // Check Agent 5 LLM override if configured
-        if let Some(ref agent5_llm) = config.generation.agent5_llm {
-            check_agent_provider(
+        // Check test agent LLM override if configured
+        if let Some(ref test_llm) = config.generation.test_llm {
+            check_stage_provider(
                 &valid_providers,
-                5,
-                &agent5_llm.provider,
-                &agent5_llm.model,
+                "test",
+                &test_llm.provider,
+                &test_llm.model,
                 &mut results,
             );
             check_api_key(
-                &agent5_llm.api_key_env,
-                "Agent 5 LLM",
-                &agent5_llm.provider,
+                &test_llm.api_key_env,
+                "test LLM",
+                &test_llm.provider,
                 &mut results,
             );
         }
     } else {
-        results.pass("Agent 5 disabled".to_string());
+        results.pass("test agent disabled".to_string());
     }
 
-    // 7. Check per-agent LLM overrides
-    let agent_llms = [
-        (1, &config.generation.agent1_llm),
-        (2, &config.generation.agent2_llm),
-        (3, &config.generation.agent3_llm),
-        (4, &config.generation.agent4_llm),
-    ];
-    for (num, llm_opt) in &agent_llms {
-        if let Some(llm) = llm_opt {
-            check_agent_provider(
+    // 6b. Check review agent
+    if config.generation.enable_review {
+        results.pass(format!(
+            "review agent enabled (max_retries: {})",
+            config.generation.review_max_retries
+        ));
+        if let Some(ref review_llm) = config.generation.review_llm {
+            check_stage_provider(
                 &valid_providers,
-                *num,
+                "review",
+                &review_llm.provider,
+                &review_llm.model,
+                &mut results,
+            );
+            check_api_key(
+                &review_llm.api_key_env,
+                "review LLM",
+                &review_llm.provider,
+                &mut results,
+            );
+        }
+    } else {
+        results.pass("review agent disabled".to_string());
+    }
+
+    // 7. Check per-stage LLM overrides
+    let stage_llms: [(&str, &Option<crate::config::LlmConfig>); 4] = [
+        ("extract", &config.generation.extract_llm),
+        ("map", &config.generation.map_llm),
+        ("learn", &config.generation.learn_llm),
+        ("create", &config.generation.create_llm),
+    ];
+    for (name, llm_opt) in &stage_llms {
+        if let Some(llm) = llm_opt {
+            check_stage_provider(
+                &valid_providers,
+                name,
                 &llm.provider,
                 &llm.model,
                 &mut results,
             );
             check_api_key(
                 &llm.api_key_env,
-                &format!("Agent {} LLM", num),
+                &format!("{} LLM", name),
                 &llm.provider,
                 &mut results,
             );
@@ -148,14 +173,14 @@ pub fn run(config_path: Option<String>) -> Result<()> {
     let runtime = &config.generation.container.runtime;
     if check_runtime_available(runtime) {
         results.pass(format!("Container runtime: {} (available)", runtime));
-    } else if config.generation.enable_agent5 {
+    } else if config.generation.enable_test {
         results.error(format!(
-            "Container runtime '{}' not found — Agent 5 validation will fail",
+            "Container runtime '{}' not found — test agent validation will fail",
             runtime
         ));
     } else {
         results.warn(format!(
-            "Container runtime '{}' not found (Agent 5 disabled, so this is OK)",
+            "Container runtime '{}' not found (test agent disabled, so this is OK)",
             runtime
         ));
     }
@@ -170,22 +195,23 @@ pub fn run(config_path: Option<String>) -> Result<()> {
             results.error(format!("Main LLM extra_body_json: {}", e));
         }
     }
-    let all_agent_llms = [
-        (1, &config.generation.agent1_llm),
-        (2, &config.generation.agent2_llm),
-        (3, &config.generation.agent3_llm),
-        (4, &config.generation.agent4_llm),
-        (5, &config.generation.agent5_llm),
+    let all_stage_llms: [(&str, &Option<crate::config::LlmConfig>); 6] = [
+        ("extract", &config.generation.extract_llm),
+        ("map", &config.generation.map_llm),
+        ("learn", &config.generation.learn_llm),
+        ("create", &config.generation.create_llm),
+        ("review", &config.generation.review_llm),
+        ("test", &config.generation.test_llm),
     ];
-    for (num, llm_opt) in &all_agent_llms {
+    for (name, llm_opt) in &all_stage_llms {
         if let Some(llm) = llm_opt {
             match llm.resolve_extra_body() {
                 Ok(extra) if !extra.is_empty() => {
-                    results.pass(format!("Agent {} extra_body: {} fields", num, extra.len()));
+                    results.pass(format!("{} extra_body: {} fields", name, extra.len()));
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    results.error(format!("Agent {} extra_body_json: {}", num, e));
+                    results.error(format!("{} extra_body_json: {}", name, e));
                 }
             }
         }
@@ -210,22 +236,22 @@ pub fn run(config_path: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn check_agent_provider(
+fn check_stage_provider(
     valid_providers: &[&str],
-    agent_num: usize,
+    stage_name: &str,
     provider: &str,
     model: &str,
     results: &mut CheckResult,
 ) {
     if valid_providers.contains(&provider) {
         results.pass(format!(
-            "Agent {} LLM override: {} ({})",
-            agent_num, provider, model
+            "{} LLM override: {} ({})",
+            stage_name, provider, model
         ));
     } else {
         results.error(format!(
-            "Agent {} LLM override: unknown provider '{}' (expected: {})",
-            agent_num,
+            "{} LLM override: unknown provider '{}' (expected: {})",
+            stage_name,
             provider,
             valid_providers.join(", ")
         ));
@@ -526,7 +552,7 @@ base_url = "http://localhost:11434/v1"
 [generation]
 max_retries = 1
 max_source_tokens = 1000
-enable_agent5 = true
+enable_test = true
 
 [generation.agent5_llm]
 provider = "openai-compatible"
@@ -626,7 +652,7 @@ base_url = "http://localhost:11434/v1"
 [generation]
 max_retries = 1
 max_source_tokens = 1000
-enable_agent5 = false
+enable_test = false
 "#
         )
         .unwrap();
@@ -652,7 +678,7 @@ api_key_env = "none"
 [generation]
 max_retries = 1
 max_source_tokens = 1000
-enable_agent5 = false
+enable_test = false
 "#
         )
         .unwrap();
@@ -680,7 +706,7 @@ base_url = "http://localhost:11434/v1"
 [generation]
 max_retries = 1
 max_source_tokens = 1000
-enable_agent5 = false
+enable_test = false
 "#
         )
         .unwrap();
@@ -709,22 +735,27 @@ enable_agent5 = false
     }
 
     #[test]
-    fn test_check_agent_provider_valid() {
+    fn test_check_stage_provider_valid() {
         let valid_providers = ["anthropic", "openai", "gemini", "openai-compatible"];
         let mut r = CheckResult::new();
-        check_agent_provider(&valid_providers, 1, "openai", "gpt-5", &mut r);
+        check_stage_provider(&valid_providers, "extract", "openai", "gpt-5", &mut r);
         assert_eq!(r.passed.len(), 1);
-        assert!(r.passed[0].contains("Agent 1 LLM override"));
+        assert!(r.passed[0].contains("extract LLM override"));
     }
 
     #[test]
-    fn test_check_agent_provider_invalid() {
-        // Lines 212-216: unknown provider in check_agent_provider
+    fn test_check_stage_provider_invalid() {
         let valid_providers = ["anthropic", "openai", "gemini", "openai-compatible"];
         let mut r = CheckResult::new();
-        check_agent_provider(&valid_providers, 3, "badprovider", "some-model", &mut r);
+        check_stage_provider(
+            &valid_providers,
+            "learn",
+            "badprovider",
+            "some-model",
+            &mut r,
+        );
         assert_eq!(r.errors.len(), 1);
-        assert!(r.errors[0].contains("Agent 3 LLM override"));
+        assert!(r.errors[0].contains("learn LLM override"));
         assert!(r.errors[0].contains("badprovider"));
     }
 
@@ -785,7 +816,7 @@ extra_body_json = '{{"top_p": 0.9}}'
 [generation]
 max_retries = 1
 max_source_tokens = 1000
-enable_agent5 = false
+enable_test = false
 "#
         )
         .unwrap();
@@ -813,7 +844,7 @@ base_url = "http://localhost:11434/v1"
 [generation]
 max_retries = 1
 max_source_tokens = 1000
-enable_agent5 = false
+enable_test = false
 
 [generation.agent2_llm]
 provider = "openai-compatible"
@@ -830,8 +861,8 @@ extra_body_json = '{{"top_p": 0.9}}'
     }
 
     #[test]
-    fn test_run_with_agent5_enabled_unavailable_runtime() {
-        // Lines 138-140: runtime unavailable + agent5 enabled → error, then process::exit(1)
+    fn test_run_with_test_enabled_unavailable_runtime() {
+        // runtime unavailable + test agent enabled → error
         // We test the internal logic rather than calling run() to avoid process::exit.
         let valid_providers = ["anthropic", "openai", "gemini", "openai-compatible"];
         let mut r = CheckResult::new();
@@ -840,19 +871,18 @@ extra_body_json = '{{"top_p": 0.9}}'
         if check_runtime_available(runtime) {
             r.pass(format!("Container runtime: {} (available)", runtime));
         } else {
-            // enable_agent5 = true branch (lines 138-140)
             r.error(format!(
-                "Container runtime '{}' not found — Agent 5 validation will fail",
+                "Container runtime '{}' not found — test agent validation will fail",
                 runtime
             ));
         }
 
-        // Verify check_agent_provider pass path is also exercised via valid providers
-        check_agent_provider(&valid_providers, 5, "anthropic", "claude-3", &mut r);
+        // Verify check_stage_provider pass path is also exercised via valid providers
+        check_stage_provider(&valid_providers, "test", "anthropic", "claude-3", &mut r);
 
         assert_eq!(r.errors.len(), 1);
         assert!(r.errors[0].contains("not found"));
-        assert!(r.errors[0].contains("Agent 5 validation will fail"));
+        assert!(r.errors[0].contains("test agent validation will fail"));
         assert_eq!(r.passed.len(), 1);
     }
 
@@ -875,7 +905,7 @@ base_url = "http://localhost:11434/v1"
 [generation]
 max_retries = 1
 max_source_tokens = 1000
-enable_agent5 = false
+enable_test = false
 
 [generation.container]
 runtime = "nonexistent_runtime_xyz_disabled"
@@ -886,5 +916,364 @@ runtime = "nonexistent_runtime_xyz_disabled"
         // No errors expected: api_key=none, agent5=false, runtime only warns.
         let result = run(Some(config_path.to_str().unwrap().to_string()));
         assert!(result.is_ok());
+    }
+
+    // --- Coverage: unknown LLM provider (lines 63-66) ---
+    #[test]
+    fn test_run_unknown_provider_end_to_end() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "badprovider"
+model = "test"
+api_key_env = "none"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = false
+"#
+        )
+        .unwrap();
+
+        // run() should return Err because of the unknown provider error
+        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("config error"));
+    }
+
+    // --- Coverage: review LLM config validation (lines 130-144) ---
+    #[test]
+    fn test_run_with_review_enabled_and_review_llm() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "base-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_review = true
+enable_test = false
+
+[generation.review_llm]
+provider = "openai-compatible"
+model = "review-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_ok());
+    }
+
+    // --- Coverage: review agent disabled (line 144) ---
+    #[test]
+    fn test_run_with_review_disabled() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "base-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_review = false
+enable_test = false
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_ok());
+    }
+
+    // --- Coverage: per-stage LLM validation for all 4 stages (lines 155-169) ---
+    #[test]
+    fn test_run_with_all_stage_llm_overrides() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "base-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = false
+enable_review = false
+
+[generation.extract_llm]
+provider = "openai-compatible"
+model = "extract-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.map_llm]
+provider = "openai-compatible"
+model = "map-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.learn_llm]
+provider = "openai-compatible"
+model = "learn-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.create_llm]
+provider = "openai-compatible"
+model = "create-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_ok());
+    }
+
+    // --- Coverage: container runtime error when test enabled (lines 177-179) ---
+    #[test]
+    fn test_run_with_test_enabled_bad_runtime_end_to_end() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+enable_review = false
+
+[generation.container]
+runtime = "nonexistent_runtime_xyz"
+"#
+        )
+        .unwrap();
+
+        // Test agent enabled + bad runtime → should produce errors → run() returns Err
+        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_err());
+    }
+
+    // --- Coverage: main LLM extra_body_json parse error (lines 194-195) ---
+    #[test]
+    fn test_run_with_bad_extra_body_json() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+extra_body_json = "not valid json!!!"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = false
+enable_review = false
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_err());
+    }
+
+    // --- Coverage: per-stage extra_body_json error (lines 213-214) ---
+    #[test]
+    fn test_run_with_stage_bad_extra_body_json() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = false
+enable_review = false
+
+[generation.extract_llm]
+provider = "openai-compatible"
+model = "extract-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+extra_body_json = "[1, 2, 3]"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_err());
+    }
+
+    // --- Coverage: errors.is_empty() check causing bail (line 233) ---
+    // Already covered by test_run_unknown_provider_end_to_end above.
+
+    // --- Coverage: check_api_key empty value for openai-compatible (lines 275-282) ---
+    #[test]
+    fn test_check_api_key_empty_value_openai_compatible() {
+        env::set_var("SKILLDO_TEST_EMPTY_OAI_KEY", "");
+        let mut r = CheckResult::new();
+        check_api_key(
+            &Some("SKILLDO_TEST_EMPTY_OAI_KEY".to_string()),
+            "Test",
+            "openai-compatible",
+            &mut r,
+        );
+        env::remove_var("SKILLDO_TEST_EMPTY_OAI_KEY");
+        // Empty key + openai-compatible → warning, not error
+        assert_eq!(r.warnings.len(), 1);
+        assert!(r.warnings[0].contains("empty"));
+        assert!(r.warnings[0].contains("OK for local models"));
+    }
+
+    // --- Coverage: check_api_key empty value for non-openai-compatible (line 282) ---
+    #[test]
+    fn test_check_api_key_empty_value_non_oai_compatible() {
+        env::set_var("SKILLDO_TEST_EMPTY_ANTH_KEY", "");
+        let mut r = CheckResult::new();
+        check_api_key(
+            &Some("SKILLDO_TEST_EMPTY_ANTH_KEY".to_string()),
+            "Test",
+            "anthropic",
+            &mut r,
+        );
+        env::remove_var("SKILLDO_TEST_EMPTY_ANTH_KEY");
+        // Empty key + non openai-compatible → error
+        assert_eq!(r.errors.len(), 1);
+        assert!(r.errors[0].contains("empty"));
+    }
+
+    // --- Coverage: inferred env var empty for openai-compatible (lines 311-320) ---
+    #[test]
+    fn test_check_api_key_inferred_empty_openai_compatible() {
+        // Set OPENAI_API_KEY to empty, provider=openai-compatible, api_key_env=None
+        let saved = env::var("OPENAI_API_KEY").ok();
+        env::set_var("OPENAI_API_KEY", "");
+
+        let mut r = CheckResult::new();
+        check_api_key(&None, "Test", "openai-compatible", &mut r);
+
+        match saved {
+            Some(val) => env::set_var("OPENAI_API_KEY", val),
+            None => env::remove_var("OPENAI_API_KEY"),
+        }
+
+        // Empty inferred key for openai-compatible → warning
+        assert_eq!(r.warnings.len(), 1);
+        assert!(r.warnings[0].contains("empty"));
+        assert!(r.warnings[0].contains("OK for local models"));
+    }
+
+    // --- Coverage: inferred env var empty for non-openai-compatible (lines 317-320) ---
+    #[test]
+    fn test_check_api_key_inferred_empty_non_oai_compatible() {
+        // Set OPENAI_API_KEY to empty, provider=openai (not compatible), api_key_env=None
+        let saved = env::var("OPENAI_API_KEY").ok();
+        env::set_var("OPENAI_API_KEY", "");
+
+        let mut r = CheckResult::new();
+        check_api_key(&None, "Test", "openai", &mut r);
+
+        match saved {
+            Some(val) => env::set_var("OPENAI_API_KEY", val),
+            None => env::remove_var("OPENAI_API_KEY"),
+        }
+
+        // Empty inferred key for non-openai-compatible → error
+        assert_eq!(r.errors.len(), 1);
+        assert!(r.errors[0].contains("empty"));
+        assert!(r.errors[0].contains("inferred from provider"));
+    }
+
+    // --- Coverage: review_llm with bad provider (lines 130-134) ---
+    #[test]
+    fn test_run_with_review_llm_bad_provider() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "base-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_review = true
+enable_test = false
+
+[generation.review_llm]
+provider = "bad-review-provider"
+model = "review-model"
+api_key_env = "none"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_err());
     }
 }

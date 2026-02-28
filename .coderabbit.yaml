@@ -1,0 +1,10 @@
+reviews:
+  path_filters:
+    - '!*.md'
+    - 'README.md'
+    - '!examples/skills/**'
+    - '!examples/configs/**'
+    - '!dev/scripts/**'
+    - '!AUDIT-PROMPT*.md'
+    - '!BACKLOG.md'
+    - '!BUILD.md'

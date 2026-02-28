@@ -7,8 +7,8 @@ api_key_env = "ANTHROPIC_API_KEY"
 [generation]
 max_retries = 5
 max_source_tokens = 100000
-enable_agent5 = true
-agent5_mode = "thorough"  # thorough | adaptive | minimal
+enable_test = true
+test_mode = "thorough"  # thorough | adaptive | minimal
 
 [generation.container]
 runtime = "docker"  # or "podman"

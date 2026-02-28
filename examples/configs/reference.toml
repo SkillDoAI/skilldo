@@ -14,11 +14,11 @@
 
 
 # ── Main LLM ─────────────────────────────────────────────────────────
-# Used by Agents 1-4 by default. Agent 5 uses this too unless
-# [generation.agent5_llm] is set.
+# Used by all stages by default. Test stage uses this too unless
+# [generation.test_llm] is set.
 #
-# Per-agent overrides: [generation.agent1_llm] through [generation.agent4_llm]
-# let you run individual agents on different models. See below.
+# Per-stage overrides: [generation.extract_llm] through [generation.create_llm]
+# let you run individual stages on different models. See below.
 
 [llm]
 # Provider: "anthropic", "openai", "gemini", or "openai-compatible"
@@ -75,7 +75,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 [generation]
 # Max retry attempts for the generate → validate → fix loop.
-# Each retry re-runs Agent 4 with error feedback.
+# Each retry re-runs the create stage with error feedback.
 # Increase for local models (10+) — they sometimes need several passes.
 max_retries = 5
 
@@ -88,26 +88,47 @@ parallel_extraction = true
 # Larger libraries may need more; small libraries waste tokens at high values.
 max_source_tokens = 100000
 
-# Enable Agent 5 code validation in containers.
+# Enable test stage code validation in containers.
 # When true, generated test code runs in Docker/Podman to verify patterns work.
-# Disable with --no-agent5 on CLI or set to false here.
-enable_agent5 = true
+# Disable with --no-test on CLI or set to false here.
+enable_test = true
 
-# Agent 5 validation mode:
+# Test stage validation mode:
 #   "thorough"  — test every extracted pattern (default, most accurate)
 #   "adaptive"  — test patterns, reduce scope on repeated failures
 #   "minimal"   — test only core import + one pattern (fastest)
-agent5_mode = "thorough"
+test_mode = "thorough"
+
+# Enable review agent accuracy/safety validation (default: true).
+# Reviews the generated SKILL.md for factual accuracy (API signatures,
+# dates, versions) using container introspection, plus safety checks
+# (prompt injection, obfuscated code).
+# Disable with --no-review on CLI or set to false here.
+enable_review = true
+
+# Max retries for review → create feedback loop (default: 5).
+# If review finds issues, it sends targeted complaints to the create agent.
+# review_max_retries = 5
 
 
-# ── Agent 5 LLM Override ─────────────────────────────────────────────
-# Use a different model for Agent 5 code generation.
-# This is the "hybrid" setup: cheap model for extraction (agents 1-4),
-# strong model for writing test code (agent 5).
+# ── Review Stage LLM Override ─────────────────────────────────────────
+# Use a different model for the review stage.
+# If not set, the review stage uses the main [llm] config.
+
+# [generation.review_llm]
+# provider = "anthropic"
+# model = "claude-sonnet-4-5-20250929"
+# api_key_env = "ANTHROPIC_API_KEY"
+
+
+# ── Test Stage LLM Override ──────────────────────────────────────────
+# Use a different model for the test stage code generation.
+# This is the "hybrid" setup: cheap model for extraction (extract/map/learn),
+# strong model for writing test code (test stage).
 #
-# If not set, Agent 5 uses the main [llm] config.
+# If not set, the test stage uses the main [llm] config.
 
-# [generation.agent5_llm]
+# [generation.test_llm]
 # provider = "openai"
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
@@ -117,44 +138,44 @@ agent5_mode = "thorough"
 # retry_delay = 120
 
 
-# ── Per-Agent LLM Overrides (Advanced) ───────────────────────────────
-# Run individual agents on different providers/models.
-# Each is optional — if not set, the agent uses [llm].
+# ── Per-Stage LLM Overrides (Advanced) ───────────────────────────────
+# Run individual stages on different providers/models.
+# Each is optional — if not set, the stage uses [llm].
 #
-# Use case: run cheap local extraction (agents 1-3) with a strong
-# cloud model for synthesis (agent 4) and validation (agent 5).
+# Use case: run cheap local extraction (extract/map/learn) with a strong
+# cloud model for synthesis (create) and validation (test).
 #
 # Each section has the same fields as [llm].
 
-# [generation.agent1_llm]
+# [generation.extract_llm]
 # provider = "openai-compatible"
 # model = "qwen3-coder:latest"
 # api_key_env = "none"
 # base_url = "http://localhost:11434/v1"
 
-# [generation.agent2_llm]
+# [generation.map_llm]
 # provider = "openai-compatible"
 # model = "qwen3-coder:latest"
 # api_key_env = "none"
 # base_url = "http://localhost:11434/v1"
 
-# [generation.agent3_llm]
+# [generation.learn_llm]
 # provider = "openai-compatible"
 # model = "qwen3-coder:latest"
 # api_key_env = "none"
 # base_url = "http://localhost:11434/v1"
 
-# [generation.agent4_llm]
+# [generation.create_llm]
 # provider = "anthropic"
 # model = "claude-sonnet-4-5-20250929"
 # api_key_env = "ANTHROPIC_API_KEY"
 
 
 # ── Container Settings ───────────────────────────────────────────────
-# Agent 5 runs generated test code inside containers for safety.
+# The test stage runs generated test code inside containers for safety.
 
 [generation.container]
-# Container runtime: "docker" or "podman"
+# Container runtime: "podman" or "docker" (auto-detected if omitted)
 runtime = "docker"
 
 # Timeout for container execution in seconds.
@@ -165,7 +186,7 @@ timeout = 60
 # Auto-remove containers after execution.
 cleanup = true
 
-# Library install source for Agent 5 validation:
+# Library install source for test stage validation:
 #   "registry"       — install from PyPI (default, works for published packages)
 #   "local-install"  — mount local repo at /src, run `pip install /src`
 #                      (requires pyproject.toml or setup.py in the repo)
@@ -197,30 +218,31 @@ cleanup = true
 
 
 # ── Custom Prompts (Advanced) ────────────────────────────────────────
-# Override or extend the built-in agent prompts.
+# Override or extend the built-in stage prompts.
 #
-# Per-agent mode:
+# Per-stage mode:
 #   "append"    — your text is added after the built-in prompt (default)
 #   "overwrite" — your text replaces the built-in prompt entirely
 #
-# Agent 5 is always append-only (overwrite is ignored for safety).
+# Test and review stages are always append-only (overwrite is ignored for safety).
 #
-# The global override_prompts flag sets the default for all agents.
-# Per-agent modes take precedence over the global flag.
+# The global override_prompts flag sets the default for all stages.
+# Per-stage modes take precedence over the global flag.
 
 [prompts]
 # Global default: false = append, true = overwrite
 # override_prompts = false
 
-# Per-agent mode overrides
-# agent1_mode = "append"
-# agent2_mode = "append"
-# agent3_mode = "append"
-# agent4_mode = "append"
+# Per-stage mode overrides
+# extract_mode = "append"
+# map_mode = "append"
+# learn_mode = "append"
+# create_mode = "append"
 
-# Custom prompt text per agent
-# agent1_custom = "Also extract all class methods that start with 'get_'"
-# agent2_custom = "Focus on async/await patterns"
-# agent3_custom = "Pay special attention to migration guides"
-# agent4_custom = "Use British English in all descriptions"
-# agent5_custom = "Test edge cases with empty inputs"
+# Custom prompt text per stage
+# extract_custom = "Also extract all class methods that start with 'get_'"
+# map_custom = "Focus on async/await patterns"
+# learn_custom = "Pay special attention to migration guides"
+# create_custom = "Use British English in all descriptions"
+# review_custom = "Also check that all URLs in examples are reachable"
+# test_custom = "Test edge cases with empty inputs"

@@ -12,6 +12,7 @@ debug
 
 # Dev configs (contain local paths, model preferences)
 dev/configs/
+!dev/configs/batch/
 !dev/configs/batch/claude-sonnet.toml
 !dev/configs/batch/gpt41.toml
 

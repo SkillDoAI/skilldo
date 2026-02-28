@@ -27,13 +27,6 @@ impl<'a> PythonCodeGenerator<'a> {
         self.custom_instructions = instructions;
         self
     }
-
-    #[allow(dead_code)]
-    pub fn with_local_package(self, package: Option<String>) -> Self {
-        *self.local_package.lock().unwrap() = package;
-        self
-    }
-
     /// Generate the prompt for creating test code from a pattern
     pub fn create_test_prompt(
         pattern: &CodePattern,
@@ -253,5 +246,108 @@ print(os.getcwd())
 
         let prompt = PythonCodeGenerator::create_test_prompt(&pattern, None, None);
         assert!(!prompt.contains("installed locally"));
+    }
+
+    // --- Coverage: create_test_prompt with custom_instructions (line 94-95) ---
+    #[test]
+    fn test_create_test_prompt_with_custom_instructions() {
+        let pattern = CodePattern {
+            name: "Custom Test".to_string(),
+            description: "Tests custom instructions".to_string(),
+            code: "import click\nclick.echo('hi')".to_string(),
+            category: super::super::PatternCategory::BasicUsage,
+        };
+
+        let prompt = PythonCodeGenerator::create_test_prompt(
+            &pattern,
+            Some("Use pytest-style assertions. Always test edge cases."),
+            None,
+        );
+        assert!(prompt.contains("Additional Instructions"));
+        assert!(prompt.contains("Use pytest-style assertions"));
+    }
+
+    // --- Coverage: create_test_prompt with both local_package AND custom_instructions ---
+    #[test]
+    fn test_create_test_prompt_with_both_options() {
+        let pattern = CodePattern {
+            name: "Full Options".to_string(),
+            description: "All options test".to_string(),
+            code: "import mylib\nmylib.run()".to_string(),
+            category: super::super::PatternCategory::BasicUsage,
+        };
+
+        let prompt = PythonCodeGenerator::create_test_prompt(
+            &pattern,
+            Some("Extra instructions here"),
+            Some("mylib"),
+        );
+        assert!(prompt.contains("installed locally"));
+        assert!(prompt.contains("mylib"));
+        assert!(prompt.contains("Do NOT include"));
+        assert!(prompt.contains("Additional Instructions"));
+        assert!(prompt.contains("Extra instructions here"));
+    }
+
+    // --- Coverage: generate_test_code path (lines 135-149) via mock LLM ---
+    #[tokio::test]
+    async fn test_generate_test_code_with_mock() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = PythonCodeGenerator::new(&mock_client);
+
+        let pattern = CodePattern {
+            name: "Mock Pattern".to_string(),
+            description: "Testing generate_test_code".to_string(),
+            code: "import os\nos.getcwd()".to_string(),
+            category: super::super::PatternCategory::BasicUsage,
+        };
+
+        let result = generator.generate_test_code(&pattern).await;
+        assert!(result.is_ok());
+        // Mock returns {"status": "mock"} for unrecognized prompts
+        let code = result.unwrap();
+        assert!(!code.is_empty());
+    }
+
+    // --- Coverage: generate_test_code with local_package set ---
+    #[tokio::test]
+    async fn test_generate_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = PythonCodeGenerator::new(&mock_client);
+        generator.set_local_package(Some("mylib".to_string()));
+
+        let pattern = CodePattern {
+            name: "Local Package".to_string(),
+            description: "Testing with local package".to_string(),
+            code: "import mylib\nmylib.run()".to_string(),
+            category: super::super::PatternCategory::BasicUsage,
+        };
+
+        let result = generator.generate_test_code(&pattern).await;
+        assert!(result.is_ok());
+    }
+
+    // --- Coverage: generate_test_code with custom_instructions ---
+    #[tokio::test]
+    async fn test_generate_test_code_with_custom_instructions() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = PythonCodeGenerator::new(&mock_client)
+            .with_custom_instructions(Some("Always test edge cases".to_string()));
+
+        let pattern = CodePattern {
+            name: "Custom Instructions".to_string(),
+            description: "Test with custom instructions".to_string(),
+            code: "import os".to_string(),
+            category: super::super::PatternCategory::BasicUsage,
+        };
+
+        let result = generator.generate_test_code(&pattern).await;
+        assert!(result.is_ok());
     }
 }
