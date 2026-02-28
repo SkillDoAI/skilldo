@@ -3122,6 +3122,105 @@ Issues
     );
 }
 
+#[test]
+fn test_from_import_private_name_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from somelib import _internal
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "from pkg import _private should trigger warning. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_multi_import_with_private_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+import somelib, somelib._hidden
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "import a, b._private should trigger warning. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_from_import_multiple_with_private_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from somelib import public, _private_func
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "from pkg import public, _private should trigger warning. Issues: {:?}",
+        issues
+    );
+}
+
 // ============================================================================
 // BODY FENCE WRAPPING TESTS
 // ============================================================================

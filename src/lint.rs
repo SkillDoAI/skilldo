@@ -223,21 +223,30 @@ impl SkillLinter {
 
             for line in imports_content.lines() {
                 let trimmed = line.trim();
-                // Match any underscore-prefixed module segment (e.g. pkg._compat, pkg._internal)
-                let module_path = if let Some(rest) = trimmed.strip_prefix("from ") {
-                    rest.split_whitespace().next()
+                // Match any underscore-prefixed module segment (e.g. pkg._compat, from pkg import _internal)
+                let mut candidates: Vec<&str> = Vec::new();
+                if let Some(rest) = trimmed.strip_prefix("from ") {
+                    if let Some((module, imported)) = rest.split_once(" import ") {
+                        candidates.push(module.trim());
+                        for sym in imported.split(',') {
+                            if let Some(name) = sym.split_whitespace().next() {
+                                candidates.push(name);
+                            }
+                        }
+                    } else if let Some(module) = rest.split_whitespace().next() {
+                        candidates.push(module);
+                    }
                 } else if let Some(rest) = trimmed.strip_prefix("import ") {
-                    rest.split_whitespace().next()
-                } else {
-                    None
-                };
-                let has_private_segment = module_path
-                    .map(|path| {
-                        path.split('.').any(|seg| {
-                            seg.starts_with('_') && seg != "__future__" && seg != "__init__"
-                        })
-                    })
-                    .unwrap_or(false);
+                    for module in rest.split(',') {
+                        if let Some(name) = module.split_whitespace().next() {
+                            candidates.push(name);
+                        }
+                    }
+                }
+                let has_private_segment = candidates.iter().any(|path| {
+                    path.split('.')
+                        .any(|seg| seg.starts_with('_') && seg != "__future__" && seg != "__init__")
+                });
                 if has_private_segment {
                     issues.push(LintIssue {
                         severity: Severity::Warning,

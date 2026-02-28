@@ -51,14 +51,14 @@ impl TestResult {
         let passed_patterns: Vec<String> = self
             .test_cases
             .iter()
-            .filter(|tc| !tc.result.is_fail())
+            .filter(|tc| tc.result.is_pass())
             .map(|tc| format!("- {}", tc.pattern_name))
             .collect();
 
         let failed_tests: Vec<String> = self
             .test_cases
             .iter()
-            .filter(|tc| tc.result.is_fail())
+            .filter(|tc| !tc.result.is_pass())
             .map(|tc| {
                 format!(
                     "Pattern: {}\nGenerated test code:\n```python\n{}\n```\nError: {}",
@@ -1024,10 +1024,8 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_feedback_timeout_returns_none() {
-        // Timeout is not is_fail(), so generate_feedback filters it out.
-        // all_passed() is false (failed=1), so we enter generate_feedback body,
-        // but failed_tests is empty -> returns None.
+    fn test_generate_feedback_timeout_is_actionable() {
+        // Timeouts should be treated as failures so the patch loop can act on them.
         let result = TestResult {
             passed: 0,
             failed: 1,
@@ -1038,7 +1036,9 @@ mod tests {
             }],
         };
         assert!(!result.all_passed());
-        assert!(result.generate_feedback().is_none());
+        let feedback = result.generate_feedback().unwrap();
+        assert!(feedback.contains("Slow Pattern"));
+        assert!(feedback.contains("timed out"));
     }
 
     #[test]

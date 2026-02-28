@@ -33,6 +33,7 @@ impl ExecutionResult {
         matches!(self, ExecutionResult::Pass(_))
     }
 
+    #[allow(dead_code)]
     pub fn is_fail(&self) -> bool {
         matches!(self, ExecutionResult::Fail(_))
     }
