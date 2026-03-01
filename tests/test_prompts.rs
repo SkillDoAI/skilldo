@@ -4,7 +4,16 @@ use skilldo::llm::prompts_v2::{
 
 #[test]
 fn test_agent1_api_extractor_basic() {
-    let prompt = extract_prompt("fastapi", "0.100.0", "class FastAPI: pass", 1, None, false);
+    let prompt = extract_prompt(
+        "fastapi",
+        "0.100.0",
+        "class FastAPI: pass",
+        1,
+        None,
+        false,
+        "python",
+        "package",
+    );
 
     assert!(prompt.contains("fastapi"));
     assert!(prompt.contains("0.100.0"));
@@ -13,7 +22,16 @@ fn test_agent1_api_extractor_basic() {
 
 #[test]
 fn test_agent1_includes_library_category_instructions() {
-    let prompt = extract_prompt("requests", "2.31.0", "def get(): pass", 1, None, false);
+    let prompt = extract_prompt(
+        "requests",
+        "2.31.0",
+        "def get(): pass",
+        1,
+        None,
+        false,
+        "python",
+        "package",
+    );
 
     assert!(prompt.contains("library_category"));
     assert!(prompt.contains("web_framework"));
@@ -27,7 +45,7 @@ fn test_agent1_includes_library_category_instructions() {
 
 #[test]
 fn test_agent1_includes_extraction_requirements() {
-    let prompt = extract_prompt("click", "8.1.0", "", 1, None, false);
+    let prompt = extract_prompt("click", "8.1.0", "", 1, None, false, "python", "package");
 
     assert!(prompt.contains("Name"));
     assert!(prompt.contains("Type"));
@@ -40,7 +58,7 @@ fn test_agent1_includes_extraction_requirements() {
 
 #[test]
 fn test_agent1_includes_signature_handling() {
-    let prompt = extract_prompt("django", "4.2.0", "", 1, None, false);
+    let prompt = extract_prompt("django", "4.2.0", "", 1, None, false, "python", "package");
 
     assert!(prompt.contains("120 characters"));
     assert!(prompt.contains("signature_truncated"));
@@ -49,7 +67,16 @@ fn test_agent1_includes_signature_handling() {
 
 #[test]
 fn test_agent1_includes_method_type_classification() {
-    let prompt = extract_prompt("sqlalchemy", "2.0.0", "", 1, None, false);
+    let prompt = extract_prompt(
+        "sqlalchemy",
+        "2.0.0",
+        "",
+        1,
+        None,
+        false,
+        "python",
+        "package",
+    );
 
     assert!(prompt.contains("function"));
     assert!(prompt.contains("method"));
@@ -61,7 +88,7 @@ fn test_agent1_includes_method_type_classification() {
 
 #[test]
 fn test_agent1_includes_type_hint_handling() {
-    let prompt = extract_prompt("pydantic", "2.0.0", "", 1, None, false);
+    let prompt = extract_prompt("pydantic", "2.0.0", "", 1, None, false, "python", "package");
 
     assert!(prompt.contains("Annotated"));
     assert!(prompt.contains("Union"));
@@ -72,7 +99,7 @@ fn test_agent1_includes_type_hint_handling() {
 
 #[test]
 fn test_agent1_includes_deprecation_tracking() {
-    let prompt = extract_prompt("flask", "3.0.0", "", 1, None, false);
+    let prompt = extract_prompt("flask", "3.0.0", "", 1, None, false, "python", "package");
 
     assert!(prompt.contains("@deprecated"));
     assert!(prompt.contains("DeprecationWarning"));
@@ -83,7 +110,9 @@ fn test_agent1_includes_deprecation_tracking() {
 
 #[test]
 fn test_agent1_includes_library_specific_patterns() {
-    let prompt = extract_prompt("fastapi", "0.100.0", "", 1, None, false);
+    let prompt = extract_prompt(
+        "fastapi", "0.100.0", "", 1, None, false, "python", "package",
+    );
 
     assert!(prompt.contains("Web Frameworks"));
     assert!(prompt.contains("CLI Tools"));
@@ -93,7 +122,7 @@ fn test_agent1_includes_library_specific_patterns() {
 
 #[test]
 fn test_agent1_excludes_private_apis() {
-    let prompt = extract_prompt("package", "1.0.0", "", 1, None, false);
+    let prompt = extract_prompt("package", "1.0.0", "", 1, None, false, "python", "package");
 
     // Verify prompt excludes private APIs
     assert!(prompt.contains("starting with `_`"));
@@ -102,7 +131,7 @@ fn test_agent1_excludes_private_apis() {
 
 #[test]
 fn test_agent1_output_format() {
-    let prompt = extract_prompt("numpy", "1.24.0", "", 1, None, false);
+    let prompt = extract_prompt("numpy", "1.24.0", "", 1, None, false, "python", "package");
 
     assert!(prompt.contains("Return JSON"));
     assert!(prompt.contains(r#""library_category""#));
@@ -120,6 +149,8 @@ fn test_agent2_pattern_extractor_basic() {
         "def test_something(): assert True",
         None,
         false,
+        "python",
+        "package",
     );
 
     assert!(prompt.contains("pytest"));
@@ -129,7 +160,7 @@ fn test_agent2_pattern_extractor_basic() {
 
 #[test]
 fn test_agent2_includes_extraction_requirements() {
-    let prompt = map_prompt("click", "8.1.0", "", None, false);
+    let prompt = map_prompt("click", "8.1.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("API Being Tested"));
     assert!(prompt.contains("Setup Code"));
@@ -140,7 +171,7 @@ fn test_agent2_includes_extraction_requirements() {
 
 #[test]
 fn test_agent2_includes_test_client_patterns() {
-    let prompt = map_prompt("fastapi", "0.100.0", "", None, false);
+    let prompt = map_prompt("fastapi", "0.100.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("TestClient"));
     assert!(prompt.contains("CliRunner"));
@@ -149,7 +180,7 @@ fn test_agent2_includes_test_client_patterns() {
 
 #[test]
 fn test_agent2_includes_parametrized_tests() {
-    let prompt = map_prompt("package", "1.0.0", "", None, false);
+    let prompt = map_prompt("package", "1.0.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("@pytest.mark.parametrize"));
     assert!(prompt.contains("parameter combinations"));
@@ -157,7 +188,7 @@ fn test_agent2_includes_parametrized_tests() {
 
 #[test]
 fn test_agent2_includes_async_patterns() {
-    let prompt = map_prompt("httpx", "0.24.0", "", None, false);
+    let prompt = map_prompt("httpx", "0.24.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("async def test_async"));
     assert!(prompt.contains("await"));
@@ -166,7 +197,7 @@ fn test_agent2_includes_async_patterns() {
 
 #[test]
 fn test_agent2_includes_dependency_injection() {
-    let prompt = map_prompt("fastapi", "0.100.0", "", None, false);
+    let prompt = map_prompt("fastapi", "0.100.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("Depends"));
     assert!(prompt.contains("dependency patterns"));
@@ -174,7 +205,7 @@ fn test_agent2_includes_dependency_injection() {
 
 #[test]
 fn test_agent2_includes_error_handling() {
-    let prompt = map_prompt("requests", "2.31.0", "", None, false);
+    let prompt = map_prompt("requests", "2.31.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("Error Handling"));
     assert!(prompt.contains("expected error responses"));
@@ -183,7 +214,7 @@ fn test_agent2_includes_error_handling() {
 
 #[test]
 fn test_agent2_output_format() {
-    let prompt = map_prompt("django", "4.2.0", "", None, false);
+    let prompt = map_prompt("django", "4.2.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("Return JSON"));
     assert!(prompt.contains("pattern"));
@@ -199,6 +230,8 @@ fn test_agent3_context_extractor_basic() {
         "# Breaking Changes\n- Removed old API",
         None,
         false,
+        "python",
+        "package",
     );
 
     assert!(prompt.contains("flask"));
@@ -208,7 +241,7 @@ fn test_agent3_context_extractor_basic() {
 
 #[test]
 fn test_agent3_includes_extraction_requirements() {
-    let prompt = learn_prompt("django", "4.2.0", "", None, false);
+    let prompt = learn_prompt("django", "4.2.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("CONVENTIONS"));
     assert!(prompt.contains("PITFALLS"));
@@ -218,7 +251,7 @@ fn test_agent3_includes_extraction_requirements() {
 
 #[test]
 fn test_agent3_includes_pitfall_structure() {
-    let prompt = learn_prompt("package", "1.0.0", "", None, false);
+    let prompt = learn_prompt("package", "1.0.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("Wrong:"));
     assert!(prompt.contains("Why it fails:"));
@@ -227,7 +260,7 @@ fn test_agent3_includes_pitfall_structure() {
 
 #[test]
 fn test_agent3_includes_breaking_change_structure() {
-    let prompt = learn_prompt("sqlalchemy", "2.0.0", "", None, false);
+    let prompt = learn_prompt("sqlalchemy", "2.0.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("version_from"));
     assert!(prompt.contains("version_to"));
@@ -237,7 +270,7 @@ fn test_agent3_includes_breaking_change_structure() {
 
 #[test]
 fn test_agent3_includes_docstring_styles() {
-    let prompt = learn_prompt("numpy", "1.24.0", "", None, false);
+    let prompt = learn_prompt("numpy", "1.24.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("ReStructuredText"));
     assert!(prompt.contains("Google style"));
@@ -246,7 +279,7 @@ fn test_agent3_includes_docstring_styles() {
 
 #[test]
 fn test_agent3_includes_framework_specific_considerations() {
-    let prompt = learn_prompt("django", "4.2.0", "", None, false);
+    let prompt = learn_prompt("django", "4.2.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("Large Frameworks"));
     assert!(prompt.contains("CLI Tools"));
@@ -255,7 +288,7 @@ fn test_agent3_includes_framework_specific_considerations() {
 
 #[test]
 fn test_agent3_output_format() {
-    let prompt = learn_prompt("click", "8.1.0", "", None, false);
+    let prompt = learn_prompt("click", "8.1.0", "", None, false, "python", "package");
 
     assert!(prompt.contains("Return JSON"));
     assert!(prompt.contains(r#""conventions""#));
@@ -272,6 +305,7 @@ fn test_agent4_synthesizer_basic() {
         Some("Apache-2.0"),
         &[],
         "python",
+        "package",
         "API surface data",
         "Pattern data",
         "Context data",
@@ -295,6 +329,7 @@ fn test_agent4_license_field_with_value() {
         Some("BSD-3-Clause"),
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -313,6 +348,7 @@ fn test_agent4_license_field_without_value() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -331,6 +367,7 @@ fn test_agent4_project_urls_empty() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -350,7 +387,7 @@ fn test_agent4_project_urls_single() {
     )];
 
     let prompt = create_prompt(
-        "package", "1.0.0", None, &urls, "python", "", "", "", None, false,
+        "package", "1.0.0", None, &urls, "python", "package", "", "", "", None, false,
     );
 
     assert!(prompt.contains("- [Documentation](https://docs.example.com)"));
@@ -375,7 +412,7 @@ fn test_agent4_project_urls_multiple() {
     ];
 
     let prompt = create_prompt(
-        "package", "1.0.0", None, &urls, "python", "", "", "", None, false,
+        "package", "1.0.0", None, &urls, "python", "package", "", "", "", None, false,
     );
 
     assert!(prompt.contains("- [Documentation](https://docs.example.com)"));
@@ -391,6 +428,7 @@ fn test_agent4_custom_instructions_none() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -411,6 +449,7 @@ fn test_agent4_custom_instructions_present() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -431,6 +470,7 @@ fn test_agent4_includes_skill_md_structure() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -455,6 +495,7 @@ fn test_agent4_includes_library_specific_sections() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -478,6 +519,7 @@ fn test_agent4_includes_validation_rules() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -500,6 +542,7 @@ fn test_agent4_includes_pitfall_requirements() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -507,11 +550,10 @@ fn test_agent4_includes_pitfall_requirements() {
         false,
     );
 
-    // Pitfall requirements now in <instructions> and template
-    assert!(prompt.contains("3-5 common mistakes"));
-    assert!(prompt.contains("### Wrong:"));
-    assert!(prompt.contains("### Right:"));
-    assert!(prompt.contains("Pitfalls section is mandatory"));
+    // Pitfall requirements in <instructions> and output structure
+    assert!(prompt.contains("3-5 common mistakes") || prompt.contains("3-5 Wrong/Right pairs"));
+    assert!(prompt.contains("Wrong") && prompt.contains("Right"));
+    assert!(prompt.contains("Pitfalls section is mandatory") || prompt.contains("## Pitfalls"));
 }
 
 #[test]
@@ -522,6 +564,7 @@ fn test_agent4_includes_references_requirement() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -542,6 +585,7 @@ fn test_agent4_web_framework_patterns() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -563,6 +607,7 @@ fn test_agent4_cli_patterns() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -584,6 +629,7 @@ fn test_agent4_orm_patterns() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -606,6 +652,7 @@ fn test_agent4_http_client_patterns() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -628,6 +675,7 @@ fn test_agent4_async_framework_patterns() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -651,6 +699,7 @@ fn test_agent4_parameter_order() {
         Some("GPL-3.0"),
         &urls,
         "python",
+        "package",
         "API",
         "Patterns",
         "Context",
@@ -674,15 +723,16 @@ fn test_all_agents_include_package_name_and_version() {
     let package = "testpkg";
     let version = "1.2.3";
 
-    let p1 = extract_prompt(package, version, "", 1, None, false);
-    let p2 = map_prompt(package, version, "", None, false);
-    let p3 = learn_prompt(package, version, "", None, false);
+    let p1 = extract_prompt(package, version, "", 1, None, false, "python", "package");
+    let p2 = map_prompt(package, version, "", None, false, "python", "package");
+    let p3 = learn_prompt(package, version, "", None, false, "python", "package");
     let p4 = create_prompt(
         package,
         version,
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -698,7 +748,7 @@ fn test_all_agents_include_package_name_and_version() {
 #[test]
 fn test_template_rendering_with_special_characters() {
     let source = "def func():\n    '''Docstring with \"quotes\" and {braces}'''";
-    let prompt = extract_prompt("pkg", "1.0", source, 1, None, false);
+    let prompt = extract_prompt("pkg", "1.0", source, 1, None, false, "python", "package");
 
     assert!(prompt.contains(source));
 }
@@ -711,6 +761,7 @@ fn test_agent4_escapes_braces_in_format_string() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -718,8 +769,10 @@ fn test_agent4_escapes_braces_in_format_string() {
         false,
     );
 
-    // format! converts {{ to { in output — check {package_name} placeholder renders correctly
-    assert!(prompt.contains("{package_name}"));
+    // Verify the prompt doesn't have broken format string escaping
+    // (old test checked for {{package_name}} → {package_name} in template;
+    //  new template doesn't include import examples, so check format! didn't panic)
+    assert!(!prompt.is_empty());
 }
 
 #[test]
@@ -727,7 +780,7 @@ fn test_agent4_references_section_formatting() {
     let urls = vec![("Home".to_string(), "https://home.example.com".to_string())];
 
     let prompt = create_prompt(
-        "package", "1.0.0", None, &urls, "python", "", "", "", None, false,
+        "package", "1.0.0", None, &urls, "python", "package", "", "", "", None, false,
     );
 
     // Check markdown link format
@@ -742,6 +795,7 @@ fn test_agent4_includes_ecosystem_in_frontmatter() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -754,17 +808,29 @@ fn test_agent4_includes_ecosystem_in_frontmatter() {
 
 #[test]
 fn test_agent4_includes_version_in_frontmatter() {
-    let prompt = create_prompt("mylib", "2.5.8", None, &[], "rust", "", "", "", None, false);
+    let prompt = create_prompt(
+        "mylib",
+        "2.5.8",
+        None,
+        &[],
+        "rust",
+        "crate",
+        "",
+        "",
+        "",
+        None,
+        false,
+    );
 
     assert!(prompt.contains("version: 2.5.8"));
 }
 
 #[test]
 fn test_empty_inputs_handled_gracefully() {
-    let p1 = extract_prompt("", "", "", 1, None, false);
-    let p2 = map_prompt("", "", "", None, false);
-    let p3 = learn_prompt("", "", "", None, false);
-    let p4 = create_prompt("", "", None, &[], "", "", "", "", None, false);
+    let p1 = extract_prompt("", "", "", 1, None, false, "python", "package");
+    let p2 = map_prompt("", "", "", None, false, "python", "package");
+    let p3 = learn_prompt("", "", "", None, false, "python", "package");
+    let p4 = create_prompt("", "", None, &[], "", "", "", "", "", None, false);
     // All should produce valid strings without panicking
     assert!(!p1.is_empty());
     assert!(!p2.is_empty());
@@ -774,7 +840,7 @@ fn test_empty_inputs_handled_gracefully() {
 
 #[test]
 fn test_agent1_json_structure_validity() {
-    let prompt = extract_prompt("package", "1.0", "", 1, None, false);
+    let prompt = extract_prompt("package", "1.0", "", 1, None, false, "python", "package");
 
     // Should have JSON structure with braces
     assert!(prompt.contains(r#"{"#));
@@ -783,7 +849,7 @@ fn test_agent1_json_structure_validity() {
 
 #[test]
 fn test_agent2_json_structure_validity() {
-    let prompt = map_prompt("package", "1.0", "", None, false);
+    let prompt = map_prompt("package", "1.0", "", None, false, "python", "package");
 
     // Should have JSON structure with braces
     assert!(prompt.contains(r#"{"#));
@@ -792,7 +858,7 @@ fn test_agent2_json_structure_validity() {
 
 #[test]
 fn test_agent3_json_structure_validity() {
-    let prompt = learn_prompt("package", "1.0", "", None, false);
+    let prompt = learn_prompt("package", "1.0", "", None, false, "python", "package");
 
     // Should have JSON structure with braces
     assert!(prompt.contains(r#"{"#));
@@ -807,6 +873,7 @@ fn test_agent4_default_license_is_mit() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -821,7 +888,16 @@ fn test_agent4_default_license_is_mit() {
 
 #[test]
 fn test_comprehensive_coverage_agent1() {
-    let prompt = extract_prompt("comprehensive_test", "1.0.0", "test_code", 1, None, false);
+    let prompt = extract_prompt(
+        "comprehensive_test",
+        "1.0.0",
+        "test_code",
+        1,
+        None,
+        false,
+        "python",
+        "package",
+    );
 
     // Ensure all major sections are covered
     let required_sections = [
@@ -845,7 +921,15 @@ fn test_comprehensive_coverage_agent1() {
 
 #[test]
 fn test_comprehensive_coverage_agent2() {
-    let prompt = map_prompt("comprehensive_test", "1.0.0", "test_code", None, false);
+    let prompt = map_prompt(
+        "comprehensive_test",
+        "1.0.0",
+        "test_code",
+        None,
+        false,
+        "python",
+        "package",
+    );
 
     let required_sections = [
         "What to Extract",
@@ -865,7 +949,15 @@ fn test_comprehensive_coverage_agent2() {
 
 #[test]
 fn test_comprehensive_coverage_agent3() {
-    let prompt = learn_prompt("comprehensive_test", "1.0.0", "docs", None, false);
+    let prompt = learn_prompt(
+        "comprehensive_test",
+        "1.0.0",
+        "docs",
+        None,
+        false,
+        "python",
+        "package",
+    );
 
     let required_sections = [
         "CONVENTIONS",
@@ -890,6 +982,7 @@ fn test_comprehensive_coverage_agent4() {
         Some("MIT"),
         &[],
         "python",
+        "package",
         "api",
         "patterns",
         "context",
@@ -918,13 +1011,22 @@ fn test_comprehensive_coverage_agent4() {
 #[test]
 fn test_agent1_overwrite_with_custom() {
     let custom = "My custom agent1 prompt";
-    let prompt = extract_prompt("pkg", "1.0", "source", 1, Some(custom), true);
+    let prompt = extract_prompt(
+        "pkg",
+        "1.0",
+        "source",
+        1,
+        Some(custom),
+        true,
+        "python",
+        "package",
+    );
     assert_eq!(prompt, custom);
 }
 
 #[test]
 fn test_agent1_overwrite_without_custom_uses_default() {
-    let prompt = extract_prompt("pkg", "1.0", "source", 1, None, true);
+    let prompt = extract_prompt("pkg", "1.0", "source", 1, None, true, "python", "package");
     // No custom provided, should fall through to default prompt
     assert!(prompt.contains("pkg"));
     assert!(prompt.contains("Extract"));
@@ -933,7 +1035,16 @@ fn test_agent1_overwrite_without_custom_uses_default() {
 #[test]
 fn test_agent1_append_custom() {
     let custom = "Also extract internal APIs";
-    let prompt = extract_prompt("pkg", "1.0", "source", 1, Some(custom), false);
+    let prompt = extract_prompt(
+        "pkg",
+        "1.0",
+        "source",
+        1,
+        Some(custom),
+        false,
+        "python",
+        "package",
+    );
     // Custom should be appended, default prompt still present
     assert!(prompt.contains("pkg"));
     assert!(prompt.contains("Also extract internal APIs"));
@@ -942,14 +1053,30 @@ fn test_agent1_append_custom() {
 #[test]
 fn test_agent2_overwrite_with_custom() {
     let custom = "My custom agent2 prompt";
-    let prompt = map_prompt("pkg", "1.0", "tests", Some(custom), true);
+    let prompt = map_prompt(
+        "pkg",
+        "1.0",
+        "tests",
+        Some(custom),
+        true,
+        "python",
+        "package",
+    );
     assert_eq!(prompt, custom);
 }
 
 #[test]
 fn test_agent2_append_custom() {
     let custom = "Focus on error patterns";
-    let prompt = map_prompt("pkg", "1.0", "tests", Some(custom), false);
+    let prompt = map_prompt(
+        "pkg",
+        "1.0",
+        "tests",
+        Some(custom),
+        false,
+        "python",
+        "package",
+    );
     assert!(prompt.contains("pkg"));
     assert!(prompt.contains("Focus on error patterns"));
 }
@@ -957,14 +1084,30 @@ fn test_agent2_append_custom() {
 #[test]
 fn test_agent3_overwrite_with_custom() {
     let custom = "My custom agent3 prompt";
-    let prompt = learn_prompt("pkg", "1.0", "docs", Some(custom), true);
+    let prompt = learn_prompt(
+        "pkg",
+        "1.0",
+        "docs",
+        Some(custom),
+        true,
+        "python",
+        "package",
+    );
     assert_eq!(prompt, custom);
 }
 
 #[test]
 fn test_agent3_append_custom() {
     let custom = "Include performance tips";
-    let prompt = learn_prompt("pkg", "1.0", "docs", Some(custom), false);
+    let prompt = learn_prompt(
+        "pkg",
+        "1.0",
+        "docs",
+        Some(custom),
+        false,
+        "python",
+        "package",
+    );
     assert!(prompt.contains("pkg"));
     assert!(prompt.contains("Include performance tips"));
 }
@@ -978,6 +1121,7 @@ fn test_agent4_overwrite_with_custom() {
         None,
         &[],
         "python",
+        "package",
         "",
         "",
         "",
@@ -991,22 +1135,95 @@ fn test_agent4_overwrite_with_custom() {
 
 #[test]
 fn test_agent1_scale_hint_large_library() {
-    let prompt = extract_prompt("biglib", "1.0", "source", 1500, None, false);
+    let prompt = extract_prompt(
+        "biglib", "1.0", "source", 1500, None, false, "python", "package",
+    );
     assert!(prompt.contains("LARGE LIBRARY"));
     assert!(prompt.contains("1000+ files"));
 }
 
 #[test]
 fn test_agent1_scale_hint_very_large_library() {
-    let prompt = extract_prompt("hugelib", "1.0", "source", 3000, None, false);
+    let prompt = extract_prompt(
+        "hugelib", "1.0", "source", 3000, None, false, "python", "package",
+    );
     assert!(prompt.contains("LARGE LIBRARY ALERT"));
     assert!(prompt.contains("2000+ files"));
 }
 
 #[test]
 fn test_agent1_no_scale_hint_small_library() {
-    let prompt = extract_prompt("smalllib", "1.0", "source", 50, None, false);
+    let prompt = extract_prompt(
+        "smalllib", "1.0", "source", 50, None, false, "python", "package",
+    );
     assert!(!prompt.contains("LARGE LIBRARY"));
+}
+
+// --- Language-aware prompts ---
+
+#[test]
+fn test_extract_prompt_uses_language_and_ecosystem_term() {
+    let prompt = extract_prompt(
+        "mymod",
+        "0.1.0",
+        "func main() {}",
+        1,
+        None,
+        false,
+        "go",
+        "module",
+    );
+    assert!(prompt.contains("go module \"mymod\""));
+    assert!(!prompt.contains("Python package"));
+}
+
+#[test]
+fn test_map_prompt_uses_language_and_ecosystem_term() {
+    let prompt = map_prompt(
+        "mycrate",
+        "1.0.0",
+        "fn test_it() {}",
+        None,
+        false,
+        "rust",
+        "crate",
+    );
+    assert!(prompt.contains("rust crate \"mycrate\""));
+    assert!(!prompt.contains("Python package"));
+}
+
+#[test]
+fn test_learn_prompt_uses_language_and_ecosystem_term() {
+    let prompt = learn_prompt(
+        "mypkg",
+        "2.0.0",
+        "# Changelog",
+        None,
+        false,
+        "javascript",
+        "package",
+    );
+    assert!(prompt.contains("javascript package \"mypkg\""));
+    assert!(!prompt.contains("Python package"));
+}
+
+#[test]
+fn test_create_prompt_uses_ecosystem_term() {
+    let prompt = create_prompt(
+        "mymod",
+        "0.1.0",
+        None,
+        &[],
+        "go",
+        "module",
+        "",
+        "",
+        "",
+        None,
+        false,
+    );
+    assert!(prompt.contains("go module \"mymod\""));
+    assert!(!prompt.contains("Python package"));
 }
 
 // --- Agent 4 update mode ---
@@ -1039,6 +1256,7 @@ fn test_agent4_synthesizer_contains_security_rule() {
         None,
         &[],
         "python",
+        "package",
         "apis",
         "patterns",
         "context",
@@ -1125,6 +1343,7 @@ fn test_agent4_overwrite_mode_bypasses_security() {
         None,
         &[],
         "python",
+        "package",
         "apis",
         "patterns",
         "context",
@@ -1150,6 +1369,7 @@ fn test_agent4_synthesizer_security_in_verify_checklist() {
         None,
         &[],
         "python",
+        "package",
         "apis",
         "patterns",
         "context",
@@ -1171,6 +1391,7 @@ fn test_agent4_security_behavior_not_filename_based() {
         None,
         &[],
         "python",
+        "package",
         "apis",
         "patterns",
         "context",

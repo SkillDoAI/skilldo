@@ -30,12 +30,45 @@ impl SkillLinter {
     }
 
     /// Token-aware check for root/home wipe commands.
-    /// Matches "rm -rf /" and "rm -rf ~" but NOT "rm -rf /tmp" etc.
+    /// Matches "rm -rf /", "rm -fr ~", "rm -rfi /", "rm -r -f /", "rm -f -r /",
+    /// "rm -r -v -f /", and variants with trailing semicolons/pipes.
+    /// Does NOT match "rm -rf /tmp" or "rm -rf ~/proj".
     fn is_root_wipe_command(text: &str) -> bool {
-        let tokens: Vec<&str> = text.split_whitespace().collect();
-        tokens.windows(3).any(|w| {
-            w[0] == "rm" && (w[1] == "-rf" || w[1] == "-fr") && (w[2] == "/" || w[2] == "~")
-        })
+        // Strip trailing semicolons and pipes so "rm -rf /;" is caught.
+        let cleaned = text.replace([';', '|'], " ");
+        let tokens: Vec<&str> = cleaned.split_whitespace().collect();
+
+        // Find "rm" token
+        let Some(rm_pos) = tokens.iter().position(|t| *t == "rm") else {
+            return false;
+        };
+
+        // Collect flags and find target
+        let mut has_recursive = false;
+        let mut has_force = false;
+        let mut target = None;
+
+        for token in &tokens[rm_pos + 1..] {
+            if token.starts_with('-') {
+                if token.contains('r') {
+                    has_recursive = true;
+                }
+                if token.contains('f') {
+                    has_force = true;
+                }
+            } else {
+                target = Some(*token);
+                break;
+            }
+        }
+
+        // Only match root (/) or home (~, ~/) — NOT subdirectories like /tmp or ~/proj
+        if let Some(path) = target {
+            let is_root_or_home = path == "/" || path == "~" || path == "~/";
+            has_recursive && has_force && is_root_or_home
+        } else {
+            false
+        }
     }
 
     /// Lint a SKILL.md file content
@@ -604,6 +637,12 @@ impl SkillLinter {
         issues
     }
 
+    // NOTE: Some patterns intentionally appear in multiple arrays below
+    // (e.g. critical_code_substrs, destructive_patterns, injection_patterns,
+    // threat_patterns). Each array serves a distinct detection purpose --
+    // code-block scanning vs. prose scanning vs. HTML-comment scanning --
+    // and may trigger different severity levels or messages depending on
+    // context. Do not deduplicate across arrays.
     fn check_security(&self, content: &str) -> Vec<LintIssue> {
         let mut issues = Vec::new();
         let lines: Vec<&str> = content.lines().collect();
@@ -1199,6 +1238,56 @@ test.do_something()
             .filter(|i| i.severity == Severity::Error)
             .count();
         assert_eq!(errors, 0);
+    }
+
+    #[test]
+    fn test_is_root_wipe_basic() {
+        assert!(SkillLinter::is_root_wipe_command("rm -rf /"));
+        assert!(SkillLinter::is_root_wipe_command("rm -rf ~"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_trailing_semicolon() {
+        assert!(SkillLinter::is_root_wipe_command("rm -rf /;"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_flag_reorder() {
+        assert!(SkillLinter::is_root_wipe_command("rm -fr ~"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_extra_flags() {
+        assert!(SkillLinter::is_root_wipe_command("rm -rfi /"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_separate_flags() {
+        assert!(SkillLinter::is_root_wipe_command("rm -r -f /"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_normal_rm_not_flagged() {
+        assert!(!SkillLinter::is_root_wipe_command("rm file.txt"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_no_recursive_not_flagged() {
+        assert!(!SkillLinter::is_root_wipe_command("rm -f file.txt"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_subdirs_not_flagged() {
+        assert!(!SkillLinter::is_root_wipe_command("rm -rf /tmp"));
+        assert!(!SkillLinter::is_root_wipe_command("rm -rf ~/proj"));
+        assert!(!SkillLinter::is_root_wipe_command("rm -r -f /var/tmp"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_swapped_and_intervening_flags() {
+        assert!(SkillLinter::is_root_wipe_command("rm -f -r /"));
+        assert!(SkillLinter::is_root_wipe_command("rm -r -v -f /"));
+        assert!(SkillLinter::is_root_wipe_command("rm -f -v -r ~/"));
     }
 
     #[test]

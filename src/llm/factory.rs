@@ -40,16 +40,18 @@ pub fn create_client_from_llm_config(
 
     let max_tokens = llm_config.get_max_tokens();
     let extra_body = llm_config.resolve_extra_body()?;
+    let timeout = llm_config.request_timeout_secs;
 
     let client: Box<dyn LlmClient> = match llm_config.provider.as_str() {
         "anthropic" => Box::new(AnthropicClient::new(
             api_key,
             llm_config.model.clone(),
             max_tokens,
+            timeout,
         )),
 
         "openai" => Box::new(
-            OpenAIClient::new(api_key, llm_config.model.clone(), max_tokens)
+            OpenAIClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)
                 .with_extra_body(extra_body),
         ),
 
@@ -65,6 +67,7 @@ pub fn create_client_from_llm_config(
                     llm_config.model.clone(),
                     base_url,
                     max_tokens,
+                    timeout,
                 )
                 .with_extra_body(extra_body),
             )
@@ -74,6 +77,7 @@ pub fn create_client_from_llm_config(
             api_key,
             llm_config.model.clone(),
             max_tokens,
+            timeout,
         )),
 
         unknown => bail!("Unknown LLM provider: {}", unknown),
@@ -95,16 +99,18 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
     let api_key = config.get_api_key()?;
     let max_tokens = config.llm.get_max_tokens();
     let extra_body = config.llm.resolve_extra_body()?;
+    let timeout = config.llm.request_timeout_secs;
 
     let client: Box<dyn LlmClient> = match config.llm.provider.as_str() {
         "anthropic" => Box::new(AnthropicClient::new(
             api_key,
             config.llm.model.clone(),
             max_tokens,
+            timeout,
         )),
 
         "openai" => Box::new(
-            OpenAIClient::new(api_key, config.llm.model.clone(), max_tokens)
+            OpenAIClient::new(api_key, config.llm.model.clone(), max_tokens, timeout)
                 .with_extra_body(extra_body),
         ),
 
@@ -121,6 +127,7 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
                     config.llm.model.clone(),
                     base_url,
                     max_tokens,
+                    timeout,
                 )
                 .with_extra_body(extra_body),
             )
@@ -130,6 +137,7 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
             api_key,
             config.llm.model.clone(),
             max_tokens,
+            timeout,
         )),
 
         unknown => bail!("Unknown LLM provider: {}", unknown),
@@ -241,6 +249,7 @@ mod tests {
             retry_delay: 1,
             extra_body: std::collections::HashMap::new(),
             extra_body_json: None,
+            request_timeout_secs: 120,
         }
     }
 

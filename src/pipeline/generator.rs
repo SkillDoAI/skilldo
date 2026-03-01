@@ -25,25 +25,28 @@ pub struct GenerateOutput {
 fn strip_markdown_fences(content: &str) -> String {
     let trimmed = content.trim();
 
-    // Check for markdown fences with language specifier
-    if trimmed.starts_with("```markdown") && trimmed.ends_with("```") {
-        return trimmed
-            .strip_prefix("```markdown")
-            .and_then(|s| s.strip_suffix("```"))
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| content.to_string());
+    // Count leading backticks
+    let leading = trimmed.chars().take_while(|c| *c == '`').count();
+    if leading < 3 {
+        return content.to_string();
     }
 
-    // Check for plain markdown fences
-    if trimmed.starts_with("```") && trimmed.ends_with("```") {
-        return trimmed
-            .strip_prefix("```")
-            .and_then(|s| s.strip_suffix("```"))
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| content.to_string());
+    // Count trailing backticks
+    let trailing = trimmed.chars().rev().take_while(|c| *c == '`').count();
+    if trailing < 3 {
+        return content.to_string();
     }
 
-    content.to_string()
+    // Find end of first line (opening fence + optional language tag)
+    let rest_after_backticks = &trimmed[leading..];
+    let first_newline = match rest_after_backticks.find('\n') {
+        Some(pos) => leading + pos,
+        None => return content.to_string(),
+    };
+
+    // Extract body between fences
+    let body = &trimmed[first_newline + 1..trimmed.len() - trailing];
+    body.trim().to_string()
 }
 
 pub struct Generator {
@@ -222,6 +225,8 @@ impl Generator {
             data.source_file_count,
             self.prompts_config.extract_custom.as_deref(),
             self.prompts_config.is_overwrite("extract"),
+            data.language.as_str(),
+            data.language.ecosystem_term(),
         );
         let map_prompt = prompts_v2::map_prompt(
             &data.package_name,
@@ -229,6 +234,8 @@ impl Generator {
             &examples_and_tests,
             self.prompts_config.map_custom.as_deref(),
             self.prompts_config.is_overwrite("map"),
+            data.language.as_str(),
+            data.language.ecosystem_term(),
         );
         let learn_prompt = prompts_v2::learn_prompt(
             &data.package_name,
@@ -236,6 +243,8 @@ impl Generator {
             &docs_and_changelog,
             self.prompts_config.learn_custom.as_deref(),
             self.prompts_config.is_overwrite("learn"),
+            data.language.as_str(),
+            data.language.ecosystem_term(),
         );
 
         let extract_client = self.get_client("extract");
@@ -284,6 +293,7 @@ impl Generator {
                 data.license.as_deref(),
                 &data.project_urls,
                 data.language.as_str(),
+                data.language.ecosystem_term(),
                 &api_surface,
                 &patterns,
                 &context,
@@ -643,6 +653,43 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_markdown_fences_three_backticks() {
+        let input = "```markdown\n---\nname: test\n---\n## Imports\n```";
+        let result = strip_markdown_fences(input);
+        assert!(result.starts_with("---"));
+        assert!(!result.contains("```"));
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_four_backticks() {
+        let input = "````markdown\n---\nname: test\n---\n## Imports\n````";
+        let result = strip_markdown_fences(input);
+        assert!(result.starts_with("---"));
+        assert!(!result.contains("````"));
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_five_backticks() {
+        let input = "`````\n---\nname: test\n---\n## Imports\n`````";
+        let result = strip_markdown_fences(input);
+        assert!(result.starts_with("---"));
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_no_fences_frontmatter() {
+        let input = "---\nname: test\n---\n## Imports";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_plain_backticks() {
+        let input = "```\n---\nname: test\n---\n## Imports\n```";
+        let result = strip_markdown_fences(input);
+        assert!(result.starts_with("---"));
+    }
+
+    #[test]
     fn test_generator_new() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 3);
 
@@ -870,10 +917,9 @@ mod tests {
 
     #[test]
     fn test_strip_markdown_fences_just_backticks_markdown() {
-        // "```markdown```" -- starts_with("```markdown") and ends_with("```")
-        // strip_prefix("```markdown") yields "```", strip_suffix("```") yields ""
+        // "```markdown```" -- no newline, not a valid fence pair
         let result = strip_markdown_fences("```markdown```");
-        assert_eq!(result, "");
+        assert_eq!(result, "```markdown```");
     }
 
     #[test]
@@ -1188,20 +1234,15 @@ mod tests {
     fn test_strip_markdown_fences_yaml_lang() {
         let input = "```yaml\nkey: value\n```";
         let result = strip_markdown_fences(input);
-        // "```yaml" does not start with "```markdown", falls through to plain fence check
-        // plain check: starts_with("```") and ends_with("```") -> strips outer ```
-        // After strip_prefix("```") we get "yaml\nkey: value\n```"
-        // strip_suffix("```") -> "yaml\nkey: value\n"
-        // trim -> "yaml\nkey: value"
-        assert_eq!(result, "yaml\nkey: value");
+        // New implementation correctly strips the language tag line
+        assert_eq!(result, "key: value");
     }
 
     #[test]
     fn test_strip_markdown_fences_only_backtick_pair() {
-        // "``````" = starts_with("```") and ends_with("```")
-        // strip_prefix("```") yields "```", strip_suffix("```") yields ""
+        // "``````" -- no newline, not a valid fence pair
         let result = strip_markdown_fences("``````");
-        assert_eq!(result, "");
+        assert_eq!(result, "``````");
     }
 
     // ========================================================================
@@ -1604,8 +1645,9 @@ print(json.dumps(result))
 
     #[tokio::test]
     async fn test_generate_review_max_retries_has_unresolved_warnings() {
-        // Review client always returns failures
-        let fail_verdict = r#"{"passed": false, "issues": [{"severity": "warning", "category": "accuracy", "complaint": "Stale version number", "evidence": "pip says 2.0"}]}"#;
+        // Review client always returns failures (need "error" severity to trigger retries,
+        // since `passed` is recomputed from issues — warnings-only would pass)
+        let fail_verdict = r#"{"passed": false, "issues": [{"severity": "error", "category": "accuracy", "complaint": "Wrong version number", "evidence": "pip says 2.0"}, {"severity": "warning", "category": "accuracy", "complaint": "Stale version number", "evidence": "pip says 2.0"}]}"#;
         let introspect_script = r#"```python
 # /// script
 # requires-python = ">=3.10"
@@ -1635,10 +1677,15 @@ print(json.dumps(result))
 
         assert!(
             !output.unresolved_warnings.is_empty(),
-            "should have unresolved warnings when review exhausts retries"
+            "should have unresolved issues when review exhausts retries"
         );
+        assert_eq!(output.unresolved_warnings.len(), 2);
         assert_eq!(
             output.unresolved_warnings[0].complaint,
+            "Wrong version number"
+        );
+        assert_eq!(
+            output.unresolved_warnings[1].complaint,
             "Stale version number"
         );
     }
@@ -1875,13 +1922,8 @@ print(json.dumps(result))
     }
 
     #[test]
-    fn test_strip_markdown_fences_four_backticks() {
-        // ```` at start and end — starts_with("```") and ends_with("```") both true
-        // strip_prefix("```") yields "`", strip_suffix("```") on "`" yields None
-        // BUT: "`" does NOT end with "```", so strip_suffix fails, unwrap_or_else
-        // Wait — actually "````" starts with "```" and ends with "```".
-        // After strip_prefix("```") we get "`", strip_suffix("```") on "`" is None.
-        // unwrap_or_else returns original.
+    fn test_strip_markdown_fences_four_backticks_no_newline() {
+        // Four backticks with no newline — no body to extract, returns original
         let result = strip_markdown_fences("````");
         assert_eq!(result, "````");
     }
@@ -1905,7 +1947,8 @@ print(json.dumps(result))
         // ```python ... ``` - not "markdown" but plain fence check catches it
         let input = "```python\nprint('hello')\n```";
         let result = strip_markdown_fences(input);
-        assert_eq!(result, "python\nprint('hello')");
+        // New implementation correctly strips the language tag line
+        assert_eq!(result, "print('hello')");
     }
 
     #[test]
