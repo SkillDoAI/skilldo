@@ -440,6 +440,16 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_config_check_strict() {
+        let cli = Cli::try_parse_from(["skilldo", "config", "check", "--strict"]).unwrap();
+        let Commands::Config { action } = cli.command else {
+            panic!("Expected Config command");
+        };
+        let ConfigAction::Check { strict, .. } = action;
+        assert!(strict);
+    }
+
+    #[test]
     fn test_parse_config_check_with_path() {
         let cli =
             Cli::try_parse_from(["skilldo", "config", "check", "--config", "my.toml"]).unwrap();

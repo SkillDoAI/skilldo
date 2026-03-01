@@ -54,7 +54,9 @@ fn strip_markdown_fences(content: &str) -> String {
 fn bail_on_security_lint(issues: &[crate::lint::LintIssue]) -> Result<()> {
     let security_msgs: Vec<String> = issues
         .iter()
-        .filter(|i| i.category == "security" && matches!(i.severity, Severity::Error))
+        .filter(|i| {
+            i.category.eq_ignore_ascii_case("security") && matches!(i.severity, Severity::Error)
+        })
         .map(|i| i.message.clone())
         .collect();
     if !security_msgs.is_empty() {
@@ -523,19 +525,18 @@ impl Generator {
                     break;
                 }
 
-                // Safety issues are always fatal — never loop back to model
-                let has_safety_error = result.issues.iter().any(|i| {
-                    i.category.eq_ignore_ascii_case("safety")
+                // Safety/security issues are always fatal — never loop back to model
+                let is_fatal = |i: &crate::review::ReviewIssue| {
+                    (i.category.eq_ignore_ascii_case("safety")
+                        || i.category.eq_ignore_ascii_case("security"))
                         && matches!(i.severity, Severity::Error)
-                });
+                };
+                let has_safety_error = result.issues.iter().any(&is_fatal);
                 if has_safety_error {
                     let msgs: Vec<String> = result
                         .issues
                         .iter()
-                        .filter(|i| {
-                            i.category.eq_ignore_ascii_case("safety")
-                                && matches!(i.severity, Severity::Error)
-                        })
+                        .filter(|i| is_fatal(i))
                         .map(|i| i.complaint.clone())
                         .collect();
                     anyhow::bail!(

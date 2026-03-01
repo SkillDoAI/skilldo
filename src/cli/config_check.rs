@@ -63,6 +63,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         &config.llm.api_key_env,
         "Main LLM",
         &config.llm.provider,
+        is_llm_local(&config.llm),
         &mut results,
     );
 
@@ -97,6 +98,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
                 &test_llm.api_key_env,
                 "test LLM",
                 &test_llm.provider,
+                is_llm_local(test_llm),
                 &mut results,
             );
         }
@@ -121,6 +123,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
                 &review_llm.api_key_env,
                 "review LLM",
                 &review_llm.provider,
+                is_llm_local(review_llm),
                 &mut results,
             );
         }
@@ -142,6 +145,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
                 &llm.api_key_env,
                 &format!("{} LLM", name),
                 &llm.provider,
+                is_llm_local(llm),
                 &mut results,
             );
         }
@@ -242,9 +246,25 @@ fn is_llm_local(llm: &crate::config::LlmConfig) -> bool {
         return false;
     }
     match &llm.base_url {
-        Some(url) => url.contains("localhost") || url.contains("127.0.0.1"),
+        Some(url) => is_url_local(url),
         None => true, // default is localhost:11434
     }
+}
+
+/// Check if a URL points to a local host by inspecting the host component.
+/// Avoids substring false positives (e.g. "notlocalhost.com").
+fn is_url_local(url: &str) -> bool {
+    let host = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0" || host == "::1"
 }
 
 fn check_stage_provider(
@@ -264,9 +284,11 @@ fn check_api_key(
     api_key_env: &Option<String>,
     label: &str,
     provider: &Provider,
+    is_local: bool,
     results: &mut CheckResult,
 ) {
-    let is_oai_compat = *provider == Provider::OpenAICompatible;
+    // Only downgrade missing/empty API key to a warning for truly local endpoints.
+    let key_optional = is_local;
     match api_key_env {
         Some(env_var) if env_var.to_lowercase() == "none" => {
             results.pass(format!("{}: no API key needed", label));
@@ -275,7 +297,7 @@ fn check_api_key(
             Ok(v) if !v.trim().is_empty() => {
                 results.pass(format!("{}: {} is set", label, env_var));
             }
-            Ok(_) if is_oai_compat => {
+            Ok(_) if key_optional => {
                 results.warn(format!(
                     "{}: {} is set but empty (OK for local models, needed for gateways)",
                     label, env_var
@@ -284,7 +306,7 @@ fn check_api_key(
             Ok(_) => {
                 results.error(format!("{}: {} is set but empty", label, env_var));
             }
-            Err(_) if is_oai_compat => {
+            Err(_) if key_optional => {
                 results.warn(format!(
                     "{}: {} is not set (OK for local models, needed for gateways)",
                     label, env_var
@@ -303,7 +325,7 @@ fn check_api_key(
                         label, inferred
                     ));
                 }
-                Ok(_) if is_oai_compat => {
+                Ok(_) if key_optional => {
                     results.warn(format!(
                         "{}: {} is set but empty (OK for local models, needed for gateways)",
                         label, inferred
@@ -315,7 +337,7 @@ fn check_api_key(
                         label, inferred
                     ));
                 }
-                Err(_) if is_oai_compat => {
+                Err(_) if key_optional => {
                     results.warn(format!(
                         "{}: {} is not set (OK for local models, needed for gateways)",
                         label, inferred
@@ -432,6 +454,7 @@ mod tests {
             &Some("none".to_string()),
             "Test",
             &Provider::Anthropic,
+            false,
             &mut r,
         );
         assert_eq!(r.passed.len(), 1);
@@ -446,6 +469,7 @@ mod tests {
             &Some("SKILLDO_TEST_CHECK_KEY".to_string()),
             "Test",
             &Provider::Anthropic,
+            false,
             &mut r,
         );
         assert_eq!(r.passed.len(), 1);
@@ -460,6 +484,7 @@ mod tests {
             &Some("SKILLDO_NONEXISTENT_KEY_999".to_string()),
             "Test",
             &Provider::Anthropic,
+            false,
             &mut r,
         );
         assert_eq!(r.errors.len(), 1);
@@ -473,6 +498,7 @@ mod tests {
             &Some("SKILLDO_NONEXISTENT_KEY_999".to_string()),
             "Test",
             &Provider::OpenAICompatible,
+            true, // local in test context
             &mut r,
         );
         // Should be a warning, not an error
@@ -488,6 +514,7 @@ mod tests {
             &Some("none".to_string()),
             "Test",
             &Provider::OpenAICompatible,
+            true, // local in test context
             &mut r,
         );
         assert_eq!(r.passed.len(), 1);
@@ -498,7 +525,7 @@ mod tests {
     fn test_check_api_key_inferred_from_provider() {
         // Known provider with api_key_env=None → infers env var and checks it
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", &Provider::Anthropic, &mut r);
+        check_api_key(&None, "Test", &Provider::Anthropic, false, &mut r);
         // ANTHROPIC_API_KEY is not set in test → error with inferred message
         assert_eq!(r.errors.len(), 1);
         assert!(r.errors[0].contains("inferred from provider"));
@@ -787,7 +814,7 @@ enable_test = false
         // Temporarily map gemini to our custom var by routing through the existing test helper.
         // The code infers GEMINI_API_KEY for gemini provider — set that one.
         env::set_var("GEMINI_API_KEY", "fake-gemini-key-for-inferred-test");
-        check_api_key(&None, "Test", &Provider::Gemini, &mut r);
+        check_api_key(&None, "Test", &Provider::Gemini, false, &mut r);
         env::remove_var("GEMINI_API_KEY");
         env::remove_var("SKILLDO_TEST_INFERRED_GEMINI_KEY_99");
         assert_eq!(r.passed.len(), 1);
@@ -800,7 +827,7 @@ enable_test = false
         env::remove_var("OPENAI_API_KEY");
 
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", &Provider::OpenAICompatible, &mut r);
+        check_api_key(&None, "Test", &Provider::OpenAICompatible, true, &mut r);
 
         assert_eq!(r.warnings.len(), 1);
         assert!(r.errors.is_empty());
@@ -1184,6 +1211,7 @@ extra_body_json = "[1, 2, 3]"
             &Some("SKILLDO_TEST_EMPTY_OAI_KEY".to_string()),
             "Test",
             &Provider::OpenAICompatible,
+            true, // local in test context
             &mut r,
         );
         env::remove_var("SKILLDO_TEST_EMPTY_OAI_KEY");
@@ -1202,6 +1230,7 @@ extra_body_json = "[1, 2, 3]"
             &Some("SKILLDO_TEST_EMPTY_ANTH_KEY".to_string()),
             "Test",
             &Provider::Anthropic,
+            false,
             &mut r,
         );
         env::remove_var("SKILLDO_TEST_EMPTY_ANTH_KEY");
@@ -1217,7 +1246,7 @@ extra_body_json = "[1, 2, 3]"
         env::set_var("OPENAI_API_KEY", "");
 
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", &Provider::OpenAICompatible, &mut r);
+        check_api_key(&None, "Test", &Provider::OpenAICompatible, true, &mut r);
 
         // Empty inferred key for openai-compatible → warning
         assert_eq!(r.warnings.len(), 1);
@@ -1232,7 +1261,7 @@ extra_body_json = "[1, 2, 3]"
         env::set_var("OPENAI_API_KEY", "");
 
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", &Provider::OpenAI, &mut r);
+        check_api_key(&None, "Test", &Provider::OpenAI, false, &mut r);
 
         // Empty inferred key for non-openai-compatible → error
         assert_eq!(r.errors.len(), 1);
