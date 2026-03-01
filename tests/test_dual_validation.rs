@@ -1,3 +1,4 @@
+use skilldo::detector::Language;
 use skilldo::lint::{Severity, SkillLinter};
 use skilldo::validator::{FunctionalValidator, ValidationResult};
 
@@ -97,7 +98,7 @@ print("✓ Test passed")
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "python").unwrap();
+    let result = validator.validate(skill_md, &Language::Python).unwrap();
 
     match result {
         ValidationResult::Pass(output) => {
@@ -130,7 +131,7 @@ x = undefined_function()
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "python").unwrap();
+    let result = validator.validate(skill_md, &Language::Python).unwrap();
 
     match result {
         ValidationResult::Fail(_) => {
@@ -160,7 +161,7 @@ This has no code blocks.
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "python").unwrap();
+    let result = validator.validate(skill_md, &Language::Python).unwrap();
 
     match result {
         ValidationResult::Skipped(reason) => {
@@ -185,7 +186,7 @@ const express = require('express');
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "javascript").unwrap();
+    let result = validator.validate(skill_md, &Language::JavaScript).unwrap();
 
     match result {
         ValidationResult::Skipped(reason) => {
@@ -263,7 +264,7 @@ print("✓ Valid")
 
     // 2. Functional validation second
     let validator = FunctionalValidator::new();
-    let result = validator.validate(valid_skill, "python").unwrap();
+    let result = validator.validate(valid_skill, &Language::Python).unwrap();
 
     match result {
         ValidationResult::Pass(_) => {
@@ -297,7 +298,7 @@ assert x == 5.0
     let validator = FunctionalValidator::new();
 
     // This should work - comments should be skipped during extraction
-    let result = validator.validate(skill_md, "python").unwrap();
+    let result = validator.validate(skill_md, &Language::Python).unwrap();
 
     match result {
         ValidationResult::Pass(_) | ValidationResult::Skipped(_) => {
@@ -321,7 +322,7 @@ x = math.sqrt(16)
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "python").unwrap();
+    let result = validator.validate(skill_md, &Language::Python).unwrap();
 
     // Should either pass (added print) or skip (no docker/python)
     match result {
@@ -359,7 +360,7 @@ raise Exception("Second block should not run")
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "python").unwrap();
+    let result = validator.validate(skill_md, &Language::Python).unwrap();
 
     match result {
         ValidationResult::Pass(output) => {
@@ -413,7 +414,7 @@ print(x)
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "python").unwrap();
+    let result = validator.validate(skill_md, &Language::Python).unwrap();
 
     match result {
         ValidationResult::Fail(err) => {
@@ -438,7 +439,7 @@ x = 1 / 0  # Division by zero
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "python").unwrap();
+    let result = validator.validate(skill_md, &Language::Python).unwrap();
 
     match result {
         ValidationResult::Fail(err) => {
@@ -467,7 +468,7 @@ print("test")
 ```
 "#;
 
-    let result = validator.validate(skill_md, "python");
+    let result = validator.validate(skill_md, &Language::Python);
 
     // Should return Ok with some ValidationResult (Pass, Fail, or Skipped)
     match result {
@@ -488,7 +489,7 @@ fn main() {
 "#;
 
     let validator = FunctionalValidator::new();
-    let result = validator.validate(skill_md, "rust").unwrap();
+    let result = validator.validate(skill_md, &Language::Rust).unwrap();
 
     match result {
         ValidationResult::Skipped(reason) => {
@@ -502,7 +503,7 @@ fn main() {
 #[test]
 fn test_validator_handles_empty_skill() {
     let validator = FunctionalValidator::new();
-    let result = validator.validate("", "python").unwrap();
+    let result = validator.validate("", &Language::Python).unwrap();
 
     match result {
         ValidationResult::Skipped(reason) => {
@@ -527,6 +528,6 @@ assert x == 2
     let validator = FunctionalValidator::new();
 
     // Should still extract code (implementation might need to handle "py" as well)
-    let result = validator.validate(skill_md, "python");
+    let result = validator.validate(skill_md, &Language::Python);
     assert!(result.is_ok());
 }

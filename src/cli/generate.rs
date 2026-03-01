@@ -5,7 +5,7 @@ use std::str::FromStr;
 use tracing::info;
 
 use crate::cli::version;
-use crate::config::Config;
+use crate::config::{Config, Provider};
 use crate::detector::{self, Language};
 use crate::llm::factory;
 use crate::pipeline::collector::Collector;
@@ -62,7 +62,7 @@ pub async fn run(
     // Apply CLI overrides
     if let Some(ref provider) = provider_override {
         info!("CLI override: provider = {}", provider);
-        config.llm.provider = provider.clone();
+        config.llm.provider = provider.parse::<Provider>()?;
     }
     if let Some(ref model) = model_override {
         info!("CLI override: model = {}", model);
@@ -140,7 +140,7 @@ pub async fn run(
         }
         if let Some(ref provider) = test_provider_override {
             info!("CLI override: test provider = {}", provider);
-            test_llm.provider = provider.clone();
+            test_llm.provider = provider.parse::<Provider>()?;
         }
         config.generation.test_llm = Some(test_llm);
     }

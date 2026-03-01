@@ -6,6 +6,7 @@ use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
 use crate::config::detect_container_runtime;
+use crate::detector::Language;
 use crate::util::run_cmd_with_timeout;
 
 /// Default timeout for validation commands (seconds)
@@ -48,15 +49,15 @@ impl FunctionalValidator {
     }
 
     /// Validate a generated SKILL.md by running extracted code
-    pub fn validate(&self, skill_md: &str, ecosystem: &str) -> Result<ValidationResult> {
-        match ecosystem {
-            "python" => self.validate_python(skill_md),
-            "javascript" | "typescript" => Ok(ValidationResult::Skipped(
+    pub fn validate(&self, skill_md: &str, language: &Language) -> Result<ValidationResult> {
+        match language {
+            Language::Python => self.validate_python(skill_md),
+            Language::JavaScript => Ok(ValidationResult::Skipped(
                 "JavaScript validation not yet implemented".to_string(),
             )),
             _ => Ok(ValidationResult::Skipped(format!(
                 "Validation not supported for {}",
-                ecosystem
+                language.as_str()
             ))),
         }
     }
@@ -216,6 +217,7 @@ impl Default for FunctionalValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detector::Language;
 
     #[test]
     fn test_extract_hello_world() {
@@ -249,7 +251,7 @@ print("✓ Test passed")
 "#;
 
         let validator = FunctionalValidator::new();
-        let result = validator.validate(skill_md, "python").unwrap();
+        let result = validator.validate(skill_md, &Language::Python).unwrap();
 
         match result {
             ValidationResult::Pass(_) => { /* expected */ }
@@ -272,7 +274,7 @@ x = undefined_function()
 "#;
 
         let validator = FunctionalValidator::new();
-        let result = validator.validate(skill_md, "python").unwrap();
+        let result = validator.validate(skill_md, &Language::Python).unwrap();
 
         match result {
             ValidationResult::Fail(_) => { /* expected */ }
@@ -288,7 +290,9 @@ x = undefined_function()
     #[test]
     fn test_validate_javascript_skipped() {
         let validator = FunctionalValidator::new();
-        let result = validator.validate("# SKILL.md", "javascript").unwrap();
+        let result = validator
+            .validate("# SKILL.md", &Language::JavaScript)
+            .unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("JavaScript validation not yet implemented".to_string())
@@ -298,7 +302,9 @@ x = undefined_function()
     #[test]
     fn test_validate_typescript_skipped() {
         let validator = FunctionalValidator::new();
-        let result = validator.validate("# SKILL.md", "typescript").unwrap();
+        let result = validator
+            .validate("# SKILL.md", &Language::JavaScript)
+            .unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("JavaScript validation not yet implemented".to_string())
@@ -308,7 +314,7 @@ x = undefined_function()
     #[test]
     fn test_validate_unknown_ecosystem_skipped() {
         let validator = FunctionalValidator::new();
-        let result = validator.validate("# SKILL.md", "rust").unwrap();
+        let result = validator.validate("# SKILL.md", &Language::Rust).unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("Validation not supported for rust".to_string())
@@ -327,7 +333,7 @@ Some documentation without any python code blocks.
         assert!(code.is_empty());
 
         // Also confirm validate returns Skipped for this case
-        let result = validator.validate(skill_md, "python").unwrap();
+        let result = validator.validate(skill_md, &Language::Python).unwrap();
         match result {
             ValidationResult::Skipped(msg) => {
                 assert!(msg.contains("No runnable code"));
@@ -466,7 +472,7 @@ x = os.getcwd()
     #[test]
     fn test_validate_empty_string_returns_skipped() {
         let validator = FunctionalValidator::new();
-        let result = validator.validate("", "python").unwrap();
+        let result = validator.validate("", &Language::Python).unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("No runnable code found in SKILL.md".to_string())
@@ -600,7 +606,7 @@ x = os.getcwd()
             container_runtime: Some(runtime),
         };
         let skill_md = "```python\nimport os\nprint(os.getcwd())\n```\n";
-        let result = validator.validate(skill_md, "python").unwrap();
+        let result = validator.validate(skill_md, &Language::Python).unwrap();
         match result {
             ValidationResult::Pass(out) => assert!(!out.is_empty()),
             other => panic!("Expected Pass, got {:?}", other),
@@ -614,7 +620,7 @@ x = os.getcwd()
             container_runtime: None,
         };
         let skill_md = "```python\nimport os\nprint(os.getcwd())\n```\n";
-        let result = validator.validate(skill_md, "python").unwrap();
+        let result = validator.validate(skill_md, &Language::Python).unwrap();
         match result {
             ValidationResult::Pass(out) => assert!(!out.is_empty()),
             ValidationResult::Skipped(_) => { /* python3 not available, ok */ }
@@ -625,7 +631,9 @@ x = os.getcwd()
     #[test]
     fn test_validate_whitespace_only_returns_skipped() {
         let validator = FunctionalValidator::new();
-        let result = validator.validate("   \n\n  \n", "python").unwrap();
+        let result = validator
+            .validate("   \n\n  \n", &Language::Python)
+            .unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("No runnable code found in SKILL.md".to_string())
@@ -683,7 +691,7 @@ Some more prose here.
 "#;
 
         let validator = FunctionalValidator::new();
-        let result = validator.validate(skill_md, "python").unwrap();
+        let result = validator.validate(skill_md, &Language::Python).unwrap();
 
         assert_eq!(
             result,
@@ -750,7 +758,7 @@ Some more prose here.
             container_runtime: None,
         };
         let result = v
-            .validate("# Just prose, no code blocks", "python")
+            .validate("# Just prose, no code blocks", &Language::Python)
             .unwrap();
         assert_eq!(
             result,
@@ -765,7 +773,7 @@ Some more prose here.
             container_runtime: Some("podman".to_string()),
         };
         let result = v
-            .validate("# Just prose, no code blocks", "python")
+            .validate("# Just prose, no code blocks", &Language::Python)
             .unwrap();
         assert_eq!(
             result,
@@ -779,36 +787,36 @@ Some more prose here.
         let v = FunctionalValidator {
             container_runtime: None,
         };
-        let result = v.validate("# SKILL.md", "go").unwrap();
+        let result = v.validate("# SKILL.md", &Language::Go).unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("Validation not supported for go".to_string())
         );
     }
 
-    /// validate() with ecosystem = "ruby" returns unsupported
+    /// validate() with Rust ecosystem returns unsupported
     #[test]
-    fn test_validate_ruby_ecosystem_skipped() {
+    fn test_validate_rust_ecosystem_skipped() {
         let v = FunctionalValidator {
             container_runtime: None,
         };
-        let result = v.validate("# SKILL.md", "ruby").unwrap();
+        let result = v.validate("# SKILL.md", &Language::Rust).unwrap();
         assert_eq!(
             result,
-            ValidationResult::Skipped("Validation not supported for ruby".to_string())
+            ValidationResult::Skipped("Validation not supported for rust".to_string())
         );
     }
 
-    /// validate() with empty ecosystem string
+    /// validate() with Go ecosystem returns unsupported
     #[test]
-    fn test_validate_empty_ecosystem_skipped() {
+    fn test_validate_go_ecosystem_skipped_with_none_runtime() {
         let v = FunctionalValidator {
             container_runtime: None,
         };
-        let result = v.validate("# SKILL.md", "").unwrap();
+        let result = v.validate("# SKILL.md", &Language::Go).unwrap();
         assert_eq!(
             result,
-            ValidationResult::Skipped("Validation not supported for ".to_string())
+            ValidationResult::Skipped("Validation not supported for go".to_string())
         );
     }
 
@@ -818,7 +826,7 @@ Some more prose here.
         let v = FunctionalValidator {
             container_runtime: None,
         };
-        let result = v.validate("# SKILL.md", "javascript").unwrap();
+        let result = v.validate("# SKILL.md", &Language::JavaScript).unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("JavaScript validation not yet implemented".to_string())
@@ -831,7 +839,7 @@ Some more prose here.
         let v = FunctionalValidator {
             container_runtime: Some("docker".to_string()),
         };
-        let result = v.validate("# SKILL.md", "typescript").unwrap();
+        let result = v.validate("# SKILL.md", &Language::JavaScript).unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("JavaScript validation not yet implemented".to_string())
@@ -991,7 +999,7 @@ x = os.getpid()
             container_runtime: None,
         };
         let skill_md = "```python\nimport os\nprint(os.getcwd())\n```\n";
-        let result = v.validate(skill_md, "python").unwrap();
+        let result = v.validate(skill_md, &Language::Python).unwrap();
         // Without container runtime, it falls through to run_python_system.
         // On systems without python3, this returns Skipped.
         // On systems with python3, this returns Pass.
@@ -1115,7 +1123,7 @@ b = a + 5
             container_runtime: Some("podman".to_string()),
         };
         let skill_md = "```python\n# only comments\n```\n";
-        let result = v.validate(skill_md, "python").unwrap();
+        let result = v.validate(skill_md, &Language::Python).unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("No runnable code found in SKILL.md".to_string())
@@ -1151,7 +1159,7 @@ b = a + 5
             container_runtime: Some("nonexistent_runtime_xyz".to_string()),
         };
         let skill_md = "```python\nimport os\nprint(os.getcwd())\n```\n";
-        let result = v.validate(skill_md, "python");
+        let result = v.validate(skill_md, &Language::Python);
         // Should be Err because the container runtime doesn't exist
         assert!(
             result.is_err(),
@@ -1234,7 +1242,7 @@ b = a + 5
             container_runtime: None,
         };
         let skill_md = "```python\nx = 42\nprint(f'answer={x}')\n```\n";
-        let result = v.validate(skill_md, "python").unwrap();
+        let result = v.validate(skill_md, &Language::Python).unwrap();
         match result {
             ValidationResult::Pass(out) => {
                 assert!(
@@ -1257,7 +1265,7 @@ b = a + 5
             container_runtime: None,
         };
         let skill_md = "```python\nimport nonexistent_module_xyz_abc\nnonexistent_module_xyz_abc.do_stuff()\n```\n";
-        let result = v.validate(skill_md, "python").unwrap();
+        let result = v.validate(skill_md, &Language::Python).unwrap();
         match result {
             ValidationResult::Fail(err) => {
                 assert!(
@@ -1329,7 +1337,7 @@ b = a + 5
         };
         let skill_md =
             "```python\nimport os\nassert os.path.exists('.')\nprint('assertion passed')\n```\n";
-        let result = v.validate(skill_md, "python").unwrap();
+        let result = v.validate(skill_md, &Language::Python).unwrap();
         match result {
             ValidationResult::Pass(out) => {
                 assert!(
@@ -1477,7 +1485,7 @@ print(sys.version)
         let v = FunctionalValidator {
             container_runtime: None,
         };
-        let result = v.validate("# SKILL.md", "rust").unwrap();
+        let result = v.validate("# SKILL.md", &Language::Rust).unwrap();
         match &result {
             ValidationResult::Skipped(msg) => {
                 assert!(
@@ -1497,7 +1505,7 @@ print(sys.version)
         let v = FunctionalValidator {
             container_runtime: None,
         };
-        let result = v.validate("# SKILL.md", "go").unwrap();
+        let result = v.validate("# SKILL.md", &Language::Go).unwrap();
         match &result {
             ValidationResult::Skipped(msg) => {
                 assert!(
@@ -1588,7 +1596,7 @@ print(sys.version)
         };
         // Skill with non-python code blocks only
         let skill_md = "```bash\necho hello\n```\n";
-        let result = v.validate(skill_md, "python").unwrap();
+        let result = v.validate(skill_md, &Language::Python).unwrap();
         assert_eq!(
             result,
             ValidationResult::Skipped("No runnable code found in SKILL.md".to_string())
@@ -1713,7 +1721,7 @@ print(sys.version)
             container_runtime: None,
         };
         let skill_md = "```python\nimport os\nx = os.getcwd()\n```\n";
-        let result = v.validate(skill_md, "python").unwrap();
+        let result = v.validate(skill_md, &Language::Python).unwrap();
         match result {
             ValidationResult::Pass(out) => {
                 assert!(

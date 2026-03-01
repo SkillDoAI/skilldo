@@ -392,7 +392,7 @@ impl Generator {
                 ValidationResult::Skipped(reason.to_string())
             } else {
                 let validator = functional_validator.get_or_insert_with(FunctionalValidator::new);
-                validator.validate(&skill_md, data.language.as_str())?
+                validator.validate(&skill_md, &data.language)?
             };
 
             match functional_result {

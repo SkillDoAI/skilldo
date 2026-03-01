@@ -3,7 +3,7 @@
 // Tests multiple ecosystems, config loading, error recovery, and output validation
 
 use anyhow::Result;
-use skilldo::config::{Config, GenerationConfig, LlmConfig, PromptsConfig};
+use skilldo::config::{Config, GenerationConfig, LlmConfig, PromptsConfig, Provider};
 use skilldo::detector::{detect_language, Language};
 use skilldo::ecosystems::python::PythonHandler;
 use skilldo::lint::{Severity, SkillLinter};
@@ -200,7 +200,7 @@ async fn test_full_pipeline_python_project() {
 async fn test_pipeline_with_custom_config() {
     let custom_config = Config {
         llm: LlmConfig {
-            provider: "mock".to_string(),
+            provider: Provider::OpenAICompatible,
             model: "test-model".to_string(),
             api_key_env: None,
             base_url: None,
@@ -244,12 +244,12 @@ async fn test_pipeline_with_custom_config() {
 
     // Verify config serialization
     let toml_str = toml::to_string(&custom_config).unwrap();
-    assert!(toml_str.contains("provider = \"mock\""));
+    assert!(toml_str.contains("provider = \"openai-compatible\""));
     assert!(toml_str.contains("max_retries = 5"));
 
     // Test config deserialization
     let parsed: Config = toml::from_str(&toml_str).unwrap();
-    assert_eq!(parsed.llm.provider, "mock");
+    assert_eq!(parsed.llm.provider, Provider::OpenAICompatible);
     assert_eq!(parsed.generation.max_retries, 5);
 }
 
@@ -503,7 +503,7 @@ agent1_custom = "Custom instructions here"
 "#;
 
     let config: Config = toml::from_str(toml_str).unwrap();
-    assert_eq!(config.llm.provider, "anthropic");
+    assert_eq!(config.llm.provider, Provider::Anthropic);
     assert_eq!(config.generation.max_retries, 5);
     assert!(config.prompts.override_prompts);
 }

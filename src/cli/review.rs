@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use tracing::info;
 
-use crate::config::Config;
+use crate::config::{Config, Provider};
 use crate::llm::factory;
 use crate::review::{self, ReviewAgent};
 
@@ -43,7 +43,7 @@ pub async fn run(
 
     // Apply CLI overrides to the resolved config
     if let Some(ref provider) = provider_override {
-        llm_config.provider = provider.clone();
+        llm_config.provider = provider.parse::<Provider>()?;
     }
     if let Some(ref model) = model_override {
         llm_config.model = model.clone();
