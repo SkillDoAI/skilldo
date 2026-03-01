@@ -12,7 +12,12 @@ pub(crate) fn pyproject_version(content: &str) -> Option<String> {
         .trim_matches(']')
         .trim_matches('{')
         .trim_matches('}');
-    if !version.is_empty() && !version.contains("attr") && !version.contains("\"") {
+    if !version.is_empty()
+        && !version.contains('=')
+        && !version.contains("attr")
+        && !version.contains("file")
+        && !version.contains("\"")
+    {
         Some(version.to_string())
     } else {
         None

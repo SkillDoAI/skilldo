@@ -533,7 +533,7 @@ impl Generator {
                         warn!("  ⚠ review: malformed verdict, retrying");
                         continue;
                     }
-                    warn!("  ⚠ review: malformed verdict on final attempt, accepting as pass");
+                    warn!("  ⚠ review: malformed verdict on final attempt, proceeding with unresolved error");
                     had_unresolved_errors = true;
                     break;
                 }

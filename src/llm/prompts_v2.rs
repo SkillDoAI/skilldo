@@ -950,7 +950,7 @@ pub fn create_update_prompt(
 ) -> String {
     let ecosystem_term = language.ecosystem_term();
     let lang_str = language.as_str();
-    format!(
+    let mut prompt = format!(
         r#"You are updating an existing SKILL.md for {ecosystem_term} "{}" to version {}.
 
 ## Existing SKILL.md (preserve everything that's still correct)
@@ -1014,7 +1014,9 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
         context,
         version,
         ecosystem_term = ecosystem_term
-    )
+    );
+    prompt.push_str(language_hints(language, "create"));
+    prompt
 }
 
 /// Review agent Phase A: generate a Python introspection script to verify SKILL.md claims.
