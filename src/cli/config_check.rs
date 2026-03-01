@@ -43,12 +43,9 @@ pub fn run(config_path: Option<String>) -> Result<()> {
             config
         }
         Err(e) => {
-            // Intentional: print the error diagnostically and return Ok(()).
-            // This is a diagnostic command — config load failure is reported to the
-            // user via print_results(), not propagated as an Err (which would double-print).
             results.error(format!("Failed to load config: {}", e));
             print_results(&results);
-            return Ok(());
+            anyhow::bail!("config check failed: {}", e);
         }
     };
 
@@ -512,9 +509,9 @@ mod tests {
 
     #[test]
     fn test_run_with_nonexistent_config() {
-        // Should not panic, should report an error gracefully
+        // Should not panic, should report an error with non-zero exit
         let result = run(Some("/nonexistent/config.toml".to_string()));
-        assert!(result.is_ok()); // run() returns Ok even on config errors (it prints them)
+        assert!(result.is_err());
     }
 
     #[test]
@@ -952,9 +949,9 @@ enable_test = false
         )
         .unwrap();
 
-        // run() reports config load failure gracefully (returns Ok, prints error)
+        // Config load failure → error exit
         let result = run(Some(config_path.to_str().unwrap().to_string()));
-        assert!(result.is_ok()); // config load error is printed, not propagated
+        assert!(result.is_err());
     }
 
     // --- Coverage: review LLM config validation (lines 130-144) ---
@@ -1271,9 +1268,9 @@ api_key_env = "none"
         )
         .unwrap();
 
-        // run() reports config load failure gracefully (returns Ok, prints error)
+        // Config load failure → error exit
         let result = run(Some(config_path.to_str().unwrap().to_string()));
-        assert!(result.is_ok()); // config load error is printed, not propagated
+        assert!(result.is_err());
     }
 
     #[test]

@@ -41,7 +41,7 @@ impl FunctionalValidator {
             info!("{} available - using containerized validation", detected);
             Some(detected)
         } else {
-            warn!("No container runtime responding - using system Python (less safe)");
+            warn!("No container runtime responding — validation will be skipped");
             None
         };
 
@@ -75,11 +75,15 @@ impl FunctionalValidator {
 
         info!("Extracted test code:\n{}", test_code);
 
-        // Run the test
+        // Run the test — container isolation is required for safety
         if let Some(ref runtime) = self.container_runtime {
             self.run_python_container(runtime, &test_code)
         } else {
-            self.run_python_system(&test_code)
+            warn!("Skipping validation: no container runtime available");
+            Ok(ValidationResult::Skipped(
+                "No container runtime — skipping validation (container isolation required)"
+                    .to_string(),
+            ))
         }
     }
 
@@ -170,7 +174,8 @@ impl FunctionalValidator {
         }
     }
 
-    /// Run Python code using system Python (fallback, less safe)
+    /// Run Python code using system Python (used in tests only; validate_python requires container)
+    #[cfg(test)]
     fn run_python_system(&self, code: &str) -> Result<ValidationResult> {
         // Check if python3 is available
         if !Command::new("python3")
@@ -614,17 +619,21 @@ x = os.getcwd()
     }
 
     #[test]
-    #[ignore] // Requires python3 on system
-    fn test_validate_python_full_system_path() {
+    fn test_validate_python_no_runtime_returns_skipped() {
         let validator = FunctionalValidator {
             container_runtime: None,
         };
         let skill_md = "```python\nimport os\nprint(os.getcwd())\n```\n";
         let result = validator.validate(skill_md, &Language::Python).unwrap();
         match result {
-            ValidationResult::Pass(out) => assert!(!out.is_empty()),
-            ValidationResult::Skipped(_) => { /* python3 not available, ok */ }
-            other => panic!("Expected Pass or Skipped, got {:?}", other),
+            ValidationResult::Skipped(msg) => {
+                assert!(
+                    msg.contains("container"),
+                    "Should mention container: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected Skipped without runtime, got {:?}", other),
         }
     }
 
@@ -991,27 +1000,23 @@ x = os.getpid()
         assert_eq!(original, cloned);
     }
 
-    /// validate_python dispatches correctly when runtime is None and code is extractable
-    /// but python3 may or may not be available -- we just ensure we don't get an error
+    /// validate_python with no runtime always returns Skipped (container required)
     #[test]
-    fn test_validate_python_no_runtime_with_code_dispatches() {
+    fn test_validate_python_no_runtime_with_code_skips() {
         let v = FunctionalValidator {
             container_runtime: None,
         };
         let skill_md = "```python\nimport os\nprint(os.getcwd())\n```\n";
         let result = v.validate(skill_md, &Language::Python).unwrap();
-        // Without container runtime, it falls through to run_python_system.
-        // On systems without python3, this returns Skipped.
-        // On systems with python3, this returns Pass.
-        // Either way it should not be Fail for valid code.
         match result {
-            ValidationResult::Pass(_) | ValidationResult::Skipped(_) => { /* expected */ }
-            ValidationResult::Fail(err) => {
-                panic!(
-                    "Valid code should not fail (might skip if no python3): {}",
-                    err
+            ValidationResult::Skipped(msg) => {
+                assert!(
+                    msg.contains("container"),
+                    "Should mention container: {}",
+                    msg
                 );
             }
+            other => panic!("Expected Skipped without runtime, got: {:?}", other),
         }
     }
 
@@ -1235,49 +1240,23 @@ b = a + 5
         }
     }
 
-    /// validate_python with no runtime dispatches to run_python_system for valid code
+    /// validate_python with no runtime returns Skipped (container isolation required)
     #[test]
-    fn test_validate_python_system_path_valid_code() {
+    fn test_validate_python_no_runtime_skips() {
         let v = FunctionalValidator {
             container_runtime: None,
         };
         let skill_md = "```python\nx = 42\nprint(f'answer={x}')\n```\n";
         let result = v.validate(skill_md, &Language::Python).unwrap();
         match result {
-            ValidationResult::Pass(out) => {
+            ValidationResult::Skipped(msg) => {
                 assert!(
-                    out.contains("answer=42"),
-                    "Expected answer=42 in output, got: {}",
-                    out
+                    msg.contains("container"),
+                    "Skip message should mention container, got: {}",
+                    msg
                 );
             }
-            ValidationResult::Skipped(_) => { /* python3 not available, acceptable */ }
-            ValidationResult::Fail(err) => {
-                panic!("Valid print code should not fail: {}", err);
-            }
-        }
-    }
-
-    /// validate_python with no runtime dispatches to run_python_system for invalid code
-    #[test]
-    fn test_validate_python_system_path_invalid_code() {
-        let v = FunctionalValidator {
-            container_runtime: None,
-        };
-        let skill_md = "```python\nimport nonexistent_module_xyz_abc\nnonexistent_module_xyz_abc.do_stuff()\n```\n";
-        let result = v.validate(skill_md, &Language::Python).unwrap();
-        match result {
-            ValidationResult::Fail(err) => {
-                assert!(
-                    err.contains("ModuleNotFoundError") || err.contains("No module named"),
-                    "Expected import error, got: {}",
-                    err
-                );
-            }
-            ValidationResult::Skipped(_) => { /* python3 not available, acceptable */ }
-            ValidationResult::Pass(_) => {
-                panic!("Importing nonexistent module should not Pass");
-            }
+            other => panic!("Expected Skipped without runtime, got: {:?}", other),
         }
     }
 
@@ -1329,9 +1308,9 @@ b = a + 5
         }
     }
 
-    /// validate_python end-to-end: code with assert that passes
+    /// validate_python with no runtime always returns Skipped
     #[test]
-    fn test_validate_python_system_path_passing_assertion() {
+    fn test_validate_python_no_runtime_skips_assertion_code() {
         let v = FunctionalValidator {
             container_runtime: None,
         };
@@ -1339,17 +1318,14 @@ b = a + 5
             "```python\nimport os\nassert os.path.exists('.')\nprint('assertion passed')\n```\n";
         let result = v.validate(skill_md, &Language::Python).unwrap();
         match result {
-            ValidationResult::Pass(out) => {
+            ValidationResult::Skipped(msg) => {
                 assert!(
-                    out.contains("assertion passed"),
-                    "Expected 'assertion passed' in output, got: {}",
-                    out
+                    msg.contains("container"),
+                    "Should mention container: {}",
+                    msg
                 );
             }
-            ValidationResult::Skipped(_) => { /* python3 not available, acceptable */ }
-            ValidationResult::Fail(err) => {
-                panic!("os.path.exists('.') should not fail: {}", err);
-            }
+            other => panic!("Expected Skipped without runtime, got: {:?}", other),
         }
     }
 

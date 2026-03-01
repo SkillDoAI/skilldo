@@ -531,6 +531,24 @@ impl Generator {
                     break;
                 }
 
+                // Safety issues are always fatal — never loop back to model
+                let has_safety_error = result
+                    .issues
+                    .iter()
+                    .any(|i| i.category == "safety" && matches!(i.severity, Severity::Error));
+                if has_safety_error {
+                    let msgs: Vec<String> = result
+                        .issues
+                        .iter()
+                        .filter(|i| i.category == "safety")
+                        .map(|i| i.complaint.clone())
+                        .collect();
+                    anyhow::bail!(
+                        "SAFETY: Review agent detected safety issues:\n{}",
+                        msgs.join("\n")
+                    );
+                }
+
                 if review_attempt == self.review_max_retries {
                     warn!("  review: max retries reached, proceeding with issues");
                     for issue in &result.issues {
