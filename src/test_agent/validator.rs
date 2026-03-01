@@ -9,7 +9,7 @@ use super::{CodePattern, LanguageCodeGenerator, LanguageExecutor, LanguageParser
 use crate::config::ContainerConfig;
 use crate::llm::client::LlmClient;
 
-/// Validation mode for Agent 5
+/// Validation mode for test agent
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ValidationMode {
     /// Test 2-3 patterns thoroughly
@@ -101,8 +101,8 @@ Instructions:
     }
 }
 
-/// Main Agent 5 coordinator
-pub struct Agent5CodeValidator<'a> {
+/// Main test agent coordinator
+pub struct TestCodeValidator<'a> {
     parser: Box<dyn LanguageParser>,
     code_generator: Box<dyn LanguageCodeGenerator + 'a>,
     executor: Box<dyn LanguageExecutor>,
@@ -111,8 +111,8 @@ pub struct Agent5CodeValidator<'a> {
     install_source: String,
 }
 
-impl<'a> Agent5CodeValidator<'a> {
-    /// Create a new Agent 5 validator for Python
+impl<'a> TestCodeValidator<'a> {
+    /// Create a new test agent validator for Python
     #[allow(dead_code)]
     pub fn new_python(llm_client: &'a dyn LlmClient, config: ContainerConfig) -> Self {
         let install_source = config.install_source.clone();
@@ -125,7 +125,7 @@ impl<'a> Agent5CodeValidator<'a> {
         }
     }
 
-    /// Create a new Agent 5 validator for Python with custom instructions (append-only)
+    /// Create a new test agent validator for Python with custom instructions (append-only)
     pub fn new_python_with_custom(
         llm_client: &'a dyn LlmClient,
         config: ContainerConfig,
@@ -637,8 +637,8 @@ mod tests {
         executor: Box<dyn LanguageExecutor>,
         mode: ValidationMode,
         install_source: &str,
-    ) -> Agent5CodeValidator<'a> {
-        Agent5CodeValidator {
+    ) -> TestCodeValidator<'a> {
+        TestCodeValidator {
             parser,
             code_generator,
             executor,

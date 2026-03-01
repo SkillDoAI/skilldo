@@ -49,18 +49,27 @@ impl PartialEq<&str> for SecretString {
 }
 
 /// Validate a dependency name is safe for use in shell commands and config files.
-/// Rejects names containing shell metacharacters or control sequences.
-/// Valid: alphanumeric, hyphens, underscores, dots, slashes, square brackets,
-/// commas, spaces, comparison operators, and at signs (for scoped npm packages
-/// and version constraints like `pandas>=2.0,<3`).
+/// Rejects names containing shell metacharacters, spaces (flag injection vector),
+/// or control sequences.
+/// Valid: alphanumeric, hyphens, underscores, dots, forward slashes (scoped npm
+/// like `@scope/pkg`), square brackets, commas, at signs, and version constraint
+/// operators (`>=`, `<`, `~=`, `^`, `!`).
+/// Spaces are NOT allowed — they enable flag injection (e.g., `pkg --malicious`).
 pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
     if dep.is_empty() {
         return Err("Empty dependency name".to_string());
     }
+    // Reject leading hyphens (flag injection: `-e malicious`)
+    if dep.starts_with('-') {
+        return Err(format!(
+            "Dependency name starts with '-' (possible flag injection): {}",
+            dep
+        ));
+    }
     for ch in dep.chars() {
         match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' => {}
-            '-' | '_' | '.' | '/' | '[' | ']' | ',' | ' ' | '@' => {}
+            '-' | '_' | '.' | '/' | '[' | ']' | ',' | '@' => {}
             '>' | '<' | '=' | '!' | '~' | '^' => {} // version constraints
             _ => {
                 return Err(format!(
@@ -224,5 +233,15 @@ mod tests {
         assert!(sanitize_dep_name("pkg|cat /etc/passwd").is_err());
         assert!(sanitize_dep_name("pkg&& evil").is_err());
         assert!(sanitize_dep_name("").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_dep_name_rejects_flag_injection() {
+        // Leading hyphen — could inject flags like `-e malicious`
+        assert!(sanitize_dep_name("-e").is_err());
+        assert!(sanitize_dep_name("--malicious-flag").is_err());
+        // Spaces enable flag injection: `pkg --malicious`
+        assert!(sanitize_dep_name("pkg --malicious").is_err());
+        assert!(sanitize_dep_name("express rm").is_err());
     }
 }

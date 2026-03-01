@@ -5,11 +5,12 @@ use std::str::FromStr;
 use tracing::info;
 
 use crate::cli::version;
-use crate::config::Config;
+use crate::config::{Config, Provider};
 use crate::detector::{self, Language};
 use crate::llm::factory;
 use crate::pipeline::collector::Collector;
 use crate::pipeline::generator::Generator;
+use crate::review;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -61,7 +62,7 @@ pub async fn run(
     // Apply CLI overrides
     if let Some(ref provider) = provider_override {
         info!("CLI override: provider = {}", provider);
-        config.llm.provider = provider.clone();
+        config.llm.provider = provider.parse::<Provider>()?;
     }
     if let Some(ref model) = model_override {
         info!("CLI override: model = {}", model);
@@ -139,7 +140,7 @@ pub async fn run(
         }
         if let Some(ref provider) = test_provider_override {
             info!("CLI override: test provider = {}", provider);
-            test_llm.provider = provider.clone();
+            test_llm.provider = provider.parse::<Provider>()?;
         }
         config.generation.test_llm = Some(test_llm);
     }
@@ -356,18 +357,7 @@ pub async fn run(
             "\n⚠ Review completed with {} unresolved issue(s):",
             output_result.unresolved_warnings.len()
         );
-        for (i, issue) in output_result.unresolved_warnings.iter().enumerate() {
-            println!(
-                "  {}. [{}][{}] {}",
-                i + 1,
-                issue.severity,
-                issue.category,
-                issue.complaint
-            );
-            if !issue.evidence.is_empty() {
-                println!("     Evidence: {}", issue.evidence);
-            }
-        }
+        review::print_review_issues(&output_result.unresolved_warnings);
         println!("\nThese could not be automatically verified or fixed.");
         println!("Consider adjusting your review prompts via the review_custom config option.");
     }
@@ -741,7 +731,7 @@ setup(name="testpkg", version="1.0.0")
     }
 
     #[tokio::test]
-    async fn test_run_with_no_agent5() {
+    async fn test_run_with_no_test_agent() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
         let result = run(

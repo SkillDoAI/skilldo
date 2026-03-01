@@ -2,7 +2,7 @@
 //! Tests configuration structure and default values
 
 use anyhow::Result;
-use skilldo::config::Config;
+use skilldo::config::{Config, Provider};
 
 #[test]
 fn test_config_has_defaults() -> Result<()> {
@@ -11,7 +11,8 @@ fn test_config_has_defaults() -> Result<()> {
     // Should have reasonable defaults
     assert!(config.generation.max_retries > 0);
     assert!(config.generation.max_source_tokens > 0);
-    assert!(!config.llm.provider.is_empty());
+    // Provider is an enum — always valid
+    let _ = config.llm.provider.to_string();
     assert!(!config.llm.model.is_empty());
 
     Ok(())
@@ -39,10 +40,8 @@ fn test_config_llm_defaults() -> Result<()> {
     let config = Config::default();
 
     // LLM config should have provider and model
-    assert!(
-        !config.llm.provider.is_empty(),
-        "Provider should not be empty"
-    );
+    // Provider is an enum — always valid
+    let _ = config.llm.provider.to_string();
     assert!(!config.llm.model.is_empty(), "Model should not be empty");
 
     Ok(())
@@ -54,7 +53,8 @@ fn test_config_load_returns_valid_config() -> Result<()> {
     let config = Config::load()?;
 
     assert!(config.generation.max_retries > 0);
-    assert!(!config.llm.provider.is_empty());
+    // Provider is an enum — always valid
+    let _ = config.llm.provider.to_string();
 
     Ok(())
 }
@@ -98,7 +98,10 @@ fn test_generation_config_get_test_mode_thorough() {
     let mode = config.generation.get_test_mode();
 
     // Default mode should be thorough
-    assert!(matches!(mode, skilldo::agent5::ValidationMode::Thorough));
+    assert!(matches!(
+        mode,
+        skilldo::test_agent::ValidationMode::Thorough
+    ));
 }
 
 #[test]
@@ -108,7 +111,8 @@ fn test_config_returns_default_when_no_config_file() {
 
     // Should have valid defaults
     assert!(config.generation.max_retries > 0);
-    assert!(!config.llm.provider.is_empty());
+    // Provider is an enum — always valid
+    let _ = config.llm.provider.to_string();
 }
 
 #[test]
@@ -133,7 +137,7 @@ fn test_config_get_api_key_when_env_var_not_set() -> Result<()> {
 fn test_config_get_api_key_when_no_env_var_specified() -> Result<()> {
     // openai-compatible with no api_key_env: should return empty string (local models)
     let mut config = Config::default();
-    config.llm.provider = "openai-compatible".to_string();
+    config.llm.provider = Provider::OpenAICompatible;
     config.llm.api_key_env = None;
 
     let result = config.get_api_key()?;
@@ -176,7 +180,7 @@ fn test_config_get_api_key_inferred_from_provider() -> Result<()> {
 
 #[test]
 fn test_generation_config_get_test_mode_minimal() {
-    use skilldo::agent5::ValidationMode;
+    use skilldo::test_agent::ValidationMode;
 
     // Create config with minimal mode
     let mut config = Config::default();
@@ -188,7 +192,7 @@ fn test_generation_config_get_test_mode_minimal() {
 
 #[test]
 fn test_generation_config_get_test_mode_adaptive() {
-    use skilldo::agent5::ValidationMode;
+    use skilldo::test_agent::ValidationMode;
 
     // Create config with adaptive mode
     let mut config = Config::default();

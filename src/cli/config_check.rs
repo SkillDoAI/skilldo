@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::env;
 use std::process::Command;
 
-use crate::config::Config;
+use crate::config::{Config, Provider};
 
 struct CheckResult {
     passed: Vec<String>,
@@ -43,29 +43,17 @@ pub fn run(config_path: Option<String>) -> Result<()> {
             config
         }
         Err(e) => {
-            // Intentional: print the error diagnostically and return Ok(()).
-            // This is a diagnostic command — config load failure is reported to the
-            // user via print_results(), not propagated as an Err (which would double-print).
             results.error(format!("Failed to load config: {}", e));
             print_results(&results);
-            return Ok(());
+            anyhow::bail!("config check failed: {}", e);
         }
     };
 
-    // 2. Check LLM provider
-    let valid_providers = ["anthropic", "openai", "gemini", "openai-compatible"];
-    if valid_providers.contains(&config.llm.provider.as_str()) {
-        results.pass(format!(
-            "LLM provider: {} (model: {})",
-            config.llm.provider, config.llm.model
-        ));
-    } else {
-        results.error(format!(
-            "Unknown LLM provider: '{}' (expected: {})",
-            config.llm.provider,
-            valid_providers.join(", ")
-        ));
-    }
+    // 2. Check LLM provider (enum-validated — always valid)
+    results.pass(format!(
+        "LLM provider: {} (model: {})",
+        config.llm.provider, config.llm.model
+    ));
 
     // 3. Check main API key env var
     check_api_key(
@@ -76,7 +64,7 @@ pub fn run(config_path: Option<String>) -> Result<()> {
     );
 
     // 4. Check base_url for openai-compatible
-    if config.llm.provider == "openai-compatible" {
+    if config.llm.provider == Provider::OpenAICompatible {
         if config.llm.base_url.is_some() {
             results.pass("Base URL configured for openai-compatible provider".to_string());
         } else {
@@ -101,13 +89,7 @@ pub fn run(config_path: Option<String>) -> Result<()> {
 
         // Check test agent LLM override if configured
         if let Some(ref test_llm) = config.generation.test_llm {
-            check_stage_provider(
-                &valid_providers,
-                "test",
-                &test_llm.provider,
-                &test_llm.model,
-                &mut results,
-            );
+            check_stage_provider("test", &test_llm.provider, &test_llm.model, &mut results);
             check_api_key(
                 &test_llm.api_key_env,
                 "test LLM",
@@ -127,7 +109,6 @@ pub fn run(config_path: Option<String>) -> Result<()> {
         ));
         if let Some(ref review_llm) = config.generation.review_llm {
             check_stage_provider(
-                &valid_providers,
                 "review",
                 &review_llm.provider,
                 &review_llm.model,
@@ -153,13 +134,7 @@ pub fn run(config_path: Option<String>) -> Result<()> {
     ];
     for (name, llm_opt) in &stage_llms {
         if let Some(llm) = llm_opt {
-            check_stage_provider(
-                &valid_providers,
-                name,
-                &llm.provider,
-                &llm.model,
-                &mut results,
-            );
+            check_stage_provider(name, &llm.provider, &llm.model, &mut results);
             check_api_key(
                 &llm.api_key_env,
                 &format!("{} LLM", name),
@@ -225,6 +200,15 @@ pub fn run(config_path: Option<String>) -> Result<()> {
         ));
     }
 
+    // 11. Warn about parallel extraction with local models
+    if config.generation.parallel_extraction && is_likely_local_provider(&config) {
+        results.warn(
+            "parallel_extraction=true with a local provider (Ollama) — \
+             this may cause hangs. Set parallel_extraction = false in [generation]"
+                .to_string(),
+        );
+    }
+
     // Print results
     print_results(&results);
 
@@ -236,34 +220,56 @@ pub fn run(config_path: Option<String>) -> Result<()> {
     Ok(())
 }
 
+/// Heuristic: check if any LLM used during parallel extraction is likely local (Ollama).
+/// Inspects extract/map/learn overrides if present, otherwise falls back to the main LLM config.
+fn is_likely_local_provider(config: &Config) -> bool {
+    let llms_used_in_parallel = [
+        config.generation.extract_llm.as_ref(),
+        config.generation.map_llm.as_ref(),
+        config.generation.learn_llm.as_ref(),
+    ];
+    // If any stage override is local, warn. If no overrides, check main config.
+    let has_override = llms_used_in_parallel.iter().any(|o| o.is_some());
+    if has_override {
+        llms_used_in_parallel
+            .iter()
+            .filter_map(|o| o.as_ref())
+            .any(|llm| is_llm_local(llm))
+    } else {
+        is_llm_local(&config.llm)
+    }
+}
+
+fn is_llm_local(llm: &crate::config::LlmConfig) -> bool {
+    if llm.provider != Provider::OpenAICompatible {
+        return false;
+    }
+    match &llm.base_url {
+        Some(url) => url.contains("localhost") || url.contains("127.0.0.1"),
+        None => true, // default is localhost:11434
+    }
+}
+
 fn check_stage_provider(
-    valid_providers: &[&str],
     stage_name: &str,
-    provider: &str,
+    provider: &Provider,
     model: &str,
     results: &mut CheckResult,
 ) {
-    if valid_providers.contains(&provider) {
-        results.pass(format!(
-            "{} LLM override: {} ({})",
-            stage_name, provider, model
-        ));
-    } else {
-        results.error(format!(
-            "{} LLM override: unknown provider '{}' (expected: {})",
-            stage_name,
-            provider,
-            valid_providers.join(", ")
-        ));
-    }
+    // Provider is enum-validated — always valid
+    results.pass(format!(
+        "{} LLM override: {} ({})",
+        stage_name, provider, model
+    ));
 }
 
 fn check_api_key(
     api_key_env: &Option<String>,
     label: &str,
-    provider: &str,
+    provider: &Provider,
     results: &mut CheckResult,
 ) {
+    let is_oai_compat = *provider == Provider::OpenAICompatible;
     match api_key_env {
         Some(env_var) if env_var.to_lowercase() == "none" => {
             results.pass(format!("{}: no API key needed", label));
@@ -272,7 +278,7 @@ fn check_api_key(
             Ok(v) if !v.trim().is_empty() => {
                 results.pass(format!("{}: {} is set", label, env_var));
             }
-            Ok(_) if provider == "openai-compatible" => {
+            Ok(_) if is_oai_compat => {
                 results.warn(format!(
                     "{}: {} is set but empty (OK for local models, needed for gateways)",
                     label, env_var
@@ -281,7 +287,7 @@ fn check_api_key(
             Ok(_) => {
                 results.error(format!("{}: {} is set but empty", label, env_var));
             }
-            Err(_) if provider == "openai-compatible" => {
+            Err(_) if is_oai_compat => {
                 results.warn(format!(
                     "{}: {} is not set (OK for local models, needed for gateways)",
                     label, env_var
@@ -292,49 +298,38 @@ fn check_api_key(
             }
         },
         None => {
-            // Infer the env var from provider (mirrors Config::get_api_key behavior)
-            let inferred = match provider {
-                "openai" => Some("OPENAI_API_KEY"),
-                "anthropic" => Some("ANTHROPIC_API_KEY"),
-                "gemini" => Some("GEMINI_API_KEY"),
-                "openai-compatible" => Some("OPENAI_API_KEY"),
-                _ => None,
-            };
-            if let Some(env_var) = inferred {
-                match env::var(env_var) {
-                    Ok(v) if !v.trim().is_empty() => {
-                        results.pass(format!(
-                            "{}: {} is set (inferred from provider)",
-                            label, env_var
-                        ));
-                    }
-                    Ok(_) if provider == "openai-compatible" => {
-                        results.warn(format!(
-                            "{}: {} is set but empty (OK for local models, needed for gateways)",
-                            label, env_var
-                        ));
-                    }
-                    Ok(_) => {
-                        results.error(format!(
-                            "{}: {} is set but empty (inferred from provider)",
-                            label, env_var
-                        ));
-                    }
-                    Err(_) if provider == "openai-compatible" => {
-                        results.warn(format!(
-                            "{}: {} is not set (OK for local models, needed for gateways)",
-                            label, env_var
-                        ));
-                    }
-                    Err(_) => {
-                        results.error(format!(
-                            "{}: {} is not set (inferred from provider)",
-                            label, env_var
-                        ));
-                    }
+            let inferred = provider.default_api_key_env();
+            match env::var(inferred) {
+                Ok(v) if !v.trim().is_empty() => {
+                    results.pass(format!(
+                        "{}: {} is set (inferred from provider)",
+                        label, inferred
+                    ));
                 }
-            } else {
-                results.pass(format!("{}: no API key configured", label));
+                Ok(_) if is_oai_compat => {
+                    results.warn(format!(
+                        "{}: {} is set but empty (OK for local models, needed for gateways)",
+                        label, inferred
+                    ));
+                }
+                Ok(_) => {
+                    results.error(format!(
+                        "{}: {} is set but empty (inferred from provider)",
+                        label, inferred
+                    ));
+                }
+                Err(_) if is_oai_compat => {
+                    results.warn(format!(
+                        "{}: {} is not set (OK for local models, needed for gateways)",
+                        label, inferred
+                    ));
+                }
+                Err(_) => {
+                    results.error(format!(
+                        "{}: {} is not set (inferred from provider)",
+                        label, inferred
+                    ));
+                }
             }
         }
     }
@@ -436,7 +431,12 @@ mod tests {
     #[test]
     fn test_check_api_key_none_provider() {
         let mut r = CheckResult::new();
-        check_api_key(&Some("none".to_string()), "Test", "anthropic", &mut r);
+        check_api_key(
+            &Some("none".to_string()),
+            "Test",
+            &Provider::Anthropic,
+            &mut r,
+        );
         assert_eq!(r.passed.len(), 1);
         assert!(r.passed[0].contains("no API key needed"));
     }
@@ -448,7 +448,7 @@ mod tests {
         check_api_key(
             &Some("SKILLDO_TEST_CHECK_KEY".to_string()),
             "Test",
-            "anthropic",
+            &Provider::Anthropic,
             &mut r,
         );
         assert_eq!(r.passed.len(), 1);
@@ -462,7 +462,7 @@ mod tests {
         check_api_key(
             &Some("SKILLDO_NONEXISTENT_KEY_999".to_string()),
             "Test",
-            "anthropic",
+            &Provider::Anthropic,
             &mut r,
         );
         assert_eq!(r.errors.len(), 1);
@@ -475,7 +475,7 @@ mod tests {
         check_api_key(
             &Some("SKILLDO_NONEXISTENT_KEY_999".to_string()),
             "Test",
-            "openai-compatible",
+            &Provider::OpenAICompatible,
             &mut r,
         );
         // Should be a warning, not an error
@@ -484,18 +484,24 @@ mod tests {
     }
 
     #[test]
-    fn test_check_api_key_no_env_configured_unknown_provider() {
-        // Unknown provider with no api_key_env → no key needed
+    fn test_check_api_key_explicit_none() {
+        // api_key_env="none" → no key needed (e.g. Ollama)
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", "custom-provider", &mut r);
+        check_api_key(
+            &Some("none".to_string()),
+            "Test",
+            &Provider::OpenAICompatible,
+            &mut r,
+        );
         assert_eq!(r.passed.len(), 1);
+        assert!(r.passed[0].contains("no API key needed"));
     }
 
     #[test]
     fn test_check_api_key_inferred_from_provider() {
         // Known provider with api_key_env=None → infers env var and checks it
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", "anthropic", &mut r);
+        check_api_key(&None, "Test", &Provider::Anthropic, &mut r);
         // ANTHROPIC_API_KEY is not set in test → error with inferred message
         assert_eq!(r.errors.len(), 1);
         assert!(r.errors[0].contains("inferred from provider"));
@@ -503,9 +509,9 @@ mod tests {
 
     #[test]
     fn test_run_with_nonexistent_config() {
-        // Should not panic, should report an error gracefully
+        // Should not panic, should report an error with non-zero exit
         let result = run(Some("/nonexistent/config.toml".to_string()));
-        assert!(result.is_ok()); // run() returns Ok even on config errors (it prints them)
+        assert!(result.is_err());
     }
 
     #[test]
@@ -534,7 +540,7 @@ max_source_tokens = 50000
         assert!(result.is_ok());
     }
 
-    // Test unknown provider by validating config directly.
+    // Test unknown provider rejected at deserialization time.
     #[test]
     fn test_run_with_unknown_provider() {
         use std::io::Write;
@@ -556,17 +562,14 @@ max_source_tokens = 1000
         )
         .unwrap();
 
-        // run() calls process::exit(1) when there are errors, so we verify the
-        // validation logic directly rather than calling run() end-to-end.
-        let config =
-            crate::config::Config::load_with_path(Some(config_path.to_str().unwrap().to_string()))
-                .unwrap();
-        let valid_providers = ["anthropic", "openai", "gemini", "openai-compatible"];
-        assert!(!valid_providers.contains(&config.llm.provider.as_str()));
+        // Provider enum rejects unknown values at deserialization time
+        let result =
+            crate::config::Config::load_with_path(Some(config_path.to_str().unwrap().to_string()));
+        assert!(result.is_err(), "badprovider should fail deserialization");
     }
 
     #[test]
-    fn test_run_with_agent5_llm_override() {
+    fn test_run_with_test_llm_override() {
         use std::io::Write;
         let dir = tempfile::TempDir::new().unwrap();
         let config_path = dir.path().join("test.toml");
@@ -767,27 +770,10 @@ enable_test = false
 
     #[test]
     fn test_check_stage_provider_valid() {
-        let valid_providers = ["anthropic", "openai", "gemini", "openai-compatible"];
         let mut r = CheckResult::new();
-        check_stage_provider(&valid_providers, "extract", "openai", "gpt-5", &mut r);
+        check_stage_provider("extract", &Provider::OpenAI, "gpt-5", &mut r);
         assert_eq!(r.passed.len(), 1);
         assert!(r.passed[0].contains("extract LLM override"));
-    }
-
-    #[test]
-    fn test_check_stage_provider_invalid() {
-        let valid_providers = ["anthropic", "openai", "gemini", "openai-compatible"];
-        let mut r = CheckResult::new();
-        check_stage_provider(
-            &valid_providers,
-            "learn",
-            "badprovider",
-            "some-model",
-            &mut r,
-        );
-        assert_eq!(r.errors.len(), 1);
-        assert!(r.errors[0].contains("learn LLM override"));
-        assert!(r.errors[0].contains("badprovider"));
     }
 
     #[test]
@@ -799,7 +785,7 @@ enable_test = false
         // Temporarily map gemini to our custom var by routing through the existing test helper.
         // The code infers GEMINI_API_KEY for gemini provider — set that one.
         env::set_var("GEMINI_API_KEY", "fake-gemini-key-for-inferred-test");
-        check_api_key(&None, "Test", "gemini", &mut r);
+        check_api_key(&None, "Test", &Provider::Gemini, &mut r);
         env::remove_var("GEMINI_API_KEY");
         env::remove_var("SKILLDO_TEST_INFERRED_GEMINI_KEY_99");
         assert_eq!(r.passed.len(), 1);
@@ -812,7 +798,7 @@ enable_test = false
         env::remove_var("OPENAI_API_KEY");
 
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", "openai-compatible", &mut r);
+        check_api_key(&None, "Test", &Provider::OpenAICompatible, &mut r);
 
         assert_eq!(r.warnings.len(), 1);
         assert!(r.errors.is_empty());
@@ -887,7 +873,6 @@ extra_body_json = '{{"top_p": 0.9}}'
     fn test_run_with_test_enabled_unavailable_runtime() {
         // runtime unavailable + test agent enabled → error
         // We test the internal logic rather than calling run() to avoid process::exit.
-        let valid_providers = ["anthropic", "openai", "gemini", "openai-compatible"];
         let mut r = CheckResult::new();
         let runtime = "nonexistent_runtime_xyz";
 
@@ -901,7 +886,7 @@ extra_body_json = '{{"top_p": 0.9}}'
         }
 
         // Verify check_stage_provider pass path is also exercised via valid providers
-        check_stage_provider(&valid_providers, "test", "anthropic", "claude-3", &mut r);
+        check_stage_provider("test", &Provider::Anthropic, "claude-3", &mut r);
 
         assert_eq!(r.errors.len(), 1);
         assert!(r.errors[0].contains("not found"));
@@ -910,8 +895,8 @@ extra_body_json = '{{"top_p": 0.9}}'
     }
 
     #[test]
-    fn test_run_with_agent5_disabled_unavailable_runtime() {
-        // Lines 143-145: runtime unavailable + agent5 disabled → warning (no process::exit)
+    fn test_run_with_test_agent_disabled_unavailable_runtime() {
+        // Lines 143-145: runtime unavailable + test agent disabled → warning (no process::exit)
         use std::io::Write;
         let dir = tempfile::TempDir::new().unwrap();
         let config_path = dir.path().join("test.toml");
@@ -936,12 +921,12 @@ runtime = "nonexistent_runtime_xyz_disabled"
         )
         .unwrap();
 
-        // No errors expected: api_key=none, agent5=false, runtime only warns.
+        // No errors expected: api_key=none, test_agent=false, runtime only warns.
         let result = run(Some(config_path.to_str().unwrap().to_string()));
         assert!(result.is_ok());
     }
 
-    // --- Coverage: unknown LLM provider (lines 63-66) ---
+    // --- Coverage: unknown LLM provider rejected at config load ---
     #[test]
     fn test_run_unknown_provider_end_to_end() {
         use std::io::Write;
@@ -964,10 +949,9 @@ enable_test = false
         )
         .unwrap();
 
-        // run() should return Err because of the unknown provider error
+        // Config load failure → error exit
         let result = run(Some(config_path.to_str().unwrap().to_string()));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("config error"));
     }
 
     // --- Coverage: review LLM config validation (lines 130-144) ---
@@ -1197,7 +1181,7 @@ extra_body_json = "[1, 2, 3]"
         check_api_key(
             &Some("SKILLDO_TEST_EMPTY_OAI_KEY".to_string()),
             "Test",
-            "openai-compatible",
+            &Provider::OpenAICompatible,
             &mut r,
         );
         env::remove_var("SKILLDO_TEST_EMPTY_OAI_KEY");
@@ -1215,7 +1199,7 @@ extra_body_json = "[1, 2, 3]"
         check_api_key(
             &Some("SKILLDO_TEST_EMPTY_ANTH_KEY".to_string()),
             "Test",
-            "anthropic",
+            &Provider::Anthropic,
             &mut r,
         );
         env::remove_var("SKILLDO_TEST_EMPTY_ANTH_KEY");
@@ -1231,7 +1215,7 @@ extra_body_json = "[1, 2, 3]"
         env::set_var("OPENAI_API_KEY", "");
 
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", "openai-compatible", &mut r);
+        check_api_key(&None, "Test", &Provider::OpenAICompatible, &mut r);
 
         // Empty inferred key for openai-compatible → warning
         assert_eq!(r.warnings.len(), 1);
@@ -1246,7 +1230,7 @@ extra_body_json = "[1, 2, 3]"
         env::set_var("OPENAI_API_KEY", "");
 
         let mut r = CheckResult::new();
-        check_api_key(&None, "Test", "openai", &mut r);
+        check_api_key(&None, "Test", &Provider::OpenAI, &mut r);
 
         // Empty inferred key for non-openai-compatible → error
         assert_eq!(r.errors.len(), 1);
@@ -1254,7 +1238,7 @@ extra_body_json = "[1, 2, 3]"
         assert!(r.errors[0].contains("inferred from provider"));
     }
 
-    // --- Coverage: review_llm with bad provider (lines 130-134) ---
+    // --- Coverage: review_llm with bad provider rejected at config load ---
     #[test]
     fn test_run_with_review_llm_bad_provider() {
         use std::io::Write;
@@ -1284,7 +1268,38 @@ api_key_env = "none"
         )
         .unwrap();
 
+        // Config load failure → error exit
         let result = run(Some(config_path.to_str().unwrap().to_string()));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_likely_local_provider_ollama() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::OpenAICompatible;
+        config.llm.base_url = Some("http://localhost:11434/v1".to_string());
+        assert!(is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_likely_local_provider_no_base_url() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::OpenAICompatible;
+        config.llm.base_url = None; // default is localhost
+        assert!(is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_likely_local_provider_remote() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::OpenAICompatible;
+        config.llm.base_url = Some("https://api.openrouter.ai/api/v1".to_string());
+        assert!(!is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_likely_local_provider_non_compat() {
+        let config = Config::default(); // Anthropic
+        assert!(!is_likely_local_provider(&config));
     }
 }

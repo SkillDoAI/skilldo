@@ -3,12 +3,12 @@ use tracing::{info, warn};
 
 use super::collector::CollectedData;
 use super::normalizer;
-use crate::agent5::{Agent5CodeValidator, TestResult, ValidationMode};
 use crate::config::{ContainerConfig, PromptsConfig};
 use crate::lint::{Severity, SkillLinter};
 use crate::llm::client::LlmClient;
 use crate::llm::prompts_v2;
 use crate::review::{ReviewAgent, ReviewIssue};
+use crate::test_agent::{TestCodeValidator, TestResult, ValidationMode};
 use crate::validator::{FunctionalValidator, ValidationResult};
 
 /// Output from the generation pipeline.
@@ -225,8 +225,7 @@ impl Generator {
             data.source_file_count,
             self.prompts_config.extract_custom.as_deref(),
             self.prompts_config.is_overwrite("extract"),
-            data.language.as_str(),
-            data.language.ecosystem_term(),
+            &data.language,
         );
         let map_prompt = prompts_v2::map_prompt(
             &data.package_name,
@@ -234,8 +233,7 @@ impl Generator {
             &examples_and_tests,
             self.prompts_config.map_custom.as_deref(),
             self.prompts_config.is_overwrite("map"),
-            data.language.as_str(),
-            data.language.ecosystem_term(),
+            &data.language,
         );
         let learn_prompt = prompts_v2::learn_prompt(
             &data.package_name,
@@ -243,8 +241,7 @@ impl Generator {
             &docs_and_changelog,
             self.prompts_config.learn_custom.as_deref(),
             self.prompts_config.is_overwrite("learn"),
-            data.language.as_str(),
-            data.language.ecosystem_term(),
+            &data.language,
         );
 
         let extract_client = self.get_client("extract");
@@ -282,8 +279,7 @@ impl Generator {
                 &api_surface,
                 &patterns,
                 &context,
-                data.language.as_str(),
-                data.language.ecosystem_term(),
+                &data.language,
             );
             self.get_client("create").complete(&update_prompt).await?
         } else {
@@ -294,8 +290,7 @@ impl Generator {
                 &data.version,
                 data.license.as_deref(),
                 &data.project_urls,
-                data.language.as_str(),
-                data.language.ecosystem_term(),
+                &data.language,
                 &api_surface,
                 &patterns,
                 &context,
@@ -397,14 +392,14 @@ impl Generator {
                 ValidationResult::Skipped(reason.to_string())
             } else {
                 let validator = functional_validator.get_or_insert_with(FunctionalValidator::new);
-                validator.validate(&skill_md, data.language.as_str())?
+                validator.validate(&skill_md, &data.language)?
             };
 
             match functional_result {
                 ValidationResult::Pass(output) => {
                     info!("  ✓ Functional validation passed");
                     info!("    Output: {}", output.lines().next().unwrap_or(""));
-                    break; // Format and functional passed, skip Agent 5 if not Python
+                    break; // Format and functional passed, skip test agent if not Python
                 }
                 ValidationResult::Skipped(reason) => {
                     info!("  ⏭️  Functional validation skipped: {}", reason);
@@ -415,7 +410,7 @@ impl Generator {
 
                         let test_llm = self.get_client("test");
 
-                        let test_validator = Agent5CodeValidator::new_python_with_custom(
+                        let test_validator = TestCodeValidator::new_python_with_custom(
                             test_llm,
                             self.container_config.clone(),
                             self.prompts_config.test_custom.clone(),
@@ -464,7 +459,7 @@ impl Generator {
                             Err(e) => {
                                 warn!("  ✗ test error: {}", e);
                                 warn!("    Continuing without test validation");
-                                break; // Don't fail the whole pipeline for Agent 5 errors
+                                break; // Don't fail the whole pipeline for test agent errors
                             }
                         }
                     } else {
@@ -534,6 +529,24 @@ impl Generator {
                 if result.passed {
                     info!("  ✓ review: passed");
                     break;
+                }
+
+                // Safety issues are always fatal — never loop back to model
+                let has_safety_error = result
+                    .issues
+                    .iter()
+                    .any(|i| i.category == "safety" && matches!(i.severity, Severity::Error));
+                if has_safety_error {
+                    let msgs: Vec<String> = result
+                        .issues
+                        .iter()
+                        .filter(|i| i.category == "safety")
+                        .map(|i| i.complaint.clone())
+                        .collect();
+                    anyhow::bail!(
+                        "SAFETY: Review agent detected safety issues:\n{}",
+                        msgs.join("\n")
+                    );
                 }
 
                 if review_attempt == self.review_max_retries {
@@ -747,7 +760,7 @@ mod tests {
         let output = gen.generate(&data).await.unwrap();
         let result = &output.skill_md;
 
-        // Mock Agent 4 produces frontmatter with name/version/ecosystem, normalizer preserves it
+        // Mock create agent produces frontmatter with name/version/ecosystem, normalizer preserves it
         assert!(
             result.contains("---"),
             "should contain frontmatter delimiters"
@@ -757,7 +770,7 @@ mod tests {
             "should contain ecosystem in frontmatter"
         );
 
-        // The mock Agent 4 output contains these sections
+        // The mock create agent output contains these sections
         assert!(
             result.contains("## Imports"),
             "should contain Imports section"
@@ -774,7 +787,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_non_python_skips_functional_validation() {
-        // Non-Python language: functional validation is skipped, Agent 5 skipped
+        // Non-Python language: functional validation is skipped, test agent skipped
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1).with_test(false);
 
         let mut data = make_test_data();
@@ -798,7 +811,7 @@ mod tests {
         let data = make_test_data();
         let output = gen.generate(&data).await.unwrap();
 
-        // Should still produce valid output (mock returns same Agent 4 response)
+        // Should still produce valid output (mock returns same create agent response)
         assert!(output.skill_md.contains("---"));
     }
 
@@ -1065,7 +1078,7 @@ mod tests {
     #[test]
     fn test_generate_output_with_warnings() {
         let warning = ReviewIssue {
-            severity: "warning".to_string(),
+            severity: crate::review::Severity::Warning,
             category: "accuracy".to_string(),
             complaint: "Wrong version".to_string(),
             evidence: "expected 2.0, got 1.0".to_string(),
@@ -1076,7 +1089,10 @@ mod tests {
             unresolved_warnings: vec![warning],
         };
         assert_eq!(output.unresolved_warnings.len(), 1);
-        assert_eq!(output.unresolved_warnings[0].severity, "warning");
+        assert_eq!(
+            output.unresolved_warnings[0].severity,
+            crate::review::Severity::Warning
+        );
         assert_eq!(output.unresolved_warnings[0].category, "accuracy");
         assert_eq!(output.unresolved_warnings[0].complaint, "Wrong version");
         assert_eq!(
@@ -1382,7 +1398,7 @@ mod tests {
     }
 
     /// A mock LLM client that delegates to MockLlmClient but overrides
-    /// the create stage response (Agent 4) with custom content.
+    /// the create stage response (create agent) with custom content.
     struct CustomCreateClient {
         create_response: String,
         fallback: MockLlmClient,
@@ -1697,8 +1713,8 @@ print(json.dumps(result))
     // ========================================================================
 
     #[tokio::test]
-    async fn test_generate_non_python_test_enabled_skips_agent5() {
-        // Non-Python + test enabled: functional validation skipped, no agent5
+    async fn test_generate_non_python_test_enabled_skips_test_agent() {
+        // Non-Python + test enabled: functional validation skipped, no test agent
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(true)
             .with_review(false);
@@ -1984,7 +2000,7 @@ print(json.dumps(result))
     #[test]
     fn test_generate_output_debug_with_warnings() {
         let warning = ReviewIssue {
-            severity: "warning".to_string(),
+            severity: crate::review::Severity::Warning,
             category: "safety".to_string(),
             complaint: "Contains suspicious pattern".to_string(),
             evidence: "line 42".to_string(),
@@ -2186,13 +2202,13 @@ print(json.dumps(result))
     }
 
     // ========================================================================
-    // Test enabled + Python: exercises the Agent 5 path
-    // (MockLlmClient returns mock Agent 5 responses)
+    // Test enabled + Python: exercises the test agent path
+    // (MockLlmClient returns mock test agent responses)
     // ========================================================================
 
     #[tokio::test]
-    async fn test_generate_test_enabled_python_exercises_agent5_path() {
-        // With test enabled for Python, the pipeline enters the Agent 5 code path.
+    async fn test_generate_test_enabled_python_exercises_test_agent_path() {
+        // With test enabled for Python, the pipeline enters the test agent code path.
         // MockLlmClient generates a mock test script. The actual container execution
         // will fail (no container in test env), but the error is caught gracefully.
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
@@ -2203,7 +2219,7 @@ print(json.dumps(result))
         data.language = Language::Python;
 
         let output = gen.generate(&data).await.unwrap();
-        // Pipeline should complete even if Agent 5 container validation fails
+        // Pipeline should complete even if test agent container validation fails
         assert!(!output.skill_md.is_empty());
     }
 
@@ -2212,7 +2228,7 @@ print(json.dumps(result))
     // ========================================================================
 
     #[tokio::test]
-    async fn test_generate_test_enabled_javascript_skips_agent5() {
+    async fn test_generate_test_enabled_javascript_skips_test_agent() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(true)
             .with_review(false);
@@ -2225,7 +2241,7 @@ print(json.dumps(result))
     }
 
     #[tokio::test]
-    async fn test_generate_test_enabled_go_skips_agent5() {
+    async fn test_generate_test_enabled_go_skips_test_agent() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(true)
             .with_review(false);

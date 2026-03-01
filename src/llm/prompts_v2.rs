@@ -1,6 +1,7 @@
 // Improved prompts based on analysis of FastAPI, Django, and Click
 
-#[allow(clippy::too_many_arguments)]
+use crate::detector::Language;
+
 pub fn extract_prompt(
     package_name: &str,
     version: &str,
@@ -8,8 +9,7 @@ pub fn extract_prompt(
     source_file_count: usize,
     custom_instructions: Option<&str>,
     overwrite: bool,
-    language: &str,
-    ecosystem_term: &str,
+    language: &Language,
 ) -> String {
     // If overwrite mode and custom provided, use it directly
     if overwrite {
@@ -17,6 +17,9 @@ pub fn extract_prompt(
             return custom.to_string();
         }
     }
+
+    let ecosystem_term = language.ecosystem_term();
+    let language = language.as_str();
 
     // Add scale-aware hints for large libraries
     let scale_hint = if source_file_count > 2000 {
@@ -364,14 +367,16 @@ pub fn map_prompt(
     test_code: &str,
     custom_instructions: Option<&str>,
     overwrite: bool,
-    language: &str,
-    ecosystem_term: &str,
+    language: &Language,
 ) -> String {
     if overwrite {
         if let Some(custom) = custom_instructions {
             return custom.to_string();
         }
     }
+
+    let ecosystem_term = language.ecosystem_term();
+    let language = language.as_str();
 
     let mut prompt = format!(
         r#"You are analyzing the test suite for {language} {ecosystem_term} "{}" v{}.
@@ -486,14 +491,16 @@ pub fn learn_prompt(
     docs_and_changelog: &str,
     custom_instructions: Option<&str>,
     overwrite: bool,
-    language: &str,
-    ecosystem_term: &str,
+    language: &Language,
 ) -> String {
     if overwrite {
         if let Some(custom) = custom_instructions {
             return custom.to_string();
         }
     }
+
+    let ecosystem_term = language.ecosystem_term();
+    let language = language.as_str();
 
     let mut prompt = format!(
         r#"You are analyzing documentation and changelog for {language} {ecosystem_term} "{}" v{}.
@@ -688,8 +695,7 @@ pub fn create_prompt(
     version: &str,
     license: Option<&str>,
     project_urls: &[(String, String)],
-    ecosystem: &str,
-    ecosystem_term: &str,
+    language: &Language,
     api_surface: &str,
     patterns: &str,
     context: &str,
@@ -702,6 +708,9 @@ pub fn create_prompt(
             return custom.to_string();
         }
     }
+
+    let ecosystem_term = language.ecosystem_term();
+    let ecosystem = language.as_str();
 
     // Format references section
     let references = if project_urls.is_empty() {
@@ -925,7 +934,6 @@ Now generate the SKILL.md content for {} v{}:
 }
 
 /// Update prompt for create stage: patches an existing SKILL.md with new data
-#[allow(clippy::too_many_arguments)]
 pub fn create_update_prompt(
     package_name: &str,
     version: &str,
@@ -933,9 +941,10 @@ pub fn create_update_prompt(
     api_surface: &str,
     patterns: &str,
     context: &str,
-    language: &str,
-    ecosystem_term: &str,
+    language: &Language,
 ) -> String {
+    let ecosystem_term = language.ecosystem_term();
+    let language = language.as_str();
     format!(
         r#"You are updating an existing SKILL.md for {ecosystem_term} "{}" to version {}.
 

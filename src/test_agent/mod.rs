@@ -1,4 +1,4 @@
-// Agent 5: Code Generation Validator
+// Test agent: Code Generation Validator
 //
 // Meta-validation that tests if the generated SKILL.md is actually useful
 // for AI agents writing real code.
@@ -12,7 +12,7 @@ pub mod validator;
 pub use executor::{ExecutionEnv, ExecutionResult};
 #[allow(unused_imports)]
 pub use parser::{CodePattern, PatternCategory};
-pub use validator::{Agent5CodeValidator, TestResult, ValidationMode};
+pub use validator::{TestCodeValidator, TestResult, ValidationMode};
 
 use anyhow::Result;
 

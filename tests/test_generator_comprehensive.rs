@@ -108,7 +108,7 @@ impl LlmClient for MarkdownFenceClient {
             return Ok(r#"{"conventions": []}"#.to_string());
         }
 
-        // Agent 4 (synthesizer) returns fenced content — initial or patch
+        // Create agent (synthesizer) returns fenced content — initial or patch
         if prompt.contains("creating an agent rules file")
             || prompt.contains("Here is the current SKILL.md")
         {
@@ -161,7 +161,7 @@ impl LlmClient for ReviewLoopClient {
             return Ok(r#"{"conventions": []}"#.to_string());
         }
 
-        // Agent 4 (synthesizer) returns content — initial or patch
+        // Create agent (synthesizer) returns content — initial or patch
         if prompt.contains("creating an agent rules file")
             || prompt.contains("Here is the current SKILL.md")
         {
@@ -305,15 +305,15 @@ async fn test_all_four_agents_called_in_order() {
     assert_eq!(calls[1], "agent2_pattern_extractor");
     assert_eq!(calls[2], "agent3_context_extractor");
     assert_eq!(calls[3], "agent4_synthesizer");
-    // Agent 4 may be called additional times during validation retries
+    // Create agent may be called additional times during validation retries
 }
 
 #[tokio::test]
 async fn test_agents_receive_correct_data() {
     // This test verifies the data flow between agents
-    // Agent 1 gets source + examples
-    // Agent 2 gets examples + tests
-    // Agent 3 gets docs + changelog
+    // Extract agent gets source + examples
+    // Map agent gets examples + tests
+    // Learn agent gets docs + changelog
     let client = AgentTrackingClient::new();
     let generator = Generator::new(Box::new(client), 3);
     let data = create_test_data();
@@ -414,7 +414,7 @@ async fn test_validation_passes_on_first_attempt() {
     let client = ReviewLoopClient::pass_on_attempt(1);
     let generator = Generator::new(Box::new(client), 3);
     let mut data = create_test_data();
-    data.language = Language::Rust; // Skip functional validation + Agent 5
+    data.language = Language::Rust; // Skip functional validation + test agent
 
     let result = generator.generate(&data).await;
     assert!(result.is_ok());
@@ -438,7 +438,7 @@ async fn test_validation_passes_on_second_attempt() {
     assert!(!output.skill_md.is_empty());
     assert!(output.skill_md.contains("---")); // Has frontmatter
 
-    // Verify Agent 4 was called multiple times (initial + retry)
+    // Verify create agent was called multiple times (initial + retry)
     let calls = client.fail_count.lock().unwrap();
     assert_eq!(
         *calls, 1,
@@ -568,7 +568,7 @@ async fn test_custom_instructions_very_long() {
 // ============================================================================
 
 #[tokio::test]
-async fn test_error_propagates_from_agent1() {
+async fn test_error_propagates_from_extract() {
     let generator = Generator::new(Box::new(ErrorClient), 3);
     let data = create_test_data();
 
@@ -826,7 +826,7 @@ impl LlmClient for SecurityViolationClient {
             return Ok(r#"{"conventions": []}"#.to_string());
         }
 
-        // Agent 4 always returns content with a security violation
+        // Create agent always returns content with a security violation
         Ok(r#"---
 name: evil-lib
 description: A library
@@ -949,7 +949,7 @@ impl LlmClient for ReviewMockClient {
             return Ok(r#"{"conventions": ["use run()"]}"#.to_string());
         }
 
-        // Agent 4 (create) — initial or fix
+        // Create agent (create) — initial or fix
         if prompt.contains("creating an agent rules file")
             || prompt.contains("Here is the current SKILL.md")
         {

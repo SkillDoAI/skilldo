@@ -5,12 +5,15 @@
 //! 2. Script runs in a container; results + SKILL.md go back to LLM for verdict
 
 use anyhow::{Context, Result};
+use std::str::FromStr;
 use tracing::{debug, warn};
 
-use crate::agent5::container_executor::ContainerExecutor;
-use crate::agent5::executor::ExecutionResult;
-use crate::agent5::LanguageExecutor;
 use crate::config::ContainerConfig;
+use crate::test_agent::container_executor::ContainerExecutor;
+use crate::test_agent::executor::ExecutionResult;
+use crate::test_agent::LanguageExecutor;
+// Re-export Severity from lint so callers can use `review::Severity`
+pub use crate::lint::Severity;
 use crate::llm::client::LlmClient;
 use crate::llm::prompts_v2;
 
@@ -33,10 +36,26 @@ impl Default for ReviewResult {
 /// A single issue found during review.
 #[derive(Debug, Clone)]
 pub struct ReviewIssue {
-    pub severity: String,
+    pub severity: Severity,
     pub category: String,
     pub complaint: String,
     pub evidence: String,
+}
+
+/// Print a numbered list of review issues to stdout.
+pub fn print_review_issues(issues: &[ReviewIssue]) {
+    for (i, issue) in issues.iter().enumerate() {
+        println!(
+            "  {}. [{}][{}] {}",
+            i + 1,
+            issue.severity,
+            issue.category,
+            issue.complaint
+        );
+        if !issue.evidence.is_empty() {
+            println!("     Evidence: {}", issue.evidence);
+        }
+    }
 }
 
 /// Review agent that validates SKILL.md accuracy and safety.
@@ -116,7 +135,7 @@ impl<'a> ReviewAgent<'a> {
         if self.strict && introspection_degraded {
             result.passed = false;
             result.issues.push(ReviewIssue {
-                severity: "error".to_string(),
+                severity: Severity::Error,
                 category: "introspection".to_string(),
                 complaint:
                     "Container introspection failed — verdict is based on textual analysis only"
@@ -282,9 +301,8 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                         severity: item
                             .get("severity")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("error")
-                            .trim()
-                            .to_lowercase(),
+                            .and_then(|s| Severity::from_str(s).ok())
+                            .unwrap_or(Severity::Error),
                         category: item
                             .get("category")
                             .and_then(|v| v.as_str())
@@ -307,7 +325,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
     // error-severity issues should NOT pass.
     let has_errors = issues
         .iter()
-        .any(|i| i.severity != "warning" && i.severity != "info");
+        .any(|i| i.severity != Severity::Warning && i.severity != Severity::Info);
     let passed = !has_errors;
 
     Ok(ReviewResult { passed, issues })
@@ -430,7 +448,7 @@ mod tests {
         assert!(!result.passed);
         assert_eq!(result.issues.len(), 2);
         assert_eq!(result.issues[0].category, "accuracy");
-        assert_eq!(result.issues[0].severity, "error");
+        assert_eq!(result.issues[0].severity, Severity::Error);
         assert!(result.issues[0].complaint.contains("weekday"));
         assert_eq!(result.issues[1].category, "consistency");
     }
@@ -471,7 +489,7 @@ mod tests {
         let result = parse_review_response(json, false).unwrap();
         assert!(!result.passed);
         assert_eq!(result.issues.len(), 1);
-        assert_eq!(result.issues[0].severity, "error"); // default
+        assert_eq!(result.issues[0].severity, Severity::Error); // default
         assert_eq!(result.issues[0].category, "accuracy"); // default
         assert_eq!(result.issues[0].evidence, ""); // default
     }
@@ -496,7 +514,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             issues: vec![ReviewIssue {
-                severity: "error".to_string(),
+                severity: Severity::Error,
                 category: "accuracy".to_string(),
                 complaint: "Wrong signature for set_loglevel".to_string(),
                 evidence: "inspect.signature() says (level)".to_string(),
@@ -516,7 +534,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             issues: vec![ReviewIssue {
-                severity: "error".to_string(),
+                severity: Severity::Error,
                 category: "safety".to_string(),
                 complaint: "Hidden instruction detected".to_string(),
                 evidence: String::new(),
@@ -623,13 +641,13 @@ mod tests {
             passed: false,
             issues: vec![
                 ReviewIssue {
-                    severity: "error".to_string(),
+                    severity: Severity::Error,
                     category: "accuracy".to_string(),
                     complaint: "Wrong signature".to_string(),
                     evidence: "expected (x, y)".to_string(),
                 },
                 ReviewIssue {
-                    severity: "error".to_string(),
+                    severity: Severity::Error,
                     category: "safety".to_string(),
                     complaint: "Prompt injection found".to_string(),
                     evidence: String::new(),
@@ -687,7 +705,7 @@ mod tests {
         assert!(
             r.issues
                 .iter()
-                .any(|i| i.category == "introspection" && i.severity == "error"),
+                .any(|i| i.category == "introspection" && i.severity == Severity::Error),
             "introspection issue should have error severity"
         );
     }
@@ -743,7 +761,7 @@ mod tests {
         if strict && introspection_degraded {
             result.passed = false;
             result.issues.push(ReviewIssue {
-                severity: "error".to_string(),
+                severity: Severity::Error,
                 category: "introspection".to_string(),
                 complaint:
                     "Container introspection failed — verdict is based on textual analysis only"
@@ -758,7 +776,7 @@ mod tests {
         );
         assert_eq!(result.issues.len(), 1);
         assert_eq!(result.issues[0].category, "introspection");
-        assert_eq!(result.issues[0].severity, "error");
+        assert_eq!(result.issues[0].severity, Severity::Error);
     }
 
     #[test]
@@ -773,7 +791,7 @@ mod tests {
         if strict && introspection_degraded {
             result.passed = false;
             result.issues.push(ReviewIssue {
-                severity: "warning".to_string(),
+                severity: Severity::Warning,
                 category: "introspection".to_string(),
                 complaint: "should not appear".to_string(),
                 evidence: String::new(),

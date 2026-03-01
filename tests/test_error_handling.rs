@@ -1,5 +1,5 @@
 // Comprehensive error handling and failure case tests
-use skilldo::config::Config;
+use skilldo::config::{Config, Provider};
 use skilldo::detector::Language;
 use skilldo::llm::factory;
 use skilldo::pipeline::collector::Collector;
@@ -20,15 +20,23 @@ fn test_missing_api_key() {
 }
 
 #[test]
-fn test_invalid_provider() {
-    let mut config = Config::default();
-    config.llm.provider = "invalid_provider".to_string();
-    config.llm.api_key_env = Some("SKILLDO_TEST_DUMMY_KEY".to_string());
-    env::set_var("SKILLDO_TEST_DUMMY_KEY", "test_key");
-    let result = factory::create_client(&config, false);
-    assert!(result.is_err());
-    // Just verify it's an error - don't check exact message
-    env::remove_var("SKILLDO_TEST_DUMMY_KEY");
+fn test_invalid_provider_rejected_by_serde() {
+    // Provider enum rejects unknown values at deserialization time
+    let toml_str = r#"
+[llm]
+provider = "invalid_provider"
+model = "test"
+api_key_env = "none"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+"#;
+    let result: Result<Config, _> = toml::from_str(toml_str);
+    assert!(
+        result.is_err(),
+        "invalid provider should fail deserialization"
+    );
 }
 
 #[tokio::test]
@@ -52,7 +60,7 @@ fn test_language_from_invalid_string() {
 fn test_config_with_invalid_toml() {
     // Config loads default if repo config is invalid
     let config = Config::default();
-    assert!(config.llm.provider == "anthropic");
+    assert!(config.llm.provider == Provider::Anthropic);
     assert!(config.generation.max_retries == 5);
 }
 
@@ -60,7 +68,7 @@ fn test_config_with_invalid_toml() {
 fn test_openai_compatible_client_without_api_key() {
     env::set_var("SKILLDO_TEST_ERR_OAI_EMPTY", "");
     let mut config = Config::default();
-    config.llm.provider = "openai-compatible".to_string();
+    config.llm.provider = Provider::OpenAICompatible;
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_OAI_EMPTY".to_string());
     let result = factory::create_client(&config, false);
     // Empty API key should be accepted for openai-compatible providers (Ollama, etc.)
@@ -72,7 +80,7 @@ fn test_openai_compatible_client_without_api_key() {
 fn test_gemini_client_creation() {
     env::set_var("SKILLDO_TEST_ERR_GEMINI", "test_key");
     let mut config = Config::default();
-    config.llm.provider = "gemini".to_string();
+    config.llm.provider = Provider::Gemini;
     config.llm.model = "gemini-pro".to_string();
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_GEMINI".to_string());
     let result = factory::create_client(&config, false);
@@ -96,7 +104,7 @@ fn test_all_supported_languages() {
 #[test]
 fn test_config_default_values() {
     let config = Config::default();
-    assert_eq!(config.llm.provider, "anthropic");
+    assert_eq!(config.llm.provider, Provider::Anthropic);
     assert_eq!(config.llm.api_key_env, None);
     assert_eq!(config.generation.max_retries, 5);
     assert!(!config.prompts.override_prompts);
@@ -106,7 +114,7 @@ fn test_config_default_values() {
 fn test_openai_compatible_with_custom_base_url() {
     env::set_var("SKILLDO_TEST_ERR_COMPAT_1", "test_key");
     let mut config = Config::default();
-    config.llm.provider = "openai-compatible".to_string();
+    config.llm.provider = Provider::OpenAICompatible;
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_COMPAT_1".to_string());
     config.llm.base_url = Some("http://custom:8080/v1".to_string());
 
@@ -119,7 +127,7 @@ fn test_openai_compatible_with_custom_base_url() {
 fn test_openai_compatible_without_base_url() {
     env::set_var("SKILLDO_TEST_ERR_COMPAT_2", "test_key");
     let mut config = Config::default();
-    config.llm.provider = "openai-compatible".to_string();
+    config.llm.provider = Provider::OpenAICompatible;
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_COMPAT_2".to_string());
     config.llm.base_url = None;
 
