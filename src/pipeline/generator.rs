@@ -225,8 +225,7 @@ impl Generator {
             data.source_file_count,
             self.prompts_config.extract_custom.as_deref(),
             self.prompts_config.is_overwrite("extract"),
-            data.language.as_str(),
-            data.language.ecosystem_term(),
+            &data.language,
         );
         let map_prompt = prompts_v2::map_prompt(
             &data.package_name,
@@ -234,8 +233,7 @@ impl Generator {
             &examples_and_tests,
             self.prompts_config.map_custom.as_deref(),
             self.prompts_config.is_overwrite("map"),
-            data.language.as_str(),
-            data.language.ecosystem_term(),
+            &data.language,
         );
         let learn_prompt = prompts_v2::learn_prompt(
             &data.package_name,
@@ -243,8 +241,7 @@ impl Generator {
             &docs_and_changelog,
             self.prompts_config.learn_custom.as_deref(),
             self.prompts_config.is_overwrite("learn"),
-            data.language.as_str(),
-            data.language.ecosystem_term(),
+            &data.language,
         );
 
         let extract_client = self.get_client("extract");
@@ -282,8 +279,7 @@ impl Generator {
                 &api_surface,
                 &patterns,
                 &context,
-                data.language.as_str(),
-                data.language.ecosystem_term(),
+                &data.language,
             );
             self.get_client("create").complete(&update_prompt).await?
         } else {
@@ -294,8 +290,7 @@ impl Generator {
                 &data.version,
                 data.license.as_deref(),
                 &data.project_urls,
-                data.language.as_str(),
-                data.language.ecosystem_term(),
+                &data.language,
                 &api_surface,
                 &patterns,
                 &context,
@@ -1065,7 +1060,7 @@ mod tests {
     #[test]
     fn test_generate_output_with_warnings() {
         let warning = ReviewIssue {
-            severity: "warning".to_string(),
+            severity: crate::review::Severity::Warning,
             category: "accuracy".to_string(),
             complaint: "Wrong version".to_string(),
             evidence: "expected 2.0, got 1.0".to_string(),
@@ -1076,7 +1071,10 @@ mod tests {
             unresolved_warnings: vec![warning],
         };
         assert_eq!(output.unresolved_warnings.len(), 1);
-        assert_eq!(output.unresolved_warnings[0].severity, "warning");
+        assert_eq!(
+            output.unresolved_warnings[0].severity,
+            crate::review::Severity::Warning
+        );
         assert_eq!(output.unresolved_warnings[0].category, "accuracy");
         assert_eq!(output.unresolved_warnings[0].complaint, "Wrong version");
         assert_eq!(
@@ -1984,7 +1982,7 @@ print(json.dumps(result))
     #[test]
     fn test_generate_output_debug_with_warnings() {
         let warning = ReviewIssue {
-            severity: "warning".to_string(),
+            severity: crate::review::Severity::Warning,
             category: "safety".to_string(),
             complaint: "Contains suspicious pattern".to_string(),
             evidence: "line 42".to_string(),

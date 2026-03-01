@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::llm::factory;
-use crate::review::ReviewAgent;
+use crate::review::{self, ReviewAgent};
 
 /// Run the review agent standalone against an existing SKILL.md file.
 #[allow(clippy::too_many_arguments)]
@@ -91,34 +91,12 @@ pub async fn run(
     // Print results
     if result.passed && !result.issues.is_empty() {
         println!("PASSED with {} warning(s):\n", result.issues.len());
-        for (i, issue) in result.issues.iter().enumerate() {
-            println!(
-                "  {}. [{}][{}] {}",
-                i + 1,
-                issue.severity,
-                issue.category,
-                issue.complaint
-            );
-            if !issue.evidence.is_empty() {
-                println!("     Evidence: {}", issue.evidence);
-            }
-        }
+        review::print_review_issues(&result.issues);
     } else if result.passed {
         println!("PASSED: No issues found.");
     } else {
         println!("FAILED: {} issue(s) found.\n", result.issues.len());
-        for (i, issue) in result.issues.iter().enumerate() {
-            println!(
-                "  {}. [{}][{}] {}",
-                i + 1,
-                issue.severity,
-                issue.category,
-                issue.complaint
-            );
-            if !issue.evidence.is_empty() {
-                println!("     Evidence: {}", issue.evidence);
-            }
-        }
+        review::print_review_issues(&result.issues);
     }
 
     if !result.passed {
@@ -647,12 +625,12 @@ base_url = "http://localhost:11434/v1"
 
     #[test]
     fn test_passed_with_warnings_output() {
-        use crate::review::{ReviewIssue, ReviewResult};
+        use crate::review::{ReviewIssue, ReviewResult, Severity};
 
         let result = ReviewResult {
             passed: true,
             issues: vec![ReviewIssue {
-                severity: "warning".to_string(),
+                severity: Severity::Warning,
                 category: "consistency".to_string(),
                 complaint: "Minor version drift".to_string(),
                 evidence: "1.0.0 vs 1.0.1".to_string(),

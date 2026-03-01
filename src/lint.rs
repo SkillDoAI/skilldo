@@ -1,5 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
+use std::fmt;
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct LintIssue {
@@ -9,11 +11,35 @@ pub struct LintIssue {
     pub suggestion: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Severity {
-    Error,   // Must fix
+    #[default]
+    Error, // Must fix
     Warning, // Should fix
     Info,    // Nice to have
+}
+
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Severity::Error => write!(f, "error"),
+            Severity::Warning => write!(f, "warning"),
+            Severity::Info => write!(f, "info"),
+        }
+    }
+}
+
+impl FromStr for Severity {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "error" => Ok(Severity::Error),
+            "warning" => Ok(Severity::Warning),
+            "info" => Ok(Severity::Info),
+            _ => Err(()),
+        }
+    }
 }
 
 pub struct SkillLinter;

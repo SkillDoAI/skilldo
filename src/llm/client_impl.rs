@@ -8,6 +8,13 @@ use tracing::debug;
 use super::client::LlmClient;
 use crate::util::SecretString;
 
+fn build_http_client(timeout_secs: u64) -> Result<Client> {
+    Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .context("failed to build HTTP client")
+}
+
 // ============================================================================
 // Anthropic Client
 // ============================================================================
@@ -48,10 +55,7 @@ impl AnthropicClient {
             api_key: api_key.into(),
             model,
             max_tokens,
-            client: Client::builder()
-                .timeout(Duration::from_secs(timeout_secs))
-                .build()
-                .context("failed to build HTTP client")?,
+            client: build_http_client(timeout_secs)?,
         })
     }
 }
@@ -164,10 +168,7 @@ impl OpenAIClient {
             base_url,
             max_tokens,
             extra_body: std::collections::HashMap::new(),
-            client: Client::builder()
-                .timeout(Duration::from_secs(timeout_secs))
-                .build()
-                .context("failed to build HTTP client")?,
+            client: build_http_client(timeout_secs)?,
         })
     }
 
@@ -318,10 +319,7 @@ impl GeminiClient {
             api_key: api_key.into(),
             model,
             max_tokens,
-            client: Client::builder()
-                .timeout(Duration::from_secs(timeout_secs))
-                .build()
-                .context("failed to build HTTP client")?,
+            client: build_http_client(timeout_secs)?,
         })
     }
 }
@@ -343,14 +341,14 @@ impl LlmClient for GeminiClient {
         debug!("Calling Gemini API with model: {}", self.model);
 
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model,
-            self.api_key.expose()
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            self.model
         );
 
         let response = self
             .client
             .post(&url)
+            .header("x-goog-api-key", self.api_key.expose())
             .header("content-type", "application/json")
             .json(&request)
             .send()

@@ -10,6 +10,7 @@ use crate::detector::{self, Language};
 use crate::llm::factory;
 use crate::pipeline::collector::Collector;
 use crate::pipeline::generator::Generator;
+use crate::review;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -356,18 +357,7 @@ pub async fn run(
             "\n⚠ Review completed with {} unresolved issue(s):",
             output_result.unresolved_warnings.len()
         );
-        for (i, issue) in output_result.unresolved_warnings.iter().enumerate() {
-            println!(
-                "  {}. [{}][{}] {}",
-                i + 1,
-                issue.severity,
-                issue.category,
-                issue.complaint
-            );
-            if !issue.evidence.is_empty() {
-                println!("     Evidence: {}", issue.evidence);
-            }
-        }
+        review::print_review_issues(&output_result.unresolved_warnings);
         println!("\nThese could not be automatically verified or fixed.");
         println!("Consider adjusting your review prompts via the review_custom config option.");
     }
