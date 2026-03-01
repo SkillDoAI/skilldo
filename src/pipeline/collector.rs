@@ -188,7 +188,9 @@ impl Collector {
                             if let Some(eq) = line[start..].find("=") {
                                 let after_eq = &line[start + eq + 1..];
                                 if let Some(quote_start) = after_eq.find(['\'', '"']) {
-                                    let quote_char = after_eq.chars().nth(quote_start).unwrap();
+                                    // find() returns a byte index; safe to index directly
+                                    // because ' and " are single-byte ASCII
+                                    let quote_char = after_eq.as_bytes()[quote_start] as char;
                                     if let Some(quote_end) =
                                         after_eq[quote_start + 1..].find(quote_char)
                                     {

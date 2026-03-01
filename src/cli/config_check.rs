@@ -223,21 +223,15 @@ pub fn run(config_path: Option<String>) -> Result<()> {
 /// Heuristic: check if any LLM used during parallel extraction is likely local (Ollama).
 /// Inspects extract/map/learn overrides if present, otherwise falls back to the main LLM config.
 fn is_likely_local_provider(config: &Config) -> bool {
-    let llms_used_in_parallel = [
+    let overrides = [
         config.generation.extract_llm.as_ref(),
         config.generation.map_llm.as_ref(),
         config.generation.learn_llm.as_ref(),
     ];
-    // If any stage override is local, warn. If no overrides, check main config.
-    let has_override = llms_used_in_parallel.iter().any(|o| o.is_some());
-    if has_override {
-        llms_used_in_parallel
-            .iter()
-            .filter_map(|o| o.as_ref())
-            .any(|llm| is_llm_local(llm))
-    } else {
-        is_llm_local(&config.llm)
-    }
+    // Each parallel stage uses its override if present, otherwise inherits config.llm.
+    overrides
+        .iter()
+        .any(|o| is_llm_local(o.map_or(&config.llm, |llm| llm)))
 }
 
 fn is_llm_local(llm: &crate::config::LlmConfig) -> bool {

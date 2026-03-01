@@ -182,10 +182,10 @@ impl<'a> ReviewAgent<'a> {
 
         match result {
             Ok(ExecutionResult::Pass(stdout)) => {
-                // Verify the output looks like JSON — if the script printed garbage,
+                // Verify the output is valid JSON — if the script printed garbage,
                 // treat it as a failure so the verdict LLM ignores it cleanly.
                 let trimmed = stdout.trim();
-                if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
                     Ok(stdout)
                 } else {
                     warn!("  review: introspection script output is not JSON, ignoring");

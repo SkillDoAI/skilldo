@@ -49,6 +49,23 @@ fn strip_markdown_fences(content: &str) -> String {
     body.trim().to_string()
 }
 
+/// Bail immediately if any lint issues are security errors.
+/// Security content must never be sent back to the model for "fixing".
+fn bail_on_security_lint(issues: &[crate::lint::LintIssue]) -> Result<()> {
+    let security_msgs: Vec<String> = issues
+        .iter()
+        .filter(|i| i.category == "security" && matches!(i.severity, Severity::Error))
+        .map(|i| i.message.clone())
+        .collect();
+    if !security_msgs.is_empty() {
+        anyhow::bail!(
+            "SECURITY: Generated SKILL.md contains dangerous content:\n{}",
+            security_msgs.join("\n")
+        );
+    }
+    Ok(())
+}
+
 pub struct Generator {
     client: Box<dyn LlmClient>,
     extract_client: Option<Box<dyn LlmClient>>,
@@ -334,20 +351,7 @@ impl Generator {
                 warn!("  ✗ Format validation failed: {} errors", error_msgs.len());
 
                 // Security errors bail IMMEDIATELY — never sent back to the model.
-                // Sending security violations to the model for "fixing" lets it
-                // learn bypass strategies. Fail fast, fail hard.
-                let has_security_errors = lint_issues.iter().any(|i| i.category == "security");
-                if has_security_errors {
-                    let security_msgs: Vec<String> = lint_issues
-                        .iter()
-                        .filter(|i| i.category == "security")
-                        .map(|i| i.message.clone())
-                        .collect();
-                    anyhow::bail!(
-                        "SECURITY: Generated SKILL.md contains dangerous content that cannot be shipped:\n{}",
-                        security_msgs.join("\n")
-                    );
-                }
+                bail_on_security_lint(&lint_issues)?;
 
                 if attempt == validation_passes - 1 {
                     info!("Max retries reached, returning best attempt despite format issues");
@@ -475,19 +479,7 @@ impl Generator {
                         // Final safety check: re-lint to catch any security issues
                         // introduced during fix attempts
                         let final_lint = linter.lint(&skill_md)?;
-                        let has_security_errors =
-                            final_lint.iter().any(|i| i.category == "security");
-                        if has_security_errors {
-                            let security_msgs: Vec<String> = final_lint
-                                .iter()
-                                .filter(|i| i.category == "security")
-                                .map(|i| i.message.clone())
-                                .collect();
-                            anyhow::bail!(
-                                "SECURITY: Generated SKILL.md contains dangerous content that cannot be shipped:\n{}",
-                                security_msgs.join("\n")
-                            );
-                        }
+                        bail_on_security_lint(&final_lint)?;
                         info!("Max retries reached, returning best attempt despite code issues");
                         break;
                     }
@@ -540,7 +532,7 @@ impl Generator {
                     let msgs: Vec<String> = result
                         .issues
                         .iter()
-                        .filter(|i| i.category == "safety")
+                        .filter(|i| i.category == "safety" && matches!(i.severity, Severity::Error))
                         .map(|i| i.complaint.clone())
                         .collect();
                     anyhow::bail!(
@@ -576,17 +568,7 @@ impl Generator {
 
                 // Quick lint check before re-review
                 let lint_issues = linter.lint(&skill_md)?;
-                let has_security = lint_issues
-                    .iter()
-                    .any(|i| i.category == "security" && matches!(i.severity, Severity::Error));
-                if has_security {
-                    let msgs: Vec<String> = lint_issues
-                        .iter()
-                        .filter(|i| i.category == "security")
-                        .map(|i| i.message.clone())
-                        .collect();
-                    anyhow::bail!("SECURITY: {}", msgs.join("\n"));
-                }
+                bail_on_security_lint(&lint_issues)?;
             }
         }
 
@@ -605,18 +587,7 @@ impl Generator {
         let post_issues = linter.lint(&skill_md)?;
 
         // Security errors are always fatal, even post-normalization
-        let post_security: Vec<_> = post_issues
-            .iter()
-            .filter(|i| i.category == "security" && matches!(i.severity, Severity::Error))
-            .collect();
-        if !post_security.is_empty() {
-            let security_msgs: Vec<String> =
-                post_security.iter().map(|i| i.message.clone()).collect();
-            anyhow::bail!(
-                "SECURITY: Post-normalization output contains dangerous content:\n{}",
-                security_msgs.join("\n")
-            );
-        }
+        bail_on_security_lint(&post_issues)?;
 
         let post_errors: Vec<_> = post_issues
             .iter()

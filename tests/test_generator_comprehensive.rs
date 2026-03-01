@@ -878,8 +878,8 @@ async fn test_security_violations_block_output_on_final_retry() {
         error_msg
     );
     assert!(
-        error_msg.contains("cannot be shipped"),
-        "Error should say content cannot be shipped, got: {}",
+        error_msg.contains("dangerous content"),
+        "Error should mention dangerous content, got: {}",
         error_msg
     );
 }

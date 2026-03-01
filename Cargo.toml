@@ -19,6 +19,9 @@ dirs = "6"
 tempfile = "3"
 regex = "1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 mockito = "1"
 
