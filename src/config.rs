@@ -429,26 +429,35 @@ impl Config {
         Self::load_with_path(None)
     }
 
-    /// Load configuration from a specific path, or use default search paths
+    /// Load configuration from a specific path, or use default search paths.
+    /// Parse errors in existing config files are surfaced immediately (not silently ignored).
     pub fn load_with_path(path: Option<String>) -> Result<Self> {
-        // If explicit path provided, use it
+        // If explicit path provided, use it (both missing and malformed are errors)
         if let Some(config_path) = path {
             debug!("Loading config from explicit path: {}", config_path);
             return Self::load_from_path(&config_path);
         }
 
         // Try repo root first (per-repo config)
-        if let Ok(config) = Self::load_from_path("skilldo.toml") {
-            debug!("Loaded config from ./skilldo.toml");
-            return Ok(config);
+        match Self::try_load_from_path("skilldo.toml") {
+            Ok(Some(config)) => {
+                debug!("Loaded config from ./skilldo.toml");
+                return Ok(config);
+            }
+            Ok(None) => {}           // file not found, try next
+            Err(e) => return Err(e), // parse error — surface immediately
         }
 
         // Try user config directory
         if let Some(config_dir) = dirs::config_dir() {
             let config_path = config_dir.join("skilldo").join("config.toml");
-            if let Ok(config) = Self::load_from_path(&config_path) {
-                debug!("Loaded config from {:?}", config_path);
-                return Ok(config);
+            match Self::try_load_from_path(&config_path) {
+                Ok(Some(config)) => {
+                    debug!("Loaded config from {:?}", config_path);
+                    return Ok(config);
+                }
+                Ok(None) => {}           // file not found, try next
+                Err(e) => return Err(e), // parse error — surface immediately
             }
         }
 
@@ -461,6 +470,20 @@ impl Config {
         let content = fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Try to load config from a path.
+    /// Returns Ok(None) if file doesn't exist, Ok(Some) if loaded, Err on parse failure.
+    fn try_load_from_path<P: AsRef<Path>>(path: P) -> Result<Option<Self>> {
+        let path = path.as_ref();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let config: Config = toml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", path.display(), e))?;
+        Ok(Some(config))
     }
 
     /// Get API key from environment variable specified in config.
@@ -1062,5 +1085,23 @@ agent5_custom = "test instructions"
     fn test_request_timeout_default() {
         let config = Config::default();
         assert_eq!(config.llm.request_timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_try_load_from_path_not_found() {
+        let result = Config::try_load_from_path("/nonexistent/path/skilldo.toml");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_try_load_from_path_malformed_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        fs::write(&path, "this is not valid { toml }}}").unwrap();
+        let result = Config::try_load_from_path(&path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to parse"), "got: {}", err);
     }
 }

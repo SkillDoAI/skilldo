@@ -7,7 +7,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::executor::{ExecutionEnv, ExecutionResult};
 use super::LanguageExecutor;
@@ -220,6 +220,7 @@ impl LanguageExecutor for ContainerExecutor {
 
         // Pass extra environment variables (private registries, proxies, etc.)
         for (key, value) in &self.config.extra_env {
+            warn_dangerous_env_var(key);
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
 
@@ -325,6 +326,28 @@ impl ContainerExecutor {
                 Err(e)
             }
         }
+    }
+}
+
+/// Env vars that could compromise container isolation or hijack execution.
+const DANGEROUS_ENV_VARS: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PATH",
+    "HOME",
+    "SHELL",
+    "USER",
+];
+
+fn warn_dangerous_env_var(key: &str) {
+    if DANGEROUS_ENV_VARS
+        .iter()
+        .any(|d| key.eq_ignore_ascii_case(d))
+    {
+        warn!(
+            "extra_env contains sensitive variable '{}' — this may compromise container isolation",
+            key
+        );
     }
 }
 
@@ -1100,5 +1123,27 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("source_path is required"));
+    }
+
+    #[test]
+    fn test_warn_dangerous_env_var_detects_ld_preload() {
+        // Should not panic; just logs a warning
+        warn_dangerous_env_var("LD_PRELOAD");
+        warn_dangerous_env_var("ld_preload"); // case-insensitive
+    }
+
+    #[test]
+    fn test_warn_dangerous_env_var_allows_safe_vars() {
+        // Safe vars should not trigger warning (no panic or error)
+        warn_dangerous_env_var("PIP_INDEX_URL");
+        warn_dangerous_env_var("HTTPS_PROXY");
+        warn_dangerous_env_var("MY_CUSTOM_VAR");
+    }
+
+    #[test]
+    fn test_dangerous_env_vars_list() {
+        assert!(DANGEROUS_ENV_VARS.contains(&"LD_PRELOAD"));
+        assert!(DANGEROUS_ENV_VARS.contains(&"PATH"));
+        assert!(!DANGEROUS_ENV_VARS.contains(&"PYTHONPATH"));
     }
 }

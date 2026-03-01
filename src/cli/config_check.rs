@@ -203,6 +203,15 @@ pub fn run(config_path: Option<String>) -> Result<()> {
         ));
     }
 
+    // 11. Warn about parallel extraction with local models
+    if config.generation.parallel_extraction && is_likely_local_provider(&config) {
+        results.warn(
+            "parallel_extraction=true with a local provider (Ollama) — \
+             this may cause hangs. Set parallel_extraction = false in [generation]"
+                .to_string(),
+        );
+    }
+
     // Print results
     print_results(&results);
 
@@ -212,6 +221,17 @@ pub fn run(config_path: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Heuristic: openai-compatible with localhost base_url is likely Ollama or similar local model.
+fn is_likely_local_provider(config: &Config) -> bool {
+    if config.llm.provider != Provider::OpenAICompatible {
+        return false;
+    }
+    match &config.llm.base_url {
+        Some(url) => url.contains("localhost") || url.contains("127.0.0.1"),
+        None => true, // default is localhost:11434
+    }
 }
 
 fn check_stage_provider(
@@ -1241,5 +1261,35 @@ api_key_env = "none"
         // run() reports config load failure gracefully (returns Ok, prints error)
         let result = run(Some(config_path.to_str().unwrap().to_string()));
         assert!(result.is_ok()); // config load error is printed, not propagated
+    }
+
+    #[test]
+    fn test_is_likely_local_provider_ollama() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::OpenAICompatible;
+        config.llm.base_url = Some("http://localhost:11434/v1".to_string());
+        assert!(is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_likely_local_provider_no_base_url() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::OpenAICompatible;
+        config.llm.base_url = None; // default is localhost
+        assert!(is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_likely_local_provider_remote() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::OpenAICompatible;
+        config.llm.base_url = Some("https://api.openrouter.ai/api/v1".to_string());
+        assert!(!is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_likely_local_provider_non_compat() {
+        let config = Config::default(); // Anthropic
+        assert!(!is_likely_local_provider(&config));
     }
 }
