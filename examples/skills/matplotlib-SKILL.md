@@ -1,8 +1,7 @@
 ---
-
 name: matplotlib
 description: Python library for creating static, animated, and interactive visualizations.
-version: 3.10
+version: 3.10.8
 ecosystem: python
 license: MIT
 generated_with: gpt-5.2
@@ -285,7 +284,7 @@ Not applicable (no version-specific breaking-change details were provided in the
 - **matplotlib.__version__** - Version string (computed lazily via module `__getattr__`).
 - **matplotlib.__version_info__** - Structured version info object.
 - **matplotlib.__bibtex__** - BibTeX citation string.
-- **matplotlib.set_loglevel(level: str)** - Set Matplotlib’s logging level.
+- **matplotlib.set_loglevel(level, *, logger='matplotlib')** - Set Matplotlib’s logging level.
 - **matplotlib.get_configdir()** - Return the configuration directory path.
 - **matplotlib.get_cachedir()** - Return the cache directory path.
 - **matplotlib.get_data_path()** - Return the path to Matplotlib’s bundled data.
@@ -294,6 +293,28 @@ Not applicable (no version-specific breaking-change details were provided in the
 - **matplotlib.MatplotlibDeprecationWarning** - Warning category used for Matplotlib deprecations.
 - **matplotlib.RcParams** - Validated mapping for runtime configuration (rcParams).
 - **matplotlib.rc_params(fail_on_error: bool = False)** - Load and return rcParams as an `RcParams` instance.
+- **matplotlib.rc_params_from_file(fname, fail_on_error: bool = False, use_default_template: bool = True)** - Load rcParams from a file.
+- **matplotlib.rcParamsDefault** - Property: default rcParams.
+- **matplotlib.rcParams** - Property: the global rcParams, assignable.
+- **matplotlib.rcParamsOrig** - Property: original rcParams at import.
+- **matplotlib.defaultParams** - Property: default rcParams (legacy/alias).
+- **matplotlib.rc(group, **kwargs)** - Set the current rc params for a group.
+- **matplotlib.rcdefaults()** - Restore rcParams to their default settings.
+- **matplotlib.rc_file_defaults()** - Restore rcParams from the default matplotlibrc file.
+- **matplotlib.rc_file(fname)** - Update rcParams from a specified file.
+- **matplotlib.rc_context(rc=None, fname=None)** - Context manager to temporarily set rcParams.
+- **matplotlib.use(backend, *, force=True)** - Select backend; must be called before importing pyplot.
+- **matplotlib.get_backend()** - Get the current backend name.
+- **matplotlib.interactive(b: bool)** - Set interactive mode on or off.
+- **matplotlib.is_interactive()** - Return whether interactive mode is on.
+- **matplotlib.colormaps() -> list[str]** - List available colormaps.
+- **matplotlib.multivar_colormaps() -> list[str]** - List available multivariate colormaps.
+- **matplotlib.bivar_colormaps() -> list[str]** - List available bivariate colormaps.
+- **matplotlib.color_sequences() -> list[str]** - List available color sequences.
 - **matplotlib.RcParams.find_all(pattern)** - Return a filtered `RcParams` matching a pattern.
 - **matplotlib.RcParams.copy()** - Return a copy of the `RcParams`.
 - **matplotlib.RcParams._set(key, val)** - Public (documented) helper to set a parameter with Matplotlib semantics.
+
+## Security
+
+This SKILL.md teaches only safe, standard usage of the Matplotlib library. It does **not** instruct agents to access, modify, or transmit files or data outside the user's project directory. All examples are limited to configuration, debugging, and visualization. No destructive or privileged actions are included or permitted.

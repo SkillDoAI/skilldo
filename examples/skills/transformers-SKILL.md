@@ -1,11 +1,10 @@
 ---
-
 name: transformers
-description: State-of-the-art NLP, vision, audio, and multimodal model inference/training utilities including pipelines, pretrained models, and tokenizers.
-version: unknown
+description: python library
+version: 5.2.0
 ecosystem: python
-license: Apache 2.0 License
-generated_with: gpt-5.2
+license: Apache 2.0 License"
+generated_with: claude-sonnet-4-5-20250929
 ---
 
 ## Imports
@@ -23,7 +22,7 @@ from transformers.utils.metrics import attach_tracer, traced
 from transformers import pipeline
 
 def main() -> None:
-    text_gen = pipeline(task="text-generation", model="Qwen/Qwen2.5-1.5B")
+    text_gen = pipeline(task="text-generation", model="openai-community/gpt2")
     out = text_gen("The secret to baking a really good cake is ", max_new_tokens=40)
     print(out[0]["generated_text"])
 
@@ -61,8 +60,9 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 ```
-* For chat/instruct models, pass a list of `{role, content}` messages (not just a single string).
+* For chat/instruct models with proper chat templates, pass a list of `{role, content}` messages (not just a single string).
 * Use `dtype=` and `device_map="auto"` to control memory/placement for larger models.
+* Note: Not all models have chat templates; verify the model supports chat format before using this pattern.
 
 ### Load, modify, and save a tokenizer ✅ Current
 ```python
@@ -177,10 +177,62 @@ if __name__ == "__main__":
 * `@attach_tracer()` is a class decorator that ensures instances have `self.tracer`.
 * `@traced` works on methods and standalone functions; supports `span_name=` and `additional_attributes=`.
 
+### Register custom quantization methods ✅ Current
+```python
+from typing import Any
+import torch
+from transformers import AutoModelForCausalLM
+from transformers.quantizers import HfQuantizer, register_quantization_config, register_quantizer
+from transformers.utils.quantization_config import QuantizationConfigMixin
+
+@register_quantization_config("custom")
+class CustomConfig(QuantizationConfigMixin):
+    def __init__(self) -> None:
+        self.quant_method = "custom"
+        self.bits = 8
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {"num_bits": self.bits}
+
+@register_quantizer("custom")
+class CustomQuantizer(HfQuantizer):
+    def __init__(self, quantization_config, **kwargs) -> None:
+        super().__init__(quantization_config, **kwargs)
+        self.quantization_config = quantization_config
+    
+    def _process_model_before_weight_loading(self, model, **kwargs) -> bool:
+        return True
+    
+    def _process_model_after_weight_loading(self, model, **kwargs) -> bool:
+        return True
+    
+    def is_serializable(self) -> bool:
+        return True
+    
+    def is_trainable(self) -> bool:
+        return False
+
+def main() -> None:
+    model_8bit = AutoModelForCausalLM.from_pretrained(
+        "facebook/opt-350m",
+        quantization_config=CustomConfig(),
+        dtype="auto"
+    )
+    print("Model loaded with custom quantization")
+
+if __name__ == "__main__":
+    main()
+```
+* Use `@register_quantization_config` to register a custom quantization configuration class.
+* Use `@register_quantizer` to register the corresponding quantizer implementation.
+* Extend `QuantizationConfigMixin` and `HfQuantizer` for full integration with the transformers quantization system.
+
 ## Configuration
 
 - Installation (match backend/framework):
-  - `pip install "transformers[torch]"` (PyTorch required per README: Python 3.9+, PyTorch 2.4+).
+  - `pip install "transformers[torch]"` (PyTorch required per README: Python 3.10+, PyTorch 2.4+).
+  - For JAX: `pip install "transformers[jax]"`
+  - For TensorFlow: `pip install "transformers[tf]"`
 - Model caching:
   - Models/tokenizers downloaded by `pipeline()` / `from_pretrained()` are cached and reused across runs (location depends on Hugging Face cache configuration).
 - Device and precision for large models:
@@ -190,7 +242,7 @@ if __name__ == "__main__":
 - Special tokens:
   - Add tokens: `tokenizer.add_tokens([...], special_tokens=True)`
   - Add extra specials: `tokenizer.add_special_tokens({"extra_special_tokens": [...]}, replace_extra_special_tokens=False)`
-  - Note: tests mention `additional_special_tokens` is deprecated in v5 and converted to `extra_special_tokens` (prefer `extra_special_tokens` for new code).
+  - Note: `additional_special_tokens` is deprecated in v5 and converted to `extra_special_tokens` (prefer `extra_special_tokens` for new code).
 
 ## Pitfalls
 
@@ -198,7 +250,7 @@ if __name__ == "__main__":
 ```python
 from transformers import pipeline
 
-pipeline = pipeline(task="text-generation", model="Qwen/Qwen2.5-1.5B")
+pipeline = pipeline(task="text-generation", model="openai-community/gpt2")
 # Now `pipeline(...)` is no longer the factory function; it's a Pipeline object.
 pipeline = pipeline(task="image-classification", model="facebook/dinov2-small-imagenet1k-1-layer")
 ```
@@ -207,7 +259,7 @@ pipeline = pipeline(task="image-classification", model="facebook/dinov2-small-im
 ```python
 from transformers import pipeline
 
-text_gen = pipeline(task="text-generation", model="Qwen/Qwen2.5-1.5B")
+text_gen = pipeline(task="text-generation", model="openai-community/gpt2")
 img_cls = pipeline(task="image-classification", model="facebook/dinov2-small-imagenet1k-1-layer")
 ```
 
@@ -254,9 +306,11 @@ print(vqa("What is in the image?"))
 from transformers import pipeline
 
 vqa = pipeline(task="visual-question-answering", model="Salesforce/blip-vqa-base")
+image_url = "https://huggingface.co/datasets/huggingface/documentation-images/"
+image_url += "resolve/main/transformers/tasks/idefics-few-shot.jpg"
 print(
     vqa(
-        image="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/idefics-few-shot.jpg",
+        image=image_url,
         question="What is in the image?",
     )
 )
@@ -280,34 +334,101 @@ tokenizer.add_tokens(["[SPECIAL_TOKEN_1]"], special_tokens=True)
 assert tokenizer.tokenize("[SPECIAL_TOKEN_1]") == ["[SPECIAL_TOKEN_1]"]
 ```
 
+### Wrong: Using `PretrainedConfig` (lowercase)
+```python
+from transformers import PretrainedConfig  # Deprecated naming
+
+config = PretrainedConfig()
+```
+
+### Right: Use `PreTrainedConfig` (PascalCase)
+```python
+from transformers import PreTrainedConfig
+
+config = PreTrainedConfig()
+```
+
+### Wrong: Using old Python/PyTorch versions
+```python
+# Python 3.9 or PyTorch 2.3
+# Transformers 5.2.0 will not work properly
+```
+
+### Right: Ensure minimum version requirements
+```python
+# Python 3.10+ and PyTorch 2.4+
+# Verify before installing:
+# python --version  # Should be 3.10 or higher
+# pip install "transformers[torch]>=5.2.0"
+```
+
 ## References
 
-- [Official Documentation](https://huggingface.co/docs/transformers)
-- [GitHub Repository](https://github.com/huggingface/transformers)
-- parrots.png dataset image:
-  - <https://huggingface.co/datasets/Narsil/image_dummy/raw/main/parrots.png>
-- idefics-few-shot.jpg documentation image:
-  - <https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/idefics-few-shot.jpg>
+- Official Documentation: <https://huggingface.co/docs/transformers>
+- GitHub Repository: <https://github.com/huggingface/transformers>
+- Parrots image dataset: <https://huggingface.co/datasets/Narsil/image_dummy/raw/main/parrots.png>
 
-## Migration from v[previous]
+## Migration from v4.x to v5.2.0
 
-No explicit breaking-change notes were provided in the inputs.
+### Breaking Changes
 
-Known deprecation note from tests:
-- `additional_special_tokens` ⚠️ Soft Deprecation (not shown in examples)
-  - Deprecated since: v5 (per test note)
-  - Still works: likely (tests indicate it is converted)
-  - Modern alternative: `extra_special_tokens`
-  - Migration guidance: replace `{"additional_special_tokens": [...]}` with `{"extra_special_tokens": [...]}` when calling `tokenizer.add_special_tokens(...)`.
+1. **Minimum Python version**: Python 3.10+ is now required (previously 3.9+).
+   - **Action**: Upgrade your Python environment to 3.10 or higher before upgrading transformers.
+
+2. **Minimum PyTorch version**: PyTorch 2.4+ is now required (previously 2.3+).
+   - **Action**: Upgrade PyTorch: `pip install "torch>=2.4"`
+
+3. **Special tokens parameter naming**: `additional_special_tokens` is deprecated in favor of `extra_special_tokens`.
+   - **Action**: Replace `{"additional_special_tokens": [...]}` with `{"extra_special_tokens": [...]}` when calling `tokenizer.add_special_tokens(...)`.
+
+### Migration Steps
+
+1. **Update environment**:
+   ```bash
+   # Ensure Python 3.10+
+   python --version
+   
+   # Upgrade PyTorch
+   pip install "torch>=2.4"
+   
+   # Upgrade transformers
+   pip install "transformers[torch]>=5.2.0"
+   ```
+
+2. **Update tokenizer special tokens**:
+   ```python
+   # Old (deprecated in v5)
+   tokenizer.add_special_tokens({"additional_special_tokens": ["[SPECIAL]"]})
+   
+   # New (v5+)
+   tokenizer.add_special_tokens({"extra_special_tokens": ["[SPECIAL]"]})
+   ```
+
+3. **Update config class naming**:
+   ```python
+   # Old (deprecated)
+   from transformers import PretrainedConfig
+   
+   # New
+   from transformers import PreTrainedConfig
+   ```
 
 ## API Reference
 
-- **transformers.pipeline(task, model, \*\*kwargs)** - Create a task-specific `Pipeline`; key kwargs include `dtype=`, `device_map=`, `revision=`.
+### Core Pipeline APIs
+
+- **transformers.pipeline(task, model, \*\*kwargs)** - Create a task-specific `Pipeline`; key kwargs include `dtype=`, `device_map=`, `revision=`, `torch_dtype=`, `trust_remote_code=`.
 - **transformers.Pipeline(\_\_call\_\_)** - Run inference on a single input or batch; returns task-specific structured outputs.
+- **transformers.TextGenerationPipeline** - Pipeline for text generation tasks.
+
+### Tokenizer APIs
+
 - **transformers.AutoTokenizer.from_pretrained(pretrained_model_name_or_path, \*\*kwargs)** - Load tokenizer from Hub id or local directory; accepts tokenizer-specific kwargs.
+- **transformers.PreTrainedTokenizer** - Base class for Python-based tokenizers.
+- **transformers.PreTrainedTokenizerFast** - Fast tokenizer implementation using Rust backend.
+- **transformers.PreTrainedTokenizerBase** - Abstract base class for all tokenizers; provides common interface.
 - **PreTrainedTokenizerBase.save_pretrained(save_directory)** - Save tokenizer files/config to a directory for later reuse.
 - **PreTrainedTokenizerBase.\_\_call\_\_(texts, padding=False, truncation=False, return_tensors=None, \*\*kwargs)** - Batch tokenize; returns a `BatchEncoding`.
-- **transformers.BatchEncoding.data** - Underlying dict-like mapping of encoded fields (e.g., `input_ids`, `attention_mask`).
 - **PreTrainedTokenizerBase.encode(text, add_special_tokens=True, \*\*kwargs)** - Encode text to token ids.
 - **PreTrainedTokenizerBase.decode(ids, skip_special_tokens=False, clean_up_tokenization_spaces=True, \*\*kwargs)** - Decode token ids to text.
 - **PreTrainedTokenizerBase.tokenize(text, \*\*kwargs)** - Convert text to token strings.
@@ -315,5 +436,69 @@ Known deprecation note from tests:
 - **PreTrainedTokenizerBase.add_tokens(new_tokens, special_tokens=False)** - Add tokens to tokenizer; use `special_tokens=True` for special tokens.
 - **PreTrainedTokenizerBase.add_special_tokens(special_tokens_dict, replace_extra_special_tokens=True)** - Add special tokens; supports `extra_special_tokens`.
 - **PreTrainedTokenizerBase.model_input_names** - List of primary model input field names (often starts with `input_ids` or `input_values`).
+- **transformers.BatchEncoding** - Output of tokenizer encode methods; dict-like with `.data` attribute.
+- **transformers.BatchEncoding.data** - Underlying dict-like mapping of encoded fields (e.g., `input_ids`, `attention_mask`).
+- **transformers.AddedToken** - Class representing an added token with specific behavior (single_word, lstrip, rstrip, etc.).
+
+### Model Loading APIs
+
+- **transformers.AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path, \*\*kwargs)** - Load causal language model; supports `config=`, `cache_dir=`, `quantization_config=`, `device_map=`, `dtype=`.
+- **transformers.PreTrainedConfig** - Base class for all model configurations.
+- **transformers.PretrainedConfig** ⚠️ Deprecated - Legacy alias for `PreTrainedConfig`; use `PreTrainedConfig` instead.
+
+### Training APIs
+
+- **transformers.TrainingArguments** - Configuration for training with Trainer.
+- **transformers.Seq2SeqTrainingArguments** - Training arguments specialized for sequence-to-sequence models.
+- **transformers.TrainerCallback** - Base class for Trainer callbacks.
+- **transformers.EarlyStoppingCallback** - Callback for early stopping during training.
+
+### Generation APIs
+
+- **transformers.GenerationConfig** - Configuration for text generation.
+- **transformers.GenerationMixin** - Mixin providing generation methods (generate, sample, etc.).
+- **transformers.TextStreamer** - Stream generated tokens to stdout in real-time.
+- **transformers.TextIteratorStreamer** - Iterator-based streamer for token-by-token generation.
+
+### Data Handling APIs
+
+- **transformers.DataCollatorWithPadding** - Collate examples with dynamic padding.
+- **transformers.DataCollatorForLanguageModeling** - Collate for masked/causal language modeling.
+- **transformers.DataCollatorForSeq2Seq** - Collate for sequence-to-sequence tasks.
+
+### Quantization APIs
+
+- **transformers.BitsAndBytesConfig** - Configuration for 8-bit/4-bit quantization using bitsandbytes.
+- **transformers.GPTQConfig** - Configuration for GPTQ quantization.
+- **transformers.AwqConfig** - Configuration for AWQ quantization.
+- **transformers.quantizers.HfQuantizer** - Base class for custom quantizers.
+- **transformers.quantizers.register_quantizer(quantization_method)** - Decorator to register custom quantizers.
+- **transformers.quantizers.register_quantization_config(quantization_method)** - Decorator to register custom quantization configs.
+- **transformers.utils.quantization_config.QuantizationConfigMixin** - Base class for quantization configuration classes.
+
+### Multimodal APIs
+
+- **transformers.ProcessorMixin** - Base class for multimodal processors.
+- **transformers.FeatureExtractionMixin** - Base class for feature extractors.
+- **transformers.ImageProcessingMixin** - Base class for image processors.
+
+### Cache APIs
+
+- **transformers.Cache** - Base class for KV cache implementations.
+- **transformers.DynamicCache** - Dynamic KV cache that grows as needed.
+- **transformers.StaticCache** - Pre-allocated static KV cache for fixed sizes.
+
+### Utility APIs
+
+- **transformers.HfArgumentParser** - Argument parser for dataclasses.
+- **transformers.set_seed(seed)** - Set random seed for reproducibility.
+- **transformers.logging.get_logger(name)** - Get a logger for transformers modules.
+- **transformers.is_torch_available()** - Check if PyTorch is available.
+- **transformers.is_tokenizers_available()** - Check if fast tokenizers backend is available.
+- **transformers.is_vision_available()** - Check if vision dependencies are available.
+- **transformers.convert_slow_tokenizer(slow_tokenizer)** - Convert a slow tokenizer to fast tokenizer.
+
+### Metrics & Tracing APIs
+
 - **transformers.utils.metrics.attach_tracer()** - Class decorator that attaches a tracer to instances (`self.tracer`).
 - **transformers.utils.metrics.traced(span_name=None, additional_attributes=None)** - Decorator for methods/functions to create tracing spans; supports custom span names and attributes.

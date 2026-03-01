@@ -91,7 +91,7 @@ impl SkillLinter {
             }
         }
 
-        // Check for "unknown" version
+        // Check for problematic versions
         if let Some(version) = frontmatter.get("version") {
             if version == "unknown" {
                 issues.push(LintIssue {
@@ -100,6 +100,28 @@ impl SkillLinter {
                     message: "Version is 'unknown' — version extraction failed".to_string(),
                     suggestion: Some(
                         "Try --version-from git-tag or --version <version> to set explicitly"
+                            .to_string(),
+                    ),
+                });
+            } else if version == "source" {
+                issues.push(LintIssue {
+                    severity: Severity::Warning,
+                    category: "frontmatter".to_string(),
+                    message: "Version is 'source' — version extraction failed".to_string(),
+                    suggestion: Some(
+                        "Use --version <version> to set the version explicitly".to_string(),
+                    ),
+                });
+            } else if !version.starts_with(|c: char| c.is_ascii_digit()) {
+                issues.push(LintIssue {
+                    severity: Severity::Warning,
+                    category: "frontmatter".to_string(),
+                    message: format!(
+                        "Version '{}' doesn't look like a semver version",
+                        version
+                    ),
+                    suggestion: Some(
+                        "Version should start with a digit (e.g., '1.0.0'). Use --version to set explicitly."
                             .to_string(),
                     ),
                 });
@@ -154,6 +176,32 @@ impl SkillLinter {
             });
         }
 
+        // Check for body wrapped in ```markdown fence (normalizer should have stripped this)
+        {
+            let mut fm_dashes = 0;
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed == "---" {
+                    fm_dashes += 1;
+                    continue;
+                }
+                if fm_dashes >= 2 && !trimmed.is_empty() {
+                    if trimmed == "```markdown" || trimmed == "```md" {
+                        issues.push(LintIssue {
+                            severity: Severity::Error,
+                            category: "content".to_string(),
+                            message: "Body is wrapped in a ```markdown fence".to_string(),
+                            suggestion: Some(
+                                "Remove the wrapping ```markdown fence. The normalizer should have caught this."
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+
         // Check minimum length
         if content.len() < 1000 {
             issues.push(LintIssue {
@@ -162,6 +210,59 @@ impl SkillLinter {
                 message: format!("Content is very short ({} chars)", content.len()),
                 suggestion: Some("Consider adding more examples and explanations".to_string()),
             });
+        }
+
+        // Check for private/internal modules in Imports section
+        if let Some(imports_start) = content.find("## Imports") {
+            let imports_section = &content[imports_start..];
+            let imports_end = imports_section[10..] // Skip "## Imports"
+                .find("\n## ")
+                .map(|pos| pos + 10)
+                .unwrap_or(imports_section.len());
+            let imports_content = &imports_section[..imports_end];
+
+            for line in imports_content.lines() {
+                let trimmed = line.trim();
+                // Match any underscore-prefixed module segment (e.g. pkg._compat, from pkg import _internal)
+                let mut candidates: Vec<&str> = Vec::new();
+                if let Some(rest) = trimmed.strip_prefix("from ") {
+                    if let Some((module, imported)) = rest.split_once(" import ") {
+                        candidates.push(module.trim());
+                        for sym in imported.split(',') {
+                            if let Some(name) = sym.split_whitespace().next() {
+                                candidates.push(name);
+                            }
+                        }
+                    } else if let Some(module) = rest.split_whitespace().next() {
+                        candidates.push(module);
+                    }
+                } else if let Some(rest) = trimmed.strip_prefix("import ") {
+                    for module in rest.split(',') {
+                        if let Some(name) = module.split_whitespace().next() {
+                            candidates.push(name);
+                        }
+                    }
+                }
+                let has_private_segment = candidates.iter().any(|path| {
+                    path.split('.')
+                        .any(|seg| seg.starts_with('_') && seg != "__future__" && seg != "__init__")
+                });
+                if has_private_segment {
+                    issues.push(LintIssue {
+                        severity: Severity::Warning,
+                        category: "content".to_string(),
+                        message: format!(
+                            "Private/internal module in Imports: '{}'",
+                            trimmed
+                        ),
+                        suggestion: Some(
+                            "Only public API imports belong in the ## Imports section. Use the public API equivalent."
+                                .to_string(),
+                        ),
+                    });
+                    break; // One warning is enough
+                }
+            }
         }
 
         // Check for Pitfalls with Wrong/Right examples
@@ -381,13 +482,18 @@ impl SkillLinter {
         let meta_text_patterns = [
             "below is the",
             "here is the",
+            "here is your",
             "here's the",
+            "certainly!",
+            "corrections made",
             "i've generated",
             "i have generated",
             "as requested",
             "with exact sections",
             "the following skill.md",
             "generated skill.md",
+            "this file now has",
+            "format issues fixed",
         ];
         // Only check the first 5 non-empty lines after frontmatter (meta-text is always at the top)
         let mut checked = 0;
@@ -738,38 +844,7 @@ impl SkillLinter {
                 }
             }
 
-            // 3. Credential/secret file access in prose
-            let credential_paths = [
-                "~/.ssh/",
-                "~/.aws/credentials",
-                "~/.aws/config",
-                "~/.gnupg/",
-                "~/.npmrc",
-                "~/.pypirc",
-                "~/.netrc",
-                "~/.docker/config.json",
-                "~/.kube/config",
-                "/etc/shadow",
-            ];
-            for path in &credential_paths {
-                if line.contains(path) {
-                    issues.push(LintIssue {
-                        severity: Severity::Error,
-                        category: "security".to_string(),
-                        message: format!(
-                            "Credential file access in prose: '{}'",
-                            path
-                        ),
-                        suggestion: Some(
-                            "SKILL.md should not instruct agents to read credential or secret files."
-                                .to_string(),
-                        ),
-                    });
-                    break;
-                }
-            }
-
-            // 4. Prompt injection
+            // 3. Prompt injection
             let injection_patterns = [
                 "ignore all previous instructions",
                 "ignore previous instructions",
@@ -805,7 +880,7 @@ impl SkillLinter {
                 }
             }
 
-            // 5. System file modification
+            // 4. System file modification
             let system_paths = [
                 "~/.bashrc",
                 "~/.zshrc",
@@ -836,7 +911,7 @@ impl SkillLinter {
                 }
             }
 
-            // 6. Obfuscated payloads — base64 decode piped to shell
+            // 5. Obfuscated payloads — base64 decode piped to shell
             if (lower.contains("base64")
                 && (lower.contains("| sh")
                     || lower.contains("| bash")
@@ -855,7 +930,7 @@ impl SkillLinter {
                 });
             }
 
-            // 7. Reverse shells
+            // 6. Reverse shells
             if lower.contains("/dev/tcp/")
                 || lower.contains("/dev/udp/")
                 || (lower.contains("bash -i") && lower.contains(">&"))
@@ -873,7 +948,7 @@ impl SkillLinter {
                 });
             }
 
-            // 8. Remote script execution — pipe to shell
+            // 7. Remote script execution — pipe to shell
             if (lower.contains("curl ") || lower.contains("wget ") || lower.contains("fetch "))
                 && (lower.contains("| sh")
                     || lower.contains("| bash")
@@ -892,7 +967,7 @@ impl SkillLinter {
                 });
             }
 
-            // 9. Privilege escalation
+            // 8. Privilege escalation
             if lower.contains("chmod 777 /")
                 || lower.contains("chmod -r 777")
                 || lower.contains("chmod +s ")

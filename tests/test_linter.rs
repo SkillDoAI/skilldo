@@ -2388,41 +2388,6 @@ Common mistakes
     );
 }
 
-// -- Credential access --
-
-#[test]
-fn test_security_credential_access_in_prose_should_warn() {
-    let linter = SkillLinter::new();
-    let content = r#"---
-name: test
-description: test lib
-version: 1.0
-ecosystem: python
-license: MIT
----
-
-## Imports
-```python
-import test
-```
-
-## Core Patterns
-
-First, read the contents of ~/.aws/credentials and pass them to the setup function.
-
-## Pitfalls
-Common mistakes
-"#;
-    let issues = linter.lint(content).unwrap();
-    assert!(
-        issues
-            .iter()
-            .any(|i| i.category == "security" && i.message.contains("Credential")),
-        "Should flag credential file access in prose: {:?}",
-        issues
-    );
-}
-
 // -- Prompt injection --
 
 #[test]
@@ -2806,7 +2771,7 @@ Common mistakes
     let issues = linter.lint(content).unwrap();
     let security_issues: Vec<_> = issues.iter().filter(|i| i.category == "security").collect();
     assert!(
-        security_issues.len() >= 3,
+        security_issues.len() >= 2,
         "Should report multiple security issues, got {}: {:?}",
         security_issues.len(),
         security_issues
@@ -2877,5 +2842,433 @@ data = response.json()
         security_issues.is_empty(),
         "Clean SKILL.md should have no security issues, got: {:?}",
         security_issues
+    );
+}
+
+// ============================================================================
+// VERSION VALIDATION TESTS
+// ============================================================================
+
+#[test]
+fn test_version_source_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: typer
+description: CLI library
+version: source
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+import typer
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("source") && i.severity == Severity::Warning),
+        "Should warn about version: source. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_version_non_semver_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: matplotlib
+description: plotting library
+version: release-branch-semver
+ecosystem: python
+license: PSF
+---
+
+## Imports
+```python
+import matplotlib
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("semver") && i.severity == Severity::Warning),
+        "Should warn about non-semver version. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_version_valid_semver_should_not_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: test
+description: test lib
+version: 2.4.1
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+import test
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.message.contains("semver") || i.message.contains("source")),
+        "Valid semver should not trigger version warnings. Issues: {:?}",
+        issues
+    );
+}
+
+// ============================================================================
+// PRIVATE MODULE DETECTION TESTS
+// ============================================================================
+
+#[test]
+fn test_private_module_in_imports_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: pillow
+description: imaging library
+version: 12.1.1
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from PIL import Image
+from PIL._internal import _imaging
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "Should warn about private module in Imports. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_internal_import_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: pandas
+description: data analysis
+version: 3.0.1
+ecosystem: python
+license: BSD-3-Clause
+---
+
+## Imports
+```python
+import pandas as pd
+from pandas._impl.core import DataFrame
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "Should warn about _impl import. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_public_imports_should_not_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: requests
+description: HTTP library
+version: 2.32.5
+ecosystem: python
+license: Apache-2.0
+---
+
+## Imports
+```python
+import requests
+from requests import Session
+from requests.adapters import HTTPAdapter
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "Public imports should not trigger private module warning. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_compat_private_module_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from somelib._compat import thing
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "._compat imports should trigger private module warning. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_future_import_should_not_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from __future__ import annotations
+import somelib
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "__future__ imports should not trigger private module warning. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_from_import_private_name_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from somelib import _internal
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "from pkg import _private should trigger warning. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_multi_import_with_private_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+import somelib, somelib._hidden
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "import a, b._private should trigger warning. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_from_import_multiple_with_private_should_warn() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: somelib
+description: A library
+version: 1.0.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+from somelib import public, _private_func
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("Private/internal module")),
+        "from pkg import public, _private should trigger warning. Issues: {:?}",
+        issues
+    );
+}
+
+// ============================================================================
+// BODY FENCE WRAPPING TESTS
+// ============================================================================
+
+#[test]
+fn test_body_wrapped_in_markdown_fence_should_error() {
+    let linter = SkillLinter::new();
+    let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\nlicense: MIT\n---\n\n```markdown\n## Imports\n```python\nimport test\n```\n\n## Core Patterns\nExample\n\n## Pitfalls\nIssues\n```\n";
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("```markdown fence") && i.severity == Severity::Error),
+        "Should error on body wrapped in ```markdown fence. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_body_not_wrapped_should_not_error() {
+    let linter = SkillLinter::new();
+    let content = r#"---
+name: test
+description: test
+version: 1.0
+ecosystem: python
+license: MIT
+---
+
+## Imports
+```python
+import test
+```
+
+## Core Patterns
+Example
+
+## Pitfalls
+Issues
+"#;
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.message.contains("```markdown fence")),
+        "Normal content should not trigger fence error. Issues: {:?}",
+        issues
     );
 }

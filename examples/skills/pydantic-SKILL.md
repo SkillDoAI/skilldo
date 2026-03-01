@@ -1,5 +1,4 @@
 ---
-
 name: pydantic
 description: Data validation library using Python type hints to validate, serialize, and document data structures
 version: 2.12.5
@@ -23,13 +22,49 @@ from pydantic import AliasPath, AliasChoices
 
 ### Basic Model Definition ✅ Current
 ```python
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 class User(BaseModel):
     id: int
     name: str = Field(min_length=1, max_length=100)
     email: str
     age: int | None = Field(default=None, ge=0, le=120)
+
+# Valid case: all fields, age in bounds
+u = User(id=1, name="Alice", email="alice@example.com", age=30)
+assert u.id == 1
+assert 1 <= len(u.name) <= 100
+assert u.email.count("@") == 1
+assert u.age == 30
+
+# Valid case: age omitted (should default to None)
+u2 = User(id=2, name="Bob", email="bob@example.com")
+assert u2.age is None
+
+# Invalid: name too short
+try:
+    User(id=3, name="", email="c@example.com")
+except ValidationError as e:
+    # Pydantic 2 error messages include error type, check for that
+    assert "string_too_short" in str(e)
+
+# Invalid: name too long
+try:
+    User(id=4, name="x"*101, email="d@example.com")
+except ValidationError as e:
+    assert "string_too_long" in str(e)
+
+# Invalid: age too low
+try:
+    User(id=5, name="Ed", email="e@example.com", age=-1)
+except ValidationError as e:
+    assert "greater_than_or_equal" in str(e) or "ge" in str(e) or "Value error, got -1" in str(e)
+
+# Invalid: age too high
+try:
+    User(id=6, name="Fay", email="f@example.com", age=121)
+except ValidationError as e:
+    assert "less_than_or_equal" in str(e) or "le" in str(e) or "Value error, got 121" in str(e)
 ```
 * Define models by subclassing `BaseModel` with type-annotated fields
 * Use `Field()` to add constraints, defaults, descriptions, and metadata
@@ -227,7 +262,7 @@ class Items(BaseModel):
     tags: list[Annotated[str, Field(min_length=3)]]
 ```
 
-### Wrong: Using deprecated json_encoders
+### Wrong: Using deprecated json_encoders ⚠️
 ```python
 from pydantic import BaseModel
 from datetime import datetime
@@ -272,7 +307,7 @@ class User(BaseModel):
     tags: list[str] = Field(default_factory=list)
 ```
 
-### Wrong: Using class methods for 'after' model validators
+### Wrong: Using class methods for 'after' model validators ⚠️
 ```python
 from pydantic import BaseModel, model_validator
 
@@ -303,6 +338,26 @@ class User(BaseModel):
             raise ValueError('passwords do not match')
         return self
 ```
+
+## Migration
+
+### Breaking and Deprecating Changes
+
+**Method and API deprecations:**  
+Pydantic v2.12.x continues to deprecate classmethod-based 'after' model validators:  
+- Using a `@classmethod` for an `'after'` model validator now emits a warning (since 2.12.0).  
+  Update usage to use instance methods for `'after'` model validation.  
+- The `json_encoders` config option is removed/deprecated.  
+  Use `@field_serializer` and `@model_serializer` for custom serialization.
+
+**Recent breaking changes (summarized):**
+- `after` model validators as classmethods now emit a warning, not an error.  
+- `build()` method of `AnyUrl` and `Dsn` reverted percent-encoding of credentials in 2.12.4 (no action needed unless you relied on this).
+
+**Migration tips:**  
+- If your code uses classmethod-based `@model_validator(mode='after')`, convert these to instance methods.
+- Refactor custom serialization logic to use the new `@field_serializer` or `@model_serializer` decorators.
+- If you migrated from v1, see the full migration table and notes below.
 
 ## References
 
@@ -406,7 +461,7 @@ bump-pydantic my_package
 - **model_validate(obj)** - Validate and parse input data from dict or object; raises ValidationError
 - **model_dump(...)** - Serialize model to dict with options for include/exclude, aliases, and serialization modes
 - **model_dump_json(...)** - Serialize model directly to JSON string
-- **model_json_schema()** - Generate JSON Schema for the model
+- **model_json_schema(...)** - Generate JSON Schema for the model
 - **field_validator(*fields, mode='after')** - Decorator for field-level validation; modes: 'before', 'after', 'wrap', 'plain'
 - **model_validator(mode)** - Decorator for model-level validation; modes: 'before', 'after', 'wrap'
 - **computed_field** - Decorator to mark property as computed field included in serialization

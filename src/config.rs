@@ -25,8 +25,8 @@ pub struct LlmConfig {
 
     /// Optional: Override max_tokens for LLM requests
     /// If not specified, uses provider-specific defaults:
-    /// - anthropic: 4096
-    /// - openai: 4096
+    /// - anthropic: 8192
+    /// - openai: 8192
     /// - openai-compatible (ollama): 16384
     /// - gemini: 8192
     #[serde(default)]
@@ -115,50 +115,71 @@ impl LlmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationConfig {
+    #[serde(default = "default_max_retries")]
     pub max_retries: usize,
+    #[serde(default = "default_max_source_tokens")]
     pub max_source_tokens: usize,
 
-    /// Run agents 1-3 in parallel (default: true).
+    /// Run extract/map/learn agents in parallel (default: true).
     /// Disable for local models (Ollama) to avoid overloading the machine.
     #[serde(default = "default_true")]
     pub parallel_extraction: bool,
 
-    /// Enable Agent 5 code generation validation (default: true)
+    /// Enable test agent code generation validation (default: true)
+    /// Alias: enable_agent5 (deprecated, will be removed in v0.2.0)
+    #[serde(default = "default_true", alias = "enable_agent5")]
+    pub enable_test: bool,
+
+    /// Test agent validation mode: "thorough", "adaptive", or "minimal" (default: "thorough")
+    /// Alias: agent5_mode (deprecated, will be removed in v0.2.0)
+    #[serde(default = "default_test_mode", alias = "agent5_mode")]
+    pub test_mode: String,
+
+    /// Enable review agent accuracy/safety validation (default: true)
     #[serde(default = "default_true")]
-    pub enable_agent5: bool,
+    pub enable_review: bool,
 
-    /// Agent 5 validation mode: "thorough", "adaptive", or "minimal" (default: "thorough")
-    #[serde(default = "default_agent5_mode")]
-    pub agent5_mode: String,
+    /// Max retries for review → create feedback loop (default: 5)
+    #[serde(default = "default_review_max_retries")]
+    pub review_max_retries: usize,
 
-    /// Optional: Override LLM for Agent 1 (API extraction)
+    /// Optional: Override LLM for extract agent (API extraction)
+    /// Alias: agent1_llm (deprecated, will be removed in v0.2.0)
+    #[serde(default, alias = "agent1_llm")]
+    pub extract_llm: Option<LlmConfig>,
+
+    /// Optional: Override LLM for map agent (pattern extraction)
+    /// Alias: agent2_llm (deprecated, will be removed in v0.2.0)
+    #[serde(default, alias = "agent2_llm")]
+    pub map_llm: Option<LlmConfig>,
+
+    /// Optional: Override LLM for learn agent (context extraction)
+    /// Alias: agent3_llm (deprecated, will be removed in v0.2.0)
+    #[serde(default, alias = "agent3_llm")]
+    pub learn_llm: Option<LlmConfig>,
+
+    /// Optional: Override LLM for create agent (synthesis)
+    /// Alias: agent4_llm (deprecated, will be removed in v0.2.0)
+    #[serde(default, alias = "agent4_llm")]
+    pub create_llm: Option<LlmConfig>,
+
+    /// Optional: Override LLM for review agent (accuracy/safety validation)
     #[serde(default)]
-    pub agent1_llm: Option<LlmConfig>,
+    pub review_llm: Option<LlmConfig>,
 
-    /// Optional: Override LLM for Agent 2 (pattern extraction)
-    #[serde(default)]
-    pub agent2_llm: Option<LlmConfig>,
+    /// Optional: Override LLM for test agent (code execution validation)
+    /// Alias: agent5_llm (deprecated, will be removed in v0.2.0)
+    #[serde(default, alias = "agent5_llm")]
+    pub test_llm: Option<LlmConfig>,
 
-    /// Optional: Override LLM for Agent 3 (context extraction)
-    #[serde(default)]
-    pub agent3_llm: Option<LlmConfig>,
-
-    /// Optional: Override LLM for Agent 4 (synthesis)
-    #[serde(default)]
-    pub agent4_llm: Option<LlmConfig>,
-
-    /// Optional: Override LLM model for Agent 5 only (default: use main llm.model)
-    #[serde(default)]
-    pub agent5_llm: Option<LlmConfig>,
-
-    /// Container configuration for Agent 5 validation
+    /// Container configuration for test agent validation
     #[serde(default)]
     pub container: ContainerConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerConfig {
-    /// Container runtime: "docker", "podman", etc. (default: "docker")
+    /// Container runtime: "podman", "docker", etc. (default: auto-detected)
     #[serde(default = "default_runtime")]
     pub runtime: String,
 
@@ -224,6 +245,22 @@ impl Default for ContainerConfig {
 }
 
 fn default_runtime() -> String {
+    detect_container_runtime()
+}
+
+/// Detect available container runtime (podman preferred, then docker)
+pub fn detect_container_runtime() -> String {
+    for runtime in &["podman", "docker"] {
+        if std::process::Command::new(runtime)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return runtime.to_string();
+        }
+    }
+    // Fallback — will fail at execution time with a clear error
     "docker".to_string()
 }
 
@@ -255,14 +292,26 @@ fn default_true() -> bool {
     true
 }
 
-fn default_agent5_mode() -> String {
+fn default_test_mode() -> String {
     "thorough".to_string()
 }
 
+fn default_max_retries() -> usize {
+    5
+}
+
+fn default_max_source_tokens() -> usize {
+    100000
+}
+
+fn default_review_max_retries() -> usize {
+    5
+}
+
 impl GenerationConfig {
-    /// Parse agent5_mode string into ValidationMode enum
-    pub fn get_agent5_mode(&self) -> ValidationMode {
-        match self.agent5_mode.to_lowercase().as_str() {
+    /// Parse test_mode string into ValidationMode enum
+    pub fn get_test_mode(&self) -> ValidationMode {
+        match self.test_mode.to_lowercase().as_str() {
             "minimal" => ValidationMode::Minimal,
             "adaptive" => ValidationMode::Adaptive,
             _ => ValidationMode::Thorough, // Default
@@ -273,45 +322,49 @@ impl GenerationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PromptsConfig {
     /// Global default: if true, custom prompts replace defaults. If false, append.
-    /// Per-agent modes (agentN_mode) take precedence over this.
+    /// Per-stage modes (extract_mode, etc.) take precedence over this.
     #[serde(default)]
     pub override_prompts: bool,
 
-    /// Per-agent mode: "append" (default) or "overwrite"
-    /// Agent 5 only supports "append" (overwrite is ignored)
-    #[serde(default)]
-    pub agent1_mode: Option<String>,
-    #[serde(default)]
-    pub agent2_mode: Option<String>,
-    #[serde(default)]
-    pub agent3_mode: Option<String>,
-    #[serde(default)]
-    pub agent4_mode: Option<String>,
+    /// Per-stage mode: "append" (default) or "overwrite"
+    /// Test stage only supports "append" (overwrite is ignored)
+    /// Aliases: agent1_mode..agent4_mode (deprecated, will be removed in v0.2.0)
+    #[serde(default, alias = "agent1_mode")]
+    pub extract_mode: Option<String>,
+    #[serde(default, alias = "agent2_mode")]
+    pub map_mode: Option<String>,
+    #[serde(default, alias = "agent3_mode")]
+    pub learn_mode: Option<String>,
+    #[serde(default, alias = "agent4_mode")]
+    pub create_mode: Option<String>,
 
     /// Custom prompt additions or replacements
+    /// Aliases: agent1_custom..agent5_custom (deprecated, will be removed in v0.2.0)
+    #[serde(default, alias = "agent1_custom")]
+    pub extract_custom: Option<String>,
+    #[serde(default, alias = "agent2_custom")]
+    pub map_custom: Option<String>,
+    #[serde(default, alias = "agent3_custom")]
+    pub learn_custom: Option<String>,
+    #[serde(default, alias = "agent4_custom")]
+    pub create_custom: Option<String>,
     #[serde(default)]
-    pub agent1_custom: Option<String>,
-    #[serde(default)]
-    pub agent2_custom: Option<String>,
-    #[serde(default)]
-    pub agent3_custom: Option<String>,
-    #[serde(default)]
-    pub agent4_custom: Option<String>,
-    #[serde(default)]
-    pub agent5_custom: Option<String>,
+    pub review_custom: Option<String>,
+    #[serde(default, alias = "agent5_custom")]
+    pub test_custom: Option<String>,
 }
 
 impl PromptsConfig {
-    /// Check if a given agent should overwrite its default prompt.
-    /// Per-agent mode takes precedence, then falls back to global override_prompts.
-    /// Agent 5 always returns false (append-only).
-    pub fn is_overwrite(&self, agent: u8) -> bool {
-        let mode = match agent {
-            1 => &self.agent1_mode,
-            2 => &self.agent2_mode,
-            3 => &self.agent3_mode,
-            4 => &self.agent4_mode,
-            _ => return false, // Agent 5: always append
+    /// Check if a given stage should overwrite its default prompt.
+    /// Per-stage mode takes precedence, then falls back to global override_prompts.
+    /// Test and review stages always return false (append-only).
+    pub fn is_overwrite(&self, stage: &str) -> bool {
+        let mode = match stage {
+            "extract" => &self.extract_mode,
+            "map" => &self.map_mode,
+            "learn" => &self.learn_mode,
+            "create" => &self.create_mode,
+            _ => return false, // test, review: always append
         };
         match mode.as_deref() {
             Some("overwrite") => true,
@@ -420,13 +473,16 @@ impl Default for Config {
                 max_retries: 5,
                 max_source_tokens: 100000,
                 parallel_extraction: true,
-                enable_agent5: true,
-                agent5_mode: "thorough".to_string(),
-                agent1_llm: None,
-                agent2_llm: None,
-                agent3_llm: None,
-                agent4_llm: None,
-                agent5_llm: None,
+                enable_test: true,
+                test_mode: "thorough".to_string(),
+                enable_review: true,
+                review_max_retries: default_review_max_retries(),
+                extract_llm: None,
+                map_llm: None,
+                learn_llm: None,
+                create_llm: None,
+                review_llm: None,
+                test_llm: None,
                 container: ContainerConfig::default(),
             },
             prompts: PromptsConfig::default(),
@@ -478,25 +534,26 @@ mod tests {
     }
 
     #[test]
-    fn test_is_overwrite_per_agent_mode() {
+    fn test_is_overwrite_per_stage_mode() {
         let mut prompts = PromptsConfig::default();
         // Default: not overwrite
-        assert!(!prompts.is_overwrite(1));
-        assert!(!prompts.is_overwrite(4));
+        assert!(!prompts.is_overwrite("extract"));
+        assert!(!prompts.is_overwrite("create"));
 
-        // Agent 5 always returns false
+        // Test and review always return false
         prompts.override_prompts = true;
-        assert!(!prompts.is_overwrite(5));
+        assert!(!prompts.is_overwrite("test"));
+        assert!(!prompts.is_overwrite("review"));
 
-        // Per-agent mode takes precedence over global
-        prompts.agent1_mode = Some("overwrite".to_string());
-        assert!(prompts.is_overwrite(1));
+        // Per-stage mode takes precedence over global
+        prompts.extract_mode = Some("overwrite".to_string());
+        assert!(prompts.is_overwrite("extract"));
 
-        prompts.agent2_mode = Some("append".to_string());
-        assert!(!prompts.is_overwrite(2));
+        prompts.map_mode = Some("append".to_string());
+        assert!(!prompts.is_overwrite("map"));
 
-        // Global fallback when no per-agent mode
-        assert!(prompts.is_overwrite(3)); // no agent3_mode set, falls back to override_prompts=true
+        // Global fallback when no per-stage mode
+        assert!(prompts.is_overwrite("learn")); // no learn_mode set, falls back to override_prompts=true
     }
 
     #[test]
@@ -529,43 +586,34 @@ mod tests {
     }
 
     #[test]
-    fn test_agent5_mode_parsing() {
+    fn test_test_mode_parsing() {
         let mut gen = GenerationConfig {
             max_retries: 5,
             max_source_tokens: 100000,
             parallel_extraction: true,
-            enable_agent5: true,
-            agent5_mode: "thorough".to_string(),
-            agent1_llm: None,
-            agent2_llm: None,
-            agent3_llm: None,
-            agent4_llm: None,
-            agent5_llm: None,
+            enable_test: true,
+            test_mode: "thorough".to_string(),
+            enable_review: true,
+            review_max_retries: 5,
+            extract_llm: None,
+            map_llm: None,
+            learn_llm: None,
+            create_llm: None,
+            review_llm: None,
+            test_llm: None,
             container: ContainerConfig::default(),
         };
-        assert_eq!(
-            gen.get_agent5_mode(),
-            crate::agent5::ValidationMode::Thorough
-        );
+        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Thorough);
 
-        gen.agent5_mode = "minimal".to_string();
-        assert_eq!(
-            gen.get_agent5_mode(),
-            crate::agent5::ValidationMode::Minimal
-        );
+        gen.test_mode = "minimal".to_string();
+        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Minimal);
 
-        gen.agent5_mode = "adaptive".to_string();
-        assert_eq!(
-            gen.get_agent5_mode(),
-            crate::agent5::ValidationMode::Adaptive
-        );
+        gen.test_mode = "adaptive".to_string();
+        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Adaptive);
 
         // Unknown defaults to thorough
-        gen.agent5_mode = "unknown".to_string();
-        assert_eq!(
-            gen.get_agent5_mode(),
-            crate::agent5::ValidationMode::Thorough
-        );
+        gen.test_mode = "unknown".to_string();
+        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Thorough);
     }
 
     #[test]
@@ -651,11 +699,12 @@ install_source = "local-mount"
     #[test]
     fn test_per_agent_llm_defaults_to_none() {
         let config = Config::default();
-        assert!(config.generation.agent1_llm.is_none());
-        assert!(config.generation.agent2_llm.is_none());
-        assert!(config.generation.agent3_llm.is_none());
-        assert!(config.generation.agent4_llm.is_none());
-        assert!(config.generation.agent5_llm.is_none());
+        assert!(config.generation.extract_llm.is_none());
+        assert!(config.generation.map_llm.is_none());
+        assert!(config.generation.learn_llm.is_none());
+        assert!(config.generation.create_llm.is_none());
+        assert!(config.generation.review_llm.is_none());
+        assert!(config.generation.test_llm.is_none());
     }
 
     #[test]
@@ -682,16 +731,16 @@ model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.generation.agent1_llm.is_some());
-        assert!(config.generation.agent2_llm.is_none());
-        assert!(config.generation.agent3_llm.is_none());
-        assert!(config.generation.agent4_llm.is_none());
-        assert!(config.generation.agent5_llm.is_some());
+        assert!(config.generation.extract_llm.is_some());
+        assert!(config.generation.map_llm.is_none());
+        assert!(config.generation.learn_llm.is_none());
+        assert!(config.generation.create_llm.is_none());
+        assert!(config.generation.test_llm.is_some());
 
-        let agent1 = config.generation.agent1_llm.unwrap();
-        assert_eq!(agent1.provider, "openai-compatible");
-        assert_eq!(agent1.model, "qwen3-coder:latest");
-        assert_eq!(agent1.base_url.unwrap(), "http://localhost:11434/v1");
+        let extract = config.generation.extract_llm.unwrap();
+        assert_eq!(extract.provider, "openai-compatible");
+        assert_eq!(extract.model, "qwen3-coder:latest");
+        assert_eq!(extract.base_url.unwrap(), "http://localhost:11434/v1");
     }
 
     #[test]
@@ -735,11 +784,11 @@ model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.generation.agent1_llm.is_some());
-        assert!(config.generation.agent2_llm.is_some());
-        assert!(config.generation.agent3_llm.is_some());
-        assert!(config.generation.agent4_llm.is_some());
-        assert!(config.generation.agent5_llm.is_some());
+        assert!(config.generation.extract_llm.is_some());
+        assert!(config.generation.map_llm.is_some());
+        assert!(config.generation.learn_llm.is_some());
+        assert!(config.generation.create_llm.is_some());
+        assert!(config.generation.test_llm.is_some());
     }
 
     #[test]
@@ -795,9 +844,9 @@ base_url = "https://inference-api.nvidia.com/v1/responses"
 effort = "high"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        let agent4 = config.generation.agent4_llm.unwrap();
-        assert!(!agent4.extra_body.is_empty());
-        assert!(agent4.extra_body.contains_key("reasoning"));
+        let create = config.generation.create_llm.unwrap();
+        assert!(!create.extra_body.is_empty());
+        assert!(create.extra_body.contains_key("reasoning"));
     }
 
     #[test]
@@ -875,5 +924,77 @@ max_source_tokens = 100000
         let config = Config::default();
         let resolved = config.llm.resolve_extra_body().unwrap();
         assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn test_old_config_names_still_work_via_aliases() {
+        // Old agent1_llm..agent5_llm names should deserialize into new field names
+        let toml = r#"
+[llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+enable_agent5 = false
+agent5_mode = "minimal"
+
+[generation.agent1_llm]
+provider = "openai-compatible"
+model = "qwen3-coder:latest"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[prompts]
+agent1_mode = "overwrite"
+agent4_custom = "extra instructions"
+agent5_custom = "test instructions"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        // Old enable_agent5 → new enable_test
+        assert!(!config.generation.enable_test);
+        // Old agent5_mode → new test_mode
+        assert_eq!(config.generation.test_mode, "minimal");
+        // Old agent1_llm → new extract_llm
+        assert!(config.generation.extract_llm.is_some());
+        // Old agent1_mode → new extract_mode
+        assert_eq!(config.prompts.extract_mode.as_deref(), Some("overwrite"));
+        // Old agent4_custom → new create_custom
+        assert_eq!(
+            config.prompts.create_custom.as_deref(),
+            Some("extra instructions")
+        );
+        // Old agent5_custom → new test_custom
+        assert_eq!(
+            config.prompts.test_custom.as_deref(),
+            Some("test instructions")
+        );
+    }
+
+    #[test]
+    fn test_new_review_config_defaults() {
+        let config = Config::default();
+        assert!(config.generation.enable_review);
+        assert_eq!(config.generation.review_max_retries, 5);
+        assert!(config.generation.review_llm.is_none());
+        assert!(config.prompts.review_custom.is_none());
+    }
+
+    #[test]
+    fn test_detect_container_runtime_returns_non_empty() {
+        let runtime = detect_container_runtime();
+        assert!(!runtime.is_empty(), "runtime should be a non-empty string");
+    }
+
+    #[test]
+    fn test_detect_container_runtime_returns_known_value() {
+        let runtime = detect_container_runtime();
+        assert!(
+            runtime == "podman" || runtime == "docker",
+            "runtime should be 'podman' or 'docker', got '{}'",
+            runtime
+        );
     }
 }

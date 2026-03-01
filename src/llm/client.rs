@@ -363,9 +363,21 @@ def create(tags: list = None):
 - **Response** - Custom response
 "#
             .to_string())
-        } else if prompt.contains("reviewing a generated SKILL.md") {
-            // Agent 5: Reviewer
-            Ok(r#"{"status": "pass"}"#.to_string())
+        } else if prompt.contains("verification script generator") {
+            // Review agent Phase A: introspection script
+            Ok(r#"```python
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["testpkg"]
+# ///
+import json
+result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
+print(json.dumps(result))
+```"#
+            .to_string())
+        } else if prompt.contains("quality gate for a generated SKILL.md") {
+            // Review agent Phase B: verdict
+            Ok(r#"{"passed": true, "issues": []}"#.to_string())
         } else {
             Ok(r#"{"status": "mock"}"#.to_string())
         }

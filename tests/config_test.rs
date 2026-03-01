@@ -60,22 +60,22 @@ fn test_config_load_returns_valid_config() -> Result<()> {
 }
 
 #[test]
-fn test_config_agent5_enabled_by_default() -> Result<()> {
+fn test_config_test_enabled_by_default() -> Result<()> {
     let config = Config::default();
 
-    // Agent5 should be enabled by default
-    assert!(config.generation.enable_agent5);
+    // Test stage should be enabled by default
+    assert!(config.generation.enable_test);
 
     Ok(())
 }
 
 #[test]
-fn test_config_agent5_mode_default() -> Result<()> {
+fn test_config_test_mode_default() -> Result<()> {
     let config = Config::default();
 
-    // Should have a default agent5 mode
-    assert!(!config.generation.agent5_mode.is_empty());
-    assert_eq!(config.generation.agent5_mode, "thorough");
+    // Should have a default test mode
+    assert!(!config.generation.test_mode.is_empty());
+    assert_eq!(config.generation.test_mode, "thorough");
 
     Ok(())
 }
@@ -93,9 +93,9 @@ fn test_config_get_api_key() -> Result<()> {
 }
 
 #[test]
-fn test_generation_config_get_agent5_mode_thorough() {
+fn test_generation_config_get_test_mode_thorough() {
     let config = Config::default();
-    let mode = config.generation.get_agent5_mode();
+    let mode = config.generation.get_test_mode();
 
     // Default mode should be thorough
     assert!(matches!(mode, skilldo::agent5::ValidationMode::Thorough));
@@ -175,25 +175,25 @@ fn test_config_get_api_key_inferred_from_provider() -> Result<()> {
 }
 
 #[test]
-fn test_generation_config_get_agent5_mode_minimal() {
+fn test_generation_config_get_test_mode_minimal() {
     use skilldo::agent5::ValidationMode;
 
     // Create config with minimal mode
     let mut config = Config::default();
-    config.generation.agent5_mode = "minimal".to_string();
+    config.generation.test_mode = "minimal".to_string();
 
-    let mode = config.generation.get_agent5_mode();
+    let mode = config.generation.get_test_mode();
     assert!(matches!(mode, ValidationMode::Minimal));
 }
 
 #[test]
-fn test_generation_config_get_agent5_mode_adaptive() {
+fn test_generation_config_get_test_mode_adaptive() {
     use skilldo::agent5::ValidationMode;
 
     // Create config with adaptive mode
     let mut config = Config::default();
-    config.generation.agent5_mode = "adaptive".to_string();
+    config.generation.test_mode = "adaptive".to_string();
 
-    let mode = config.generation.get_agent5_mode();
+    let mode = config.generation.get_test_mode();
     assert!(matches!(mode, ValidationMode::Adaptive));
 }

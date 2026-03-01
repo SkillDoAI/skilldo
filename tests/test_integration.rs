@@ -174,10 +174,11 @@ async fn test_full_pipeline_python_project() {
     // Step 3: Generate with mock client
     let client = Box::new(MockLlmClient::new());
     let generator = Generator::new(client, 3);
-    let skill_md = generator.generate(&data).await.unwrap();
+    let output = generator.generate(&data).await.unwrap();
+    let skill_md = &output.skill_md;
 
     // Step 4: Validate output format
-    let format_errors = validate_skill_md_format(&skill_md);
+    let format_errors = validate_skill_md_format(skill_md);
     assert!(
         format_errors.is_empty(),
         "SKILL.md format errors: {:?}",
@@ -186,7 +187,7 @@ async fn test_full_pipeline_python_project() {
 
     // Step 5: Lint validation
     let linter = SkillLinter::new();
-    let issues = linter.lint(&skill_md).unwrap();
+    let issues = linter.lint(skill_md).unwrap();
 
     let errors: Vec<_> = issues
         .iter()
@@ -213,26 +214,30 @@ async fn test_pipeline_with_custom_config() {
             max_retries: 5,
             max_source_tokens: 50000,
             parallel_extraction: true,
-            enable_agent5: true,
-            agent5_mode: "thorough".to_string(),
-            agent1_llm: None,
-            agent2_llm: None,
-            agent3_llm: None,
-            agent4_llm: None,
-            agent5_llm: None,
+            enable_test: true,
+            test_mode: "thorough".to_string(),
+            enable_review: false,
+            review_max_retries: 5,
+            extract_llm: None,
+            map_llm: None,
+            learn_llm: None,
+            create_llm: None,
+            review_llm: None,
+            test_llm: None,
             container: skilldo::config::ContainerConfig::default(),
         },
         prompts: PromptsConfig {
             override_prompts: false,
-            agent1_mode: None,
-            agent2_mode: None,
-            agent3_mode: None,
-            agent4_mode: None,
-            agent1_custom: Some("Custom Agent 1 instructions".to_string()),
-            agent2_custom: None,
-            agent3_custom: None,
-            agent4_custom: None,
-            agent5_custom: None,
+            extract_mode: None,
+            map_mode: None,
+            learn_mode: None,
+            create_mode: None,
+            extract_custom: Some("Custom Agent 1 instructions".to_string()),
+            map_custom: None,
+            learn_custom: None,
+            create_custom: None,
+            review_custom: None,
+            test_custom: None,
         },
     };
 

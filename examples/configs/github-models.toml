@@ -17,5 +17,5 @@ base_url = "https://models.inference.ai.azure.com"
 [generation]
 max_retries = 3
 max_source_tokens = 100000
-enable_agent5 = false
+enable_test = false
 parallel_extraction = true

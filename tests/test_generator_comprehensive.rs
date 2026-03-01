@@ -351,13 +351,13 @@ async fn test_strip_markdown_fence_with_language() {
     let generator = Generator::new(Box::new(client), 3);
     let data = create_test_data();
 
-    let result = generator.generate(&data).await.unwrap();
+    let output = generator.generate(&data).await.unwrap();
 
     // Should NOT contain markdown fences
-    assert!(!result.starts_with("```markdown"));
-    assert!(!result.ends_with("```"));
+    assert!(!output.skill_md.starts_with("```markdown"));
+    assert!(!output.skill_md.ends_with("```"));
     // Should contain the actual content
-    assert!(result.contains("# SKILL.md Content"));
+    assert!(output.skill_md.contains("# SKILL.md Content"));
 }
 
 #[tokio::test]
@@ -366,13 +366,13 @@ async fn test_strip_plain_markdown_fence() {
     let generator = Generator::new(Box::new(client), 3);
     let data = create_test_data();
 
-    let result = generator.generate(&data).await.unwrap();
+    let output = generator.generate(&data).await.unwrap();
 
     // Should NOT contain plain fences
-    assert!(!result.starts_with("```"));
-    assert!(!result.ends_with("```"));
+    assert!(!output.skill_md.starts_with("```"));
+    assert!(!output.skill_md.ends_with("```"));
     // Should contain the actual content
-    assert!(result.contains("# SKILL.md Content"));
+    assert!(output.skill_md.contains("# SKILL.md Content"));
 }
 
 #[tokio::test]
@@ -381,10 +381,10 @@ async fn test_no_fence_stripping_when_not_fenced() {
     let generator = Generator::new(Box::new(client), 3);
     let data = create_test_data();
 
-    let result = generator.generate(&data).await.unwrap();
+    let output = generator.generate(&data).await.unwrap();
 
     // Content should be unchanged
-    assert!(result.contains("# SKILL.md Content"));
+    assert!(output.skill_md.contains("# SKILL.md Content"));
 }
 
 #[tokio::test]
@@ -395,14 +395,14 @@ async fn test_fence_stripping_on_regeneration() {
     let mut data = create_test_data();
     data.language = Language::Rust;
 
-    let result = generator.generate(&data).await.unwrap();
+    let output = generator.generate(&data).await.unwrap();
 
     // Regenerated content should have fences stripped
-    assert!(!result.starts_with("```markdown"));
-    assert!(!result.ends_with("```"));
+    assert!(!output.skill_md.starts_with("```markdown"));
+    assert!(!output.skill_md.ends_with("```"));
     // Should have valid frontmatter (not raw markdown fences)
-    assert!(result.contains("---"));
-    assert!(result.contains("name:"));
+    assert!(output.skill_md.contains("---"));
+    assert!(output.skill_md.contains("name:"));
 }
 
 // ============================================================================
@@ -420,7 +420,7 @@ async fn test_validation_passes_on_first_attempt() {
     assert!(result.is_ok());
 
     let output = result.unwrap();
-    assert!(output.contains("Initial SKILL.md"));
+    assert!(output.skill_md.contains("Initial SKILL.md"));
 }
 
 #[tokio::test]
@@ -435,8 +435,8 @@ async fn test_validation_passes_on_second_attempt() {
 
     // Should have valid output after retry
     let output = result.unwrap();
-    assert!(!output.is_empty());
-    assert!(output.contains("---")); // Has frontmatter
+    assert!(!output.skill_md.is_empty());
+    assert!(output.skill_md.contains("---")); // Has frontmatter
 
     // Verify Agent 4 was called multiple times (initial + retry)
     let calls = client.fail_count.lock().unwrap();
@@ -457,8 +457,8 @@ async fn test_validation_passes_on_third_attempt() {
     assert!(result.is_ok());
 
     let output = result.unwrap();
-    assert!(!output.is_empty());
-    assert!(output.contains("---")); // Has frontmatter
+    assert!(!output.skill_md.is_empty());
+    assert!(output.skill_md.contains("---")); // Has frontmatter
 
     // Verify retry logic worked
     let calls = client.fail_count.lock().unwrap();
@@ -484,7 +484,7 @@ async fn test_validation_stops_after_max_retries() {
 
     // Should return the last attempt
     let output = result.unwrap();
-    assert!(!output.is_empty());
+    assert!(!output.skill_md.is_empty());
 }
 
 #[tokio::test]
@@ -530,7 +530,7 @@ async fn test_custom_instructions_none() {
 async fn test_custom_instructions_some() {
     let client = AgentTrackingClient::new();
     let mut prompts_config = skilldo::config::PromptsConfig::default();
-    prompts_config.agent4_custom = Some("Focus on async patterns".to_string());
+    prompts_config.create_custom = Some("Focus on async patterns".to_string());
     let generator = Generator::new(Box::new(client), 3).with_prompts_config(prompts_config);
     let data = create_test_data();
 
@@ -542,7 +542,7 @@ async fn test_custom_instructions_some() {
 async fn test_custom_instructions_empty_string() {
     let client = AgentTrackingClient::new();
     let mut prompts_config = skilldo::config::PromptsConfig::default();
-    prompts_config.agent4_custom = Some("".to_string());
+    prompts_config.create_custom = Some("".to_string());
     let generator = Generator::new(Box::new(client), 3).with_prompts_config(prompts_config);
     let data = create_test_data();
 
@@ -555,7 +555,7 @@ async fn test_custom_instructions_very_long() {
     let client = AgentTrackingClient::new();
     let long_instructions = "x".repeat(10000);
     let mut prompts_config = skilldo::config::PromptsConfig::default();
-    prompts_config.agent4_custom = Some(long_instructions);
+    prompts_config.create_custom = Some(long_instructions);
     let generator = Generator::new(Box::new(client), 3).with_prompts_config(prompts_config);
     let data = create_test_data();
 
@@ -627,10 +627,10 @@ async fn test_fence_with_extra_whitespace() {
     }
 
     let generator = Generator::new(Box::new(WhitespaceClient), 3);
-    let result = generator.generate(&create_test_data()).await.unwrap();
+    let output = generator.generate(&create_test_data()).await.unwrap();
 
-    assert!(!result.contains("```"));
-    assert!(result.contains("# Content"));
+    assert!(!output.skill_md.contains("```"));
+    assert!(output.skill_md.contains("# Content"));
 }
 
 #[tokio::test]
@@ -657,10 +657,10 @@ async fn test_fence_with_nested_code_blocks() {
     }
 
     let generator = Generator::new(Box::new(NestedClient), 3);
-    let result = generator.generate(&create_test_data()).await.unwrap();
+    let output = generator.generate(&create_test_data()).await.unwrap();
 
     // Outer fences removed, inner code blocks preserved
-    assert!(result.contains("```python"));
+    assert!(output.skill_md.contains("```python"));
 }
 
 #[tokio::test]
@@ -687,10 +687,10 @@ async fn test_fence_incomplete_opening() {
     }
 
     let generator = Generator::new(Box::new(IncompleteClient), 3);
-    let result = generator.generate(&create_test_data()).await.unwrap();
+    let output = generator.generate(&create_test_data()).await.unwrap();
 
     // Should return original content if not properly fenced
-    assert!(result.contains("```markdown"));
+    assert!(output.skill_md.contains("```markdown"));
 }
 
 #[tokio::test]
@@ -717,10 +717,10 @@ async fn test_fence_only_closing() {
     }
 
     let generator = Generator::new(Box::new(ClosingOnlyClient), 3);
-    let result = generator.generate(&create_test_data()).await.unwrap();
+    let output = generator.generate(&create_test_data()).await.unwrap();
 
     // Should return original content
-    assert!(result.contains("```"));
+    assert!(output.skill_md.contains("```"));
 }
 
 #[tokio::test]
@@ -747,11 +747,11 @@ async fn test_empty_content_between_fences() {
     }
 
     let generator = Generator::new(Box::new(EmptyFenceClient), 3);
-    let result = generator.generate(&create_test_data()).await.unwrap();
+    let output = generator.generate(&create_test_data()).await.unwrap();
 
     // Should contain frontmatter (normalized output)
-    assert!(result.contains("name:"));
-    assert!(result.contains("version:"));
+    assert!(output.skill_md.contains("name:"));
+    assert!(output.skill_md.contains("version:"));
 }
 
 // ============================================================================
@@ -763,7 +763,7 @@ async fn test_full_pipeline_with_all_features() {
     // Test combining: custom instructions + review retry + fence stripping
     let client = ReviewLoopClient::pass_on_attempt(2);
     let mut prompts_config = skilldo::config::PromptsConfig::default();
-    prompts_config.agent4_custom = Some("Use modern patterns".to_string());
+    prompts_config.create_custom = Some("Use modern patterns".to_string());
     let generator = Generator::new(Box::new(client), 3).with_prompts_config(prompts_config);
 
     let mut data = create_test_data();
@@ -775,8 +775,8 @@ async fn test_full_pipeline_with_all_features() {
     assert!(result.is_ok());
 
     let output = result.unwrap();
-    assert!(!output.is_empty());
-    assert!(!output.contains("```markdown"));
+    assert!(!output.skill_md.is_empty());
+    assert!(!output.skill_md.contains("```markdown"));
 }
 
 #[tokio::test]
@@ -784,10 +784,10 @@ async fn test_generator_builder_pattern() {
     // Test that builder pattern works correctly
     let client = AgentTrackingClient::new();
     let mut prompts_config = skilldo::config::PromptsConfig::default();
-    prompts_config.agent4_custom = Some("Test".to_string());
+    prompts_config.create_custom = Some("Test".to_string());
     let generator = Generator::new(Box::new(client.clone()), 5).with_prompts_config(prompts_config);
 
-    let result: Result<String, anyhow::Error> = generator.generate(&create_test_data()).await;
+    let result = generator.generate(&create_test_data()).await;
     assert!(result.is_ok());
 }
 
@@ -901,4 +901,159 @@ async fn test_security_violations_not_forgiven_even_with_zero_retries() {
         error_msg.contains("SECURITY"),
         "Error should mention SECURITY"
     );
+}
+
+// ============================================================================
+// Tests: Review Pipeline
+// ============================================================================
+
+/// Mock client that handles review agent prompts (Phase A + Phase B).
+/// Supports configurable review pass/fail behavior.
+struct ReviewMockClient {
+    review_call_count: Arc<Mutex<usize>>,
+    review_pass_on: usize, // 0 = always pass, 1 = pass on first review, etc.
+}
+
+impl ReviewMockClient {
+    fn always_pass() -> Self {
+        Self {
+            review_call_count: Arc::new(Mutex::new(0)),
+            review_pass_on: 0,
+        }
+    }
+
+    fn pass_on_review(attempt: usize) -> Self {
+        Self {
+            review_call_count: Arc::new(Mutex::new(0)),
+            review_pass_on: attempt,
+        }
+    }
+
+    fn always_fail() -> Self {
+        Self {
+            review_call_count: Arc::new(Mutex::new(0)),
+            review_pass_on: usize::MAX,
+        }
+    }
+}
+
+#[async_trait]
+impl LlmClient for ReviewMockClient {
+    async fn complete(&self, prompt: &str) -> Result<String> {
+        // Agents 1-3
+        if prompt.contains("Extract the complete public API surface") {
+            return Ok(r#"{"apis": [{"name": "run"}]}"#.to_string());
+        } else if prompt.contains("Extract correct usage patterns") {
+            return Ok(r#"{"patterns": [{"api": "run"}]}"#.to_string());
+        } else if prompt.contains("Extract conventions") {
+            return Ok(r#"{"conventions": ["use run()"]}"#.to_string());
+        }
+
+        // Agent 4 (create) — initial or fix
+        if prompt.contains("creating an agent rules file")
+            || prompt.contains("Here is the current SKILL.md")
+        {
+            return Ok(valid_skill_content("Reviewed SKILL.md"));
+        }
+
+        // Review Phase A: introspection script
+        if prompt.contains("verification script generator") {
+            return Ok(r#"```python
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["test_package"]
+# ///
+import json
+print(json.dumps({"version": "1.0.0", "imports": [], "signatures": []}))
+```"#
+                .to_string());
+        }
+
+        // Review Phase B: verdict
+        if prompt.contains("quality gate for a generated SKILL.md") {
+            let mut count = self.review_call_count.lock().unwrap();
+            let current = *count;
+            *count += 1;
+
+            if current >= self.review_pass_on {
+                return Ok(r#"{"passed": true, "issues": []}"#.to_string());
+            }
+            return Ok(r#"{"passed": false, "issues": [{"severity": "error", "category": "accuracy", "complaint": "Wrong signature for run()", "evidence": "expected (x) got (y)"}]}"#.to_string());
+        }
+
+        Ok(r#"{"status": "mock"}"#.to_string())
+    }
+}
+
+#[tokio::test]
+async fn test_review_enabled_passes_first_try() {
+    let client = ReviewMockClient::always_pass();
+    let generator = Generator::new(Box::new(client), 3)
+        .with_review(true)
+        .with_review_max_retries(2);
+
+    let data = create_test_data();
+    let output = generator.generate(&data).await.unwrap();
+    assert!(output.skill_md.contains("---"));
+    assert!(output.unresolved_warnings.is_empty());
+}
+
+#[tokio::test]
+async fn test_review_enabled_fails_then_passes() {
+    let client = ReviewMockClient::pass_on_review(1); // fail first, pass second
+    let generator = Generator::new(Box::new(client), 3)
+        .with_review(true)
+        .with_review_max_retries(2);
+
+    let data = create_test_data();
+    let output = generator.generate(&data).await.unwrap();
+    assert!(output.skill_md.contains("---"));
+    assert!(output.unresolved_warnings.is_empty());
+}
+
+#[tokio::test]
+async fn test_review_max_retries_returns_unresolved_warnings() {
+    let client = ReviewMockClient::always_fail();
+    let generator = Generator::new(Box::new(client), 3)
+        .with_review(true)
+        .with_review_max_retries(1);
+
+    let data = create_test_data();
+    let output = generator.generate(&data).await.unwrap();
+    assert!(output.skill_md.contains("---"));
+    // Should have unresolved warnings since review never passed
+    assert!(
+        !output.unresolved_warnings.is_empty(),
+        "Should have unresolved warnings when review fails all retries"
+    );
+    assert_eq!(output.unresolved_warnings[0].category, "accuracy");
+    assert!(output.unresolved_warnings[0]
+        .complaint
+        .contains("Wrong signature"));
+}
+
+#[tokio::test]
+async fn test_review_disabled_skips_review() {
+    let client = ReviewMockClient::always_fail(); // would fail if review ran
+    let generator = Generator::new(Box::new(client), 3).with_review(false);
+
+    let data = create_test_data();
+    let output = generator.generate(&data).await.unwrap();
+    assert!(output.skill_md.contains("---"));
+    assert!(output.unresolved_warnings.is_empty()); // review never ran
+}
+
+#[tokio::test]
+async fn test_review_non_python_skips_introspection() {
+    let client = ReviewMockClient::always_pass();
+    let generator = Generator::new(Box::new(client), 3)
+        .with_review(true)
+        .with_review_max_retries(0);
+
+    let mut data = create_test_data();
+    data.language = Language::Rust;
+    let output = generator.generate(&data).await.unwrap();
+    assert!(output.skill_md.contains("---"));
+    // Should still pass — review runs LLM-only verdict without introspection
+    assert!(output.unresolved_warnings.is_empty());
 }

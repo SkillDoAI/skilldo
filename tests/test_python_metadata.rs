@@ -45,7 +45,7 @@ setup(
     let license = handler.get_license();
 
     assert!(license.is_some());
-    assert_eq!(license.unwrap(), "BSD-3-Clause'");
+    assert_eq!(license.unwrap(), "BSD-3-Clause");
 }
 
 #[test]
@@ -946,6 +946,426 @@ fn test_find_source_dedup() {
     sorted.sort();
     sorted.dedup();
     assert_eq!(files.len(), sorted.len(), "Should have no duplicate files");
+}
+
+// --- extract_version_number() edge cases (tested via get_version + release docs) ---
+
+#[test]
+fn test_extract_version_v_prefix() {
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(
+        docs_dir.join("release.md"),
+        "# Release v3.0.0\n\nNew major release.\n",
+    )
+    .unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let version = handler.get_version().unwrap();
+    assert_eq!(
+        version, "3.0.0",
+        "v prefix should be stripped by trim_matches"
+    );
+}
+
+#[test]
+fn test_extract_version_single_number_no_dot() {
+    // Single number "3" has no dot, so extract_version_number returns None for that word.
+    // However, lines ending with "." (e.g., "Major release.") produce a spurious "."
+    // match because trim_matches leaves "." and empty split parts pass the all-numeric check.
+    // This test documents the current behavior.
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+    // Use content with no trailing period to avoid the spurious "." match
+    fs::write(
+        docs_dir.join("release.md"),
+        "# Release 3\n\nMajor release coming soon\n",
+    )
+    .unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let version = handler.get_version().unwrap();
+    assert_eq!(
+        version, "latest",
+        "Single number without dot should not match"
+    );
+}
+
+#[test]
+fn test_extract_version_prerelease_suffix() {
+    // "3.0.0-beta" -> trim_matches strips "-beta" -> "3.0.0"
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(
+        docs_dir.join("release.md"),
+        "# Release 3.0.0-beta\n\nPre-release.\n",
+    )
+    .unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let version = handler.get_version().unwrap();
+    assert_eq!(version, "3.0.0", "Pre-release suffix should be stripped");
+}
+
+#[test]
+fn test_extract_version_malformed_text() {
+    // No version-like pattern in the doc at all.
+    // Avoid trailing periods in prose to prevent spurious "." match from trim_matches.
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(
+        docs_dir.join("release.md"),
+        "# Release notes\n\nSome improvements were made\n",
+    )
+    .unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let version = handler.get_version().unwrap();
+    assert_eq!(
+        version, "latest",
+        "No version pattern should fall through to latest"
+    );
+}
+
+#[test]
+fn test_extract_version_rc_suffix() {
+    // "2.1.0rc1" -> trim_matches only strips from edges: left '2' is numeric (keep),
+    // right '1' is numeric (keep), so the whole string stays "2.1.0rc1".
+    // Split by '.': ["2", "1", "0rc1"] -> "0rc1" is not all-numeric -> no match.
+    // This tests that RC versions without a separator are NOT extracted.
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(
+        docs_dir.join("release.md"),
+        "# Release 2.1.0rc1\n\nRelease candidate coming soon\n",
+    )
+    .unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let version = handler.get_version().unwrap();
+    assert_eq!(
+        version, "latest",
+        "RC suffix without separator is not extractable"
+    );
+}
+
+// --- get_license() TOML table format: {text=...} (no space variant) ---
+
+#[test]
+fn test_license_from_toml_table_no_spaces() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // Table format without spaces: license = {text="GPL-3.0"}
+    // The code's condition matches "{text=" but then find("{ text") (with space) fails,
+    // so the table extraction is skipped. The else branch filters out values starting with '{'.
+    // This documents the current behavior: no-space variant is NOT extracted.
+    let pyproject_content = r#"
+[project]
+name = "test-package"
+version = "1.0.0"
+license = {text="GPL-3.0"}
+"#;
+    fs::write(repo_path.join("pyproject.toml"), pyproject_content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let license = handler.get_license();
+
+    assert!(
+        license.is_none(),
+        "No-space table format is not currently extractable"
+    );
+}
+
+#[test]
+fn test_license_from_toml_table_single_quotes() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    let pyproject_content = r#"
+[project]
+name = "test-package"
+license = { text = 'MPL-2.0' }
+"#;
+    fs::write(repo_path.join("pyproject.toml"), pyproject_content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let license = handler.get_license();
+
+    assert_eq!(license, Some("MPL-2.0".to_string()));
+}
+
+// --- get_license() from setup.cfg with [metadata] section ---
+
+#[test]
+fn test_license_from_setup_cfg_metadata_section() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // setup.cfg with [metadata] section and license field
+    let setup_cfg_content = r#"[metadata]
+name = my-package
+version = 1.0.0
+license = BSD-2-Clause
+description = A test package
+
+[options]
+packages = find:
+"#;
+    fs::write(repo_path.join("setup.cfg"), setup_cfg_content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let license = handler.get_license();
+
+    assert_eq!(license, Some("BSD-2-Clause".to_string()));
+}
+
+#[test]
+fn test_license_setup_cfg_empty_value() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // setup.cfg with license = (empty value)
+    let content = "[metadata]\nlicense = \n";
+    fs::write(repo_path.join("setup.cfg"), content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let license = handler.get_license();
+
+    assert!(
+        license.is_none(),
+        "Empty license value in setup.cfg should return None"
+    );
+}
+
+// --- find_changelog() when no changelog exists (already tested, adding variant) ---
+
+#[test]
+fn test_find_changelog_ignores_non_standard_names() {
+    let temp = TempDir::new().unwrap();
+    // Files that look similar but aren't in the checked list
+    fs::write(temp.path().join("changelog.txt"), "# Changes").unwrap();
+    fs::write(temp.path().join("RELEASES.md"), "# Releases").unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let changelog = handler.find_changelog();
+    assert!(
+        changelog.is_none(),
+        "Non-standard changelog names should not be found"
+    );
+}
+
+// --- collect_docs_recursive() depth limit boundary ---
+
+#[test]
+fn test_docs_depth_limit_boundary_at_10() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // Build exactly depth=10 nesting under docs/ (should still be reachable)
+    // docs/ is depth=0, level0 is depth=1, ..., level9 is depth=10
+    let mut dir_at_10 = repo_path.join("docs");
+    for i in 0..10 {
+        dir_at_10 = dir_at_10.join(format!("level{}", i));
+    }
+    fs::create_dir_all(&dir_at_10).unwrap();
+    fs::write(dir_at_10.join("boundary.md"), "# At depth 10").unwrap();
+
+    // Build depth=11 (should NOT be reachable, depth > 10 returns early)
+    let mut dir_at_11 = repo_path.join("docs");
+    for i in 0..11 {
+        dir_at_11 = dir_at_11.join(format!("d{}", i));
+    }
+    fs::create_dir_all(&dir_at_11).unwrap();
+    fs::write(dir_at_11.join("too_deep.md"), "# Too deep").unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let docs = handler.find_docs().unwrap();
+
+    // depth=10 doc should be found (the check is depth > 10, not depth >= 10)
+    assert!(
+        docs.iter().any(|p| p.ends_with("boundary.md")),
+        "Doc at depth 10 should be reachable"
+    );
+
+    // depth=11 doc should NOT be found
+    assert!(
+        !docs.iter().any(|p| p.ends_with("too_deep.md")),
+        "Doc at depth 11 should not be reachable"
+    );
+}
+
+// --- collect_docs_recursive() skip hidden dirs (additional .git case) ---
+
+#[test]
+fn test_docs_skip_dotgit_dir() {
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    let git_dir = docs_dir.join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
+    fs::write(git_dir.join("config.md"), "# git internal").unwrap();
+
+    // Also create a normal doc for positive assertion
+    fs::write(docs_dir.join("guide.md"), "# Guide").unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let docs = handler.find_docs().unwrap();
+
+    assert!(docs.iter().any(|p| p.ends_with("guide.md")));
+    assert!(
+        !docs.iter().any(|p| p.to_str().unwrap().contains(".git")),
+        ".git dir inside docs should be skipped"
+    );
+}
+
+#[test]
+fn test_docs_skip_multiple_hidden_dirs() {
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+
+    // Multiple hidden directories
+    for hidden in &[".doctrees", ".sphinx", ".cache"] {
+        let dir = docs_dir.join(hidden);
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("note.md"), "# Hidden").unwrap();
+    }
+
+    fs::write(docs_dir.join("visible.md"), "# Visible").unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let docs = handler.find_docs().unwrap();
+
+    assert!(docs.iter().any(|p| p.ends_with("visible.md")));
+    assert_eq!(
+        docs.iter()
+            .filter(|p| p.to_str().unwrap().contains("note.md"))
+            .count(),
+        0,
+        "No docs from hidden directories should be collected"
+    );
+}
+
+// --- get_version() from release notes / whatsnew docs ---
+
+#[test]
+fn test_version_from_docs_blog() {
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(
+        docs_dir.join("blog.md"),
+        "# Announcing 1.8.0\n\nWe are happy to announce...\n",
+    )
+    .unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let version = handler.get_version().unwrap();
+    assert_eq!(version, "1.8.0", "Should find version in blog doc");
+}
+
+#[test]
+fn test_version_doc_must_match_filename_pattern() {
+    // A doc not matching "release", "blog", "whatsnew", or "changelog" should be ignored
+    let temp = TempDir::new().unwrap();
+    let docs_dir = temp.path().join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(
+        docs_dir.join("tutorial.md"),
+        "# Tutorial for version 9.9.9\n",
+    )
+    .unwrap();
+
+    let handler = PythonHandler::new(temp.path());
+    let version = handler.get_version().unwrap();
+    assert_eq!(
+        version, "latest",
+        "tutorial.md should not be checked for version"
+    );
+}
+
+// --- get_project_urls() from setup.py: closing brace on URL line ---
+
+#[test]
+fn test_project_urls_setup_py_closing_brace_on_url_line() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // The closing } is on the same line as a URL entry
+    // The parser breaks on seeing }, so this URL should not be captured
+    let setup_content = r#"
+setup(
+    project_urls={
+        "Docs": "https://docs.example.com"}
+)
+"#;
+    fs::write(repo_path.join("setup.py"), setup_content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let urls = handler.get_project_urls();
+
+    // Parser breaks on first line containing "}", so the URL may not be captured
+    // This tests the break-on-closing-brace path
+    // The line contains both "http" and "}" so the break triggers before parsing
+    assert!(
+        urls.is_empty(),
+        "Parser should break on line with closing brace before extracting"
+    );
+}
+
+#[test]
+fn test_project_urls_setup_py_multi_entry() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // Multiple entries with closing } on its own line
+    let setup_content = r#"
+setup(
+    project_urls={
+        "Homepage": "https://example.com",
+        "Docs": "https://docs.example.com",
+    }
+)
+"#;
+    fs::write(repo_path.join("setup.py"), setup_content).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let urls = handler.get_project_urls();
+
+    // Both URLs should be found (} is on its own line, not with a URL)
+    assert!(urls.len() >= 2, "Should find at least 2 URLs from setup.py");
+}
+
+#[test]
+fn test_project_urls_setup_py_fallback_only_when_pyproject_empty() {
+    let temp = TempDir::new().unwrap();
+    let repo_path = temp.path();
+
+    // Both pyproject.toml with URLs and setup.py exist -> pyproject wins
+    let pyproject = r#"
+[project.urls]
+Homepage = "https://pyproject.example.com"
+"#;
+    let setup = r#"
+setup(
+    project_urls={
+        "Homepage": "https://setup.example.com",
+    }
+)
+"#;
+    fs::write(repo_path.join("pyproject.toml"), pyproject).unwrap();
+    fs::write(repo_path.join("setup.py"), setup).unwrap();
+
+    let handler = PythonHandler::new(repo_path);
+    let urls = handler.get_project_urls();
+
+    assert_eq!(urls.len(), 1);
+    assert_eq!(urls[0].1, "https://pyproject.example.com");
 }
 
 #[test]

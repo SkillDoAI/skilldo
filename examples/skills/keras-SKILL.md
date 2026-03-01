@@ -1,8 +1,7 @@
 ---
-
 name: keras
 description: Multi-backend deep learning library for building, training, running inference, and saving neural network models in Python.
-version: unknown
+version: 3.13.2
 ecosystem: python
 license: MIT
 generated_with: gpt-5.2
@@ -21,12 +20,14 @@ from keras import Model, layers
 ```python
 import os
 
-# Backend must be set before importing keras.
+# Use a backend that is installed; here, "tensorflow" is most widely available.
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
-import numpy as np
+# Keras 3 requires TensorFlow backend as an extra dependency for most environments.
+import tensorflow as tf
 import keras
 from keras import layers
+import numpy as np
 
 model = keras.Sequential(
     [
@@ -48,10 +49,13 @@ print(preds.shape)
 import os
 import tempfile
 
+# Use a backend that supports saving; here, "tensorflow" is most widely available.
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
+import tensorflow as tf
 import keras
 from keras import layers
+import numpy as np
 
 model = keras.Sequential(
     [
@@ -60,7 +64,7 @@ model = keras.Sequential(
         layers.Dense(1),
     ]
 )
-
+# Save to temp path in .keras format
 path = os.path.join(tempfile.gettempdir(), "example_model.keras")
 model.save(path)
 print("Saved to:", path)
@@ -71,14 +75,24 @@ print("Saved to:", path)
 ```python
 import os
 
-# Choose exactly one backend per process before importing keras.
-# Valid values (depending on installed backend packages): "tensorflow", "jax", "torch", "openvino".
-#
-# This example uses "torch" because it doesn't require TensorFlow to be installed.
-os.environ["KERAS_BACKEND"] = "torch"
+# Set backend before importing keras
+os.environ["KERAS_BACKEND"] = "tensorflow"
 
+import tensorflow as tf
 import keras
+import numpy as np
 
+# Minimal model: single Dense layer, no training, just inference
+model = keras.models.Sequential([
+    keras.layers.Input(shape=(4,)),
+    keras.layers.Dense(2, activation="relu")
+])
+
+# Create dummy input and do a forward pass
+x = np.random.rand(3, 4).astype(np.float32)
+y = model(x)
+
+# Print backend name as in the example
 print("Keras imported with backend:", os.environ["KERAS_BACKEND"])
 ```
 * Backend selection is a pre-import configuration step; do not attempt to switch backends after `import keras`.
@@ -272,20 +286,61 @@ model = keras.Sequential([layers.Input(shape=(4,)), layers.Dense(1)])
 model.save("model_path.keras")
 ```
 
+## Migration
+
+**Breaking changes from Keras 2.x to Keras 3.x:**
+
+- Default model save format is now `.keras` instead of legacy HDF5 (`.h5`).  
+  ⚠️ Update `model.save()` calls to use the `.keras` extension and format.
+- Configuring backend must be done **before** importing keras; backend cannot be changed after import.  
+  ⚠️ Move all backend configuration (`KERAS_BACKEND` env var, config file) before any `keras` import statements.
+
+Keras 3 is intended as a drop-in replacement for `tf.keras` when using the TensorFlow backend. For custom components, refactor to backend-agnostic implementations. Model saving should use the new `.keras` format. Configure backend before importing keras. See README and Keras 3 release announcement for more details.
+
 ## API Reference
 
 - **keras** - Top-level package for Keras 3 (multi-backend); backend configured pre-import.
-- **keras.Model** - Base class for models; exposes inference and saving APIs.
+- **keras.Model** - `Model(inputs=None, outputs=None, name=None)`
+  - Base class for models; exposes inference and saving APIs.
+- **keras.Sequential** - `Sequential(layers=None, name=None)`
+  - Linear stack model constructor.
+- **keras.layers.Layer** - `Layer(name=None, trainable=True, dtype=None)`
+  - Base class for layers.
+- **keras.layers.Input** - `Input(shape=None, batch_size=None, name=None, dtype=None, sparse=None, tensor=None, ragged=None, batch_shape=None)`
+  - Defines input shape for models.
+- **keras.layers.InputSpec** - `InputSpec(dtype=None, shape=None, ndim=None, max_ndim=None, min_ndim=None, axes=None)`
+  - Used in layer input validation.
 - **keras.Model.predict(x, verbose=...)** - Runs inference; key params: input `x`, verbosity.
 - **keras.Model.save(filepath)** - Saves the model; prefer `*.keras` for native format.
 - **keras.Model.compile(...)** - Configures training (backend-dependent); not supported for inference-only backends like OpenVINO.
 - **keras.Model.fit(...)** - Training loop (when supported by backend).
-- **keras.Sequential(layers=...)** - Linear stack model constructor.
-- **keras.layers.Input(shape=...)** - Defines input shape for models.
-- **keras.layers.Dense(units, activation=...)** - Fully-connected layer.
-- **keras.layers.Dropout(rate)** - Regularization layer (training-time behavior).
-- **keras.layers.Conv2D(filters, kernel_size, activation=...)** - 2D convolution layer (vision).
-- **keras.layers.Flatten()** - Flattens spatial inputs to vectors.
-- **keras.layers.Embedding(input_dim, output_dim)** - Token embedding layer (NLP).
-- **keras.optimizers.Adam(learning_rate=...)** - Common optimizer for training.
-- **keras.losses.CategoricalCrossentropy(from_logits=...)** - Common classification loss.
+- **keras.KerasTensor** - `KerasTensor(shape, dtype, name=None, sparse=None, ragged=None, element_spec=None)`
+  - Symbolic tensor used internally and for model construction.
+- **keras.Variable** - `Variable(initial_value, name=None, dtype=None, trainable=True)`
+  - Backend variable abstraction.
+- **keras.Loss** - `Loss(reduction='auto', name=None)`
+- **keras.Metric** - `Metric(name=None, dtype=None)`
+- **keras.Optimizer** - `Optimizer(name, **kwargs)`
+- **keras.Initializer** - `Initializer()`
+- **keras.DTypePolicy** - `DTypePolicy(name_or_spec)`
+- **keras.FloatDTypePolicy** - `FloatDTypePolicy(name)`
+- **keras.Function** - `Function(func, name=None)`
+- **keras.Operation** - `Operation(func, name=None)`
+- **keras.Quantizer** - `Quantizer(**kwargs)`
+- **keras.Regularizer** - `Regularizer(**kwargs)`
+- **keras.StatelessScope** - `StatelessScope()`
+- **keras.SymbolicScope** - `SymbolicScope()`
+- **keras.RematScope** - `RematScope()`
+- **keras.remat(fn, static_argnums=(), policy=None)` - Rematerialization utility.
+- **keras.device(name)` - Device context manager.
+- **keras.name_scope(name)` - Name scope context manager.
+- **keras.__version__** - `'3.13.2'`
+- **keras.version()** - Returns Keras version string.
+
+> For additional layers, losses, optimizers, and utilities, see respective submodules:  
+> `keras.layers`, `keras.losses`, `keras.metrics`, `keras.optimizers`, etc.
+
+---
+
+**Security Notice:**  
+All examples are designed for local project use. Never use these patterns to access or modify files outside your project directory or to transmit data externally.

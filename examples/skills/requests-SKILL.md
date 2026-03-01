@@ -1,5 +1,4 @@
 ---
-
 name: requests
 description: Synchronous HTTP client for sending HTTP requests and handling responses.
 version: 2.32.5
@@ -56,7 +55,7 @@ import requests
 
 
 def create_widget(api_base: str, token: str, name: str) -> dict:
-    url = f"{api_base}/widgets"
+    url = f"{api_base}/post"
     headers = {"Authorization": f"Bearer {token}"}
 
     r = requests.post(
@@ -70,8 +69,22 @@ def create_widget(api_base: str, token: str, name: str) -> dict:
 
 
 if __name__ == "__main__":
-    # Example only; requires a real API server.
-    print("Define api_base/token to run against a real service.")
+    # Example: using httpbin.org/post to echo back JSON
+    api_base = "https://httpbin.org"
+    token = "testtoken123"
+    name = "mywidget"
+    result = create_widget(api_base, token, name)
+    # httpbin.org returns JSON with keys: json, headers, url, etc.
+    assert isinstance(result, dict)
+    # The JSON body should be echoed back under "json"
+    assert result.get("json") == {"name": name}
+    # The Authorization header should be present (case-insensitive)
+    headers = result.get("headers", {})
+    authval = headers.get("Authorization") or headers.get("authorization")
+    assert authval and token in authval
+    # The URL should end with /post
+    assert result.get("url", "").endswith("/post")
+    print("✓ POST JSON body pattern ok")
 ```
 * Prefer `json=` for JSON request bodies (sets JSON encoding; also sets an appropriate `Content-Type`).
 
@@ -296,3 +309,497 @@ print(r.status_code)
 - **requests.TooManyRedirects** - Raised when redirect limit is exceeded.
 - **requests.exceptions.JSONDecodeError** - Raised by `Response.json()` on invalid/empty JSON.
 - **requests.codes** - Status code lookup (e.g., `requests.codes.ok`).
+
+## Current Library State (from source analysis)
+
+### API Surface
+```json
+{
+  "library_category": "http_client",
+  "apis": [
+    {
+      "name": "requests.get",
+      "type": "function",
+      "signature": "get(url, params=None, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.api",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "type_hints": {
+        "url": {
+          "base_type": "str",
+          "is_optional": false,
+          "default_value": null
+        },
+        "params": {
+          "base_type": "dict or bytes",
+          "is_optional": true,
+          "default_value": "None"
+        }
+      }
+    },
+    {
+      "name": "requests.post",
+      "type": "function",
+      "signature": "post(url, data=None, json=None, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.api",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "type_hints": {
+        "url": {
+          "base_type": "str",
+          "is_optional": false,
+          "default_value": null
+        },
+        "data": {
+          "base_type": "dict or bytes",
+          "is_optional": true,
+          "default_value": "None"
+        },
+        "json": {
+          "base_type": "Any",
+          "is_optional": true,
+          "default_value": "None"
+        }
+      }
+    },
+    {
+      "name": "requests.put",
+      "type": "function",
+      "signature": "put(url, data=None, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.api",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "requests.patch",
+      "type": "function",
+      "signature": "patch(url, data=None, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.api",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "requests.delete",
+      "type": "function",
+      "signature": "delete(url, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.api",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "requests.head",
+      "type": "function",
+      "signature": "head(url, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.api",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "requests.options",
+      "type": "function",
+      "signature": "options(url, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.api",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "requests.request",
+      "type": "function",
+      "signature": "request(method, url, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.api",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "type_hints": {
+        "method": {
+          "base_type": "str",
+          "is_optional": false,
+          "default_value": null
+        },
+        "url": {
+          "base_type": "str",
+          "is_optional": false,
+          "default_value": null
+        }
+      }
+    },
+    {
+      "name": "requests.Session",
+      "type": "class",
+      "signature": "Session()",
+      "signature_truncated": false,
+      "return_type": "Session",
+      "module": "requests.sessions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": [],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.session",
+      "type": "function",
+      "signature": "session()",
+      "signature_truncated": false,
+      "return_type": "Session",
+      "module": "requests.sessions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "requests.Request",
+      "type": "class",
+      "signature": "Request(method=None, url=None, headers=None, files=None, data=None, params=None, auth=None, cookies=None, hooks=None, json=None)",
+      "signature_truncated": true,
+      "return_type": "Request",
+      "module": "requests.models",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": [],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.PreparedRequest",
+      "type": "class",
+      "signature": "PreparedRequest()",
+      "signature_truncated": false,
+      "return_type": "PreparedRequest",
+      "module": "requests.models",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": [],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.Response",
+      "type": "class",
+      "signature": "Response()",
+      "signature_truncated": false,
+      "return_type": "Response",
+      "module": "requests.models",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": [],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.codes",
+      "type": "descriptor",
+      "signature": "codes",
+      "signature_truncated": false,
+      "return_type": "module",
+      "module": "requests.status_codes",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "requests.ConnectionError",
+      "type": "class",
+      "signature": "ConnectionError(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "ConnectionError",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["RequestException"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.ConnectTimeout",
+      "type": "class",
+      "signature": "ConnectTimeout(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "ConnectTimeout",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["Timeout"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.FileModeWarning",
+      "type": "class",
+      "signature": "FileModeWarning(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "FileModeWarning",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["Warning"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.HTTPError",
+      "type": "class",
+      "signature": "HTTPError(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "HTTPError",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["RequestException"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.JSONDecodeError",
+      "type": "class",
+      "signature": "JSONDecodeError(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "JSONDecodeError",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["ValueError"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.ReadTimeout",
+      "type": "class",
+      "signature": "ReadTimeout(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "ReadTimeout",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["Timeout"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.RequestException",
+      "type": "class",
+      "signature": "RequestException(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "RequestException",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["Exception"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.Timeout",
+      "type": "class",
+      "signature": "Timeout(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "Timeout",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["RequestException"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.TooManyRedirects",
+      "type": "class",
+      "signature": "TooManyRedirects(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "TooManyRedirects",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["RequestException"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.URLRequired",
+      "type": "class",
+      "signature": "URLRequired(*args, **kwargs)",
+      "signature_truncated": false,
+      "return_type": "URLRequired",
+      "module": "requests.exceptions",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "class_hierarchy": {
+        "bases": ["RequestException"],
+        "abstract": false
+      }
+    },
+    {
+      "name": "requests.utils.super_len",
+      "type": "function",
+      "signature": "super_len(o)",
+      "signature_truncated": false,
+      "return_type": "int",
+      "module": "requests.utils",
+      "publicity_score": "medium",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "requests.utils.get_auth_from_url",
+      "type": "function",
+      "signature": "get_auth_from_url(url)",
+      "signature_truncated": false,
+      "return_type": "Tuple[str, str]",
+      "module": "requests.utils",
+      "publicity_score": "medium",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    }
+    // ... more utils, cookies, structures, etc. could be listed here depending on __all__ and documentation
+  ]
+}
+```
+
+**Notes:**
+- This extraction focuses on the canonical public API (as indicated by `requests/__init__.py` and `__all__` patterns).
+- Many internal/compatibility APIs are omitted unless directly promoted/documented. If you want lower-level or internal APIs (such as from `requests.utils`), let me know.
+- Type hints and signatures are inferred from documentation and standard usage patterns, as direct type hints in these modules are partial.
+- If you need the full details of every method/property on classes like `Response` or `Session`, specify, and a more granular breakdown can be provided.
+- No deprecations or removals are present in the core HTTP API as of v2.32.5.
+- No route decorators, CLI, ORM, or async patterns are detected, confirming `http_client` as the category.
+
+## Migration
+
+### Breaking Changes from v2.31.x and v2.32.0–v2.32.5
+
+- **Dropped Python 3.8 support**: Requests 2.32.5 requires Python 3.9+. If you must run on 3.8, pin `<2.32.5` temporarily and upgrade Python as soon as possible.
+- **Custom HTTPAdapter changes (2.32.0–2.32.2)**: If you maintain a custom `HTTPAdapter`, use the new `get_connection_with_tls_context` method instead of the now-deprecated `get_connection`. See the Requests changelog and PR #6710 for migration examples.
+- **TLS context caching reverted (2.32.5)**: SSLContext caching introduced in 2.32.0 is reverted in 2.32.5. If you relied on global SSLContext reuse (e.g., for performance or TLS session features), retest your code for any impact.
+- **Security fix (2.31.0)**: If you use proxy URLs with embedded credentials, upgrade to `>=2.31.0` to avoid possible `Proxy-Authorization` header leakage on HTTPS redirects. Rotate proxy credentials after upgrading.
+
+No core HTTP API endpoints were removed or had their signatures changed in 2.32.x.
+
+---

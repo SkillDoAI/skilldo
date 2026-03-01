@@ -113,83 +113,67 @@ pub fn ensure_references(content: &str, project_urls: &[(String, String)]) -> St
 }
 
 /// Strip meta-text preamble that LLMs sometimes emit before the real content.
-/// e.g., "Below is the generated SKILL.md file with exact sections as requested:"
+/// Removes ALL lines between frontmatter and the first markdown heading (## or #)
+/// or code fence (```). This catches conversational preambles like:
+/// - "Certainly! Here is your corrected SKILL.md."
+/// - "**Corrections made:**" lists
+/// - "Below is the generated SKILL.md file..."
 fn strip_meta_text(content: &str) -> String {
-    let meta_patterns = [
-        "below is the",
-        "here is the",
-        "here's the",
-        "i've generated",
-        "i have generated",
-        "as requested",
-        "with exact sections",
-        "the following skill.md",
-        "generated skill.md",
-    ];
-
     let lines: Vec<&str> = content.lines().collect();
-    let mut start_idx = 0;
-    let mut frontmatter_dashes = 0;
-    let mut found_meta = false;
 
+    // Find end of frontmatter
+    let mut fm_end = None;
+    let mut dashes = 0;
     for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-
-        if trimmed == "---" {
-            frontmatter_dashes += 1;
-            if frontmatter_dashes == 2 {
-                // Just passed the frontmatter — check lines after it
-                start_idx = i + 1;
-                continue;
+        if line.trim() == "---" {
+            dashes += 1;
+            if dashes == 2 {
+                fm_end = Some(i);
+                break;
             }
-            continue;
         }
+    }
 
-        // Only check lines immediately after frontmatter (skip empties)
-        if frontmatter_dashes >= 2 {
-            if trimmed.is_empty() {
-                start_idx = i + 1;
-                continue;
-            }
+    let fm_end = match fm_end {
+        Some(i) => i,
+        None => return content.to_string(),
+    };
 
-            let lower = trimmed.to_lowercase();
-            if meta_patterns.iter().any(|p| lower.contains(p)) {
-                warn!("Stripping meta-text: '{}'", trimmed);
-                start_idx = i + 1;
-                found_meta = true;
-                continue;
-            }
-
-            // First real content line after frontmatter — stop checking
+    // Find the first "real content" line after frontmatter:
+    // a heading (# or ##) or a code fence (```)
+    let mut content_start = None;
+    for (i, line) in lines[fm_end + 1..].iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.starts_with("```") {
+            content_start = Some(fm_end + 1 + i);
             break;
         }
     }
 
-    // Only rebuild if we actually found meta-text to strip
-    if found_meta {
-        // Find where frontmatter ends (second ---)
-        let mut fm_end = 0;
-        let mut dashes = 0;
-        for (i, line) in lines.iter().enumerate() {
-            if line.trim() == "---" {
-                dashes += 1;
-                if dashes == 2 {
-                    fm_end = i;
-                    break;
-                }
-            }
+    let content_start = match content_start {
+        Some(i) => i,
+        None => return content.to_string(),
+    };
+
+    // Check if there's any non-empty preamble to strip
+    let has_preamble = lines[fm_end + 1..content_start]
+        .iter()
+        .any(|l| !l.trim().is_empty());
+
+    if has_preamble {
+        let stripped: Vec<&str> = lines[fm_end + 1..content_start]
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .copied()
+            .collect();
+        for line in &stripped {
+            warn!("Stripping meta-text: '{}'", line.trim());
         }
 
         let mut result = lines[..=fm_end].join("\n");
         result.push('\n');
-        // Skip empty lines right after meta-text
-        let remaining = &lines[start_idx..];
-        let content_start = remaining
-            .iter()
-            .position(|l| !l.trim().is_empty())
-            .unwrap_or(0);
         result.push('\n');
-        result.push_str(&remaining[content_start..].join("\n"));
+        result.push_str(&lines[content_start..].join("\n"));
         result.push('\n');
         return result;
     }
@@ -617,6 +601,49 @@ mod tests {
         let content = "```python\nimport click\n```\n\n```python\nclick.command()\n```\n";
         let result = fix_unclosed_code_blocks(content);
         assert_eq!(result, content, "Already closed should mean no changes");
+    }
+
+    #[test]
+    fn test_strip_meta_text_certainly_preamble() {
+        let content = "---\nname: pillow\ndescription: python library\nversion: 12.1.1\necosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n## Imports\n```python\nfrom PIL import Image\n```\n";
+        let result = strip_meta_text(content);
+        assert!(
+            !result.contains("Certainly!"),
+            "Should strip 'Certainly!' preamble. Got: {}",
+            result
+        );
+        assert!(result.contains("## Imports"));
+    }
+
+    #[test]
+    fn test_strip_meta_text_corrections_list() {
+        let content = "---\nname: typer\ndescription: python library\nversion: 0.24.1\necosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n**Corrections made:**\n- Fixed import order\n- Added missing examples\n\n## Imports\n```python\nimport typer\n```\n";
+        let result = strip_meta_text(content);
+        assert!(!result.contains("Certainly!"), "Should strip preamble");
+        assert!(
+            !result.contains("Corrections made"),
+            "Should strip corrections list"
+        );
+        assert!(result.contains("## Imports"));
+    }
+
+    #[test]
+    fn test_strip_meta_text_then_markdown_fence() {
+        // The pillow pattern: preamble + ```markdown fence
+        let content = "---\nname: pillow\ndescription: python library\nversion: 12.1.1\necosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n```markdown\n## Imports\n```python\nfrom PIL import Image\n```\n\n## Core Patterns\nPatterns\n```\n";
+        // strip_meta_text should remove preamble, leaving fence as first line
+        let after_meta = strip_meta_text(content);
+        assert!(
+            !after_meta.contains("Certainly!"),
+            "Preamble should be stripped"
+        );
+        // Then strip_body_markdown_fence should catch the fence
+        let after_fence = strip_body_markdown_fence(&after_meta);
+        assert!(
+            !after_fence.contains("```markdown"),
+            "Fence should be stripped after preamble removal"
+        );
+        assert!(after_fence.contains("## Imports"));
     }
 
     #[test]

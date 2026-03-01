@@ -33,6 +33,7 @@ impl ExecutionResult {
         matches!(self, ExecutionResult::Pass(_))
     }
 
+    #[allow(dead_code)]
     pub fn is_fail(&self) -> bool {
         matches!(self, ExecutionResult::Fail(_))
     }
@@ -403,5 +404,171 @@ print(f"Click version: {click.__version__}")
 
         let result = executor.run_code(&env, code).unwrap();
         assert!(result.is_pass());
+    }
+
+    // --- Clone derive coverage ---
+
+    #[test]
+    fn test_execution_result_clone_pass() {
+        let original = ExecutionResult::Pass("output".to_string());
+        let cloned = original.clone();
+        assert!(cloned.is_pass());
+        assert_eq!(cloned.error_message(), "output");
+    }
+
+    #[test]
+    fn test_execution_result_clone_fail() {
+        let original = ExecutionResult::Fail("some error".to_string());
+        let cloned = original.clone();
+        assert!(cloned.is_fail());
+        assert_eq!(cloned.error_message(), "some error");
+    }
+
+    #[test]
+    fn test_execution_result_clone_timeout() {
+        let original = ExecutionResult::Timeout;
+        let cloned = original.clone();
+        assert!(!cloned.is_pass());
+        assert!(!cloned.is_fail());
+        assert_eq!(
+            cloned.error_message(),
+            "Test execution timed out (60 seconds)"
+        );
+    }
+
+    // --- Debug derive coverage ---
+
+    #[test]
+    fn test_execution_result_debug_pass() {
+        let result = ExecutionResult::Pass("hello".to_string());
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Pass"));
+        assert!(debug_str.contains("hello"));
+    }
+
+    #[test]
+    fn test_execution_result_debug_fail() {
+        let result = ExecutionResult::Fail("error msg".to_string());
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Fail"));
+        assert!(debug_str.contains("error msg"));
+    }
+
+    #[test]
+    fn test_execution_result_debug_timeout() {
+        let result = ExecutionResult::Timeout;
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Timeout"));
+    }
+
+    #[test]
+    fn test_execution_env_debug() {
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: Some(PathBuf::from("/usr/bin/python3")),
+            container_name: Some("test-ctr".to_string()),
+            dependencies: vec!["requests".to_string()],
+        };
+        let debug_str = format!("{:?}", env);
+        assert!(debug_str.contains("ExecutionEnv"));
+        assert!(debug_str.contains("test-ctr"));
+        assert!(debug_str.contains("requests"));
+    }
+
+    #[test]
+    fn test_execution_env_debug_none_fields() {
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        let debug_str = format!("{:?}", env);
+        assert!(debug_str.contains("ExecutionEnv"));
+        assert!(debug_str.contains("None"));
+    }
+
+    // --- PythonUvExecutor::new() direct usage ---
+
+    #[test]
+    fn test_python_uv_executor_new_timeout() {
+        let executor = PythonUvExecutor::new();
+        assert_eq!(executor.timeout_secs, 60);
+    }
+
+    // --- ExecutionEnv field access ---
+
+    #[test]
+    fn test_execution_env_dependencies_stored() {
+        let temp_dir = TempDir::new().unwrap();
+        let deps = vec!["numpy".to_string(), "pandas".to_string()];
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: None,
+            dependencies: deps,
+        };
+        assert_eq!(env.dependencies.len(), 2);
+        assert_eq!(env.dependencies[0], "numpy");
+        assert_eq!(env.dependencies[1], "pandas");
+    }
+
+    #[test]
+    fn test_execution_env_container_name_field() {
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: None,
+            container_name: Some("my-container".to_string()),
+            dependencies: vec![],
+        };
+        assert_eq!(env.container_name.as_deref(), Some("my-container"));
+    }
+
+    #[test]
+    fn test_execution_env_python_path_field() {
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            python_path: Some(PathBuf::from("/usr/local/bin/python3")),
+            container_name: None,
+            dependencies: vec![],
+        };
+        assert_eq!(
+            env.python_path.as_deref(),
+            Some(std::path::Path::new("/usr/local/bin/python3"))
+        );
+    }
+
+    // --- with_timeout chaining ---
+
+    #[test]
+    fn test_with_timeout_chained() {
+        let executor = PythonUvExecutor::new().with_timeout(120);
+        assert_eq!(executor.timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_with_timeout_zero() {
+        let executor = PythonUvExecutor::new().with_timeout(0);
+        assert_eq!(executor.timeout_secs, 0);
+    }
+
+    // --- error_message with empty strings ---
+
+    #[test]
+    fn test_execution_result_pass_empty_message() {
+        let result = ExecutionResult::Pass(String::new());
+        assert!(result.is_pass());
+        assert_eq!(result.error_message(), "");
+    }
+
+    #[test]
+    fn test_execution_result_fail_empty_message() {
+        let result = ExecutionResult::Fail(String::new());
+        assert!(result.is_fail());
+        assert_eq!(result.error_message(), "");
     }
 }

@@ -1,8 +1,7 @@
 ---
-
 name: rich
 description: Terminal rendering library for styled text, tables, progress bars, prompts, markdown, syntax highlighting, and tracebacks.
-version: 14.3.2
+version: 14.3.3
 ecosystem: python
 license: MIT
 generated_with: gpt-5.2
@@ -131,16 +130,95 @@ if __name__ == "__main__":
 * `Prompt.ask(..., choices=[...])` loops until valid input; set `case_sensitive=False` if desired.
 * `Confirm.ask(...)` is for yes/no prompts; `IntPrompt` / `FloatPrompt` parse numeric input.
 
+### Pretty printing with `pretty.pprint` ✅ Current
+```python
+from __future__ import annotations
+
+from rich.pretty import pprint
+
+def main() -> None:
+    data = {
+        "name": "example",
+        "items": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "nested": {"foo": "bar", "baz": [True, False]},
+    }
+    
+    # Basic pretty print
+    pprint(data)
+    
+    # With max_length to truncate sequences/dicts
+    pprint(data, max_length=3)
+    
+    # With max_string to truncate long strings
+    pprint({"long": "Hello" * 50}, max_string=20)
+
+if __name__ == "__main__":
+    main()
+```
+* `pprint(obj, ...)` pretty prints objects with automatic layout and syntax highlighting.
+* Use `max_length=N` to limit items shown in sequences/dicts; use `max_string=N` to truncate strings.
+* Use `expand_all=True` to force multi-line layout even for small objects.
+
+### Trees for hierarchical data ✅ Current
+```python
+from __future__ import annotations
+
+from rich.tree import Tree
+from rich.console import Console
+
+def main() -> None:
+    console = Console()
+    
+    tree = Tree("Project Root")
+    tree.add("README.md")
+    src = tree.add("src/", style="bold blue")
+    src.add("main.py")
+    src.add("utils.py")
+    tree.add("tests/", style="bold green")
+    
+    console.print(tree)
+
+if __name__ == "__main__":
+    main()
+```
+* `Tree(label)` creates a tree structure for hierarchical data visualization.
+* Use `.add(item, style=..., guide_style=...)` to add branches; returns a `Tree` for nesting.
+
+### Columns for multi-column layout ✅ Current
+```python
+from __future__ import annotations
+
+from rich.columns import Columns
+from rich.console import Console
+from rich.panel import Panel
+
+def main() -> None:
+    console = Console()
+    
+    panels = [Panel(f"Item {i}", expand=True) for i in range(6)]
+    columns = Columns(panels, equal=True, expand=True)
+    
+    console.print(columns)
+
+if __name__ == "__main__":
+    main()
+```
+* `Columns(renderables, ...)` arranges items in columns.
+* Use `equal=True` for equal-width columns; `expand=True` to fill available width.
+* Use `align="left"`, `"center"`, or `"right"` to control alignment.
+
 ## Configuration
 
 - **Console configuration**
   - Prefer constructing a `Console()` and passing it through your app.
-  - If you rely on Rich’s global console, you can access it via:
+  - If you rely on Rich's global console, you can access it via:
     - `rich.get_console() -> Console`
     - `rich.reconfigure(*args, **kwargs) -> None` (reconfigures the global console)
 - **Environment variables (behavior change in 14.0.0)**
   - `NO_COLOR`: if set to a **non-empty** value, disables color output; **empty** is treated as disabled (i.e., does not disable colors).
   - `FORCE_COLOR`: if set to a **non-empty** value, forces color output; **empty** is treated as disabled.
+  - `UNICODE_VERSION`: control Unicode version used for cell width calculations (added in 14.3.0).
+  - `TTY_COMPATIBLE`: override auto-detection of TTY support (added in 14.0.0).
 - **Unicode width handling**
   - Rich has internal support for Unicode cell width tables; avoid relying on internal loaders.
   - If using `rich.cells.cell_len`, prefer keyword args (not positional), especially after signature changes in 14.3.0.
@@ -267,6 +345,38 @@ if __name__ == "__main__":
     main()
 ```
 
+### Wrong: Expecting empty environment variables to enable features
+```python
+from __future__ import annotations
+
+import os
+
+def main() -> None:
+    # Empty NO_COLOR will NOT disable colors in Rich 14.0.0+
+    os.environ["NO_COLOR"] = ""
+    from rich import print
+    print("[red]This will still be colored[/]")
+
+if __name__ == "__main__":
+    main()
+```
+
+### Right: Set environment variables to non-empty values
+```python
+from __future__ import annotations
+
+import os
+
+def main() -> None:
+    # Set to non-empty value to disable colors
+    os.environ["NO_COLOR"] = "1"
+    from rich import print
+    print("[red]This will not be colored[/]")
+
+if __name__ == "__main__":
+    main()
+```
+
 ## References
 
 - [Official Documentation](https://rich.readthedocs.io/)
@@ -306,6 +416,15 @@ if __name__ == "__main__":
 - **14.3.0: `rich.cells.cell_len` signature changed**
   - Migration: prefer keyword arguments when calling `cell_len` to avoid positional mismatch.
 
+- **14.3.0: IPython Console support**
+  - `pretty.install(console=...)` now respects the Console instance in IPython environments.
+  - Migration: if you pass a custom Console to `pretty.install()`, it will now be used in IPython.
+
+- **14.3.0: Markdown styling changes**
+  - Markdown headers, tables, and rules have updated styling.
+  - New styles added: `markdown.table.header` and `markdown.table.border`.
+  - Migration: review Markdown rendering output; customize styles if needed to match previous appearance.
+
 ## API Reference
 
 - **rich.print(*objects, sep=" ", end="\\n", file=None, flush=False)** - Rich-enhanced print with markup rendering.
@@ -336,5 +455,17 @@ if __name__ == "__main__":
 - **rich.syntax.Syntax(code, lexer, theme="monokai", line_numbers=False, ...)** - Render syntax-highlighted code.
 - **rich.pretty.install(console=None, ...)**
   - Enable Rich pretty-printing in REPL/IPython contexts.
+- **rich.pretty.pprint(obj, *, console=None, indent_guides=True, max_length=None, max_string=None, max_depth=None, expand_all=False, ...)**
+  - Pretty print an object to the console with Rich formatting.
+- **rich.pretty.pretty_repr(obj, *, max_width=80, indent_size=4, max_length=None, max_string=None, max_depth=None, expand_all=False, ...)**
+  - Generate a pretty string representation of an object.
 - **rich.traceback.install(...)**
   - Install Rich traceback handler (note output format changed in 14.0.0).
+- **rich.tree.Tree(label, *, guide_style="tree.line", ...)**
+  - Create a tree structure for hierarchical data.
+- **rich.tree.Tree.add(label, *, style=None, guide_style=None, ...)**
+  - Add a branch to the tree; returns a `Tree` for nesting.
+- **rich.columns.Columns(renderables, *, equal=False, expand=False, align="left", ...)**
+  - Arrange renderables in columns.
+- **rich.filesize.decimal(size, *, precision=1, separator=" ")**
+  - Format file size in decimal units (base 1000: bytes, kB, MB, etc.).

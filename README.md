@@ -8,37 +8,37 @@ The goal: make agent rules a standard part of every open-source package — like
 
 ## How It Works
 
-Skilldo reads a library's source directory and runs a 5-agent pipeline to extract knowledge and synthesize it into a single `SKILL.md` file:
+Skilldo reads a library's source directory and runs a 6-stage pipeline to extract knowledge and synthesize it into a single `SKILL.md` file:
 
-```
-Source Code ──→ Agent 1 (API Extraction)     ──┐
-Test Files  ──→ Agent 2 (Pattern Extraction) ──┤──→ Agent 4 (Synthesis) ──→ SKILL.md
-Docs/README ──→ Agent 3 (Context Extraction) ──┘        ↑                      │
-                                                        └── Agent 5 ←──────────┘
-                                                        (Code Validation)
+```text
+Source Code ──→ Extract (API Surface)       ──┐
+Test Files  ──→ Map (Pattern Extraction)    ──┤──→ Create ──→ Review ──→ Test ──→ SKILL.md
+Docs/README ──→ Learn (Context Extraction)  ──┘      ↑          │         │
+                                                     └──────────┴─────────┘
+                                                      (retry on failure)
 ```
 
 1. **Collect** — Discovers source files, tests, documentation, and changelogs from the local directory
-2. **Extract** — Three agents work in parallel to pull out the API surface, usage patterns, and conventions/pitfalls
-3. **Synthesize** — A fourth agent combines everything into a formatted SKILL.md
-4. **Validate** — A fifth agent generates test code from the patterns and runs it in a container to verify correctness
-5. **Iterate** — If validation fails, feedback loops back for regeneration (configurable retries)
+2. **Extract** — Three stages work in parallel to pull out the API surface, usage patterns, and conventions/pitfalls
+3. **Create** — Combines everything into a formatted SKILL.md
+4. **Review** — Verifies accuracy (dates, signatures, consistency) and safety (prompt injection, nefarious content)
+5. **Test** — Generates test code from the patterns and runs it in a container to verify correctness
+6. **Iterate** — If review or test fails, feedback loops back for regeneration (configurable retries)
 
 The output is a structured Markdown file with YAML frontmatter, ready to drop into any repository.
 
 ## The Agents
 
-| Agent | Role | What It Does |
+| Stage | Role | What It Does |
 |-------|------|-------------|
-| **Agent 1** — Extractor | API Surface | Reads source code to identify public functions, classes, methods, parameters, return types, and deprecations |
-| **Agent 2** — Patterns | Usage Patterns | Reads test files to extract real-world usage examples showing how the library is actually used |
-| **Agent 3** — Context | Conventions & Pitfalls | Reads docs, README, and changelogs to find common mistakes, migration notes, and best practices |
-| **Agent 4** — Synthesizer | SKILL.md Composition | Combines output from Agents 1-3 into a structured SKILL.md with sections for imports, patterns, pitfalls, and more |
-| **Agent 5** — Validator | Code Testing | Generates runnable test code from the SKILL.md patterns and executes it in a Docker/Podman container to verify they actually work |
+| **Extract** | API Surface | Reads source code to identify public functions, classes, methods, parameters, return types, and deprecations |
+| **Map** | Usage Patterns | Reads test files to extract real-world usage examples showing how the library is actually used |
+| **Learn** | Conventions & Pitfalls | Reads docs, README, and changelogs to find common mistakes, migration notes, and best practices |
+| **Create** | SKILL.md Composition | Combines output from extract/map/learn into a structured SKILL.md with sections for imports, patterns, pitfalls, and more |
+| **Review** | Accuracy & Safety | Verifies dates, API signatures, and content consistency; checks for prompt injection, destructive commands, and credential leaks |
+| **Test** | Code Validation | Generates runnable test code from the SKILL.md patterns and executes it in a Docker/Podman container to verify they actually work |
 
-Agent 5 is optional but recommended. When enabled, it catches hallucinated APIs, wrong parameter names, and broken code examples before they ship. If validation fails, Agent 4 regenerates with the error feedback.
-
-> **Note**: A security review agent may be added before Agent 5 in a future release. Agent numbers are subject to change — the roles are what matter.
+Test is optional but recommended. When enabled, it catches hallucinated APIs, wrong parameter names, and broken code examples before they ship. If validation fails, Create regenerates with the error feedback.
 
 ## Install
 
@@ -88,8 +88,17 @@ skilldo generate [PATH] [OPTIONS]
 | `--version <VER>` | Explicit version override, e.g. `"2.1.0"` |
 | `--version-from <STRATEGY>` | Version extraction strategy: `git-tag`, `package`, `branch`, `commit` |
 | `--config <PATH>` | Path to config file |
-| `--no-agent5` | Disable Agent 5 container validation |
-| `--no-parallel` | Run agents 1–3 sequentially instead of in parallel (useful for local models) |
+| `--provider <PROVIDER>` | LLM provider: `anthropic`, `openai`, `gemini`, `openai-compatible` |
+| `--model <MODEL>` | Override LLM model (e.g., `gpt-4.1`, `claude-sonnet-4-5-20250929`) |
+| `--base-url <URL>` | Base URL for openai-compatible providers |
+| `--max-retries <N>` | Override max generation retries |
+| `--no-test` | Disable test stage container validation |
+| `--test-mode <MODE>` | Test validation mode: `thorough`, `adaptive`, `minimal` |
+| `--test-model <MODEL>` | Override test stage LLM model |
+| `--test-provider <PROVIDER>` | Override test stage LLM provider |
+| `--runtime <RUNTIME>` | Container runtime: `docker` or `podman` |
+| `--timeout <SECONDS>` | Container execution timeout |
+| `--no-parallel` | Run extract/map/learn sequentially instead of in parallel (useful for local models) |
 | `-q, --quiet` | Suppress info messages, show warnings and errors only |
 | `-v, --verbose` | Show debug output |
 | `--dry-run` | Use a mock LLM client (no API key needed, for testing) |
@@ -97,8 +106,18 @@ skilldo generate [PATH] [OPTIONS]
 ### Examples
 
 ```bash
-# Basic generation with auto-detection
-skilldo generate /path/to/repo
+# Quick start — no config file needed (uses env vars for API key)
+skilldo generate /path/to/repo --provider openai --model gpt-4.1
+
+# With Anthropic
+skilldo generate /path/to/repo --provider anthropic --model claude-sonnet-4-5-20250929
+
+# With local Ollama model
+skilldo generate /path/to/repo --provider openai-compatible --model codestral:latest \
+  --base-url http://localhost:11434/v1 --no-parallel
+
+# Using a config file (recommended for repeated use)
+skilldo generate /path/to/repo --config my-config.toml -o click-SKILL.md
 
 # Force Python, custom output path
 skilldo generate /path/to/repo --language python -o rules/SKILL.md
@@ -106,11 +125,11 @@ skilldo generate /path/to/repo --language python -o rules/SKILL.md
 # Update an existing SKILL.md (reads it, regenerates, writes back)
 skilldo generate /path/to/repo -i SKILL.md -o SKILL.md
 
-# Extract version from git tags instead of package files
-skilldo generate /path/to/repo --version-from git-tag
+# Use Podman instead of Docker for test validation
+skilldo generate /path/to/repo --runtime podman
 
-# Skip Agent 5 validation (faster, no container needed)
-skilldo generate /path/to/repo --no-agent5
+# Skip test validation (faster, no container needed)
+skilldo generate /path/to/repo --no-test
 
 # Run agents sequentially (for local models that can't handle parallel requests)
 skilldo generate /path/to/repo --no-parallel
@@ -118,6 +137,18 @@ skilldo generate /path/to/repo --no-parallel
 # Dry run to test without an LLM
 skilldo generate /path/to/repo --dry-run
 ```
+
+### Lint
+
+Validate a generated SKILL.md for structural and security issues:
+
+```bash
+skilldo lint click-SKILL.md
+```
+
+Checks for: missing frontmatter, missing required sections, unclosed code blocks, degeneration patterns (repeated text, gibberish), prompt instruction leaks, and security violations (destructive commands, credential access, exfiltration URLs, reverse shells, obfuscated payloads).
+
+The linter runs automatically after generation and also in CI.
 
 ### Config Check
 
@@ -147,22 +178,18 @@ model = "gpt-5.2"
 # Name of the environment variable holding your API key.
 # Skilldo reads the key from this env var at runtime — it never stores keys in config.
 api_key_env = "OPENAI_API_KEY"
-
-[generation]
-max_retries = 5
-max_source_tokens = 100000
 ```
 
 Set your API key before running: `export OPENAI_API_KEY="sk-your-key-here"`
 
-This uses GPT-5.2 for all agents, with Agent 5 validation enabled by default using Docker.
+This uses GPT-5.2 for all stages, with test validation enabled by default using Docker.
 
 ### Full Documented Config
 
 ```toml
 # ── LLM Provider ──────────────────────────────────────────────
-# Configures the model used for Agents 1-4 (and Agent 5 if no
-# separate agent5_llm is specified).
+# Configures the model used for all stages (unless overridden
+# per-stage via extract_llm, create_llm, test_llm, etc.).
 [llm]
 # Provider: "anthropic", "openai", "gemini", or "openai-compatible"
 provider = "anthropic"
@@ -178,7 +205,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 # base_url = "http://localhost:11434/v1"
 
 # Override max output tokens per LLM request.
-# Defaults: anthropic=4096, openai=4096, openai-compatible=16384, gemini=8192
+# Defaults: anthropic=8192, openai=8192, openai-compatible=16384, gemini=8192
 # max_tokens = 8192
 
 # Extra fields merged into the LLM request body (for provider-specific params).
@@ -193,35 +220,38 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Max retry attempts for the generate→validate loop (default: 5)
 max_retries = 5
 
-# Run agents 1-3 in parallel (default: true). CLI: --no-parallel
+# Run extract/map/learn in parallel (default: true). CLI: --no-parallel
 parallel_extraction = true
 
 # Approximate token budget for source code sent to agents (default: 100000)
 max_source_tokens = 100000
 
-# Enable Agent 5 code validation in containers (default: true). CLI: --no-agent5
-enable_agent5 = true
+# Enable test stage code validation in containers (default: true). CLI: --no-test
+enable_test = true
 
-# Agent 5 validation mode (default: "thorough")
+# Test validation mode (default: "thorough")
 #   "thorough"  — test every extracted pattern
 #   "adaptive"  — test patterns, reduce scope on repeated failures
 #   "minimal"   — test only core import + one pattern
-agent5_mode = "thorough"
+test_mode = "thorough"
 
-# ── Per-Agent LLM Overrides (Optional) ────────────────────────
-# Run individual agents on different providers/models.
-# Each is optional — if not set, the agent uses [llm].
+# Enable review stage (default: true)
+enable_review = true
+
+# ── Per-Stage LLM Overrides (Optional) ────────────────────────
+# Run individual stages on different providers/models.
+# Each is optional — if not set, the stage uses [llm].
 #
-# [generation.agent5_llm]           # Agent 5 (code validation)
+# [generation.test_llm]              # Test stage
 # provider = "openai"
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
 #
-# Also available: agent1_llm, agent2_llm, agent3_llm, agent4_llm
+# Also available: extract_llm, map_llm, learn_llm, create_llm, review_llm
 # See examples/configs/reference.toml for the full list.
 
 # ── Container Settings ────────────────────────────────────────
-# Agent 5 runs generated test code inside containers for safety.
+# The test stage runs generated test code inside containers for safety.
 [generation.container]
 # Container runtime: "docker" or "podman" (default: "docker")
 runtime = "docker"
@@ -240,16 +270,16 @@ cleanup = true
 # go_image = "golang:1.21-alpine"
 
 # ── Custom Prompts (Advanced) ────────────────────────────────
-# Override or extend the built-in agent prompts.
-# Mode per agent: "append" (default) adds your text after the built-in
-# prompt, "overwrite" replaces it entirely. Agent 5 is always append-only.
+# Override or extend the built-in stage prompts.
+# Mode per stage: "append" (default) adds your text after the built-in
+# prompt, "overwrite" replaces it entirely. Test stage is always append-only.
 #
 # [prompts]
-# override_prompts = false        # Global default: false = append
-# agent1_mode = "append"          # Per-agent override
-# agent1_custom = "Also extract all class methods that start with 'get_'"
-# agent4_mode = "overwrite"
-# agent4_custom = "Your entirely custom Agent 4 prompt here..."
+# override_prompts = false            # Global default: false = append
+# extract_mode = "append"             # Per-stage override
+# extract_custom = "Also extract all class methods that start with 'get_'"
+# create_mode = "overwrite"
+# create_custom = "Your entirely custom create prompt here..."
 ```
 
 ### Supported Providers
@@ -270,16 +300,15 @@ Ready-to-use configs for common setups:
 - [`examples/configs/ollama.toml`](examples/configs/ollama.toml) — Qwen3-Coder via Ollama (local, no API key)
 - [`examples/configs/hybrid.toml`](examples/configs/hybrid.toml) — Local extraction + cloud validation (best of both worlds)
 - [`examples/configs/deepseek.toml`](examples/configs/deepseek.toml) — DeepSeek (OpenAI-compatible cloud)
-- [`examples/configs/api-gateway.toml`](examples/configs/api-gateway.toml) — OpenAI-compatible API gateway with `extra_body` parameters
 - [`examples/configs/per-agent-extra-body.toml`](examples/configs/per-agent-extra-body.toml) — Per-agent `extra_body` overrides (e.g., different reasoning effort per agent)
 - [`examples/configs/github-models.toml`](examples/configs/github-models.toml) — GitHub Models free tier (for CI/testing)
 - [`examples/configs/reference.toml`](examples/configs/reference.toml) — **Every field documented** (copy what you need)
 
 ## Example Output
 
-We've generated SKILL.md files for the **top 25 Python libraries** and counting. Browse them all in [`examples/skills/`](examples/skills/):
+We've generated SKILL.md files for **28 Python libraries** and counting. Browse them all in [`examples/skills/`](examples/skills/):
 
-aiohttp, arrow, boto3, celery, click, django, fastapi, flask, httpx, jinja2, keras, matplotlib, numpy, pandas, pillow, pydantic, pytest, pytorch, requests, rich, scikit-learn, scipy, sqlalchemy, transformers, typer
+aiohttp, arrow, beautifulsoup4, boto3, celery, click, cryptography, django, fastapi, flask, httpx, jinja2, keras, matplotlib, numpy, pandas, pillow, pydantic, pytest, pytorch, requests, rich, scikit-learn, scipy, sqlalchemy, transformers, typer, unstructured
 
 ## Tips and Model Experience
 
@@ -289,7 +318,7 @@ Generation gets you 90-95% of the way to a good SKILL.md — a validated, well-s
 
 **Best overall**: GPT-5.2 produces the cleanest output with fewest retries. It nailed the `click` library on the first try in under 3 minutes.
 
-**Best value**: The **hybrid setup** (local model for Agents 1-4, cloud model for Agent 5) gives you the best of both worlds. Extraction doesn't need a frontier model — a 14B-30B local model handles it fine. Code validation is where model quality matters most.
+**Best value**: The **hybrid setup** (local model for extract/map/learn/create, cloud model for review+test) gives you the best of both worlds. Extraction doesn't need a frontier model — a 14B-30B local model handles it fine. Review and test are where model quality matters most — run those in the cloud for best results.
 
 **Local-only**: Qwen3-Coder (30B) via Ollama works well for small-to-medium libraries but may struggle with complex ones. Expect more retries and occasional truncation from token limits. Totally usable for free, just slower.
 
@@ -297,8 +326,8 @@ Generation gets you 90-95% of the way to a good SKILL.md — a validated, well-s
 
 ### Benchmarks (Feb 2026)
 
-| Library | Model | Time | Agent 5 Result | Retries |
-|---------|-------|------|-----------------|---------|
+| Library | Model | Time | Test Result | Retries |
+|---------|-------|------|-------------|---------|
 | click | GPT-5.2 | ~3 min | 3/3 pass | 1 |
 | requests | GPT-5.2 | ~4.5 min | 3/3 pass | 3 |
 | scipy | Claude Sonnet + GPT-5.2 (hybrid) | ~3.5 min | 3/3 pass | — |
@@ -348,7 +377,7 @@ cargo audit
 
 **Runtime:**
 - Rust 1.70+
-- Docker or Podman (for Agent 5 validation)
+- Docker or Podman (for test validation)
 - An LLM API key (or Ollama for local models)
 
 **External commands** (invoked at runtime via shell):
@@ -356,12 +385,12 @@ cargo audit
 | Command | Required? | Purpose |
 |---------|-----------|---------|
 | `git` | Optional | Version detection fallback (`git describe --tags`, `git rev-parse`) when package metadata doesn't contain a version |
-| `docker` or `podman` | For Agent 5 | Runs generated test code in isolated containers |
-| `uv` | For Agent 5 (local) | Sets up Python environments for local (non-container) validation |
+| `docker` or `podman` | For test stage | Runs generated test code in isolated containers |
+| `uv` | For test stage (local) | Sets up Python environments for local (non-container) validation |
 | `python3` | For non-container validation | Direct Python execution when containers aren't available |
 
 **Development / Testing:**
-- [uv](https://docs.astral.sh/uv/) — required to run the full test suite (Agent 5 executor tests use `uv` to create isolated Python environments)
+- [uv](https://docs.astral.sh/uv/) — required to run the full test suite (test stage executor tests use `uv` to create isolated Python environments)
 - [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) — for coverage reports (`make coverage` will install it automatically)
 - [pre-commit](https://pre-commit.com/) — for git hooks (`pre-commit install && pre-commit install --hook-type pre-push`)
 

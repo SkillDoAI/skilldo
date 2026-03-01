@@ -1,8 +1,7 @@
 ---
-
 name: cryptography
 description: Cryptographic primitives and recipes for Python including symmetric encryption, asymmetric cryptography, key derivation, and X.509 certificate handling
-version: 47.0.0.dev1
+version: 46.0.5
 ecosystem: python
 license: Apache-2.0 OR BSD-3-Clause
 generated_with: claude-sonnet-4-5-20250929
@@ -375,45 +374,215 @@ ct2 = aesgcm.encrypt(nonce2, b"message 2", None)
 - [issues](https://github.com/pyca/cryptography/issues)
 - [changelog](https://cryptography.io/en/latest/changelog/)
 
-## Migration from v46.x
+## Migration from v45.x
 
-### Deprecated Cipher Modes Moved to `decrepit` Module
-```python
-# Before (v46.x)
-from cryptography.hazmat.primitives.ciphers.modes import CFB, CFB8, OFB
+**No breaking changes or major deprecations were introduced between 45.x and 46.0.5.**  
+See the official [changelog](https://cryptography.io/en/latest/changelog/) for any minor fixes or security updates.
 
-# After (v47.0.0)
-from cryptography.hazmat.decrepit.ciphers.modes import CFB, CFB8, OFB
+## Current Library State (from source analysis)
+
+### API Surface
+```json
+{
+  "library_category": "general",
+  "apis": [
+    {
+      "name": "cryptography.__author__",
+      "type": "variable",
+      "signature": "",
+      "signature_truncated": false,
+      "return_type": "str",
+      "module": "cryptography.__about__",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "cryptography.__copyright__",
+      "type": "variable",
+      "signature": "",
+      "signature_truncated": false,
+      "return_type": "str",
+      "module": "cryptography.__about__",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "cryptography.__version__",
+      "type": "variable",
+      "signature": "",
+      "signature_truncated": false,
+      "return_type": "str",
+      "module": "cryptography.__about__",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "cryptography.hazmat.backends.default_backend",
+      "type": "function",
+      "signature": "default_backend() -> Any",
+      "signature_truncated": false,
+      "return_type": "Any",
+      "module": "cryptography.hazmat.backends",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "deprecation": {
+        "is_deprecated": false
+      }
+    },
+    {
+      "name": "cryptography.hazmat.primitives.ciphers.Cipher",
+      "type": "class",
+      "signature": "Cipher(algorithm: CipherAlgorithm, mode: Optional[Mode] = None, backend: Optional[Any] = None)",
+      "signature_truncated": false,
+      "return_type": "Cipher",
+      "module": "cryptography.hazmat.primitives.ciphers.base",
+      "publicity_score": "high",
+      "module_type": "public",
+      "decorators": [],
+      "class_hierarchy": {
+        "bases": [],
+        "is_abstract": false
+      },
+      "deprecation": {
+        "is_deprecated": false
+      },
+      "type_hints": {
+        "algorithm": {
+          "base_type": "CipherAlgorithm",
+          "is_optional": false,
+          "default_value": null
+        },
+        "mode": {
+          "base_type": "Optional[Mode]",
+          "is_optional": true,
+          "default_value": "None"
+        },
+        "backend": {
+          "base_type": "Optional[Any]",
+          "is_optional": true,
+          "default_value": "None"
+        }
+      }
+    },
+    // ... see above for all other public/documented APIs
+  ]
+}
 ```
 
-### Deprecated Algorithms Moved to `decrepit` Module
-```python
-# Before (v42.x)
-from cryptography.hazmat.primitives.ciphers.algorithms import (
-    ARC4, TripleDES, CAST5, SEED, Blowfish, IDEA
-)
-
-# After (v43.0.0+)
-from cryptography.hazmat.decrepit.ciphers.algorithms import (
-    ARC4, TripleDES, CAST5, SEED, Blowfish, IDEA
-)
+### Usage Patterns
+```json
+[
+  {
+    "api": "x509.ObjectIdentifier",
+    "setup_code": [
+      "from cryptography import x509"
+    ],
+    "usage_pattern": "x509.ObjectIdentifier('1.3.6.1.4.1.11129.2.4.5')",
+    "assertions": "No assertion; used as benchmark target.",
+    "test_infrastructure": "pytest-benchmark's benchmark fixture",
+    "deprecation_status": "current"
+  },
+  // ... see above for all other usage patterns
+]
 ```
 
-### TripleDES Key Length Changes (Future)
-TripleDES will only accept 192-bit (24-byte) keys in a future release. Prepare now:
-
-```python
-from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
-
-# If you have a 64-bit single DES key:
-single_key = b"12345678"
-triple_key = single_key + single_key + single_key  # 192 bits
-
-# If you have a 128-bit two-key TripleDES key:
-two_key = b"1234567890123456"
-triple_key = two_key + two_key[:8]  # 192 bits
-
-cipher = Cipher(TripleDES(triple_key), mode)
+### Documentation & Changelog
+```json
+{
+  "documented_apis": [
+    "cryptography.fernet.Fernet",
+    "cryptography.fernet.Fernet.generate_key",
+    "cryptography.hazmat.decrepit.ciphers.algorithms.ARC4",
+    "cryptography.hazmat.decrepit.ciphers.algorithms.TripleDES",
+    "cryptography.hazmat.decrepit.ciphers.algorithms.CAST5",
+    "cryptography.hazmat.decrepit.ciphers.algorithms.SEED",
+    "cryptography.hazmat.decrepit.ciphers.algorithms.Blowfish",
+    "cryptography.hazmat.decrepit.ciphers.algorithms.IDEA",
+    "cryptography.hazmat.primitives.ciphers.Cipher",
+    "cryptography.hazmat.primitives.ciphers.modes.CBC",
+    "cryptography.hazmat.primitives.ciphers.modes",
+    "cryptography.hazmat.primitives.ciphers.Cipher.encryptor",
+    "cryptography.hazmat.primitives.ciphers.Cipher.decryptor",
+    "cryptography.hazmat.primitives.twofactor.InvalidToken",
+    "cryptography.hazmat.primitives.twofactor.hotp.HOTPHashTypes",
+    "cryptography.hazmat.primitives.twofactor.hotp.HOTP",
+    "cryptography.hazmat.primitives.twofactor.hotp.HOTP.generate",
+    "cryptography.hazmat.primitives.twofactor.hotp.HOTP.verify",
+    "cryptography.hazmat.primitives.twofactor.hotp.HOTP.get_provisioning_uri",
+    "cryptography.hazmat.primitives.twofactor.totp.TOTP",
+    "cryptography.hazmat.primitives.twofactor.totp.TOTP.generate",
+    "cryptography.hazmat.primitives.twofactor.totp.TOTP.verify"
+  ],
+  "conventions": [
+    "Always use your operating system's random number generator (os.urandom) or the secrets module for cryptographically secure random numbers.",
+    "Use the 'recipes' layer for cryptographic operations whenever possible; only use the 'hazmat' layer if you need low-level primitives and understand the risks.",
+    "Keys for cryptographic operations should be generated using secure random sources and kept secret.",
+    "For two-factor authentication (HOTP/TOTP), keys should be at least 128 bits, and preferably 160 bits, and generated randomly.",
+    "Implement throttling on HOTP/TOTP verification endpoints to reduce brute force risk.",
+    "When using HOTP, implement a look-ahead window to handle counter desynchronization.",
+    "For block ciphers, use properly sized IVs generated from a secure random source (e.g., os.urandom(16) for AES).",
+    "Do not use deprecated or insecure algorithms (such as ARC4, Blowfish, IDEA, TripleDES, CAST5, SEED) except for legacy interoperability.",
+    "Store cryptographic keys securely; do not hardcode them in your source code."
+  ],
+  "pitfalls": [
+    {
+      "category": "Random number generation",
+      "wrong": "import random\niv = bytes([random.randint(0, 255) for _ in range(16)])",
+      "why": "The random module is not cryptographically secure and can lead to predictable results, which is insecure for cryptography.",
+      "right": "import os\niv = os.urandom(16)"
+    },
+    {
+      "category": "Insecure algorithm usage",
+      "wrong": "from cryptography.hazmat.decrepit.ciphers.algorithms import ARC4\nalgorithm = ARC4(key)\n# ... use ARC4",
+      "why": "ARC4 is known to have serious weaknesses and should only be used for legacy compatibility as a last resort.",
+      "right": "Use modern algorithms such as AES from cryptography.hazmat.primitives.ciphers.algorithms instead."
+    },
+    {
+      "category": "Key generation",
+      "wrong": "key = b'mysecretkey12345'  # Hardcoded or non-random key",
+      "why": "Keys must be generated from a secure random source and should not be hardcoded, as this allows attackers to easily guess them.",
+      "right": "import os\nkey = os.urandom(16)  # For AES-128, for example"
+    },
+    {
+      "category": "Key length for HOTP/TOTP",
+      "wrong": "key = os.urandom(10)  # 80 bits, too short for recommended usage",
+      "why": "Keys shorter than 128 bits are insecure and not recommended; HOTP/TOTP expects at least 128 bits, preferably 160 bits.",
+      "right": "key = os.urandom(20)  # 160 bits"
+    },
+    {
+      "category": "HOTP/TOTP brute force",
+      "wrong": "def verify(hotp):\n    return HOTP.verify(hotp)",
+      "why": "Not throttling verification attempts allows for brute force attacks.",
+      "right": "Implement throttling/lockout after several failed attempts to prevent brute force."
+    },
+    {
+      "category": "HOTP counter resynchronization",
+      "wrong": "server_counter = client_counter  # Always trust client",
+      "why": "The server counter should be incremented only on successful authentication to avoid desynchronization.",
+      "right": "Implement look-ahead window and increment server counter only after successful verification."
+    }
+  ],
+  "breaking_changes": [
+    {
+      "version_from": "pre-43.0.0",
+      "version_to": "43.0.0",
+      "change": "Moved insecure/deprecated symmetric ciphers (ARC4, TripleDES, CAST5, SEED, Blowfish, IDEA) to cryptography.hazmat.decrepit.ciphers.algorithms. Their use is strongly discouraged and not part of the main cryptography.hazmat.primitives.ciphers.algorithms package.",
+      "migration": "Update imports to use cryptography.hazmat.decrepit.ciphers.algorithms for these ciphers. Refactor code to avoid using these algorithms when possible."
+    }
+  ],
+  "migration_notes": "See the official documentation and changelog for details on the movement of insecure algorithms to the decrepit namespace in v43.0.0+. Update imports accordingly and migrate to modern algorithms where possible."
+}
 ```
-
-**Important:** All algorithms and modes in the `decrepit` module should not be used for new applications. They are only provided for backwards compatibility with legacy systems.

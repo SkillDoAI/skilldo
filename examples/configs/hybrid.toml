@@ -10,11 +10,11 @@ max_tokens = 16384
 [generation]
 max_retries = 5
 max_source_tokens = 100000
-enable_agent5 = true
-agent5_mode = "thorough"
+enable_test = true
+test_mode = "thorough"
 
-# Agent 5 uses GPT-5.2 for code generation (better at writing test code)
-[generation.agent5_llm]
+# Test stage uses GPT-5.2 for code generation (better at writing test code)
+[generation.test_llm]
 provider = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
