@@ -12,9 +12,10 @@ Skilldo reads a library's source directory and runs a 6-stage pipeline to extrac
 
 ```text
 Source Code ──→ Extract (API Surface)       ──┐
-Test Files  ──→ Map (Pattern Extraction)    ──┤──→ Create (Synthesis) ──→ Review ──→ SKILL.md
-Docs/README ──→ Learn (Context Extraction)  ──┘        ↑                              │
-                                                       └── Test (Code Validation) ←───┘
+Test Files  ──→ Map (Pattern Extraction)    ──┤──→ Create ──→ Review ──→ Test ──→ SKILL.md
+Docs/README ──→ Learn (Context Extraction)  ──┘      ↑          │         │
+                                                     └──────────┴─────────┘
+                                                      (retry on failure)
 ```
 
 1. **Collect** — Discovers source files, tests, documentation, and changelogs from the local directory
