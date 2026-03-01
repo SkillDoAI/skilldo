@@ -372,6 +372,9 @@ fn print_results(results: &CheckResult) {
 mod tests {
     use super::*;
 
+    // Tests that mutate OPENAI_API_KEY must not run in parallel.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_check_result_new() {
         let r = CheckResult::new();
@@ -777,10 +780,7 @@ enable_test = false
 
     #[test]
     fn test_check_api_key_inferred_openai_compatible_not_set() {
-        // Lines 256-258: api_key_env=None, openai-compatible, inferred OPENAI_API_KEY not set.
-        // OPENAI_API_KEY may be set in the environment. Temporarily remove and restore it.
-        // This test intentionally manipulates the env; the unique env var name in
-        // test_check_api_key_inferred_set avoids a race with that test.
+        let _lock = ENV_MUTEX.lock().unwrap();
         let saved = env::var("OPENAI_API_KEY").ok();
         env::remove_var("OPENAI_API_KEY");
 
@@ -1204,7 +1204,7 @@ extra_body_json = "[1, 2, 3]"
     // --- Coverage: inferred env var empty for openai-compatible (lines 311-320) ---
     #[test]
     fn test_check_api_key_inferred_empty_openai_compatible() {
-        // Set OPENAI_API_KEY to empty, provider=openai-compatible, api_key_env=None
+        let _lock = ENV_MUTEX.lock().unwrap();
         let saved = env::var("OPENAI_API_KEY").ok();
         env::set_var("OPENAI_API_KEY", "");
 
@@ -1225,7 +1225,7 @@ extra_body_json = "[1, 2, 3]"
     // --- Coverage: inferred env var empty for non-openai-compatible (lines 317-320) ---
     #[test]
     fn test_check_api_key_inferred_empty_non_oai_compatible() {
-        // Set OPENAI_API_KEY to empty, provider=openai (not compatible), api_key_env=None
+        let _lock = ENV_MUTEX.lock().unwrap();
         let saved = env::var("OPENAI_API_KEY").ok();
         env::set_var("OPENAI_API_KEY", "");
 
