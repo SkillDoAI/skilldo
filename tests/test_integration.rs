@@ -212,6 +212,9 @@ async fn test_pipeline_with_custom_config() {
             request_timeout_secs: 120,
         },
         generation: GenerationConfig {
+            output: None,
+            input: None,
+            language: None,
             max_retries: 5,
             max_source_tokens: 50000,
             parallel_extraction: true,

@@ -4,6 +4,7 @@ use std::path::Path;
 use tracing::info;
 
 use crate::config::{Config, Provider};
+use crate::detector::Language;
 use crate::llm::factory;
 use crate::review::{self, ReviewAgent};
 
@@ -73,20 +74,19 @@ pub async fn run(
         language.as_deref().unwrap_or("unknown")
     );
 
-    let lang = language.as_deref().unwrap_or("python");
+    let lang_str = language.as_deref().unwrap_or("python");
     let pkg = package_name.as_deref().unwrap_or("unknown");
-
-    // If --no-container, force non-python path (skips container introspection)
-    let effective_lang = if no_container { "unknown" } else { lang };
+    let lang = lang_str.parse::<Language>().unwrap_or(Language::Python);
 
     let review_agent = ReviewAgent::new(
         client.as_ref(),
         config.generation.container.clone(),
         config.prompts.review_custom.clone(),
     )
-    .with_strict(true);
+    .with_strict(true)
+    .with_skip_introspection(no_container);
 
-    let result = review_agent.review(&skill_md, pkg, effective_lang).await?;
+    let result = review_agent.review(&skill_md, pkg, &lang).await?;
 
     // Print results
     if result.passed && !result.issues.is_empty() {
@@ -629,6 +629,7 @@ base_url = "http://localhost:11434/v1"
 
         let result = ReviewResult {
             passed: true,
+            malformed: false,
             issues: vec![ReviewIssue {
                 severity: Severity::Warning,
                 category: "consistency".to_string(),

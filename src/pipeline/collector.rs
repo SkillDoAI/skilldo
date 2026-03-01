@@ -1,10 +1,10 @@
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::detector::Language;
-use crate::ecosystems::python::PythonHandler;
+use crate::ecosystems::python::{pyproject_project_field, PythonHandler};
 
 /// Find the largest byte index <= `index` that is a char boundary in `s`.
 fn floor_char_boundary(s: &str, index: usize) -> usize {
@@ -100,8 +100,15 @@ impl Collector {
             String::new()
         };
 
-        // Get package name - try multiple strategies
-        let package_name = Self::detect_package_name(&self.repo_path)?;
+        // Get package name - try multiple strategies, then validate
+        let mut package_name = Self::detect_package_name(&self.repo_path)?;
+        if crate::util::sanitize_dep_name(&package_name).is_err() {
+            warn!(
+                "Package name '{}' contains unexpected characters, using 'unknown'",
+                package_name
+            );
+            package_name = "unknown".to_string();
+        }
 
         Ok(CollectedData {
             package_name,
@@ -128,19 +135,22 @@ impl Collector {
                 break;
             }
 
-            if let Ok(file_content) = fs::read_to_string(path) {
-                let remaining = max_chars - total_chars;
-                if file_content.len() <= remaining {
-                    content.push_str(&format!("\n\n// File: {}\n", path.display()));
-                    content.push_str(&file_content);
-                    total_chars += file_content.len();
-                } else {
-                    content.push_str(&format!("\n\n// File: {} (truncated)\n", path.display()));
-                    let end = floor_char_boundary(&file_content, remaining);
-                    content.push_str(&file_content[..end]);
-                    total_chars = max_chars;
-                    break;
+            match fs::read_to_string(path) {
+                Ok(file_content) => {
+                    let remaining = max_chars - total_chars;
+                    if file_content.len() <= remaining {
+                        content.push_str(&format!("\n\n// File: {}\n", path.display()));
+                        content.push_str(&file_content);
+                        total_chars += file_content.len();
+                    } else {
+                        content.push_str(&format!("\n\n// File: {} (truncated)\n", path.display()));
+                        let end = floor_char_boundary(&file_content, remaining);
+                        content.push_str(&file_content[..end]);
+                        total_chars = max_chars;
+                        break;
+                    }
                 }
+                Err(e) => warn!("Cannot read {}: {}", path.display(), e),
             }
         }
 
@@ -160,19 +170,13 @@ impl Collector {
 
     /// Detect package name using multiple strategies
     fn detect_package_name(repo_path: &Path) -> Result<String> {
-        // Strategy 1: Read from pyproject.toml
+        // Strategy 1: Read from pyproject.toml (scoped to [project] section)
         let pyproject = repo_path.join("pyproject.toml");
         if pyproject.exists() {
             if let Ok(content) = fs::read_to_string(&pyproject) {
-                for line in content.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with("name") && trimmed.contains("=") {
-                        if let Some(name) = trimmed.split('=').nth(1) {
-                            let name = name.trim().trim_matches('"').trim_matches('\'');
-                            if !name.is_empty() && !name.contains("[") {
-                                return Ok(name.to_lowercase());
-                            }
-                        }
+                if let Some(name) = pyproject_project_field(&content, "name") {
+                    if !name.contains('[') {
+                        return Ok(name.to_lowercase());
                     }
                 }
             }
@@ -247,43 +251,46 @@ impl Collector {
                 break;
             }
 
-            if let Ok(file_content) = fs::read_to_string(&path) {
-                // Priority-based budget allocation per file
-                let file_budget = match priority {
-                    0..=10 => usize::MAX, // Critical: Read fully (top-level __init__.py)
-                    11..=30 => 10_000,    // Important: Substantial sample (public modules)
-                    31..=50 => 2_000,     // Normal: Moderate sample
-                    _ => 500,             // Low: Small sample (internals, tests, tools)
-                };
+            match fs::read_to_string(&path) {
+                Ok(file_content) => {
+                    // Priority-based budget allocation per file
+                    let file_budget = match priority {
+                        0..=10 => usize::MAX, // Critical: Read fully (top-level __init__.py)
+                        11..=30 => 10_000,    // Important: Substantial sample (public modules)
+                        31..=50 => 2_000,     // Normal: Moderate sample
+                        _ => 500,             // Low: Small sample (internals, tests, tools)
+                    };
 
-                let remaining = max_chars - total_chars;
-                let chars_to_read = file_content.len().min(file_budget).min(remaining);
+                    let remaining = max_chars - total_chars;
+                    let chars_to_read = file_content.len().min(file_budget).min(remaining);
 
-                let priority_label = match priority {
-                    0..=10 => "critical API",
-                    11..=30 => "public API",
-                    31..=50 => "module",
-                    _ => "impl",
-                };
+                    let priority_label = match priority {
+                        0..=10 => "critical API",
+                        11..=30 => "public API",
+                        31..=50 => "module",
+                        _ => "impl",
+                    };
 
-                if chars_to_read == file_content.len() {
-                    content.push_str(&format!(
-                        "\n\n// File: {} ({})\n",
-                        path.display(),
-                        priority_label
-                    ));
-                    content.push_str(&file_content);
-                } else {
-                    content.push_str(&format!(
-                        "\n\n// File: {} ({}, sampled)\n",
-                        path.display(),
-                        priority_label
-                    ));
-                    let end = floor_char_boundary(&file_content, chars_to_read);
-                    content.push_str(&file_content[..end]);
+                    if chars_to_read == file_content.len() {
+                        content.push_str(&format!(
+                            "\n\n// File: {} ({})\n",
+                            path.display(),
+                            priority_label
+                        ));
+                        content.push_str(&file_content);
+                    } else {
+                        content.push_str(&format!(
+                            "\n\n// File: {} ({}, sampled)\n",
+                            path.display(),
+                            priority_label
+                        ));
+                        let end = floor_char_boundary(&file_content, chars_to_read);
+                        content.push_str(&file_content[..end]);
+                    }
+
+                    total_chars += chars_to_read;
                 }
-
-                total_chars += chars_to_read;
+                Err(e) => warn!("Cannot read {}: {}", path.display(), e),
             }
         }
 
@@ -1280,6 +1287,40 @@ setup(
         // Verify language and path are preserved
         assert_eq!(c.language, Language::Python);
         assert_eq!(c.repo_path, dir.path().to_path_buf());
+    }
+
+    // -- pyproject.toml [project] scoping --
+
+    #[test]
+    fn test_detect_package_name_pyproject_scoped_to_project() {
+        let dir = TempDir::new().unwrap();
+        // name outside [project] should be ignored
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.poetry.source]\nname = \"private-pypi\"\n\n[project]\nname = \"mylib\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let name = Collector::detect_package_name(dir.path()).unwrap();
+        assert_eq!(name, "mylib");
+    }
+
+    #[test]
+    fn test_detect_package_name_pyproject_no_project_section() {
+        let dir = TempDir::new().unwrap();
+        // Only [tool.poetry] section — name should NOT match
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.poetry]\nname = \"wrong\"\n",
+        )
+        .unwrap();
+        // Should fall through to setup.py or dirname
+        fs::write(
+            dir.path().join("setup.py"),
+            "from setuptools import setup\nsetup(name=\"fallback\")\n",
+        )
+        .unwrap();
+        let name = Collector::detect_package_name(dir.path()).unwrap();
+        assert_eq!(name, "fallback");
     }
 
     // -- collect: unsupported languages --

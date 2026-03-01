@@ -38,18 +38,18 @@ pub fn ensure_frontmatter(
 
     // If frontmatter exists but has wrong format, replace it
     if let Some(after_start) = trimmed.strip_prefix("---") {
-        // Check if it has all required fields (must match linter's required list)
-        let has_name = trimmed.contains("name:");
-        let has_description = trimmed.contains("description:");
-        let has_version = trimmed.contains("version:");
-        let has_ecosystem = trimmed.contains("ecosystem:");
+        // Scope field checks to frontmatter block (between first two --- delimiters)
+        if let Some(end_pos) = after_start.find("---") {
+            let fm_block = &after_start[..end_pos];
+            let has_name = fm_block.contains("name:");
+            let has_description = fm_block.contains("description:");
+            let has_version = fm_block.contains("version:");
+            let has_ecosystem = fm_block.contains("ecosystem:");
 
-        // If missing any required field, replace the frontmatter
-        if !has_name || !has_description || !has_version || !has_ecosystem {
-            warn!("Frontmatter has wrong format - replacing it");
+            // If missing any required field, replace the frontmatter
+            if !has_name || !has_description || !has_version || !has_ecosystem {
+                warn!("Frontmatter has wrong format - replacing it");
 
-            // Find end of existing frontmatter
-            if let Some(end_pos) = after_start.find("---") {
                 let content_after = &after_start[end_pos + 3..];
                 return format!(
                     "{}{}",
@@ -57,22 +57,21 @@ pub fn ensure_frontmatter(
                     content_after.trim_start()
                 );
             }
-        } else {
+
             // Has correct fields — inject generated_with if missing
             if let Some(model) = generated_with {
-                if !trimmed.contains("generated_with:") {
-                    if let Some(end_pos) = after_start.find("---") {
-                        let frontmatter = &after_start[..end_pos].trim_end();
-                        let content_after = &after_start[end_pos + 3..];
-                        return format!(
-                            "---\n{}\ngenerated_with: {}\n---{}",
-                            frontmatter, model, content_after
-                        );
-                    }
+                if !fm_block.contains("generated_with:") {
+                    let frontmatter = fm_block.trim_end();
+                    let content_after = &after_start[end_pos + 3..];
+                    return format!(
+                        "---\n{}\ngenerated_with: {}\n---{}",
+                        frontmatter, model, content_after
+                    );
                 }
             }
             return content.to_string();
         }
+        // No closing --- found — broken frontmatter, fall through to add new one
     }
 
     warn!("Frontmatter missing - adding it");
@@ -194,10 +193,19 @@ fn strip_duplicate_frontmatter(content: &str) -> String {
         .collect();
 
     // If 4+ dashes, there may be a duplicate frontmatter block.
+    // Only consider duplicates BEFORE the first ## heading — after that, --- is a horizontal rule.
     // Verify the block between positions 2 and 3 actually looks like YAML frontmatter
     // (contains `key:` lines) — otherwise it's a horizontal rule, not a duplicate.
     if dash_positions.len() >= 4 {
         let second_start = dash_positions[2];
+
+        // If a ## heading appears before the candidate duplicate, it's not frontmatter
+        let first_heading = lines.iter().position(|l| l.trim_start().starts_with("## "));
+        if let Some(h) = first_heading {
+            if h < second_start {
+                return content.to_string();
+            }
+        }
         let second_end = dash_positions[3];
 
         // Check for YAML-like `key: value` lines. Keys must be lowercase identifiers
@@ -722,5 +730,28 @@ mod tests {
             0,
             "Should have even fence count after normalization"
         );
+    }
+
+    #[test]
+    fn test_frontmatter_body_name_does_not_fool_check() {
+        // Body contains "name:" in a code example but frontmatter is missing required fields
+        let content = "---\ndescription: a library\n---\n\n## Core Patterns\n\n```python\nname: my_config\nvalue: 42\n```";
+        let result = ensure_frontmatter(content, "mylib", "1.0.0", "python", None, None);
+
+        // Frontmatter should be replaced (missing name/version/ecosystem in fm block)
+        assert!(result.starts_with("---\n"));
+        assert!(result.contains("name: mylib"));
+        assert!(result.contains("version: 1.0.0"));
+        assert!(result.contains("ecosystem: python"));
+    }
+
+    #[test]
+    fn test_frontmatter_scoped_to_fm_block() {
+        // Frontmatter has all fields — body also has "name:" which should not cause replacement
+        let content = "---\nname: mylib\ndescription: test\nversion: 1.0.0\necosystem: python\n---\n\nname: something_else\n";
+        let result = ensure_frontmatter(content, "mylib", "1.0.0", "python", None, None);
+
+        // Should keep existing frontmatter unchanged
+        assert_eq!(result, content);
     }
 }

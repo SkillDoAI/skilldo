@@ -47,9 +47,9 @@ enum Commands {
         #[arg(short = 'i', long = "input")]
         input: Option<String>,
 
-        /// Output file path
-        #[arg(short = 'o', long, default_value = "SKILL.md")]
-        output: String,
+        /// Output file path (default: SKILL.md, or from config)
+        #[arg(short = 'o', long)]
+        output: Option<String>,
 
         /// Explicit version override (e.g., "2.1.0")
         #[arg(long)]
@@ -114,6 +114,10 @@ enum Commands {
         /// Run agents 1-3 sequentially instead of in parallel
         #[arg(long)]
         no_parallel: bool,
+
+        /// Exit 0 even when lint/review/test errors remain (default: exit 1)
+        #[arg(long)]
+        best_effort: bool,
 
         /// Use mock LLM client for testing
         #[arg(long)]
@@ -222,6 +226,7 @@ async fn main() -> Result<()> {
             install_source,
             source_path,
             no_parallel,
+            best_effort,
             dry_run,
         } => {
             cli::generate::run(
@@ -245,6 +250,7 @@ async fn main() -> Result<()> {
                 install_source,
                 source_path,
                 no_parallel,
+                best_effort,
                 dry_run,
             )
             .await?;
@@ -337,7 +343,7 @@ mod tests {
         assert_generate!(cli, |path, language, output, dry_run| {
             assert_eq!(path, ".");
             assert!(language.is_none());
-            assert_eq!(output, "SKILL.md");
+            assert!(output.is_none(), "output should default to None");
             assert!(!dry_run);
         });
     }
@@ -370,7 +376,7 @@ mod tests {
                                dry_run| {
             assert_eq!(path, "/tmp/repo");
             assert_eq!(language.unwrap(), "python");
-            assert_eq!(output, "out.md");
+            assert_eq!(output.unwrap(), "out.md");
             assert_eq!(model.unwrap(), "gpt-5.2");
             assert_eq!(max_retries.unwrap(), 5);
             assert_eq!(version.unwrap(), "2.0.0");
@@ -392,7 +398,7 @@ mod tests {
         .unwrap();
         assert_generate!(cli, |input, output| {
             assert_eq!(input.unwrap(), "old-SKILL.md");
-            assert_eq!(output, "new-SKILL.md");
+            assert_eq!(output.unwrap(), "new-SKILL.md");
         });
     }
 
@@ -580,6 +586,7 @@ mod tests {
             "--source-path",
             "/tmp/mylib",
             "--no-parallel",
+            "--best-effort",
             "--dry-run",
         ])
         .unwrap();
@@ -603,11 +610,12 @@ mod tests {
                                install_source,
                                source_path,
                                no_parallel,
+                               best_effort,
                                dry_run| {
             assert_eq!(path, "/tmp/repo");
             assert_eq!(language.unwrap(), "python");
             assert!(input.is_none());
-            assert_eq!(output, "SKILL.md");
+            assert!(output.is_none());
             assert!(version.is_none());
             assert!(version_from.is_none());
             assert!(config.is_none());
@@ -623,6 +631,7 @@ mod tests {
             assert_eq!(timeout.unwrap(), 300);
             assert_eq!(install_source.unwrap(), "local-mount");
             assert!(no_parallel);
+            assert!(best_effort);
             assert_eq!(source_path.unwrap(), "/tmp/mylib");
             assert!(dry_run);
         });
@@ -886,6 +895,16 @@ mod tests {
         });
     }
 
+    // --- Generate --best-effort ---
+
+    #[test]
+    fn test_parse_generate_best_effort() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--best-effort"]).unwrap();
+        assert_generate!(cli, |best_effort| {
+            assert!(best_effort);
+        });
+    }
+
     // --- Generate boolean defaults are false ---
 
     #[test]
@@ -893,9 +912,10 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "generate"]).unwrap();
         assert!(!cli.quiet);
         assert!(!cli.verbose);
-        assert_generate!(cli, |no_test, no_parallel, dry_run| {
+        assert_generate!(cli, |no_test, no_parallel, best_effort, dry_run| {
             assert!(!no_test);
             assert!(!no_parallel);
+            assert!(!best_effort);
             assert!(!dry_run);
         });
     }

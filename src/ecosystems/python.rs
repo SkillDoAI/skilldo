@@ -3,6 +3,61 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
+/// Extract a clean version string from pyproject.toml `[project]` section content.
+/// Strips bracket/brace wrappers and rejects dynamic versions (attr, file references).
+pub(crate) fn pyproject_version(content: &str) -> Option<String> {
+    let raw = pyproject_project_field(content, "version")?;
+    let version = raw
+        .trim_matches('[')
+        .trim_matches(']')
+        .trim_matches('{')
+        .trim_matches('}');
+    if !version.is_empty() && !version.contains("attr") && !version.contains("\"") {
+        Some(version.to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract the raw value of a field from the `[project]` section of a pyproject.toml string.
+/// Returns the value trimmed of whitespace and outer quotes, or `None` if not found.
+/// Skips lines starting with "dynamic" (PEP 621 dynamic fields).
+pub(crate) fn pyproject_project_field(content: &str, key: &str) -> Option<String> {
+    let mut in_project = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_project = trimmed == "[project]";
+            continue;
+        }
+        if in_project && trimmed.contains('=') && !trimmed.starts_with("dynamic") {
+            // Split on first '=' and match key exactly (not prefix)
+            if let Some(eq_pos) = trimmed.find('=') {
+                let lhs = trimmed[..eq_pos].trim();
+                if lhs != key {
+                    continue;
+                }
+                let val = trimmed[eq_pos + 1..]
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check if a Python filename is a test file
+fn is_test_filename(name: &str) -> bool {
+    name.starts_with("test_")
+        || name.starts_with("tests_")
+        || name.ends_with("_test.py")
+        || name == "conftest.py"
+}
+
 pub struct PythonHandler {
     repo_path: PathBuf,
 }
@@ -85,16 +140,8 @@ impl PythonHandler {
             let path = entry.path();
 
             if path.is_file() {
-                // Check if it's a test file
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".py")
-                        && (
-                            name.starts_with("test_") ||   // test_*.py
-                        name.starts_with("tests_") ||  // tests_*.py (tqdm convention)
-                        name.ends_with("_test.py")
-                            // *_test.py
-                        )
-                    {
+                    if name.ends_with(".py") && is_test_filename(name) {
                         files.push(path);
                     }
                 }
@@ -232,72 +279,17 @@ impl PythonHandler {
         None
     }
 
-    /// Get package version from pyproject.toml or setup.py
+    /// Get package version from pyproject.toml, __init__.py, or docs
     pub fn get_version(&self) -> Result<String> {
-        // Strategy 1: Try to find version in release/blog docs
-        // Look for patterns like "pandas 3.0.0", "version 3.0.0", "released 3.0"
-        if let Ok(docs) = self.find_docs() {
-            for doc_path in docs {
-                if let Some(filename) = doc_path.file_name().and_then(|n| n.to_str()) {
-                    // Check release notes, blog posts, whatsnew files
-                    if filename.contains("release")
-                        || filename.contains("blog")
-                        || filename.contains("whatsnew")
-                        || filename.contains("changelog")
-                    {
-                        if let Ok(content) = fs::read_to_string(&doc_path) {
-                            // Look for version patterns in first 1000 chars
-                            let search_content = content.chars().take(1000).collect::<String>();
-
-                            // Pattern: "pandas 3.0.0", "version 3.0.0", "released!", etc.
-                            for line in search_content.lines() {
-                                let line_lower = line.to_lowercase();
-
-                                // Extract version like "3.0.0" or "2.1.4"
-                                if let Some(version) = self.extract_version_number(&line_lower) {
-                                    debug!("Found version {} in {}", version, filename);
-                                    return Ok(version);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Strategy 2: Try pyproject.toml
+        // Strategy 1: Try pyproject.toml (most authoritative source, scoped to [project])
         let pyproject = self.repo_path.join("pyproject.toml");
-        if pyproject.exists() {
-            if let Ok(content) = fs::read_to_string(&pyproject) {
-                for line in content.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with("version")
-                        && trimmed.contains("=")
-                        && !trimmed.starts_with("dynamic")
-                    {
-                        if let Some(version) = trimmed.split('=').nth(1) {
-                            let version = version
-                                .trim()
-                                .trim_matches('"')
-                                .trim_matches('\'')
-                                .trim_matches('[')
-                                .trim_matches(']')
-                                .trim_matches('{')
-                                .trim_matches('}');
-
-                            if !version.is_empty()
-                                && !version.contains("attr")
-                                && !version.contains("\"")
-                            {
-                                return Ok(version.to_string());
-                            }
-                        }
-                    }
-                }
+        if let Ok(content) = fs::read_to_string(&pyproject) {
+            if let Some(version) = pyproject_version(&content) {
+                return Ok(version);
             }
         }
 
-        // Strategy 3: Try package __init__.py
+        // Strategy 2: Try package __init__.py
         if let Some(pkg_name) = self.repo_path.file_name().and_then(|n| n.to_str()) {
             let init_path = self.repo_path.join(pkg_name).join("__init__.py");
             if init_path.exists() {
@@ -310,6 +302,30 @@ impl PythonHandler {
                                     && version.chars().next().unwrap_or('x').is_numeric()
                                 {
                                     return Ok(version.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Strategy 3: Try release/blog docs (fallback for dynamic-version packages)
+        if let Ok(docs) = self.find_docs() {
+            for doc_path in docs {
+                if let Some(filename) = doc_path.file_name().and_then(|n| n.to_str()) {
+                    if filename.contains("release")
+                        || filename.contains("blog")
+                        || filename.contains("whatsnew")
+                        || filename.contains("changelog")
+                    {
+                        if let Ok(content) = fs::read_to_string(&doc_path) {
+                            let search_content = content.chars().take(1000).collect::<String>();
+                            for line in search_content.lines() {
+                                let line_lower = line.to_lowercase();
+                                if let Some(version) = self.extract_version_number(&line_lower) {
+                                    debug!("Found version {} in {}", version, filename);
+                                    return Ok(version);
                                 }
                             }
                         }
@@ -349,52 +365,35 @@ impl PythonHandler {
 
     /// Get package license from pyproject.toml or setup.py
     pub fn get_license(&self) -> Option<String> {
-        // Try pyproject.toml first
+        // Try pyproject.toml first (scoped to [project] section)
         let pyproject = self.repo_path.join("pyproject.toml");
         if pyproject.exists() {
             if let Ok(content) = fs::read_to_string(&pyproject) {
-                for line in content.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with("license")
-                        && trimmed.contains("=")
-                        && !trimmed.starts_with("dynamic")
-                    {
-                        // Handle TOML table format: license = { text = "BSD-3-Clause" }
-                        if trimmed.contains("{ text =") || trimmed.contains("{text=") {
-                            // Extract value from { text = "VALUE" }
-                            if let Some(start) = trimmed.find("{ text") {
-                                let after_brace = &trimmed[start..];
-                                if let Some(eq_pos) = after_brace.find('=') {
-                                    let value_part = &after_brace[eq_pos + 1..];
-                                    let clean_value = value_part
-                                        .trim()
-                                        .trim_end_matches('}')
-                                        .trim()
-                                        .trim_matches('"')
-                                        .trim_matches('\'')
-                                        .trim();
-                                    if !clean_value.is_empty() {
-                                        info!(
-                                            "Found license in pyproject.toml (table format): {}",
-                                            clean_value
-                                        );
-                                        return Some(clean_value.to_string());
-                                    }
-                                }
+                if let Some(raw) = pyproject_project_field(&content, "license") {
+                    // Handle TOML table format: { text = "BSD-3-Clause" }
+                    if raw.contains("text") && raw.starts_with('{') {
+                        if let Some(eq_pos) = raw.find('=') {
+                            let value_part = &raw[eq_pos + 1..];
+                            let clean_value = value_part
+                                .trim()
+                                .trim_end_matches('}')
+                                .trim()
+                                .trim_matches('"')
+                                .trim_matches('\'')
+                                .trim();
+                            if !clean_value.is_empty() {
+                                info!(
+                                    "Found license in pyproject.toml (table format): {}",
+                                    clean_value
+                                );
+                                return Some(clean_value.to_string());
                             }
                         }
-                        // Handle simple string format: license = "MIT"
-                        else if let Some(license) = trimmed.split('=').nth(1) {
-                            let license =
-                                license.trim().trim_matches('"').trim_matches('\'').trim();
-                            if !license.is_empty()
-                                && !license.starts_with('[')
-                                && !license.starts_with('{')
-                            {
-                                info!("Found license in pyproject.toml: {}", license);
-                                return Some(license.to_string());
-                            }
-                        }
+                    }
+                    // Simple string format (already trimmed/unquoted by helper)
+                    else if !raw.starts_with('[') && !raw.starts_with('{') {
+                        info!("Found license in pyproject.toml: {}", raw);
+                        return Some(raw);
                     }
                 }
             }
@@ -545,13 +544,17 @@ impl PythonHandler {
 
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    // ONLY collect .py files (exclude C++/C for hybrid codebases like PyTorch)
                     if ext == "py" {
-                        files.push(path);
+                        // Exclude test files from source collection
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if !is_test_filename(name) {
+                                files.push(path);
+                            }
+                        }
                     }
                 }
             } else if path.is_dir() {
-                // Skip common non-source directories
+                // Skip common non-source directories (including test dirs)
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if !matches!(
                         name,
@@ -569,6 +572,9 @@ impl PythonHandler {
                             | "csrc"
                             | "cpp"
                             | "cuda"
+                            | "tests"
+                            | "test"
+                            | "testing"
                     ) {
                         self.collect_py_files(&path, files)?;
                     }
@@ -1325,8 +1331,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_version_prefers_docs_over_pyproject() {
-        // If a release doc has a version, it takes priority over pyproject.toml
+    fn test_get_version_prefers_pyproject_over_docs() {
+        // pyproject.toml is the most authoritative source — takes priority over docs
         let dir = TempDir::new().unwrap();
         fs::write(
             dir.path().join("pyproject.toml"),
@@ -1339,7 +1345,7 @@ mod tests {
 
         let handler = PythonHandler::new(dir.path());
         let version = handler.get_version().unwrap();
-        assert_eq!(version, "2.0.0");
+        assert_eq!(version, "1.0.0");
     }
 
     #[test]
@@ -1429,10 +1435,8 @@ mod tests {
 
     #[test]
     fn test_get_license_pyproject_table_no_space() {
-        // license = {text="GPL-2.0"} — the code checks for "{ text" (with space after brace)
-        // so {text= without a space does NOT match the table format parser.
-        // The simple format parser sees the value starts with '{' and skips it.
-        // Result: None (falls through all strategies).
+        // license = {text="GPL-2.0"} — compact table format (no space after brace)
+        // The shared helper returns the full value, and the table parser handles it.
         let dir = TempDir::new().unwrap();
         fs::write(
             dir.path().join("pyproject.toml"),
@@ -1442,10 +1446,7 @@ mod tests {
 
         let handler = PythonHandler::new(dir.path());
         let lic = handler.get_license();
-        assert_eq!(
-            lic, None,
-            "Compact table format without space is not parsed"
-        );
+        assert_eq!(lic, Some("GPL-2.0".to_string()));
     }
 
     #[test]
@@ -1478,6 +1479,22 @@ mod tests {
         let handler = PythonHandler::new(dir.path());
         let lic = handler.get_license();
         assert_eq!(lic, None);
+    }
+
+    #[test]
+    fn test_pyproject_field_exact_key_match() {
+        // "license-files" should NOT shadow "license"
+        let content = "[project]\nlicense-files = [\"LICENSE\"]\nlicense = \"MIT\"\n";
+        assert_eq!(
+            pyproject_project_field(content, "license"),
+            Some("MIT".to_string())
+        );
+        // "version_info" should NOT match "version"
+        let content2 = "[project]\nversion_info = \"extra\"\nversion = \"1.0.0\"\n";
+        assert_eq!(
+            pyproject_project_field(content2, "version"),
+            Some("1.0.0".to_string())
+        );
     }
 
     #[test]
@@ -1887,5 +1904,49 @@ mod tests {
         let mut files = Vec::new();
         handler.collect_py_files(dir.path(), &mut files).unwrap();
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_collect_py_files_excludes_test_files() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("core.py"), "# core").unwrap();
+        fs::write(dir.path().join("test_core.py"), "# test").unwrap();
+        fs::write(dir.path().join("core_test.py"), "# test").unwrap();
+        fs::write(dir.path().join("conftest.py"), "# fixtures").unwrap();
+        fs::write(dir.path().join("utils.py"), "# utils").unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let mut files = Vec::new();
+        handler.collect_py_files(dir.path(), &mut files).unwrap();
+
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"core.py"));
+        assert!(names.contains(&"utils.py"));
+        assert!(!names.contains(&"test_core.py"));
+        assert!(!names.contains(&"core_test.py"));
+        assert!(!names.contains(&"conftest.py"));
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_collect_py_files_excludes_test_dirs() {
+        let dir = TempDir::new().unwrap();
+        let tests = dir.path().join("tests");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(tests.join("test_api.py"), "# test").unwrap();
+        let test_dir = dir.path().join("test");
+        fs::create_dir_all(&test_dir).unwrap();
+        fs::write(test_dir.join("test_utils.py"), "# test").unwrap();
+        fs::write(dir.path().join("main.py"), "# main").unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let mut files = Vec::new();
+        handler.collect_py_files(dir.path(), &mut files).unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert!(files[0].file_name().unwrap().to_str().unwrap() == "main.py");
     }
 }

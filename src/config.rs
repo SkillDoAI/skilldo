@@ -175,6 +175,18 @@ impl LlmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationConfig {
+    /// Default output file path (CLI --output overrides this)
+    #[serde(default)]
+    pub output: Option<String>,
+
+    /// Default input file for update mode (CLI --input overrides this)
+    #[serde(default)]
+    pub input: Option<String>,
+
+    /// Default language override (CLI --language overrides this)
+    #[serde(default)]
+    pub language: Option<String>,
+
     #[serde(default = "default_max_retries")]
     pub max_retries: usize,
     #[serde(default = "default_max_source_tokens")]
@@ -546,6 +558,9 @@ impl Default for Config {
                 request_timeout_secs: default_request_timeout(),
             },
             generation: GenerationConfig {
+                output: None,
+                input: None,
+                language: None,
                 max_retries: 5,
                 max_source_tokens: 100000,
                 parallel_extraction: true,
@@ -665,6 +680,9 @@ mod tests {
     #[test]
     fn test_test_mode_parsing() {
         let mut gen = GenerationConfig {
+            output: None,
+            input: None,
+            language: None,
             max_retries: 5,
             max_source_tokens: 100000,
             parallel_extraction: true,

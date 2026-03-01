@@ -19,7 +19,7 @@ pub fn extract_prompt(
     }
 
     let ecosystem_term = language.ecosystem_term();
-    let language = language.as_str();
+    let lang_str = language.as_str();
 
     // Add scale-aware hints for large libraries
     let scale_hint = if source_file_count > 2000 {
@@ -37,7 +37,7 @@ pub fn extract_prompt(
     };
 
     let mut prompt = format!(
-        r#"You are analyzing the {language} {ecosystem_term} "{}" v{} ({} source files).
+        r#"You are analyzing the {lang_str} {ecosystem_term} "{}" v{} ({} source files).
 
 Your job: Extract the complete public API surface.{}
 
@@ -350,9 +350,10 @@ Source code:
         source_file_count,
         scale_hint,
         source_code,
-        language = language,
         ecosystem_term = ecosystem_term
     );
+
+    prompt.push_str(language_hints(language, "extract"));
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
@@ -376,10 +377,10 @@ pub fn map_prompt(
     }
 
     let ecosystem_term = language.ecosystem_term();
-    let language = language.as_str();
+    let lang_str = language.as_str();
 
     let mut prompt = format!(
-        r#"You are analyzing the test suite for {language} {ecosystem_term} "{}" v{}.
+        r#"You are analyzing the test suite for {lang_str} {ecosystem_term} "{}" v{}.
 
 Your job: Extract correct usage patterns from the tests.
 
@@ -474,9 +475,10 @@ Test code:
         package_name,
         version,
         test_code,
-        language = language,
         ecosystem_term = ecosystem_term
     );
+
+    prompt.push_str(language_hints(language, "map"));
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
@@ -500,10 +502,10 @@ pub fn learn_prompt(
     }
 
     let ecosystem_term = language.ecosystem_term();
-    let language = language.as_str();
+    let lang_str = language.as_str();
 
     let mut prompt = format!(
-        r#"You are analyzing documentation and changelog for {language} {ecosystem_term} "{}" v{}.
+        r#"You are analyzing documentation and changelog for {lang_str} {ecosystem_term} "{}" v{}.
 
 Your job: Extract conventions, best practices, pitfalls, and migration notes.
 
@@ -678,9 +680,10 @@ Documentation and changelog:
         package_name,
         version,
         docs_and_changelog,
-        language = language,
         ecosystem_term = ecosystem_term
     );
+
+    prompt.push_str(language_hints(language, "learn"));
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
@@ -923,6 +926,8 @@ Now generate the SKILL.md content for {} v{}:
         ecosystem_term = ecosystem_term,
     );
 
+    prompt.push_str(language_hints(language, "create"));
+
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
             "\n## CUSTOM INSTRUCTIONS FOR THIS REPO\n\n{}\n",
@@ -944,7 +949,7 @@ pub fn create_update_prompt(
     language: &Language,
 ) -> String {
     let ecosystem_term = language.ecosystem_term();
-    let language = language.as_str();
+    let lang_str = language.as_str();
     format!(
         r#"You are updating an existing SKILL.md for {ecosystem_term} "{}" to version {}.
 
@@ -967,7 +972,7 @@ pub fn create_update_prompt(
 
 1. Keep all code patterns that are still valid — do NOT rewrite working examples
 2. Update version in frontmatter to {}
-3. If APIs changed signatures, update the {language} code examples to match the current API
+3. If APIs changed signatures, update the {lang_str} code examples to match the current API
 4. Add deprecation markers (⚠️) where the changelog indicates deprecations
 5. Add a Migration section if there are breaking changes from the previous version
 6. Add new patterns ONLY if significant new APIs were added
@@ -1008,8 +1013,7 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
         patterns,
         context,
         version,
-        ecosystem_term = ecosystem_term,
-        language = language
+        ecosystem_term = ecosystem_term
     )
 }
 
@@ -1027,7 +1031,17 @@ pub fn review_introspect_prompt(
     package_name: &str,
     version: &str,
     custom_instructions: Option<&str>,
+    language: &Language,
 ) -> String {
+    // Introspection is currently Python-only (PEP 723 + inspect + importlib)
+    if !matches!(language, Language::Python) {
+        return format!(
+            "INTROSPECTION SKIPPED: {} introspection not yet supported. \
+             Return an empty JSON object: {{}}",
+            language.as_str()
+        );
+    }
+
     let custom_section = custom_instructions
         .map(|c| format!("\n\nADDITIONAL INSTRUCTIONS:\n{}", c))
         .unwrap_or_default();
@@ -1089,10 +1103,12 @@ pub fn review_verdict_prompt(
     skill_md: &str,
     introspection_output: &str,
     custom_instructions: Option<&str>,
+    language: &Language,
 ) -> String {
     let custom_section = custom_instructions
         .map(|c| format!("\n\nADDITIONAL INSTRUCTIONS:\n{}", c))
         .unwrap_or_default();
+    let lang_hints = language_hints(language, "review_verdict");
 
     let utc_now = chrono_free_utc_timestamp();
 
@@ -1209,8 +1225,65 @@ Rules:
   params is acceptable for a quick-reference document. Only flag wrong/nonexistent param names.
 - Do NOT flag introspection failures/skips as issues. They are NOT SKILL.md problems.
 - Do NOT flag code inside `### Wrong:` sections. Those examples are INTENTIONALLY broken.
-- Output ONLY the JSON. No preamble, no commentary.{custom_section}"#,
+- Output ONLY the JSON. No preamble, no commentary.{custom_section}{lang_hints}"#,
     )
+}
+
+/// Language-specific hints appended to base prompts for each pipeline stage.
+/// Returns empty string for unsupported languages (prompts still work, just less specific).
+pub fn language_hints(language: &Language, stage: &str) -> &'static str {
+    match language {
+        Language::Python => python_hints(stage),
+        Language::Go => go_hints(stage),
+        _ => "",
+    }
+}
+
+fn python_hints(stage: &str) -> &'static str {
+    match stage {
+        "extract" => {
+            "\
+\n\nPYTHON-SPECIFIC HINTS:\n\
+- Note `__version__` attributes in `__init__.py` for version detection\n\
+- `setup.py` / `setup.cfg` may define additional entry points and console scripts"
+        }
+        "map" => {
+            "\
+\n\nPYTHON-SPECIFIC HINTS:\n\
+- pytest fixtures (`@pytest.fixture`) indicate common setup patterns\n\
+- `@pytest.mark.parametrize` shows common input/output combinations\n\
+- `with` context managers reveal resource lifecycle patterns\n\
+- `conftest.py` files define shared test infrastructure"
+        }
+        "learn" => {
+            "\
+\n\nPYTHON-SPECIFIC HINTS:\n\
+- Look for PEP references (e.g., PEP 484, PEP 723) — these contextualize design decisions\n\
+- Note Python 2→3 migration patterns (e.g., `six` compat layers, `__future__` imports)\n\
+- Check for type stub files (`.pyi`) that document the type system"
+        }
+        "create" => {
+            "\
+\n\nPYTHON-SPECIFIC HINTS:\n\
+- Use Python import conventions: `from package import module` not `import package.module.thing`\n\
+- Include `if __name__ == '__main__':` guard in runnable examples\n\
+- Follow PEP 8 style in code examples (snake_case, 4-space indent)\n\
+- Omitting type annotations in signatures is OK for quick-reference docs"
+        }
+        "review_verdict" => {
+            "\
+\n\nPYTHON-SPECIFIC GUIDANCE:\n\
+- Simplified signatures are OK: omitting type annotations (e.g., `name` vs `name: str`) is fine\n\
+- `Optional[X]` vs `X | None` differences are not errors\n\
+- `**kwargs` instead of listing every keyword argument is acceptable"
+        }
+        _ => "",
+    }
+}
+
+fn go_hints(_stage: &str) -> &'static str {
+    // Placeholder — Go hints will be populated in v0.2.0
+    ""
 }
 
 /// Generate a UTC timestamp string without depending on the chrono crate.
@@ -1228,4 +1301,159 @@ fn chrono_free_utc_timestamp() -> String {
         "Unix epoch seconds: {} (use for temporal verification)",
         now
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_python_extract_prompt_contains_init_hint() {
+        let prompt = extract_prompt(
+            "click",
+            "8.1.0",
+            "# source",
+            10,
+            None,
+            false,
+            &Language::Python,
+        );
+        assert!(
+            prompt.contains("__init__.py"),
+            "Python extract should mention __init__.py"
+        );
+    }
+
+    #[test]
+    fn test_go_extract_prompt_has_no_python_hints_section() {
+        let prompt = extract_prompt(
+            "cobra",
+            "1.8.0",
+            "// source",
+            10,
+            None,
+            false,
+            &Language::Go,
+        );
+        assert!(
+            !prompt.contains("PYTHON-SPECIFIC HINTS"),
+            "Go extract should not have Python-specific hints section"
+        );
+    }
+
+    #[test]
+    fn test_python_create_prompt_contains_pep8() {
+        let prompt = create_prompt(
+            "click",
+            "8.1.0",
+            None,
+            &[],
+            &Language::Python,
+            "api data",
+            "patterns",
+            "context",
+            None,
+            false,
+        );
+        assert!(
+            prompt.contains("PEP 8"),
+            "Python create should mention PEP 8"
+        );
+    }
+
+    #[test]
+    fn test_go_create_prompt_does_not_contain_pep8() {
+        let prompt = create_prompt(
+            "cobra",
+            "1.8.0",
+            None,
+            &[],
+            &Language::Go,
+            "api data",
+            "patterns",
+            "context",
+            None,
+            false,
+        );
+        assert!(
+            !prompt.contains("PEP 8"),
+            "Go create should not mention PEP 8"
+        );
+    }
+
+    #[test]
+    fn test_introspect_prompt_python_has_pep723() {
+        let prompt = review_introspect_prompt(
+            "---\nname: click\n---\n# Click",
+            "click",
+            "8.1.0",
+            None,
+            &Language::Python,
+        );
+        assert!(
+            prompt.contains("PEP 723"),
+            "Python introspect should mention PEP 723"
+        );
+    }
+
+    #[test]
+    fn test_introspect_prompt_go_skips() {
+        let prompt = review_introspect_prompt(
+            "---\nname: cobra\n---\n# Cobra",
+            "cobra",
+            "1.8.0",
+            None,
+            &Language::Go,
+        );
+        assert!(
+            prompt.contains("INTROSPECTION SKIPPED"),
+            "Go introspect should skip"
+        );
+        assert!(
+            !prompt.contains("PEP 723"),
+            "Go introspect should not mention PEP 723"
+        );
+    }
+
+    #[test]
+    fn test_verdict_prompt_python_has_language_hints() {
+        let prompt = review_verdict_prompt("# skill", "{}", None, &Language::Python);
+        assert!(
+            prompt.contains("PYTHON-SPECIFIC"),
+            "Python verdict should have Python hints"
+        );
+    }
+
+    #[test]
+    fn test_verdict_prompt_go_no_python_hints() {
+        let prompt = review_verdict_prompt("# skill", "{}", None, &Language::Go);
+        assert!(
+            !prompt.contains("PYTHON-SPECIFIC"),
+            "Go verdict should not have Python hints"
+        );
+    }
+
+    #[test]
+    fn test_language_hints_unknown_stage_returns_empty() {
+        let hints = language_hints(&Language::Python, "nonexistent_stage");
+        assert!(hints.is_empty(), "Unknown stage should return empty hints");
+    }
+
+    #[test]
+    fn test_overwrite_mode_ignores_language_hints() {
+        let custom = "My custom instructions";
+        let prompt = extract_prompt(
+            "click",
+            "8.1.0",
+            "# source",
+            10,
+            Some(custom),
+            true,
+            &Language::Python,
+        );
+        assert_eq!(
+            prompt, custom,
+            "Overwrite mode should return custom instructions only"
+        );
+    }
 }

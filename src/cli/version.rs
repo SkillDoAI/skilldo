@@ -2,6 +2,8 @@ use anyhow::{bail, Result};
 use std::path::Path;
 use std::process::Command;
 
+use crate::ecosystems::python::pyproject_version;
+
 /// Extract version from various sources
 /// Priority: explicit > version_from strategy > package metadata
 pub fn extract_version(
@@ -52,35 +54,11 @@ fn extract_from_git_tag(repo_path: &Path) -> Result<String> {
 /// Extract version from package metadata
 /// Priority: build system files > source code > changelog/docs > git tags
 fn extract_from_package(repo_path: &Path) -> Result<String> {
-    // Strategy 1: pyproject.toml — canonical source of truth for Python packages
+    // Strategy 1: pyproject.toml — canonical source of truth (scoped to [project])
     let pyproject = repo_path.join("pyproject.toml");
-    if pyproject.exists() {
-        if let Ok(content) = std::fs::read_to_string(&pyproject) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("version")
-                    && trimmed.contains("=")
-                    && !trimmed.starts_with("dynamic")
-                {
-                    if let Some(version) = trimmed.split('=').nth(1) {
-                        let version = version
-                            .trim()
-                            .trim_matches('"')
-                            .trim_matches('\'')
-                            .trim_matches('[')
-                            .trim_matches(']')
-                            .trim_matches('{')
-                            .trim_matches('}');
-
-                        if !version.is_empty()
-                            && !version.contains("attr")
-                            && !version.contains("\"")
-                        {
-                            return Ok(version.to_string());
-                        }
-                    }
-                }
-            }
+    if let Ok(content) = std::fs::read_to_string(&pyproject) {
+        if let Some(version) = pyproject_version(&content) {
+            return Ok(version);
         }
     }
 

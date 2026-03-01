@@ -19,6 +19,10 @@ pub struct GenerateOutput {
     /// Unresolved review issues that the pipeline could not fix.
     /// Empty if review passed or was disabled.
     pub unresolved_warnings: Vec<ReviewIssue>,
+    /// True when the pipeline exhausted retries with known-bad output remaining
+    /// (lint errors, review failures, test failures, malformed verdicts).
+    /// CLI should exit non-zero unless --best-effort is set.
+    pub has_unresolved_errors: bool,
 }
 
 /// Strip markdown code fences from output (```markdown ... ``` or ```...```)
@@ -203,6 +207,7 @@ impl Generator {
 
     pub async fn generate(&self, data: &CollectedData) -> Result<GenerateOutput> {
         info!("Starting pipeline for {}", data.package_name);
+        let mut had_unresolved_errors = false;
 
         // Combine docs and changelog for learn stage
         let docs_and_changelog = format!("{}\n\n{}", data.docs_content, data.changelog_content);
@@ -357,6 +362,7 @@ impl Generator {
 
                 if attempt == validation_passes - 1 {
                     info!("Max retries reached, returning best attempt despite format issues");
+                    had_unresolved_errors = true;
                     break;
                 }
 
@@ -458,6 +464,7 @@ impl Generator {
                                         }
                                     } else {
                                         warn!("  Max retries reached, proceeding despite test failures");
+                                        had_unresolved_errors = true;
                                         break;
                                     }
                                 }
@@ -483,6 +490,7 @@ impl Generator {
                         let final_lint = linter.lint(&skill_md)?;
                         bail_on_security_lint(&final_lint)?;
                         info!("Max retries reached, returning best attempt despite code issues");
+                        had_unresolved_errors = true;
                         break;
                     }
 
@@ -517,8 +525,18 @@ impl Generator {
                 );
 
                 let result = review_agent
-                    .review(&skill_md, &data.package_name, data.language.as_str())
+                    .review(&skill_md, &data.package_name, &data.language)
                     .await?;
+
+                if result.malformed {
+                    if review_attempt < self.review_max_retries {
+                        warn!("  ⚠ review: malformed verdict, retrying");
+                        continue;
+                    }
+                    warn!("  ⚠ review: malformed verdict on final attempt, accepting as pass");
+                    had_unresolved_errors = true;
+                    break;
+                }
 
                 if result.passed {
                     info!("  ✓ review: passed");
@@ -554,6 +572,7 @@ impl Generator {
                         );
                     }
                     unresolved_warnings = result.issues;
+                    had_unresolved_errors = true;
                     break;
                 }
 
@@ -605,11 +624,13 @@ impl Generator {
             for issue in &post_errors {
                 warn!("  - [{}] {}", issue.category, issue.message);
             }
+            had_unresolved_errors = true;
         }
 
         Ok(GenerateOutput {
             skill_md,
             unresolved_warnings,
+            has_unresolved_errors: had_unresolved_errors,
         })
     }
 }
@@ -1045,9 +1066,11 @@ mod tests {
         let output = GenerateOutput {
             skill_md: "# Test SKILL.md".to_string(),
             unresolved_warnings: vec![],
+            has_unresolved_errors: false,
         };
         assert_eq!(output.skill_md, "# Test SKILL.md");
         assert!(output.unresolved_warnings.is_empty());
+        assert!(!output.has_unresolved_errors);
     }
 
     #[test]
@@ -1062,6 +1085,7 @@ mod tests {
         let output = GenerateOutput {
             skill_md: "# SKILL".to_string(),
             unresolved_warnings: vec![warning],
+            has_unresolved_errors: true,
         };
         assert_eq!(output.unresolved_warnings.len(), 1);
         assert_eq!(
@@ -1081,6 +1105,7 @@ mod tests {
         let output = GenerateOutput {
             skill_md: "test".to_string(),
             unresolved_warnings: vec![],
+            has_unresolved_errors: false,
         };
         // GenerateOutput derives Debug, ensure it doesn't panic
         let debug_str = format!("{:?}", output);
@@ -1983,6 +2008,7 @@ print(json.dumps(result))
         let output = GenerateOutput {
             skill_md: "content".to_string(),
             unresolved_warnings: vec![warning],
+            has_unresolved_errors: false,
         };
         let debug_str = format!("{:?}", output);
         assert!(debug_str.contains("GenerateOutput"));

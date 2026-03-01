@@ -9,6 +9,7 @@ use std::str::FromStr;
 use tracing::{debug, warn};
 
 use crate::config::ContainerConfig;
+use crate::detector::Language;
 use crate::test_agent::container_executor::ContainerExecutor;
 use crate::test_agent::executor::ExecutionResult;
 use crate::test_agent::LanguageExecutor;
@@ -22,6 +23,9 @@ use crate::llm::prompts_v2;
 pub struct ReviewResult {
     pub passed: bool,
     pub issues: Vec<ReviewIssue>,
+    /// True when the LLM returned an unparseable verdict (non-strict mode only).
+    /// The pipeline should retry when this is true and retries remain.
+    pub malformed: bool,
 }
 
 impl Default for ReviewResult {
@@ -29,6 +33,7 @@ impl Default for ReviewResult {
         Self {
             passed: true,
             issues: Vec::new(),
+            malformed: false,
         }
     }
 }
@@ -67,6 +72,9 @@ pub struct ReviewAgent<'a> {
     /// Use strict=true for standalone review (user explicitly asked to review).
     /// Use strict=false in the pipeline (don't block generation on LLM flakiness).
     strict: bool,
+    /// When true, skip container introspection regardless of language.
+    /// Used when --no-container is passed to the CLI.
+    skip_introspection: bool,
 }
 
 impl<'a> ReviewAgent<'a> {
@@ -80,6 +88,7 @@ impl<'a> ReviewAgent<'a> {
             container_config,
             custom_prompt,
             strict: false,
+            skip_introspection: false,
         }
     }
 
@@ -89,16 +98,30 @@ impl<'a> ReviewAgent<'a> {
         self
     }
 
+    /// Skip container introspection (e.g., when --no-container is passed).
+    pub fn with_skip_introspection(mut self, skip: bool) -> Self {
+        self.skip_introspection = skip;
+        self
+    }
+
     /// Run the full review pipeline on a SKILL.md.
     pub async fn review(
         &self,
         skill_md: &str,
         package_name: &str,
-        language: &str,
+        language: &Language,
     ) -> Result<ReviewResult> {
-        // Phase A: generate introspection script (Python only)
-        let (introspection_output, introspection_degraded) = if language == "python" {
-            match self.run_introspection(skill_md, package_name).await {
+        // Phase A: generate introspection script (Python only, unless skipped)
+        let (introspection_output, introspection_degraded) = if self.skip_introspection {
+            (
+                "INTROSPECTION SKIPPED: container introspection disabled".to_string(),
+                false, // Not degraded — user intentionally skipped
+            )
+        } else if matches!(language, Language::Python) {
+            match self
+                .run_introspection(skill_md, package_name, language)
+                .await
+            {
                 Ok(output) => {
                     let degraded = output.starts_with("INTROSPECTION SKIPPED");
                     (output, degraded)
@@ -121,6 +144,7 @@ impl<'a> ReviewAgent<'a> {
             skill_md,
             &introspection_output,
             self.custom_prompt.as_deref(),
+            language,
         );
         let verdict_response = self
             .client
@@ -148,7 +172,12 @@ impl<'a> ReviewAgent<'a> {
     }
 
     /// Phase A: ask LLM to generate an introspection script, then run it in a container.
-    async fn run_introspection(&self, skill_md: &str, package_name: &str) -> Result<String> {
+    async fn run_introspection(
+        &self,
+        skill_md: &str,
+        package_name: &str,
+        language: &Language,
+    ) -> Result<String> {
         // Extract version from frontmatter for the prompt
         let version = extract_frontmatter_version(skill_md).unwrap_or_default();
 
@@ -157,6 +186,7 @@ impl<'a> ReviewAgent<'a> {
             package_name,
             &version,
             self.custom_prompt.as_deref(),
+            language,
         );
 
         let script_response = self
@@ -279,15 +309,15 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                     response.chars().take(500).collect::<String>()
                 );
             }
-            // Fallback: if the response contains "pass" (case-insensitive), treat as passed
-            if response.to_lowercase().contains("\"passed\": true")
-                || response.to_lowercase().contains("\"passed\":true")
-            {
-                return Ok(ReviewResult::default());
-            }
             // Conservative: treat parse failure as pass (don't block pipeline)
-            warn!("review: treating unparseable response as pass");
-            return Ok(ReviewResult::default());
+            let lower = response.to_lowercase();
+            if !lower.contains("\"passed\": true") && !lower.contains("\"passed\":true") {
+                warn!("review: treating unparseable response as pass");
+            }
+            return Ok(ReviewResult {
+                malformed: true,
+                ..ReviewResult::default()
+            });
         }
     };
 
@@ -328,7 +358,11 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         .any(|i| i.severity != Severity::Warning && i.severity != Severity::Info);
     let passed = !has_errors;
 
-    Ok(ReviewResult { passed, issues })
+    Ok(ReviewResult {
+        passed,
+        issues,
+        malformed: false,
+    })
 }
 
 /// Extract a JSON object from a string that may have markdown fences or preamble text.
@@ -423,6 +457,7 @@ mod tests {
         let result = parse_review_response(json, false).unwrap();
         assert!(result.passed);
         assert!(result.issues.is_empty());
+        assert!(!result.malformed, "valid JSON should not be malformed");
     }
 
     #[test]
@@ -473,6 +508,10 @@ mod tests {
         let response = "I couldn't analyze this properly, here are some thoughts...";
         let result = parse_review_response(response, false).unwrap();
         assert!(result.passed); // Conservative: unparseable = pass (pipeline mode)
+        assert!(
+            result.malformed,
+            "malformed should be true on parse failure"
+        );
     }
 
     #[test]
@@ -513,6 +552,7 @@ mod tests {
     fn test_format_feedback_accuracy_only() {
         let result = ReviewResult {
             passed: false,
+            malformed: false,
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "accuracy".to_string(),
@@ -533,6 +573,7 @@ mod tests {
     fn test_format_feedback_safety_issue() {
         let result = ReviewResult {
             passed: false,
+            malformed: false,
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "safety".to_string(),
@@ -633,12 +674,17 @@ mod tests {
         let response = "I found no issues. The result is \"passed\": true so all good.";
         let result = parse_review_response(response, false).unwrap();
         assert!(result.passed); // Fallback detects "passed": true pattern
+        assert!(
+            result.malformed,
+            "malformed should be true even when text heuristic matches"
+        );
     }
 
     #[test]
     fn test_format_feedback_mixed_issues() {
         let result = ReviewResult {
             passed: false,
+            malformed: false,
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Error,
@@ -689,7 +735,7 @@ mod tests {
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 "testpkg",
-                "python",
+                &Language::Python,
             )
             .await
             .expect("review should succeed with degraded introspection");
@@ -728,7 +774,7 @@ mod tests {
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 "testpkg",
-                "python",
+                &Language::Python,
             )
             .await
             .expect("review should succeed in advisory mode");

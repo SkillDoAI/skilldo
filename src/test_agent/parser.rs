@@ -332,8 +332,8 @@ impl LanguageParser for PythonParser {
     fn extract_patterns(&self, skill_md: &str) -> Result<Vec<CodePattern>> {
         let mut patterns = Vec::new();
 
-        // Find the Core Patterns section
-        let core_patterns_re = Regex::new(r"(?m)^##\s+Core\s+Patterns\s*$")?;
+        // Find the Core Patterns section (case-insensitive)
+        let core_patterns_re = Regex::new(r"(?mi)^##\s+Core\s+Patterns\s*$")?;
         let next_section_re = Regex::new(r"(?m)^##\s+")?;
 
         let start_pos = match core_patterns_re.find(skill_md) {
@@ -353,9 +353,10 @@ impl LanguageParser for PythonParser {
 
         let core_patterns_content = &section_content[..end_pos];
 
-        // Extract patterns: ### Pattern Name followed by description and ```python code block
+        // Extract patterns: ### Pattern Name followed by description and code block
+        // Accepts ```python, ```py, or unlabeled ``` fences
         let pattern_re = Regex::new(r"(?m)^###\s+(.+?)$")?;
-        let code_block_re = Regex::new(r"```python\n([\s\S]*?)```")?;
+        let code_block_re = Regex::new(r"(?i)```(?:python|py)?\n([\s\S]*?)```")?;
 
         let pattern_starts: Vec<(usize, String)> = pattern_re
             .captures_iter(core_patterns_content)
@@ -397,6 +398,14 @@ impl LanguageParser for PythonParser {
                     category,
                 });
             }
+        }
+
+        // Section found but zero code blocks extracted — something is wrong
+        if patterns.is_empty() {
+            anyhow::bail!(
+                "Core Patterns section found but no code blocks extracted. \
+                 Check that patterns have ### headings with code fences."
+            );
         }
 
         debug!("Extracted {} patterns from SKILL.md", patterns.len());
@@ -640,5 +649,117 @@ name: mylib
         let parser = PythonParser;
         let version = parser.extract_version(skill_md_no_version).unwrap();
         assert_eq!(version, None); // No version field returns None
+    }
+
+    #[test]
+    fn test_extract_patterns_case_insensitive_heading() {
+        let skill_md = r#"
+# Test
+
+## core patterns
+
+### Basic Example
+
+Simple usage.
+
+```python
+import mylib
+mylib.run()
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let patterns = parser.extract_patterns(skill_md).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].name, "Basic Example");
+    }
+
+    #[test]
+    fn test_extract_patterns_py_fence() {
+        let skill_md = r#"
+# Test
+
+## Core Patterns
+
+### Py Fence
+
+Example with ```py fence.
+
+```py
+import mylib
+mylib.run()
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let patterns = parser.extract_patterns(skill_md).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert!(patterns[0].code.contains("mylib.run()"));
+    }
+
+    #[test]
+    fn test_extract_patterns_unlabeled_fence() {
+        let skill_md = r#"
+# Test
+
+## Core Patterns
+
+### Unlabeled Fence
+
+Example with unlabeled fence.
+
+```
+import mylib
+mylib.run()
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let patterns = parser.extract_patterns(skill_md).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert!(patterns[0].code.contains("mylib.run()"));
+    }
+
+    #[test]
+    fn test_extract_patterns_section_found_no_blocks_errors() {
+        let skill_md = r#"
+# Test
+
+## Core Patterns
+
+### Pattern Without Code
+
+This pattern has no code block at all.
+
+## Next
+"#;
+        let parser = PythonParser;
+        let result = parser.extract_patterns(skill_md);
+        assert!(
+            result.is_err(),
+            "section found with no code blocks should error"
+        );
+    }
+
+    #[test]
+    fn test_extract_patterns_no_section_returns_empty() {
+        let skill_md = r#"
+# Test
+
+## Imports
+
+```python
+import mylib
+```
+"#;
+        let parser = PythonParser;
+        let patterns = parser.extract_patterns(skill_md).unwrap();
+        assert!(
+            patterns.is_empty(),
+            "no Core Patterns section should return empty Vec"
+        );
     }
 }
