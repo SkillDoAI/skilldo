@@ -10,7 +10,7 @@ The goal: make agent rules a standard part of every open-source package — like
 
 Skilldo reads a library's source directory and runs a 6-stage pipeline to extract knowledge and synthesize it into a single `SKILL.md` file:
 
-```
+```text
 Source Code ──→ Extract (API Surface)       ──┐
 Test Files  ──→ Map (Pattern Extraction)    ──┤──→ Create (Synthesis) ──→ Review ──→ SKILL.md
 Docs/README ──→ Learn (Context Extraction)  ──┘        ↑                              │
@@ -18,7 +18,7 @@ Docs/README ──→ Learn (Context Extraction)  ──┘        ↑          
 ```
 
 1. **Collect** — Discovers source files, tests, documentation, and changelogs from the local directory
-2. **Extract** — Three agents work in parallel to pull out the API surface, usage patterns, and conventions/pitfalls
+2. **Extract** — Three stages work in parallel to pull out the API surface, usage patterns, and conventions/pitfalls
 3. **Create** — Combines everything into a formatted SKILL.md
 4. **Review** — Verifies accuracy (dates, signatures, consistency) and safety (prompt injection, nefarious content)
 5. **Test** — Generates test code from the patterns and runs it in a container to verify correctness
@@ -91,10 +91,10 @@ skilldo generate [PATH] [OPTIONS]
 | `--model <MODEL>` | Override LLM model (e.g., `gpt-4.1`, `claude-sonnet-4-5-20250929`) |
 | `--base-url <URL>` | Base URL for openai-compatible providers |
 | `--max-retries <N>` | Override max generation retries |
-| `--no-test` | Disable test agent container validation |
+| `--no-test` | Disable test stage container validation |
 | `--test-mode <MODE>` | Test validation mode: `thorough`, `adaptive`, `minimal` |
-| `--test-model <MODEL>` | Override test agent LLM model |
-| `--test-provider <PROVIDER>` | Override test agent LLM provider |
+| `--test-model <MODEL>` | Override test stage LLM model |
+| `--test-provider <PROVIDER>` | Override test stage LLM provider |
 | `--runtime <RUNTIME>` | Container runtime: `docker` or `podman` |
 | `--timeout <SECONDS>` | Container execution timeout |
 | `--no-parallel` | Run extract/map/learn sequentially instead of in parallel (useful for local models) |
@@ -181,13 +181,13 @@ api_key_env = "OPENAI_API_KEY"
 
 Set your API key before running: `export OPENAI_API_KEY="sk-your-key-here"`
 
-This uses GPT-5.2 for all agents, with test validation enabled by default using Docker.
+This uses GPT-5.2 for all stages, with test validation enabled by default using Docker.
 
 ### Full Documented Config
 
 ```toml
 # ── LLM Provider ──────────────────────────────────────────────
-# Configures the model used for all agents (unless overridden
+# Configures the model used for all stages (unless overridden
 # per-stage via extract_llm, create_llm, test_llm, etc.).
 [llm]
 # Provider: "anthropic", "openai", "gemini", or "openai-compatible"
@@ -225,7 +225,7 @@ parallel_extraction = true
 # Approximate token budget for source code sent to agents (default: 100000)
 max_source_tokens = 100000
 
-# Enable test agent code validation in containers (default: true). CLI: --no-test
+# Enable test stage code validation in containers (default: true). CLI: --no-test
 enable_test = true
 
 # Test validation mode (default: "thorough")
@@ -234,14 +234,14 @@ enable_test = true
 #   "minimal"   — test only core import + one pattern
 test_mode = "thorough"
 
-# Enable review agent (default: true)
+# Enable review stage (default: true)
 enable_review = true
 
 # ── Per-Stage LLM Overrides (Optional) ────────────────────────
 # Run individual stages on different providers/models.
 # Each is optional — if not set, the stage uses [llm].
 #
-# [generation.test_llm]              # Test agent
+# [generation.test_llm]              # Test stage
 # provider = "openai"
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
@@ -250,7 +250,7 @@ enable_review = true
 # See examples/configs/reference.toml for the full list.
 
 # ── Container Settings ────────────────────────────────────────
-# The test agent runs generated test code inside containers for safety.
+# The test stage runs generated test code inside containers for safety.
 [generation.container]
 # Container runtime: "docker" or "podman" (default: "docker")
 runtime = "docker"
@@ -269,13 +269,13 @@ cleanup = true
 # go_image = "golang:1.21-alpine"
 
 # ── Custom Prompts (Advanced) ────────────────────────────────
-# Override or extend the built-in agent prompts.
-# Mode per agent: "append" (default) adds your text after the built-in
-# prompt, "overwrite" replaces it entirely. Test agent is always append-only.
+# Override or extend the built-in stage prompts.
+# Mode per stage: "append" (default) adds your text after the built-in
+# prompt, "overwrite" replaces it entirely. Test stage is always append-only.
 #
 # [prompts]
 # override_prompts = false            # Global default: false = append
-# extract_mode = "append"             # Per-agent override
+# extract_mode = "append"             # Per-stage override
 # extract_custom = "Also extract all class methods that start with 'get_'"
 # create_mode = "overwrite"
 # create_custom = "Your entirely custom create prompt here..."
@@ -317,7 +317,7 @@ Generation gets you 90-95% of the way to a good SKILL.md — a validated, well-s
 
 **Best overall**: GPT-5.2 produces the cleanest output with fewest retries. It nailed the `click` library on the first try in under 3 minutes.
 
-**Best value**: The **hybrid setup** (local model for extract/map/learn/create, cloud model for test) gives you the best of both worlds. Extraction doesn't need a frontier model — a 14B-30B local model handles it fine. Code validation is where model quality matters most.
+**Best value**: The **hybrid setup** (local model for extract/map/learn/create, cloud model for review+test) gives you the best of both worlds. Extraction doesn't need a frontier model — a 14B-30B local model handles it fine. Review and test are where model quality matters most — run those in the cloud for best results.
 
 **Local-only**: Qwen3-Coder (30B) via Ollama works well for small-to-medium libraries but may struggle with complex ones. Expect more retries and occasional truncation from token limits. Totally usable for free, just slower.
 
@@ -384,12 +384,12 @@ cargo audit
 | Command | Required? | Purpose |
 |---------|-----------|---------|
 | `git` | Optional | Version detection fallback (`git describe --tags`, `git rev-parse`) when package metadata doesn't contain a version |
-| `docker` or `podman` | For test agent | Runs generated test code in isolated containers |
-| `uv` | For test agent (local) | Sets up Python environments for local (non-container) validation |
+| `docker` or `podman` | For test stage | Runs generated test code in isolated containers |
+| `uv` | For test stage (local) | Sets up Python environments for local (non-container) validation |
 | `python3` | For non-container validation | Direct Python execution when containers aren't available |
 
 **Development / Testing:**
-- [uv](https://docs.astral.sh/uv/) — required to run the full test suite (test agent executor tests use `uv` to create isolated Python environments)
+- [uv](https://docs.astral.sh/uv/) — required to run the full test suite (test stage executor tests use `uv` to create isolated Python environments)
 - [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) — for coverage reports (`make coverage` will install it automatically)
 - [pre-commit](https://pre-commit.com/) — for git hooks (`pre-commit install && pre-commit install --hook-type pre-push`)
 

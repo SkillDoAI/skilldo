@@ -2,9 +2,16 @@ reviews:
   path_filters:
     - '!*.md'
     - 'README.md'
-    - '!examples/skills/**'
     - '!examples/configs/**'
     - '!dev/scripts/**'
     - '!AUDIT-PROMPT*.md'
     - '!BACKLOG.md'
     - '!BUILD.md'
+  path_instructions:
+    - path: 'examples/skills/**'
+      instructions: |
+        These are auto-generated SKILL.md files produced by an LLM pipeline.
+        Do NOT leave individual review comments on each file. Instead,
+        summarize all quality issues across all example skills in a single
+        review comment on the PR, grouped by pattern (e.g., wrong return types,
+        missing parameters, invalid syntax) rather than by file.

@@ -14,6 +14,11 @@ else ifneq ($(wildcard $(RUSTUP_LLVM_BIN)/llvm-cov),)
   # Homebrew cargo + rustup toolchain with llvm-tools-preview
   export LLVM_COV := $(RUSTUP_LLVM_BIN)/llvm-cov
   export LLVM_PROFDATA := $(RUSTUP_LLVM_BIN)/llvm-profdata
+else
+  # Fallback to PATH — may work if llvm-tools are installed system-wide
+  $(warning llvm-cov/llvm-profdata not found in rustc sysroot; falling back to PATH. Run: rustup component add llvm-tools-preview)
+  export LLVM_COV := llvm-cov
+  export LLVM_PROFDATA := llvm-profdata
 endif
 
 # Default target
@@ -79,12 +84,14 @@ check-deps:
 test: check-deps
 	cargo test --all
 
-# Run tests in parallel (faster)
+# Run tests in parallel (faster, auto-detects CPU count)
+CPU_COUNT := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 test-fast: check-deps
-	cargo test --all -- --test-threads=8
+	cargo test --all -- --test-threads=$(CPU_COUNT)
 
 # Run integration tests (requires Docker/Podman + python3)
 test-integration:
+	@command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1 || { echo "❌ Neither docker nor podman found — install one to run integration tests"; exit 1; }
 	cargo test -- --ignored
 
 # Run specific test
@@ -160,6 +167,7 @@ docker:
 
 # Docker run
 docker-run:
+	@test -n "$(REPO)" || { echo "❌ REPO is required. Usage: make docker-run REPO=path/to/repo"; exit 1; }
 	docker run --rm -v $(PWD):/workspace skilldo:latest generate /workspace/$(REPO)
 
 # Generate CHANGELOG.md from conventional commits (requires git-cliff)

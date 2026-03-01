@@ -501,7 +501,7 @@ mod tests {
     // --- Mock implementations for trait-based testing ---
 
     use super::super::{ExecutionEnv, LanguageCodeGenerator, LanguageExecutor, LanguageParser};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     struct MockParser {
         patterns: Vec<CodePattern>,
@@ -538,22 +538,26 @@ mod tests {
 
     struct MockCodeGenerator {
         result: Mutex<std::result::Result<String, String>>,
-        local_package: Mutex<Option<String>>,
+        local_package: Arc<Mutex<Option<String>>>,
     }
 
     impl MockCodeGenerator {
         fn succeeding(code: &str) -> Self {
             Self {
                 result: Mutex::new(Ok(code.to_string())),
-                local_package: Mutex::new(None),
+                local_package: Arc::new(Mutex::new(None)),
             }
         }
 
         fn failing(msg: &str) -> Self {
             Self {
                 result: Mutex::new(Err(msg.to_string())),
-                local_package: Mutex::new(None),
+                local_package: Arc::new(Mutex::new(None)),
             }
+        }
+
+        fn local_package_handle(&self) -> Arc<Mutex<Option<String>>> {
+            Arc::clone(&self.local_package)
         }
     }
 
@@ -968,6 +972,7 @@ mod tests {
     async fn test_validate_local_install_source_sets_local_package() {
         let patterns = vec![basic_pattern()];
         let code_gen = MockCodeGenerator::succeeding("print('ok')");
+        let lp_handle = code_gen.local_package_handle();
         let validator = make_validator(
             Box::new(MockParser::new(patterns)),
             Box::new(code_gen),
@@ -977,8 +982,12 @@ mod tests {
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert!(result.all_passed());
-        // Verify set_local_package was called by checking the code_generator
-        // (The mock stores the value; we verify the code path ran without error)
+        // Verify set_local_package was actually called
+        let lp = lp_handle.lock().unwrap();
+        assert!(
+            lp.is_some(),
+            "set_local_package should have been called for non-registry source"
+        );
     }
 
     #[tokio::test]
@@ -998,7 +1007,7 @@ mod tests {
     async fn test_validate_registry_does_not_set_local_package() {
         let patterns = vec![basic_pattern()];
         let code_gen = MockCodeGenerator::succeeding("print('ok')");
-        // Verify the set_local_package path is NOT taken for "registry" install_source
+        let lp_handle = code_gen.local_package_handle();
         let validator = make_validator(
             Box::new(MockParser::new(patterns)),
             Box::new(code_gen),
@@ -1008,6 +1017,12 @@ mod tests {
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert!(result.all_passed());
+        // Verify set_local_package was NOT called for registry source
+        let lp = lp_handle.lock().unwrap();
+        assert!(
+            lp.is_none(),
+            "set_local_package should not be called for registry source"
+        );
     }
 
     // --- TestResult edge case tests ---

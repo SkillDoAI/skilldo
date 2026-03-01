@@ -823,12 +823,19 @@ mod tests {
         // if available. If not, this test validates the error path.
         let executor = ContainerExecutor::new(make_config(), "python");
         let deps = vec!["requests".to_string(), "flask".to_string()];
-        let result = executor.setup_environment(&deps);
-        // If runtime is available, check deps; if not, it's an error (both valid outcomes)
-        if let Ok(env) = result {
-            assert_eq!(env.dependencies, deps);
-            assert!(env.container_name.is_some());
-            assert!(env.python_path.is_none());
+        match executor.setup_environment(&deps) {
+            Ok(env) => {
+                assert_eq!(env.dependencies, deps);
+                assert!(env.container_name.is_some());
+                assert!(env.python_path.is_none());
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("runtime not found"),
+                    "unexpected error (expected 'runtime not found'): {msg}"
+                );
+            }
         }
     }
 
