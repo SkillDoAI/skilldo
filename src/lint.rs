@@ -38,37 +38,42 @@ impl SkillLinter {
         let cleaned = text.replace([';', '|'], " ");
         let tokens: Vec<&str> = cleaned.split_whitespace().collect();
 
-        // Find "rm" token
-        let Some(rm_pos) = tokens.iter().position(|t| *t == "rm") else {
-            return false;
-        };
+        // Check every "rm" occurrence — "rm -rf /tmp; rm -rf /" has two.
+        for rm_pos in tokens
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| **t == "rm")
+            .map(|(i, _)| i)
+        {
+            let mut has_recursive = false;
+            let mut has_force = false;
+            let mut target = None;
 
-        // Collect flags and find target
-        let mut has_recursive = false;
-        let mut has_force = false;
-        let mut target = None;
+            for token in &tokens[rm_pos + 1..] {
+                if token.starts_with('-') {
+                    if token.contains('r') {
+                        has_recursive = true;
+                    }
+                    if token.contains('f') {
+                        has_force = true;
+                    }
+                } else {
+                    target = Some(*token);
+                    break;
+                }
+            }
 
-        for token in &tokens[rm_pos + 1..] {
-            if token.starts_with('-') {
-                if token.contains('r') {
-                    has_recursive = true;
+            // Only match root (/) or home (~, ~/) — NOT subdirectories like /tmp or ~/proj
+            if let Some(path) = target {
+                let stripped = path.trim_matches(|c| c == '"' || c == '\'');
+                let is_root_or_home = stripped == "/" || stripped == "~" || stripped == "~/";
+                if has_recursive && has_force && is_root_or_home {
+                    return true;
                 }
-                if token.contains('f') {
-                    has_force = true;
-                }
-            } else {
-                target = Some(*token);
-                break;
             }
         }
 
-        // Only match root (/) or home (~, ~/) — NOT subdirectories like /tmp or ~/proj
-        if let Some(path) = target {
-            let is_root_or_home = path == "/" || path == "~" || path == "~/";
-            has_recursive && has_force && is_root_or_home
-        } else {
-            false
-        }
+        false
     }
 
     /// Lint a SKILL.md file content
@@ -1288,6 +1293,31 @@ test.do_something()
         assert!(SkillLinter::is_root_wipe_command("rm -f -r /"));
         assert!(SkillLinter::is_root_wipe_command("rm -r -v -f /"));
         assert!(SkillLinter::is_root_wipe_command("rm -f -v -r ~/"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_multi_rm_second_dangerous() {
+        assert!(SkillLinter::is_root_wipe_command("rm -rf /tmp; rm -rf /"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_quoted_root() {
+        assert!(SkillLinter::is_root_wipe_command("rm -rf \"/\""));
+    }
+
+    #[test]
+    fn test_is_root_wipe_quoted_home() {
+        assert!(SkillLinter::is_root_wipe_command("rm -rf '~'"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_after_semicolon_separate_flags() {
+        assert!(SkillLinter::is_root_wipe_command("echo hello; rm -r -f /"));
+    }
+
+    #[test]
+    fn test_is_root_wipe_quoted_safe_path_not_flagged() {
+        assert!(!SkillLinter::is_root_wipe_command("rm -rf \"/tmp\""));
     }
 
     #[test]

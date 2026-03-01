@@ -662,8 +662,7 @@ base_url = "http://localhost:11434/v1"
         // Verify the branching logic: passed with non-empty issues
         assert!(result.passed && !result.issues.is_empty());
 
-        // Verify the formatted message matches expected output
-        let header = format!("PASSED with {} warning(s):", result.issues.len());
-        assert_eq!(header, "PASSED with 1 warning(s):");
+        // Verify the count resolves to the expected literal
+        assert_eq!(result.issues.len(), 1);
     }
 }

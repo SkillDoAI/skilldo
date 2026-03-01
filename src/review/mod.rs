@@ -116,7 +116,7 @@ impl<'a> ReviewAgent<'a> {
         if self.strict && introspection_degraded {
             result.passed = false;
             result.issues.push(ReviewIssue {
-                severity: "warning".to_string(),
+                severity: "error".to_string(),
                 category: "introspection".to_string(),
                 complaint:
                     "Container introspection failed — verdict is based on textual analysis only"
@@ -283,7 +283,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                             .get("severity")
                             .and_then(|v| v.as_str())
                             .unwrap_or("error")
-                            .to_string(),
+                            .to_lowercase(),
                         category: item
                             .get("category")
                             .and_then(|v| v.as_str())
@@ -658,34 +658,32 @@ mod tests {
         let container_config = crate::config::ContainerConfig::default();
         let agent = ReviewAgent::new(&client, container_config, None).with_strict(true);
 
-        // Force Python path but container will fail (no container available in tests).
-        // The run_introspection call will return Err or a degraded Ok.
-        let result = agent
+        // Container will fail (no podman in test env), but review() catches container
+        // errors and proceeds with degraded introspection + LLM verdict. MockLlmClient
+        // returns a valid verdict, so review() always returns Ok here.
+        let r = agent
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 "testpkg",
                 "python",
             )
-            .await;
+            .await
+            .expect("review should succeed with degraded introspection");
 
-        // Whether the introspection errors or produces a degraded output,
-        // strict mode should mark the result as failed.
-        match result {
-            Ok(r) => {
-                assert!(
-                    !r.passed,
-                    "strict mode should fail when introspection is degraded"
-                );
-                assert!(
-                    r.issues.iter().any(|i| i.category == "introspection"),
-                    "should have an introspection warning issue"
-                );
-            }
-            Err(_) => {
-                // An outright error (e.g., LLM call failure) is also acceptable;
-                // the important thing is it doesn't silently pass.
-            }
-        }
+        assert!(
+            !r.passed,
+            "strict mode should fail when introspection is degraded"
+        );
+        assert!(
+            r.issues.iter().any(|i| i.category == "introspection"),
+            "should have an introspection issue"
+        );
+        assert!(
+            r.issues
+                .iter()
+                .any(|i| i.category == "introspection" && i.severity == "error"),
+            "introspection issue should have error severity"
+        );
     }
 
     #[tokio::test]
@@ -697,28 +695,27 @@ mod tests {
         let agent = ReviewAgent::new(&client, container_config, None).with_strict(false);
 
         // In advisory (non-strict) mode, degraded introspection should NOT
-        // override the LLM verdict. Mock client returns passed=true.
-        let result = agent
+        // override the LLM verdict. Container fails but review() catches it
+        // and proceeds to Phase B. MockLlmClient returns passed=true.
+        let r = agent
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 "testpkg",
                 "python",
             )
-            .await;
+            .await
+            .expect("review should succeed in advisory mode");
 
-        match result {
-            Ok(r) => {
-                // Advisory mode: passed is determined by the LLM verdict alone.
-                // No introspection warning issue should be injected.
-                assert!(
-                    !r.issues.iter().any(|i| i.category == "introspection"),
-                    "advisory mode should not inject introspection issues"
-                );
-            }
-            Err(_) => {
-                // Container setup error before LLM call is fine in test env
-            }
-        }
+        // Advisory mode: passed is determined by the LLM verdict alone.
+        // No introspection issue should be injected.
+        assert!(
+            r.passed,
+            "advisory mode should pass when LLM verdict passes"
+        );
+        assert!(
+            !r.issues.iter().any(|i| i.category == "introspection"),
+            "advisory mode should not inject introspection issues"
+        );
     }
 
     #[test]
@@ -737,7 +734,7 @@ mod tests {
         if strict && introspection_degraded {
             result.passed = false;
             result.issues.push(ReviewIssue {
-                severity: "warning".to_string(),
+                severity: "error".to_string(),
                 category: "introspection".to_string(),
                 complaint:
                     "Container introspection failed — verdict is based on textual analysis only"
@@ -752,6 +749,7 @@ mod tests {
         );
         assert_eq!(result.issues.len(), 1);
         assert_eq!(result.issues[0].category, "introspection");
+        assert_eq!(result.issues[0].severity, "error");
     }
 
     #[test]
