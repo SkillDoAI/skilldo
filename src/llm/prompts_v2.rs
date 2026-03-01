@@ -1,5 +1,6 @@
 // Improved prompts based on analysis of FastAPI, Django, and Click
 
+#[allow(clippy::too_many_arguments)]
 pub fn extract_prompt(
     package_name: &str,
     version: &str,
@@ -7,6 +8,8 @@ pub fn extract_prompt(
     source_file_count: usize,
     custom_instructions: Option<&str>,
     overwrite: bool,
+    language: &str,
+    ecosystem_term: &str,
 ) -> String {
     // If overwrite mode and custom provided, use it directly
     if overwrite {
@@ -31,7 +34,7 @@ pub fn extract_prompt(
     };
 
     let mut prompt = format!(
-        r#"You are analyzing the Python package "{}" v{} ({} source files).
+        r#"You are analyzing the {language} {ecosystem_term} "{}" v{} ({} source files).
 
 Your job: Extract the complete public API surface.{}
 
@@ -339,7 +342,13 @@ Return JSON with this structure:
 Source code:
 {}
 "#,
-        package_name, version, source_file_count, scale_hint, source_code
+        package_name,
+        version,
+        source_file_count,
+        scale_hint,
+        source_code,
+        language = language,
+        ecosystem_term = ecosystem_term
     );
 
     if let Some(custom) = custom_instructions {
@@ -355,6 +364,8 @@ pub fn map_prompt(
     test_code: &str,
     custom_instructions: Option<&str>,
     overwrite: bool,
+    language: &str,
+    ecosystem_term: &str,
 ) -> String {
     if overwrite {
         if let Some(custom) = custom_instructions {
@@ -363,7 +374,7 @@ pub fn map_prompt(
     }
 
     let mut prompt = format!(
-        r#"You are analyzing the test suite for Python package "{}" v{}.
+        r#"You are analyzing the test suite for {language} {ecosystem_term} "{}" v{}.
 
 Your job: Extract correct usage patterns from the tests.
 
@@ -455,7 +466,11 @@ Return JSON with pattern objects containing standard fields plus deprecation inf
 Test code:
 {}
 "#,
-        package_name, version, test_code
+        package_name,
+        version,
+        test_code,
+        language = language,
+        ecosystem_term = ecosystem_term
     );
 
     if let Some(custom) = custom_instructions {
@@ -471,6 +486,8 @@ pub fn learn_prompt(
     docs_and_changelog: &str,
     custom_instructions: Option<&str>,
     overwrite: bool,
+    language: &str,
+    ecosystem_term: &str,
 ) -> String {
     if overwrite {
         if let Some(custom) = custom_instructions {
@@ -479,7 +496,7 @@ pub fn learn_prompt(
     }
 
     let mut prompt = format!(
-        r#"You are analyzing documentation and changelog for Python package "{}" v{}.
+        r#"You are analyzing documentation and changelog for {language} {ecosystem_term} "{}" v{}.
 
 Your job: Extract conventions, best practices, pitfalls, and migration notes.
 
@@ -651,7 +668,11 @@ Return JSON:
 Documentation and changelog:
 {}
 "#,
-        package_name, version, docs_and_changelog
+        package_name,
+        version,
+        docs_and_changelog,
+        language = language,
+        ecosystem_term = ecosystem_term
     );
 
     if let Some(custom) = custom_instructions {
@@ -668,6 +689,7 @@ pub fn create_prompt(
     license: Option<&str>,
     project_urls: &[(String, String)],
     ecosystem: &str,
+    ecosystem_term: &str,
     api_surface: &str,
     patterns: &str,
     context: &str,
@@ -693,7 +715,7 @@ pub fn create_prompt(
     };
 
     let mut prompt = format!(
-        r#"You are creating an agent rules file for Python package "{}" v{}.
+        r#"You are creating an agent rules file for {ecosystem} {ecosystem_term} "{}" v{}.
 
 This file helps AI coding agents write correct code using this library.
 
@@ -732,7 +754,7 @@ Include ALL provided URLs in the References section. Do not skip any URLs.
 RULE 5 — CODE QUALITY:
 - Every code example must use REAL APIs from the api_surface or well-known public APIs
 - Never use placeholder names like "MyClass" or "my_function"
-- Every code example must be complete and runnable Python
+- Every code example must be complete and runnable {ecosystem}
 - Include all necessary imports, show required parameters, use correct indentation
 - Do not invent APIs that don't exist — cross-reference against api_surface
 - Every variable referenced in a code example must be defined within that same code block. Never use undefined variables.
@@ -742,12 +764,13 @@ RULE 6 — DOCUMENTED APIs:
 - If an API is in api_surface but NOT in documented_apis, skip it
 - If documented_apis is empty, use api_surface and patterns to identify public APIs
 
-RULE 7 — STYLE:
+RULE 7 — STYLE AND CARDINALITY:
 - Keep it concise — focus on top 10-15 most used APIs
 - No marketing language ("powerful", "easy", "simple") — just facts and patterns
 - Type hints required if the library uses them
 - Show async/await properly — never forget await on async calls
 - Document decorator order for decorator-heavy libraries
+- API Reference section: list exactly 10-15 items that actually appear in the provided API SURFACE. If you reach 15 items, STOP. Do not generate exhaustive or pattern-based lists of APIs not in the input.
 
 RULE 8 — SECURITY (CRITICAL — DO NOT SKIP):
 The SKILL.md will be consumed by AI coding agents that can execute code and
@@ -814,6 +837,7 @@ Based on the library category, include appropriate extra sections:
 - ORMs: model definition, query patterns, relationships, transactions
 - HTTP clients: HTTP methods, request params, sessions, auth, timeouts
 - Async frameworks: async/await basics, concurrency patterns, sync wrappers
+Use the single Migration section in the template for version-specific changes. Do NOT create a second Migration section. At most one migration section may exist in the document.
 
 RULE 10 — VERSION ACCURACY:
 The version in the frontmatter MUST match the version provided in the input. Use EXACTLY the
@@ -821,6 +845,18 @@ version string given — do not round it, guess a release version, or speculate.
 looks like a dev version (e.g., "8.3.dev"), use it as-is. The version comes from the actual
 source repository and must not be fabricated. Code examples and API references should be
 accurate for the provided version — do not document features from a different version.
+
+RULE 11 — FACT-CHECKING:
+If you mention a computed or version-sensitive claim (a weekday paired with a date, a Python/language
+version requirement, a removed or renamed API, or a migration-specific behavior change), verify it
+from the provided inputs. If the inputs do not clearly support the claim, omit it rather than guessing.
+Do not synthesize weekday/date combinations unless explicitly supported by source material.
+
+RULE 12 — NO META-TEXT OR ANALYST CHATTER:
+Never include source-analysis appendices, raw JSON/API-surface dumps, correction logs, or analyst
+notes in the output. Do not output sections named "Current Library State", "API Surface",
+"Usage Patterns", "Notes", "Explanation and Notes", or "What was fixed". Do not address the user
+directly (e.g., "let me know", "if you want", "paste the file", "Here is the SKILL.md").
 
 VERIFY before outputting (do not include this checklist):
 - Library category identified
@@ -836,68 +872,31 @@ VERIFY before outputting (do not include this checklist):
 
 ## Output Structure
 
-Generate a SKILL.md file with EXACTLY these sections. Output ONLY the SKILL.md markdown content. Do NOT include ANY preamble, commentary, corrections lists, or conversational text. Do NOT say "Here is", "Certainly", or "Corrections made". Do NOT wrap the output in a ```markdown code fence. Start directly with the frontmatter (---) below.
+Generate a SKILL.md file with EXACTLY the sections listed below. Your response MUST start with the opening `---` of the frontmatter. Do NOT include ANY preamble, commentary, corrections lists, conversational text, or markdown code fences. Do NOT say "Here is", "Certainly", or "Corrections made".
 
-```markdown
----
-name: {}
-description: [one clear sentence describing the library]
-version: {}
-ecosystem: {}
-license: {}
----
+Required sections in order:
 
-## Imports
+1. **Frontmatter** (YAML between `---` delimiters):
+   name: {}
+   description: one clear sentence describing the library
+   version: {}
+   ecosystem: {ecosystem}
+   license: {}
 
-```python
-import {{package_name}}
-from {{package_name}} import [most common imports]
-from {{package_name}}.submodule import [secondary imports]
-```
+2. **## Imports** — Show real import statements using actual module names.
 
-## Core Patterns
+3. **## Core Patterns** — 3-5 most common usage patterns. Each pattern gets a ### heading with a status indicator, a complete runnable code example, and a description. Include deprecation info if applicable.
 
-[3-5 most common usage patterns, each with:]
+4. **## Configuration** — Default values, common customizations, environment variables, config formats.
 
-### [Pattern Name] [status indicator]
-```python
-# [complete, runnable example]
-```
-* [description]
-* [deprecation info if applicable]
+5. **## Pitfalls** — 3-5 Wrong/Right pairs using actual API names. Each pair has a ### Wrong heading with broken code and a ### Right heading with the fix.
 
-## Configuration
-
-[Default values, common customizations, environment variables, config formats]
-
-## Pitfalls
-
-### Wrong: [specific mistake with actual API names]
-```python
-# [code that looks right but fails]
-```
-
-### Right: [correct approach]
-```python
-# [the fix with explanation]
-```
-
-[3-5 Wrong/Right pairs total]
-
-## References
-
+6. **## References**
 {}
 
-## Migration from v[previous]
+7. **## Migration from vX.Y** — Breaking changes, deprecated-to-current mapping, before/after examples. Replace "X.Y" with the actual previous major version. Omit this section entirely if not applicable.
 
-[Breaking changes, deprecated-to-current mapping, before/after examples. Omit if not applicable.]
-
-## API Reference
-
-[Brief reference of 10-15 most important public APIs]
-- **ClassName()** - [what it does, key parameters]
-- **method_name()** - [what it does, key parameters]
-```
+8. **## API Reference** — 10-15 most important public APIs from the provided API surface. Use format: **name()** - description and key parameters.
 
 Now generate the SKILL.md content for {} v{}:
 "#,
@@ -908,11 +907,11 @@ Now generate the SKILL.md content for {} v{}:
         context,
         package_name,
         version,
-        ecosystem,
         license.unwrap_or("MIT"),
         references,
         package_name,
         version,
+        ecosystem_term = ecosystem_term,
     );
 
     if let Some(custom) = custom_instructions {
@@ -926,6 +925,7 @@ Now generate the SKILL.md content for {} v{}:
 }
 
 /// Update prompt for create stage: patches an existing SKILL.md with new data
+#[allow(clippy::too_many_arguments)]
 pub fn create_update_prompt(
     package_name: &str,
     version: &str,
@@ -933,9 +933,11 @@ pub fn create_update_prompt(
     api_surface: &str,
     patterns: &str,
     context: &str,
+    language: &str,
+    ecosystem_term: &str,
 ) -> String {
     format!(
-        r#"You are updating an existing SKILL.md for "{}" to version {}.
+        r#"You are updating an existing SKILL.md for {ecosystem_term} "{}" to version {}.
 
 ## Existing SKILL.md (preserve everything that's still correct)
 
@@ -956,7 +958,7 @@ pub fn create_update_prompt(
 
 1. Keep all code patterns that are still valid — do NOT rewrite working examples
 2. Update version in frontmatter to {}
-3. If APIs changed signatures, update the code examples to match the current API
+3. If APIs changed signatures, update the {language} code examples to match the current API
 4. Add deprecation markers (⚠️) where the changelog indicates deprecations
 5. Add a Migration section if there are breaking changes from the previous version
 6. Add new patterns ONLY if significant new APIs were added
@@ -990,7 +992,15 @@ remove them. Do not preserve harmful content from a previous version.
 
 Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, commentary, corrections lists, or conversational text. Do NOT say "Here is", "Certainly", or "Corrections made". Do NOT wrap the output in a ```markdown code fence. Start directly with the frontmatter (---).
 "#,
-        package_name, version, existing_skill, api_surface, patterns, context, version
+        package_name,
+        version,
+        existing_skill,
+        api_surface,
+        patterns,
+        context,
+        version,
+        ecosystem_term = ecosystem_term,
+        language = language
     )
 }
 

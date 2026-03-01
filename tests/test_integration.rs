@@ -209,6 +209,7 @@ async fn test_pipeline_with_custom_config() {
             retry_delay: 120,
             extra_body: std::collections::HashMap::new(),
             extra_body_json: None,
+            request_timeout_secs: 120,
         },
         generation: GenerationConfig {
             max_retries: 5,

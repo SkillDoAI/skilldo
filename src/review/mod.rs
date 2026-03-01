@@ -78,16 +78,23 @@ impl<'a> ReviewAgent<'a> {
         language: &str,
     ) -> Result<ReviewResult> {
         // Phase A: generate introspection script (Python only)
-        let introspection_output = if language == "python" {
+        let (introspection_output, introspection_degraded) = if language == "python" {
             match self.run_introspection(skill_md, package_name).await {
-                Ok(output) => output,
+                Ok(output) => {
+                    let degraded = output.starts_with("INTROSPECTION SKIPPED");
+                    (output, degraded)
+                }
                 Err(e) => {
                     warn!("  review: container introspection failed: {}", e);
-                    format!("INTROSPECTION FAILED: {}", e)
+                    (format!("INTROSPECTION FAILED: {}", e), true)
                 }
             }
         } else {
-            "INTROSPECTION SKIPPED: only Python is supported for container checks".to_string()
+            // Non-Python: introspection not applicable, not a degraded state.
+            (
+                "INTROSPECTION SKIPPED: only Python is supported for container checks".to_string(),
+                false,
+            )
         };
 
         // Phase B: LLM verdict (accuracy + safety + consistency)
@@ -102,7 +109,23 @@ impl<'a> ReviewAgent<'a> {
             .await
             .context("review verdict LLM call failed")?;
 
-        parse_review_response(&verdict_response, self.strict)
+        let mut result = parse_review_response(&verdict_response, self.strict)?;
+
+        // In strict mode, degraded introspection fails the review so the user
+        // knows the verdict was based on incomplete data.
+        if self.strict && introspection_degraded {
+            result.passed = false;
+            result.issues.push(ReviewIssue {
+                severity: "error".to_string(),
+                category: "introspection".to_string(),
+                complaint:
+                    "Container introspection failed — verdict is based on textual analysis only"
+                        .to_string(),
+                evidence: introspection_output.chars().take(500).collect(),
+            });
+        }
+
+        Ok(result)
     }
 
     /// Phase A: ask LLM to generate an introspection script, then run it in a container.
@@ -249,12 +272,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         }
     };
 
-    let passed = parsed
-        .get("passed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    let issues = parsed
+    let issues: Vec<ReviewIssue> = parsed
         .get("issues")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -265,7 +283,8 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                             .get("severity")
                             .and_then(|v| v.as_str())
                             .unwrap_or("error")
-                            .to_string(),
+                            .trim()
+                            .to_lowercase(),
                         category: item
                             .get("category")
                             .and_then(|v| v.as_str())
@@ -282,6 +301,14 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                 .collect()
         })
         .unwrap_or_default();
+
+    // Recompute `passed` from the issues list — trust the structured issues,
+    // not the LLM's boolean verdict. An LLM saying "passed: true" with
+    // error-severity issues should NOT pass.
+    let has_errors = issues
+        .iter()
+        .any(|i| i.severity != "warning" && i.severity != "info");
+    let passed = !has_errors;
 
     Ok(ReviewResult { passed, issues })
 }
@@ -622,5 +649,141 @@ mod tests {
         let result = ReviewResult::default();
         assert!(result.passed);
         assert!(result.issues.is_empty());
+    }
+
+    // --- Strict mode + degraded introspection ---
+
+    #[tokio::test]
+    async fn test_strict_mode_introspection_degraded_fails() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient::new();
+        let container_config = crate::config::ContainerConfig {
+            runtime: "__missing_runtime__".to_string(),
+            ..Default::default()
+        };
+        let agent = ReviewAgent::new(&client, container_config, None).with_strict(true);
+
+        // Container will fail (runtime doesn't exist), but review() catches container
+        // errors and proceeds with degraded introspection + LLM verdict. MockLlmClient
+        // returns a valid verdict, so review() always returns Ok here.
+        let r = agent
+            .review(
+                "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
+                "testpkg",
+                "python",
+            )
+            .await
+            .expect("review should succeed with degraded introspection");
+
+        assert!(
+            !r.passed,
+            "strict mode should fail when introspection is degraded"
+        );
+        assert!(
+            r.issues.iter().any(|i| i.category == "introspection"),
+            "should have an introspection issue"
+        );
+        assert!(
+            r.issues
+                .iter()
+                .any(|i| i.category == "introspection" && i.severity == "error"),
+            "introspection issue should have error severity"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_advisory_mode_introspection_degraded_passes_on_verdict() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient::new();
+        let container_config = crate::config::ContainerConfig {
+            runtime: "__missing_runtime__".to_string(),
+            ..Default::default()
+        };
+        let agent = ReviewAgent::new(&client, container_config, None).with_strict(false);
+
+        // In advisory (non-strict) mode, degraded introspection should NOT
+        // override the LLM verdict. Runtime doesn't exist so container fails,
+        // review() catches it and proceeds to Phase B. MockLlmClient returns passed=true.
+        let r = agent
+            .review(
+                "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
+                "testpkg",
+                "python",
+            )
+            .await
+            .expect("review should succeed in advisory mode");
+
+        // Advisory mode: passed is determined by the LLM verdict alone.
+        // No introspection issue should be injected.
+        assert!(
+            r.passed,
+            "advisory mode should pass when LLM verdict passes"
+        );
+        assert!(
+            !r.issues.iter().any(|i| i.category == "introspection"),
+            "advisory mode should not inject introspection issues"
+        );
+    }
+
+    #[test]
+    fn test_strict_introspection_degraded_unit() {
+        // Unit test: simulate the strict-mode gate logic directly.
+        // This tests the exact code path without needing a container or LLM.
+        let verdict_json = r#"{"passed": true, "issues": []}"#;
+        let mut result = parse_review_response(verdict_json, true).unwrap();
+        assert!(result.passed, "verdict alone says passed");
+
+        // Simulate degraded introspection in strict mode
+        let introspection_degraded = true;
+        let strict = true;
+        let introspection_output = "INTROSPECTION SKIPPED: script execution failed";
+
+        if strict && introspection_degraded {
+            result.passed = false;
+            result.issues.push(ReviewIssue {
+                severity: "error".to_string(),
+                category: "introspection".to_string(),
+                complaint:
+                    "Container introspection failed — verdict is based on textual analysis only"
+                        .to_string(),
+                evidence: introspection_output.chars().take(500).collect(),
+            });
+        }
+
+        assert!(
+            !result.passed,
+            "strict + degraded should override verdict to failed"
+        );
+        assert_eq!(result.issues.len(), 1);
+        assert_eq!(result.issues[0].category, "introspection");
+        assert_eq!(result.issues[0].severity, "error");
+    }
+
+    #[test]
+    fn test_advisory_introspection_degraded_unit() {
+        // Unit test: advisory mode should NOT override the verdict.
+        let verdict_json = r#"{"passed": true, "issues": []}"#;
+        let mut result = parse_review_response(verdict_json, false).unwrap();
+
+        let introspection_degraded = true;
+        let strict = false;
+
+        if strict && introspection_degraded {
+            result.passed = false;
+            result.issues.push(ReviewIssue {
+                severity: "warning".to_string(),
+                category: "introspection".to_string(),
+                complaint: "should not appear".to_string(),
+                evidence: String::new(),
+            });
+        }
+
+        assert!(result.passed, "advisory mode should not override verdict");
+        assert!(
+            result.issues.is_empty(),
+            "no introspection issue should be added"
+        );
     }
 }

@@ -19,6 +19,15 @@ impl Language {
             Language::Go => "go",
         }
     }
+
+    pub fn ecosystem_term(&self) -> &str {
+        match self {
+            Language::Python => "package",
+            Language::Go => "module",
+            Language::Rust => "crate",
+            Language::JavaScript => "package",
+        }
+    }
 }
 
 impl FromStr for Language {
@@ -106,6 +115,14 @@ mod tests {
         ] {
             assert_eq!(Language::from_str(lang.as_str()).unwrap(), *lang);
         }
+    }
+
+    #[test]
+    fn test_ecosystem_term() {
+        assert_eq!(Language::Python.ecosystem_term(), "package");
+        assert_eq!(Language::Go.ecosystem_term(), "module");
+        assert_eq!(Language::Rust.ecosystem_term(), "crate");
+        assert_eq!(Language::JavaScript.ecosystem_term(), "package");
     }
 
     #[test]

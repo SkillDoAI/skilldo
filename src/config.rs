@@ -55,6 +55,12 @@ pub struct LlmConfig {
     /// If both extra_body and extra_body_json are set, they are merged (JSON wins on conflict).
     #[serde(default)]
     pub extra_body_json: Option<String>,
+
+    /// HTTP request timeout in seconds for LLM API calls.
+    /// Default: 120 (2 minutes). LLM responses can be slow for large prompts.
+    /// Timed-out requests are automatically retried by the RetryClient.
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout_secs: u64,
 }
 
 fn default_network_retries() -> usize {
@@ -62,6 +68,10 @@ fn default_network_retries() -> usize {
 }
 
 fn default_retry_delay() -> u64 {
+    120
+}
+
+fn default_request_timeout() -> u64 {
     120
 }
 
@@ -139,7 +149,7 @@ pub struct GenerationConfig {
     #[serde(default = "default_true")]
     pub enable_review: bool,
 
-    /// Max retries for review → create feedback loop (default: 5)
+    /// Max retries for review -> create feedback loop (default: 5)
     #[serde(default = "default_review_max_retries")]
     pub review_max_retries: usize,
 
@@ -468,6 +478,7 @@ impl Default for Config {
                 retry_delay: default_retry_delay(),
                 extra_body: std::collections::HashMap::new(),
                 extra_body_json: None,
+                request_timeout_secs: default_request_timeout(),
             },
             generation: GenerationConfig {
                 max_retries: 5,
@@ -568,6 +579,7 @@ mod tests {
             retry_delay: 120,
             extra_body: std::collections::HashMap::new(),
             extra_body_json: None,
+            request_timeout_secs: 120,
         };
         assert_eq!(llm.get_max_tokens(), 8192);
 
@@ -996,5 +1008,11 @@ agent5_custom = "test instructions"
             "runtime should be 'podman' or 'docker', got '{}'",
             runtime
         );
+    }
+
+    #[test]
+    fn test_request_timeout_default() {
+        let config = Config::default();
+        assert_eq!(config.llm.request_timeout_secs, 120);
     }
 }
