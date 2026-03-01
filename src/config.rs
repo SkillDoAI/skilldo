@@ -5,7 +5,58 @@ use std::fs;
 use std::path::Path;
 use tracing::debug;
 
-use crate::agent5::ValidationMode;
+use crate::test_agent::ValidationMode;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Provider {
+    #[serde(rename = "anthropic")]
+    Anthropic,
+    #[serde(rename = "openai")]
+    OpenAI,
+    #[serde(rename = "openai-compatible")]
+    OpenAICompatible,
+    #[serde(rename = "gemini")]
+    Gemini,
+}
+
+impl Provider {
+    /// Canonical env var name for each provider's API key.
+    pub fn default_api_key_env(self) -> &'static str {
+        match self {
+            Provider::OpenAI => "OPENAI_API_KEY",
+            Provider::Anthropic => "ANTHROPIC_API_KEY",
+            Provider::Gemini => "GEMINI_API_KEY",
+            Provider::OpenAICompatible => "OPENAI_API_KEY",
+        }
+    }
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Provider::Anthropic => write!(f, "anthropic"),
+            Provider::OpenAI => write!(f, "openai"),
+            Provider::OpenAICompatible => write!(f, "openai-compatible"),
+            Provider::Gemini => write!(f, "gemini"),
+        }
+    }
+}
+
+impl std::str::FromStr for Provider {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "anthropic" => Ok(Provider::Anthropic),
+            "openai" => Ok(Provider::OpenAI),
+            "openai-compatible" => Ok(Provider::OpenAICompatible),
+            "gemini" => Ok(Provider::Gemini),
+            unknown => Err(anyhow::anyhow!(
+                "Unknown provider: {}. Valid: anthropic, openai, openai-compatible, gemini",
+                unknown
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -17,7 +68,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    pub provider: String,
+    pub provider: Provider,
     pub model: String,
     pub api_key_env: Option<String>,
     #[serde(default)]
@@ -83,12 +134,11 @@ impl LlmConfig {
         }
 
         // Provider-specific defaults
-        match self.provider.as_str() {
-            "anthropic" => 8192,
-            "openai" => 8192,
-            "openai-compatible" => 16384, // ollama and similar
-            "gemini" => 8192,
-            _ => 8192, // Safe default
+        match self.provider {
+            Provider::Anthropic => 8192,
+            Provider::OpenAI => 8192,
+            Provider::OpenAICompatible => 16384, // ollama and similar
+            Provider::Gemini => 8192,
         }
     }
 
@@ -217,7 +267,7 @@ pub struct ContainerConfig {
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 
-    /// Library install source for Agent 5 validation:
+    /// Library install source for test agent validation:
     ///   "registry"       — install from PyPI (default)
     ///   "local-install"  — mount local repo, pip install /src
     ///   "local-mount"    — mount local repo, PYTHONPATH=/src
@@ -391,26 +441,35 @@ impl Config {
         Self::load_with_path(None)
     }
 
-    /// Load configuration from a specific path, or use default search paths
+    /// Load configuration from a specific path, or use default search paths.
+    /// Parse errors in existing config files are surfaced immediately (not silently ignored).
     pub fn load_with_path(path: Option<String>) -> Result<Self> {
-        // If explicit path provided, use it
+        // If explicit path provided, use it (both missing and malformed are errors)
         if let Some(config_path) = path {
             debug!("Loading config from explicit path: {}", config_path);
             return Self::load_from_path(&config_path);
         }
 
         // Try repo root first (per-repo config)
-        if let Ok(config) = Self::load_from_path("skilldo.toml") {
-            debug!("Loaded config from ./skilldo.toml");
-            return Ok(config);
+        match Self::try_load_from_path("skilldo.toml") {
+            Ok(Some(config)) => {
+                debug!("Loaded config from ./skilldo.toml");
+                return Ok(config);
+            }
+            Ok(None) => {}           // file not found, try next
+            Err(e) => return Err(e), // parse error — surface immediately
         }
 
         // Try user config directory
         if let Some(config_dir) = dirs::config_dir() {
             let config_path = config_dir.join("skilldo").join("config.toml");
-            if let Ok(config) = Self::load_from_path(&config_path) {
-                debug!("Loaded config from {:?}", config_path);
-                return Ok(config);
+            match Self::try_load_from_path(&config_path) {
+                Ok(Some(config)) => {
+                    debug!("Loaded config from {:?}", config_path);
+                    return Ok(config);
+                }
+                Ok(None) => {}           // file not found, try next
+                Err(e) => return Err(e), // parse error — surface immediately
             }
         }
 
@@ -425,10 +484,25 @@ impl Config {
         Ok(config)
     }
 
+    /// Try to load config from a path.
+    /// Returns Ok(None) if file doesn't exist, Ok(Some) if loaded, Err on parse failure.
+    fn try_load_from_path<P: AsRef<Path>>(path: P) -> Result<Option<Self>> {
+        let path = path.as_ref();
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let config: Config = toml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", path.display(), e))?;
+        Ok(Some(config))
+    }
+
     /// Get API key from environment variable specified in config.
     /// If `api_key_env` is not set, infers the canonical env var from provider:
     ///   openai → OPENAI_API_KEY, anthropic → ANTHROPIC_API_KEY,
     ///   gemini → GEMINI_API_KEY, openai-compatible → optional (no error if missing).
+    #[allow(dead_code)] // Used by integration tests
     pub fn get_api_key(&self) -> Result<String> {
         let env_var = match &self.llm.api_key_env {
             Some(v) => v.clone(),
@@ -442,7 +516,7 @@ impl Config {
 
         // openai-compatible: try env var but don't error if missing
         // (local models like Ollama don't need keys, but gateways like OpenRouter do)
-        if self.llm.provider == "openai-compatible" {
+        if self.llm.provider == Provider::OpenAICompatible {
             return Ok(env::var(&env_var).unwrap_or_default());
         }
 
@@ -450,18 +524,9 @@ impl Config {
             .map_err(|_| anyhow::anyhow!("API key not found in environment variable: {}", env_var))
     }
 
-    /// Canonical env var name for each provider.
-    /// Unknown providers return "none" — this is intentional because custom
-    /// openai-compatible setups may use arbitrary provider names and often
-    /// don't need API keys (e.g., Ollama). The caller treats "none" as "no key required".
+    #[allow(dead_code)] // Called by get_api_key, used by integration tests
     fn default_api_key_env(&self) -> &str {
-        match self.llm.provider.as_str() {
-            "openai" => "OPENAI_API_KEY",
-            "anthropic" => "ANTHROPIC_API_KEY",
-            "gemini" => "GEMINI_API_KEY",
-            "openai-compatible" => "OPENAI_API_KEY", // Best guess; won't error if missing
-            _ => "none",
-        }
+        self.llm.provider.default_api_key_env()
     }
 }
 
@@ -469,7 +534,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             llm: LlmConfig {
-                provider: "anthropic".to_string(),
+                provider: Provider::Anthropic,
                 model: "claude-sonnet-4-20250514".to_string(),
                 api_key_env: None, // Inferred from provider in get_api_key()
                 base_url: None,
@@ -508,7 +573,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.llm.provider, "anthropic");
+        assert_eq!(config.llm.provider, Provider::Anthropic);
         assert_eq!(config.llm.api_key_env, None); // Inferred from provider
         assert_eq!(config.generation.max_retries, 5);
         assert!(!config.prompts.override_prompts);
@@ -570,7 +635,7 @@ mod tests {
     #[test]
     fn test_max_tokens_provider_defaults() {
         let mut llm = LlmConfig {
-            provider: "anthropic".to_string(),
+            provider: Provider::Anthropic,
             model: "claude-3".to_string(),
             api_key_env: None,
             base_url: None,
@@ -583,13 +648,13 @@ mod tests {
         };
         assert_eq!(llm.get_max_tokens(), 8192);
 
-        llm.provider = "openai".to_string();
+        llm.provider = Provider::OpenAI;
         assert_eq!(llm.get_max_tokens(), 8192);
 
-        llm.provider = "openai-compatible".to_string();
+        llm.provider = Provider::OpenAICompatible;
         assert_eq!(llm.get_max_tokens(), 16384);
 
-        llm.provider = "gemini".to_string();
+        llm.provider = Provider::Gemini;
         assert_eq!(llm.get_max_tokens(), 8192);
 
         // Explicit override wins
@@ -615,17 +680,29 @@ mod tests {
             test_llm: None,
             container: ContainerConfig::default(),
         };
-        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Thorough);
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Thorough
+        );
 
         gen.test_mode = "minimal".to_string();
-        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Minimal);
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Minimal
+        );
 
         gen.test_mode = "adaptive".to_string();
-        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Adaptive);
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Adaptive
+        );
 
         // Unknown defaults to thorough
         gen.test_mode = "unknown".to_string();
-        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Thorough);
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Thorough
+        );
     }
 
     #[test]
@@ -639,7 +716,7 @@ mod tests {
     #[test]
     fn test_api_key_openai_compatible_missing_ok() {
         let mut config = Config::default();
-        config.llm.provider = "openai-compatible".to_string();
+        config.llm.provider = Provider::OpenAICompatible;
         config.llm.api_key_env = Some("SKILLDO_NONEXISTENT_KEY_OAI_999".to_string());
         let key = config.get_api_key().unwrap();
         assert_eq!(key, "");
@@ -649,7 +726,7 @@ mod tests {
     fn test_api_key_openai_compatible_uses_key_when_set() {
         env::set_var("SKILLDO_TEST_OAI_COMPAT_KEY", "test_gateway_key");
         let mut config = Config::default();
-        config.llm.provider = "openai-compatible".to_string();
+        config.llm.provider = Provider::OpenAICompatible;
         config.llm.api_key_env = Some("SKILLDO_TEST_OAI_COMPAT_KEY".to_string());
         let key = config.get_api_key().unwrap();
         assert_eq!(key, "test_gateway_key");
@@ -750,7 +827,7 @@ api_key_env = "OPENAI_API_KEY"
         assert!(config.generation.test_llm.is_some());
 
         let extract = config.generation.extract_llm.unwrap();
-        assert_eq!(extract.provider, "openai-compatible");
+        assert_eq!(extract.provider, Provider::OpenAICompatible);
         assert_eq!(extract.model, "qwen3-coder:latest");
         assert_eq!(extract.base_url.unwrap(), "http://localhost:11434/v1");
     }
@@ -1014,5 +1091,23 @@ agent5_custom = "test instructions"
     fn test_request_timeout_default() {
         let config = Config::default();
         assert_eq!(config.llm.request_timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_try_load_from_path_not_found() {
+        let result = Config::try_load_from_path("/nonexistent/path/skilldo.toml");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_try_load_from_path_malformed_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        fs::write(&path, "this is not valid { toml }}}").unwrap();
+        let result = Config::try_load_from_path(&path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to parse"), "got: {}", err);
     }
 }

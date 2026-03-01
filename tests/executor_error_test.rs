@@ -1,9 +1,9 @@
-//! Tests for agent5 executor error paths
+//! Tests for test agent executor error paths
 //! Tests error handling in PythonUvExecutor
 
 use anyhow::Result;
-use skilldo::agent5::executor::PythonUvExecutor;
-use skilldo::agent5::LanguageExecutor;
+use skilldo::test_agent::executor::PythonUvExecutor;
+use skilldo::test_agent::LanguageExecutor;
 
 #[tokio::test]
 async fn test_executor_setup_fails_when_uv_not_installed() {
@@ -65,7 +65,7 @@ def broken syntax here
     assert!(result.is_fail(), "Code with syntax error should fail");
 
     let error = match result {
-        skilldo::agent5::executor::ExecutionResult::Fail(err) => err,
+        skilldo::test_agent::executor::ExecutionResult::Fail(err) => err,
         _ => panic!("Expected Fail result for syntax error"),
     };
 
@@ -109,7 +109,7 @@ print("Should not reach here")
     assert!(result.is_fail(), "Import error should cause failure");
 
     let error = match result {
-        skilldo::agent5::executor::ExecutionResult::Fail(err) => err,
+        skilldo::test_agent::executor::ExecutionResult::Fail(err) => err,
         _ => panic!("Expected Fail result for import error"),
     };
 
@@ -141,9 +141,9 @@ print("Should not reach here")
 
     // Should timeout (or fail if OS kills it immediately)
     match result {
-        skilldo::agent5::executor::ExecutionResult::Timeout => {} // expected
-        skilldo::agent5::executor::ExecutionResult::Fail(_) => {} // acceptable on some systems
-        skilldo::agent5::executor::ExecutionResult::Pass(_) => {} // possible if timeout is generous
+        skilldo::test_agent::executor::ExecutionResult::Timeout => {} // expected
+        skilldo::test_agent::executor::ExecutionResult::Fail(_) => {} // acceptable on some systems
+        skilldo::test_agent::executor::ExecutionResult::Pass(_) => {} // possible if timeout is generous
     }
 
     executor.cleanup(&env)?;

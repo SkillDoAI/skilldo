@@ -86,7 +86,7 @@ impl LlmClient for MockLlmClient {
         // Return different mock responses based on which agent is calling
         // Agent detection for v2 prompts
         if prompt.contains("Extract the complete public API surface") {
-            // Agent 1: API Extractor (v2)
+            // Extract agent: API Extractor (v2)
             Ok(r#"{
   "apis": [
     {
@@ -157,7 +157,7 @@ impl LlmClient for MockLlmClient {
 }"#
             .to_string())
         } else if prompt.contains("Extract correct usage patterns from the tests") {
-            // Agent 2: Pattern Extractor (v2)
+            // Map agent: Pattern Extractor (v2)
             Ok(r#"{
   "patterns": [
     {
@@ -194,7 +194,7 @@ impl LlmClient for MockLlmClient {
         } else if prompt
             .contains("Extract conventions, best practices, pitfalls, and migration notes")
         {
-            // Agent 3: Context Extractor (v2)
+            // Learn agent: Context Extractor (v2)
             Ok(r#"{
   "conventions": [
     "Use async def for endpoints when performing I/O operations",
@@ -226,7 +226,7 @@ impl LlmClient for MockLlmClient {
         } else if prompt.contains("creating an agent rules file")
             || prompt.contains("Here is the current SKILL.md")
         {
-            // Agent 4: Synthesizer
+            // Create agent: Synthesizer
             Ok(r#"---
 name: fastapi
 description: Modern, fast web framework for building APIs with Python

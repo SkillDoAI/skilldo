@@ -49,18 +49,27 @@ impl PartialEq<&str> for SecretString {
 }
 
 /// Validate a dependency name is safe for use in shell commands and config files.
-/// Rejects names containing shell metacharacters or control sequences.
-/// Valid: alphanumeric, hyphens, underscores, dots, slashes, square brackets,
-/// commas, spaces, comparison operators, and at signs (for scoped npm packages
-/// and version constraints like `pandas>=2.0,<3`).
+/// Rejects names containing shell metacharacters, spaces (flag injection vector),
+/// or control sequences.
+/// Valid: alphanumeric, hyphens, underscores, dots, forward slashes (scoped npm
+/// like `@scope/pkg`), square brackets, commas, at signs, and version constraint
+/// operators (`>=`, `<`, `~=`, `^`, `!`).
+/// Spaces are NOT allowed — they enable flag injection (e.g., `pkg --malicious`).
 pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
     if dep.is_empty() {
         return Err("Empty dependency name".to_string());
     }
+    // Reject leading hyphens (flag injection: `-e malicious`)
+    if dep.starts_with('-') {
+        return Err(format!(
+            "Dependency name starts with '-' (possible flag injection): {}",
+            dep
+        ));
+    }
     for ch in dep.chars() {
         match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' => {}
-            '-' | '_' | '.' | '/' | '[' | ']' | ',' | ' ' | '@' => {}
+            '-' | '_' | '.' | '/' | '[' | ']' | ',' | '@' => {}
             '>' | '<' | '=' | '!' | '~' | '^' => {} // version constraints
             _ => {
                 return Err(format!(
@@ -119,33 +128,57 @@ pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
     50
 }
 
-/// Kill a process by PID. Uses SIGKILL on Unix (Linux, macOS, WSL).
+/// Kill a process group by PID. Uses SIGKILL on the entire process group
+/// to prevent orphaned grandchildren (e.g., from `uv`, container runtimes).
 #[cfg(unix)]
-fn kill_process(pid: u32) {
-    // kill -9 sends SIGKILL to the process.
-    // This works on Linux, macOS, and WSL.
-    let _ = Command::new("kill")
+fn kill_process_group(pid: u32) {
+    // Try killing the process group first (negative PID = process group).
+    // If the child was spawned with setsid, this kills the entire tree.
+    let pgid_kill = Command::new("kill")
         .arg("-9")
-        .arg(pid.to_string())
+        .arg(format!("-{}", pid)) // negative PID = process group
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+
+    // Fallback: if process group kill failed, kill the individual process
+    if pgid_kill.map(|s| !s.success()).unwrap_or(true) {
+        let _ = Command::new("kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 #[cfg(not(unix))]
-fn kill_process(pid: u32) {
-    // On Windows (non-WSL), use taskkill
+fn kill_process_group(pid: u32) {
+    // On Windows, taskkill /T kills the process tree
     let _ = Command::new("taskkill")
-        .args(["/F", "/PID", &pid.to_string()])
+        .args(["/F", "/T", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
 }
 
-/// Run a command with a timeout, killing the child process on expiry.
-/// Spawns the command, waits up to `timeout` for it to finish.
-/// On timeout, kills the child process and returns an error.
+/// Run a command with a timeout, killing the child process tree on expiry.
+/// On Unix, spawns the child in a new session (setsid) so the entire
+/// process tree can be killed on timeout, preventing orphaned grandchildren.
 pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
+    // On Unix, create a new session so we can kill the entire process group
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe and has no preconditions
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
     let child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -163,7 +196,7 @@ pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::
     match receiver.recv_timeout(timeout) {
         Ok(result) => result.context("Failed to execute command"),
         Err(_) => {
-            kill_process(pid);
+            kill_process_group(pid);
             bail!("Command timed out after {:?}", timeout)
         }
     }
@@ -224,5 +257,15 @@ mod tests {
         assert!(sanitize_dep_name("pkg|cat /etc/passwd").is_err());
         assert!(sanitize_dep_name("pkg&& evil").is_err());
         assert!(sanitize_dep_name("").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_dep_name_rejects_flag_injection() {
+        // Leading hyphen — could inject flags like `-e malicious`
+        assert!(sanitize_dep_name("-e").is_err());
+        assert!(sanitize_dep_name("--malicious-flag").is_err());
+        // Spaces enable flag injection: `pkg --malicious`
+        assert!(sanitize_dep_name("pkg --malicious").is_err());
+        assert!(sanitize_dep_name("express rm").is_err());
     }
 }

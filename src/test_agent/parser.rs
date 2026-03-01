@@ -1,8 +1,9 @@
 use anyhow::Result;
 use regex::Regex;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::LanguageParser;
+use crate::util::sanitize_dep_name;
 
 /// Represents a code pattern extracted from SKILL.md
 #[derive(Debug, Clone, PartialEq)]
@@ -456,6 +457,17 @@ impl LanguageParser for PythonParser {
                 dependencies.push(pkg);
             }
         }
+
+        // Defense-in-depth: validate all extracted dependency names.
+        // The regexes above already constrain characters, but sanitize_dep_name
+        // provides a second layer in case patterns are loosened in the future.
+        dependencies.retain(|dep| match sanitize_dep_name(dep) {
+            Ok(_) => true,
+            Err(e) => {
+                warn!("Dropping invalid dependency at ingestion: {}", e);
+                false
+            }
+        });
 
         debug!(
             "Extracted {} dependencies from SKILL.md",

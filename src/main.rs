@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod agent5;
 mod changelog;
 mod cli;
 mod config;
@@ -11,6 +10,7 @@ mod lint;
 mod llm;
 mod pipeline;
 mod review;
+mod test_agent;
 mod util;
 mod validator;
 
@@ -178,6 +178,10 @@ enum ConfigAction {
         /// Path to config file
         #[arg(long)]
         config: Option<String>,
+
+        /// Exit with error code on validation failures (for CI)
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -273,8 +277,8 @@ async fn main() -> Result<()> {
             .await?;
         }
         Commands::Config { action } => match action {
-            ConfigAction::Check { config } => {
-                cli::config_check::run(config)?;
+            ConfigAction::Check { config, strict } => {
+                cli::config_check::run(config, strict)?;
             }
         },
     }
@@ -322,7 +326,7 @@ mod tests {
             let Commands::Config { action } = $cli.command else {
                 panic!("Expected Config command");
             };
-            let ConfigAction::Check { $field } = action;
+            let ConfigAction::Check { $field, .. } = action;
             $body
         };
     }
@@ -433,6 +437,16 @@ mod tests {
         assert_config_check!(cli, |config| {
             assert!(config.is_none());
         });
+    }
+
+    #[test]
+    fn test_parse_config_check_strict() {
+        let cli = Cli::try_parse_from(["skilldo", "config", "check", "--strict"]).unwrap();
+        let Commands::Config { action } = cli.command else {
+            panic!("Expected Config command");
+        };
+        let ConfigAction::Check { strict, .. } = action;
+        assert!(strict);
     }
 
     #[test]
@@ -796,7 +810,7 @@ mod tests {
     // --- Alias tests: --no-agent5, --agent5-model, --agent5-provider, --agent5-mode ---
 
     #[test]
-    fn test_parse_generate_no_agent5_alias() {
+    fn test_parse_generate_no_test_agent_alias() {
         let cli = Cli::try_parse_from(["skilldo", "generate", "--no-agent5"]).unwrap();
         assert_generate!(cli, |no_test| {
             assert!(no_test);
@@ -804,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_generate_agent5_model_alias() {
+    fn test_parse_generate_test_model_alias() {
         let cli =
             Cli::try_parse_from(["skilldo", "generate", "--agent5-model", "gpt-5.2"]).unwrap();
         assert_generate!(cli, |test_model| {
@@ -813,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_generate_agent5_provider_alias() {
+    fn test_parse_generate_test_provider_alias() {
         let cli =
             Cli::try_parse_from(["skilldo", "generate", "--agent5-provider", "anthropic"]).unwrap();
         assert_generate!(cli, |test_provider| {
@@ -822,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_generate_agent5_mode_alias() {
+    fn test_parse_generate_test_mode_alias() {
         let cli =
             Cli::try_parse_from(["skilldo", "generate", "--agent5-mode", "thorough"]).unwrap();
         assert_generate!(cli, |test_mode| {

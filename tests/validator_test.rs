@@ -1,7 +1,5 @@
-//! Unit tests for functional SKILL.md validator
-//! Tests code extraction and execution validation
-
 use anyhow::Result;
+use skilldo::detector::Language;
 use skilldo::validator::{FunctionalValidator, ValidationResult};
 
 #[test]
@@ -34,7 +32,7 @@ print(sys.version)
 None
 "#;
 
-    let result = validator.validate(skill_md, "python")?;
+    let result = validator.validate(skill_md, &Language::Python)?;
 
     // Should either pass (if Docker/Python available) or skip
     assert!(
@@ -71,7 +69,7 @@ Test
 None
 "#;
 
-    let result = validator.validate(skill_md, "javascript")?;
+    let result = validator.validate(skill_md, &Language::JavaScript)?;
 
     // Should skip non-Python languages
     assert!(
@@ -107,7 +105,7 @@ Just text, no code blocks
 None
 "#;
 
-    let result = validator.validate(skill_md, "python")?;
+    let result = validator.validate(skill_md, &Language::Python)?;
 
     // Should skip when no runnable code found
     assert!(
@@ -151,7 +149,7 @@ print(json_str)
 None
 "#;
 
-    let result = validator.validate(skill_md, "python")?;
+    let result = validator.validate(skill_md, &Language::Python)?;
 
     // Should extract and validate code with imports
     // May pass, fail, or skip depending on environment
@@ -193,7 +191,7 @@ print(f"Current time: {time.time()}")
 None
 "#;
 
-    let result = validator.validate(skill_md, "python")?;
+    let result = validator.validate(skill_md, &Language::Python)?;
 
     // Code with print should be recognized as runnable
     if let ValidationResult::Pass(output) = result {

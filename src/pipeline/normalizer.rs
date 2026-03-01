@@ -193,23 +193,46 @@ fn strip_duplicate_frontmatter(content: &str) -> String {
         .map(|(i, _)| i)
         .collect();
 
-    // If 4+ dashes, there's a duplicate frontmatter block
+    // If 4+ dashes, there may be a duplicate frontmatter block.
+    // Verify the block between positions 2 and 3 actually looks like YAML frontmatter
+    // (contains `key:` lines) — otherwise it's a horizontal rule, not a duplicate.
     if dash_positions.len() >= 4 {
-        warn!("Stripping duplicate frontmatter block");
-        // Keep first frontmatter (positions 0 and 1), skip second (positions 2 and 3)
         let second_start = dash_positions[2];
         let second_end = dash_positions[3];
 
-        let mut result: Vec<&str> = Vec::new();
-        result.extend_from_slice(&lines[..second_start]);
-        // Skip blank lines between meta-text and duplicate frontmatter
-        let after = &lines[second_end + 1..];
-        let content_start = after.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
-        result.extend_from_slice(&after[content_start..]);
+        // Check for YAML-like `key: value` lines. Keys must be lowercase identifiers
+        // (e.g. `name:`, `version:`) to avoid false positives on prose like "Note: something".
+        let yaml_like_count = lines[second_start + 1..second_end]
+            .iter()
+            .filter(|l| {
+                let trimmed = l.trim();
+                if let Some(colon_pos) = trimmed.find(':') {
+                    let key = trimmed[..colon_pos].trim();
+                    !key.is_empty()
+                        && key
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c == '_' || c == '-')
+                } else {
+                    false
+                }
+            })
+            .count();
+        let looks_like_frontmatter = yaml_like_count >= 2;
 
-        let mut out = result.join("\n");
-        out.push('\n');
-        return out;
+        if looks_like_frontmatter {
+            warn!("Stripping duplicate frontmatter block");
+            // Keep first frontmatter (positions 0 and 1), skip second (positions 2 and 3)
+            let mut result: Vec<&str> = Vec::new();
+            result.extend_from_slice(&lines[..second_start]);
+            // Skip blank lines between meta-text and duplicate frontmatter
+            let after = &lines[second_end + 1..];
+            let content_start = after.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
+            result.extend_from_slice(&after[content_start..]);
+
+            let mut out = result.join("\n");
+            out.push('\n');
+            return out;
+        }
     }
 
     content.to_string()
@@ -504,6 +527,28 @@ mod tests {
             result
         );
         assert!(result.contains("## Imports"));
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_preserves_horizontal_rules() {
+        // Horizontal rules (---) in body should NOT be treated as duplicate frontmatter
+        let content = "---\nname: test\nversion: 1.0\necosystem: python\n---\n\n## Section 1\nSome content.\n\n---\n\n## Section 2\nMore content.\n\n---\n\nFinal section.\n";
+        let result = strip_duplicate_frontmatter(content);
+        assert_eq!(
+            result, content,
+            "Horizontal rules should not be stripped as duplicate frontmatter"
+        );
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_preserves_prose_with_colons() {
+        // Prose lines like "Note: something" should NOT trigger frontmatter detection
+        let content = "---\nname: test\nversion: 1.0\necosystem: python\n---\n\n## Section\n\n---\n\nNote: this is important.\nWarning: do not skip this step.\n\n---\n\nMore content.\n";
+        let result = strip_duplicate_frontmatter(content);
+        assert_eq!(
+            result, content,
+            "Prose with colons should not be mistaken for frontmatter"
+        );
     }
 
     #[test]

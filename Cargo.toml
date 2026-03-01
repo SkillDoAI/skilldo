@@ -1,6 +1,6 @@
 [package]
 name = "skilldo"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -18,6 +18,9 @@ async-trait = "0.1"
 dirs = "6"
 tempfile = "3"
 regex = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 mockito = "1"

@@ -8,6 +8,13 @@ use tracing::debug;
 use super::client::LlmClient;
 use crate::util::SecretString;
 
+fn build_http_client(timeout_secs: u64) -> Result<Client> {
+    Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .context("failed to build HTTP client")
+}
+
 // ============================================================================
 // Anthropic Client
 // ============================================================================
@@ -48,10 +55,7 @@ impl AnthropicClient {
             api_key: api_key.into(),
             model,
             max_tokens,
-            client: Client::builder()
-                .timeout(Duration::from_secs(timeout_secs))
-                .build()
-                .context("failed to build HTTP client")?,
+            client: build_http_client(timeout_secs)?,
         })
     }
 }
@@ -164,10 +168,7 @@ impl OpenAIClient {
             base_url,
             max_tokens,
             extra_body: std::collections::HashMap::new(),
-            client: Client::builder()
-                .timeout(Duration::from_secs(timeout_secs))
-                .build()
-                .context("failed to build HTTP client")?,
+            client: build_http_client(timeout_secs)?,
         })
     }
 
@@ -206,7 +207,17 @@ impl LlmClient for OpenAIClient {
             self.base_url, self.model
         );
 
-        let url = format!("{}/chat/completions", self.base_url);
+        // Only append /chat/completions when the base URL doesn't already
+        // specify a concrete endpoint (e.g. /v1/responses).
+        let base = self.base_url.trim_end_matches('/');
+        let url = if base.ends_with("/chat/completions") {
+            base.to_string()
+        } else if base.contains("/v1/") {
+            // Path continues past /v1/ — user specified a full endpoint URL
+            base.to_string()
+        } else {
+            format!("{}/chat/completions", base)
+        };
 
         // Merge extra_body fields into the request JSON.
         // Intentional: extra_body may override core fields (e.g., temperature).
@@ -318,10 +329,7 @@ impl GeminiClient {
             api_key: api_key.into(),
             model,
             max_tokens,
-            client: Client::builder()
-                .timeout(Duration::from_secs(timeout_secs))
-                .build()
-                .context("failed to build HTTP client")?,
+            client: build_http_client(timeout_secs)?,
         })
     }
 }
@@ -343,14 +351,14 @@ impl LlmClient for GeminiClient {
         debug!("Calling Gemini API with model: {}", self.model);
 
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model,
-            self.api_key.expose()
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            self.model
         );
 
         let response = self
             .client
             .post(&url)
+            .header("x-goog-api-key", self.api_key.expose())
             .header("content-type", "application/json")
             .json(&request)
             .send()
@@ -759,5 +767,48 @@ mod tests {
         .unwrap();
         assert_eq!(client.max_tokens, 32768);
         assert_eq!(client.model, "gemini-2.0-flash");
+    }
+
+    // --- Coverage: URL construction for OpenAI-compatible clients ---
+    #[test]
+    fn test_openai_url_appends_chat_completions_to_v1() {
+        // Standard /v1 base → should append /chat/completions
+        let base = "https://api.openai.com/v1";
+        let trimmed = base.trim_end_matches('/');
+        let url = format!("{}/chat/completions", trimmed);
+        assert_eq!(url, "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_openai_url_preserves_full_endpoint() {
+        // Full endpoint URL with path after /v1/ → use as-is
+        let base = "https://inference-api.nvidia.com/v1/responses";
+        let trimmed = base.trim_end_matches('/');
+        assert!(trimmed.contains("/v1/"));
+        // Should NOT append /chat/completions
+        assert_eq!(trimmed, "https://inference-api.nvidia.com/v1/responses");
+    }
+
+    #[test]
+    fn test_openai_url_appends_to_bare_host() {
+        // Bare host with no path → should append /chat/completions
+        let base = "https://models.inference.ai.azure.com";
+        let trimmed = base.trim_end_matches('/');
+        assert!(!trimmed.ends_with("/chat/completions"));
+        assert!(!trimmed.contains("/v1/"));
+        let url = format!("{}/chat/completions", trimmed);
+        assert_eq!(
+            url,
+            "https://models.inference.ai.azure.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn test_openai_url_handles_trailing_slash() {
+        let base = "http://localhost:11434/v1/";
+        let trimmed = base.trim_end_matches('/');
+        assert!(!trimmed.contains("/v1/"));
+        let url = format!("{}/chat/completions", trimmed);
+        assert_eq!(url, "http://localhost:11434/v1/chat/completions");
     }
 }

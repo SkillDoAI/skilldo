@@ -1,7 +1,5 @@
-//! Tests for functional validator error paths
-//! Tests error handling in FunctionalValidator
-
 use anyhow::Result;
+use skilldo::detector::Language;
 use skilldo::validator::{FunctionalValidator, ValidationResult};
 
 #[test]
@@ -30,7 +28,7 @@ None
 "#;
 
     // Should either parse with error or skip
-    let result = validator.validate(skill_md, "python");
+    let result = validator.validate(skill_md, &Language::Python);
 
     match result {
         Ok(_) => {} // Handled gracefully,
@@ -68,7 +66,7 @@ print(sys.version)
 None
 "#;
 
-    let result = validator.validate(skill_md, "javascript")?;
+    let result = validator.validate(skill_md, &Language::JavaScript)?;
 
     // Should skip - ecosystem doesn't match
     assert!(
@@ -118,7 +116,7 @@ print(os.name)
 None
 "#;
 
-    let result = validator.validate(skill_md, "python")?;
+    let result = validator.validate(skill_md, &Language::Python)?;
 
     // Should validate using the first code block
     match result {
@@ -170,7 +168,7 @@ print(f"Found {len(result)} paths")
 None
 "#;
 
-    let result = validator.validate(skill_md, "python")?;
+    let result = validator.validate(skill_md, &Language::Python)?;
 
     // Should handle complex type annotations and imports
     match result {
@@ -213,7 +211,7 @@ func main() {}
 None
 "#;
 
-    let result = validator.validate(skill_md, "golang")?;
+    let result = validator.validate(skill_md, &Language::Go)?;
 
     // Should skip unsupported languages
     assert!(
@@ -254,7 +252,7 @@ print("Should not reach here")
 None
 "#;
 
-    let result = validator.validate(skill_md, "python")?;
+    let result = validator.validate(skill_md, &Language::Python)?;
 
     // Should either fail with error or skip (if Docker not available)
     match result {
@@ -314,7 +312,7 @@ None
         long_code
     );
 
-    let result = validator.validate(&skill_md, "python")?;
+    let result = validator.validate(&skill_md, &Language::Python)?;
 
     // Should handle long code without issues
     match result {
