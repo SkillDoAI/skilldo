@@ -178,6 +178,10 @@ enum ConfigAction {
         /// Path to config file
         #[arg(long)]
         config: Option<String>,
+
+        /// Exit with error code on validation failures (for CI)
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -273,8 +277,8 @@ async fn main() -> Result<()> {
             .await?;
         }
         Commands::Config { action } => match action {
-            ConfigAction::Check { config } => {
-                cli::config_check::run(config)?;
+            ConfigAction::Check { config, strict } => {
+                cli::config_check::run(config, strict)?;
             }
         },
     }
@@ -322,7 +326,7 @@ mod tests {
             let Commands::Config { action } = $cli.command else {
                 panic!("Expected Config command");
             };
-            let ConfigAction::Check { $field } = action;
+            let ConfigAction::Check { $field, .. } = action;
             $body
         };
     }

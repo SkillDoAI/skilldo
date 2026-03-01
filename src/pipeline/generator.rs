@@ -524,15 +524,18 @@ impl Generator {
                 }
 
                 // Safety issues are always fatal — never loop back to model
-                let has_safety_error = result
-                    .issues
-                    .iter()
-                    .any(|i| i.category == "safety" && matches!(i.severity, Severity::Error));
+                let has_safety_error = result.issues.iter().any(|i| {
+                    i.category.eq_ignore_ascii_case("safety")
+                        && matches!(i.severity, Severity::Error)
+                });
                 if has_safety_error {
                     let msgs: Vec<String> = result
                         .issues
                         .iter()
-                        .filter(|i| i.category == "safety" && matches!(i.severity, Severity::Error))
+                        .filter(|i| {
+                            i.category.eq_ignore_ascii_case("safety")
+                                && matches!(i.severity, Severity::Error)
+                        })
                         .map(|i| i.complaint.clone())
                         .collect();
                     anyhow::bail!(

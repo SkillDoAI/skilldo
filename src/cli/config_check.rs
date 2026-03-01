@@ -32,7 +32,7 @@ impl CheckResult {
     }
 }
 
-pub fn run(config_path: Option<String>) -> Result<()> {
+pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
     let mut results = CheckResult::new();
 
     // 1. Try to load config
@@ -45,7 +45,10 @@ pub fn run(config_path: Option<String>) -> Result<()> {
         Err(e) => {
             results.error(format!("Failed to load config: {}", e));
             print_results(&results);
-            anyhow::bail!("config check failed: {}", e);
+            if strict {
+                anyhow::bail!("config check failed: {}", e);
+            }
+            return Ok(());
         }
     };
 
@@ -212,8 +215,8 @@ pub fn run(config_path: Option<String>) -> Result<()> {
     // Print results
     print_results(&results);
 
-    // Return error if there were validation failures
-    if !results.errors.is_empty() {
+    // In strict mode, fail on any errors (for CI gating)
+    if strict && !results.errors.is_empty() {
         anyhow::bail!("{} config error(s) found", results.errors.len());
     }
 
@@ -504,7 +507,12 @@ mod tests {
     #[test]
     fn test_run_with_nonexistent_config() {
         // Should not panic, should report an error with non-zero exit
-        let result = run(Some("/nonexistent/config.toml".to_string()));
+        // Without --strict, config load failure prints diagnostics but returns Ok
+        let result = run(Some("/nonexistent/config.toml".to_string()), false);
+        assert!(result.is_ok());
+
+        // With --strict, config load failure returns Err
+        let result = run(Some("/nonexistent/config.toml".to_string()), true);
         assert!(result.is_err());
     }
 
@@ -530,7 +538,7 @@ max_source_tokens = 50000
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -591,7 +599,7 @@ base_url = "http://localhost:11434/v1"
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -629,7 +637,7 @@ base_url = "http://localhost:11434/v1"
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -658,7 +666,7 @@ timeout = 5
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -685,7 +693,7 @@ enable_test = false
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -712,7 +720,7 @@ enable_test = false
         .unwrap();
 
         // Should produce a warning about missing base_url but no errors.
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -739,7 +747,7 @@ enable_test = false
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -824,7 +832,7 @@ enable_test = false
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -859,7 +867,7 @@ extra_body_json = '{{"top_p": 0.9}}'
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -916,7 +924,7 @@ runtime = "nonexistent_runtime_xyz_disabled"
         .unwrap();
 
         // No errors expected: api_key=none, test_agent=false, runtime only warns.
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -943,8 +951,8 @@ enable_test = false
         )
         .unwrap();
 
-        // Config load failure → error exit
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        // Config load failure with --strict → error exit
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
         assert!(result.is_err());
     }
 
@@ -979,7 +987,7 @@ base_url = "http://localhost:11434/v1"
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -1008,7 +1016,7 @@ enable_test = false
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -1061,7 +1069,7 @@ base_url = "http://localhost:11434/v1"
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
     }
 
@@ -1093,8 +1101,8 @@ runtime = "nonexistent_runtime_xyz"
         )
         .unwrap();
 
-        // Test agent enabled + bad runtime → should produce errors → run() returns Err
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        // Test agent enabled + bad runtime → should produce errors → run(strict=true) returns Err
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
         assert!(result.is_err());
     }
 
@@ -1124,7 +1132,7 @@ enable_review = false
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
         assert!(result.is_err());
     }
 
@@ -1160,7 +1168,7 @@ extra_body_json = "[1, 2, 3]"
         )
         .unwrap();
 
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
         assert!(result.is_err());
     }
 
@@ -1262,8 +1270,8 @@ api_key_env = "none"
         )
         .unwrap();
 
-        // Config load failure → error exit
-        let result = run(Some(config_path.to_str().unwrap().to_string()));
+        // Config load failure with --strict → error exit
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
         assert!(result.is_err());
     }
 

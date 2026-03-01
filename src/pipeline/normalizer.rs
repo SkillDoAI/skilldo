@@ -200,9 +200,24 @@ fn strip_duplicate_frontmatter(content: &str) -> String {
         let second_start = dash_positions[2];
         let second_end = dash_positions[3];
 
-        let looks_like_frontmatter = lines[second_start + 1..second_end]
+        // Check for YAML-like `key: value` lines. Keys must be lowercase identifiers
+        // (e.g. `name:`, `version:`) to avoid false positives on prose like "Note: something".
+        let yaml_like_count = lines[second_start + 1..second_end]
             .iter()
-            .any(|l| l.contains(':') && !l.trim().starts_with('#'));
+            .filter(|l| {
+                let trimmed = l.trim();
+                if let Some(colon_pos) = trimmed.find(':') {
+                    let key = trimmed[..colon_pos].trim();
+                    !key.is_empty()
+                        && key
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c == '_' || c == '-')
+                } else {
+                    false
+                }
+            })
+            .count();
+        let looks_like_frontmatter = yaml_like_count >= 2;
 
         if looks_like_frontmatter {
             warn!("Stripping duplicate frontmatter block");
@@ -522,6 +537,17 @@ mod tests {
         assert_eq!(
             result, content,
             "Horizontal rules should not be stripped as duplicate frontmatter"
+        );
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_preserves_prose_with_colons() {
+        // Prose lines like "Note: something" should NOT trigger frontmatter detection
+        let content = "---\nname: test\nversion: 1.0\necosystem: python\n---\n\n## Section\n\n---\n\nNote: this is important.\nWarning: do not skip this step.\n\n---\n\nMore content.\n";
+        let result = strip_duplicate_frontmatter(content);
+        assert_eq!(
+            result, content,
+            "Prose with colons should not be mistaken for frontmatter"
         );
     }
 
