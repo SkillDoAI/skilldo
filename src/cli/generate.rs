@@ -17,7 +17,7 @@ pub async fn run(
     path: String,
     language: Option<String>,
     input: Option<String>,
-    output: String,
+    output: Option<String>,
     version_override: Option<String>,
     version_from: Option<String>,
     config_path: Option<String>,
@@ -34,9 +34,20 @@ pub async fn run(
     install_source_override: Option<String>,
     source_path_override: Option<String>,
     no_parallel: bool,
+    best_effort: bool,
     dry_run: bool,
 ) -> Result<()> {
     let repo_path = Path::new(&path);
+
+    // Load config (explicit path, repo root, or user config dir)
+    let mut config = Config::load_with_path(config_path)?;
+
+    // Resolve defaults: CLI > config > hardcoded
+    let output = output
+        .or(config.generation.output.clone())
+        .unwrap_or_else(|| "SKILL.md".to_string());
+    let input = input.or(config.generation.input.clone());
+    let language = language.or(config.generation.language.clone());
 
     // Detect or validate language
     let detected_language = if let Some(lang_str) = language {
@@ -51,13 +62,7 @@ pub async fn run(
 
     info!("Repository path: {}", repo_path.display());
     info!("Output: {}", output);
-    if let Some(ref cfg) = config_path {
-        info!("Config: {}", cfg);
-    }
     info!("Dry run: {}", dry_run);
-
-    // Load config (explicit path, repo root, or user config dir)
-    let mut config = Config::load_with_path(config_path)?;
 
     // Apply CLI overrides
     if let Some(ref provider) = provider_override {
@@ -362,6 +367,13 @@ pub async fn run(
         println!("Consider adjusting your review prompts via the review_custom config option.");
     }
 
+    // Exit non-zero when unresolved errors remain (unless --best-effort)
+    if output_result.has_unresolved_errors && !best_effort {
+        anyhow::bail!(
+            "Pipeline completed with unresolved errors. Use --best-effort to exit 0 anyway."
+        );
+    }
+
     Ok(())
 }
 
@@ -407,7 +419,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             None, // auto-detect
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -424,7 +436,8 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
-            true, // dry_run
+            false, // best_effort
+            true,  // dry_run
         )
         .await;
         assert!(result.is_ok(), "dry run failed: {:?}", result.err());
@@ -442,7 +455,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -459,6 +472,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -473,7 +487,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             Some("9.9.9".to_string()),
             None,
             None,
@@ -490,6 +504,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -505,7 +520,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -522,6 +537,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -536,7 +552,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -553,6 +569,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -576,7 +593,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             Some(input_path.to_str().unwrap().to_string()),
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -593,6 +610,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -614,7 +632,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None, // no explicit input
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -631,6 +649,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -645,7 +664,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("brainfuck".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -662,6 +681,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -676,7 +696,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -693,6 +713,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -707,7 +728,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -724,6 +745,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -738,7 +760,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -755,6 +777,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -769,7 +792,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -786,6 +809,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -800,7 +824,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -817,6 +841,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -831,7 +856,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -848,6 +873,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -862,7 +888,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -879,6 +905,7 @@ setup(name="testpkg", version="1.0.0")
             Some("local-mount".to_string()), // install_source
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -893,7 +920,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -910,6 +937,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             Some("/tmp/test".to_string()), // source_path
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -924,7 +952,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -941,6 +969,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -955,7 +984,7 @@ setup(name="testpkg", version="1.0.0")
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             Some("1.2.3".to_string()),                     // version
             None,                                          // version_from
             None,                                          // config
@@ -972,6 +1001,7 @@ setup(name="testpkg", version="1.0.0")
             Some("local-mount".to_string()),               // install_source
             Some("/tmp/test".to_string()),                 // source_path
             true,                                          // no_parallel
+            false,                                         // best_effort
             true,                                          // dry_run
         )
         .await;
@@ -1044,7 +1074,7 @@ base_url = "http://localhost:11434/v1"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             Some(config_path),
@@ -1061,6 +1091,7 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1080,7 +1111,7 @@ base_url = "http://localhost:11434/v1"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             Some(config_path),
@@ -1097,6 +1128,7 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1134,7 +1166,7 @@ install_source = "registry"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             Some(config_path.to_str().unwrap().to_string()),
@@ -1151,6 +1183,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1165,7 +1198,7 @@ install_source = "registry"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -1182,6 +1215,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1196,7 +1230,7 @@ install_source = "registry"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -1213,6 +1247,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1227,7 +1262,7 @@ install_source = "registry"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -1244,6 +1279,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1256,7 +1292,7 @@ install_source = "registry"
             "/tmp/skilldo-nonexistent-path-xyz".to_string(),
             None, // auto-detect should fail on missing path
             None,
-            "/tmp/skilldo-nonexistent-output.md".to_string(),
+            Some("/tmp/skilldo-nonexistent-output.md".to_string()),
             None,
             None,
             None,
@@ -1273,6 +1309,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1290,7 +1327,7 @@ install_source = "registry"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -1307,6 +1344,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1330,7 +1368,7 @@ install_source = "registry"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -1347,6 +1385,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false, // best_effort
             true,
         )
         .await;
@@ -1361,7 +1400,7 @@ install_source = "registry"
             repo.path().to_str().unwrap().to_string(),
             Some("python".to_string()),
             None,
-            output.to_str().unwrap().to_string(),
+            Some(output.to_str().unwrap().to_string()),
             None,
             None,
             None,
@@ -1377,10 +1416,47 @@ install_source = "registry"
             None,
             None,
             None,
-            true, // no_parallel
+            true,  // no_parallel
+            false, // best_effort
             true,
         )
         .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_best_effort_flag() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(
+            repo.path().to_str().unwrap().to_string(),
+            None,
+            None,
+            Some(output.to_str().unwrap().to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true, // best_effort
+            true, // dry_run
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "best_effort=true should always succeed: {:?}",
+            result.err()
+        );
     }
 }

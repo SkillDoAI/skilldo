@@ -95,19 +95,23 @@ fn test_prioritization_skips_test_directories() {
     let handler = PythonHandler::new(temp.path());
     let files = handler.find_source_files().unwrap();
 
-    // API files should come before test/tool files
-    let api_pos = files.iter().position(|f| f.ends_with("api.py")).unwrap();
-    let test_pos = files
-        .iter()
-        .position(|f| f.to_str().unwrap().contains("tests"))
-        .unwrap();
-    let tool_pos = files
-        .iter()
-        .position(|f| f.to_str().unwrap().contains("tools"))
-        .unwrap();
+    // API files should be present
+    assert!(
+        files.iter().any(|f| f.ends_with("api.py")),
+        "api.py should be in source files"
+    );
 
-    assert!(api_pos < test_pos);
-    assert!(api_pos < tool_pos);
+    // Test files in tests/ directory should be excluded from source collection
+    assert!(
+        !files.iter().any(|f| f.to_str().unwrap().contains("tests")),
+        "test files should be excluded from source files"
+    );
+
+    // Non-test tool files should still be present
+    assert!(
+        files.iter().any(|f| f.to_str().unwrap().contains("tools")),
+        "tool files should be in source files"
+    );
 }
 
 #[test]

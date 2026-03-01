@@ -74,8 +74,12 @@ fn test_license_priority_pyproject_over_setup() {
     let temp = TempDir::new().unwrap();
     let repo_path = temp.path();
 
-    // Both files exist - pyproject.toml should take priority
-    fs::write(repo_path.join("pyproject.toml"), "license = \"MIT\"").unwrap();
+    // Both files exist - pyproject.toml [project] should take priority
+    fs::write(
+        repo_path.join("pyproject.toml"),
+        "[project]\nlicense = \"MIT\"",
+    )
+    .unwrap();
     fs::write(repo_path.join("setup.py"), "license='GPL-3.0'").unwrap();
 
     let handler = PythonHandler::new(repo_path);
@@ -1062,9 +1066,7 @@ fn test_license_from_toml_table_no_spaces() {
     let repo_path = temp.path();
 
     // Table format without spaces: license = {text="GPL-3.0"}
-    // The code's condition matches "{text=" but then find("{ text") (with space) fails,
-    // so the table extraction is skipped. The else branch filters out values starting with '{'.
-    // This documents the current behavior: no-space variant is NOT extracted.
+    // The shared pyproject_project_field helper + generic table parser handles this.
     let pyproject_content = r#"
 [project]
 name = "test-package"
@@ -1076,10 +1078,7 @@ license = {text="GPL-3.0"}
     let handler = PythonHandler::new(repo_path);
     let license = handler.get_license();
 
-    assert!(
-        license.is_none(),
-        "No-space table format is not currently extractable"
-    );
+    assert_eq!(license, Some("GPL-3.0".to_string()));
 }
 
 #[test]

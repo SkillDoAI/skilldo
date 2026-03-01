@@ -95,7 +95,14 @@ pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
         let s = c.as_os_str().to_str().unwrap_or("");
         matches!(
             s,
-            "_internal" | "_impl" | "testing" | "tests" | "benchmarks" | "tools" | "scripts"
+            "_internal"
+                | "_impl"
+                | "test"
+                | "testing"
+                | "tests"
+                | "benchmarks"
+                | "tools"
+                | "scripts"
         )
     });
 
