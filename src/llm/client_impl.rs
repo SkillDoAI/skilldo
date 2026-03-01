@@ -43,16 +43,16 @@ struct AnthropicContent {
 }
 
 impl AnthropicClient {
-    pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Self {
-        Self {
+    pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Result<Self> {
+        Ok(Self {
             api_key: api_key.into(),
             model,
             max_tokens,
             client: Client::builder()
                 .timeout(Duration::from_secs(timeout_secs))
                 .build()
-                .expect("failed to build HTTP client"),
-        }
+                .context("failed to build HTTP client")?,
+        })
     }
 }
 
@@ -141,7 +141,7 @@ struct OpenAIChoice {
 }
 
 impl OpenAIClient {
-    pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Self {
+    pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Result<Self> {
         Self::with_base_url(
             api_key,
             model,
@@ -157,8 +157,8 @@ impl OpenAIClient {
         base_url: String,
         max_tokens: u32,
         timeout_secs: u64,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        Ok(Self {
             api_key: api_key.into(),
             model,
             base_url,
@@ -167,8 +167,8 @@ impl OpenAIClient {
             client: Client::builder()
                 .timeout(Duration::from_secs(timeout_secs))
                 .build()
-                .expect("failed to build HTTP client"),
-        }
+                .context("failed to build HTTP client")?,
+        })
     }
 
     pub fn with_extra_body(
@@ -313,16 +313,16 @@ struct GeminiResponsePart {
 }
 
 impl GeminiClient {
-    pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Self {
-        Self {
+    pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Result<Self> {
+        Ok(Self {
             api_key: api_key.into(),
             model,
             max_tokens,
             client: Client::builder()
                 .timeout(Duration::from_secs(timeout_secs))
                 .build()
-                .expect("failed to build HTTP client"),
-        }
+                .context("failed to build HTTP client")?,
+        })
     }
 }
 
@@ -388,14 +388,16 @@ mod tests {
     #[test]
     fn test_anthropic_client_creation() {
         let client =
-            AnthropicClient::new("test_key".to_string(), "claude-3".to_string(), 4096, 120);
+            AnthropicClient::new("test_key".to_string(), "claude-3".to_string(), 4096, 120)
+                .unwrap();
         assert_eq!(client.api_key.expose(), "test_key");
         assert_eq!(client.model, "claude-3");
     }
 
     #[test]
     fn test_openai_client_creation() {
-        let client = OpenAIClient::new("test_key".to_string(), "gpt-4".to_string(), 4096, 120);
+        let client =
+            OpenAIClient::new("test_key".to_string(), "gpt-4".to_string(), 4096, 120).unwrap();
         assert_eq!(client.api_key.expose(), "test_key");
         assert_eq!(client.model, "gpt-4");
         assert_eq!(client.base_url, "https://api.openai.com/v1");
@@ -409,7 +411,8 @@ mod tests {
             "http://localhost:11434/v1".to_string(),
             16384,
             120,
-        );
+        )
+        .unwrap();
         assert_eq!(client.base_url, "http://localhost:11434/v1");
     }
 
@@ -531,6 +534,7 @@ mod tests {
             4096,
             120,
         )
+        .unwrap()
         .with_extra_body(extra);
         assert_eq!(client.extra_body.len(), 1);
         assert!(client.extra_body.contains_key("reasoning"));
@@ -538,7 +542,8 @@ mod tests {
 
     #[test]
     fn test_gemini_client_creation() {
-        let client = GeminiClient::new("test_key".to_string(), "gemini-pro".to_string(), 8192, 120);
+        let client =
+            GeminiClient::new("test_key".to_string(), "gemini-pro".to_string(), 8192, 120).unwrap();
         assert_eq!(client.api_key.expose(), "test_key");
         assert_eq!(client.model, "gemini-pro");
     }
@@ -582,7 +587,8 @@ mod tests {
     // --- Coverage: empty API key (line 57/94) ---
     #[test]
     fn test_anthropic_client_empty_api_key() {
-        let client = AnthropicClient::new("".to_string(), "claude-3".to_string(), 4096, 120);
+        let client =
+            AnthropicClient::new("".to_string(), "claude-3".to_string(), 4096, 120).unwrap();
         assert_eq!(client.api_key.expose(), "");
         assert_eq!(client.max_tokens, 4096);
     }
@@ -647,7 +653,7 @@ mod tests {
     // --- Coverage: OpenAI empty/none API key skips auth header (line 224-226) ---
     #[test]
     fn test_openai_client_empty_api_key() {
-        let client = OpenAIClient::new("".to_string(), "gpt-4".to_string(), 4096, 120);
+        let client = OpenAIClient::new("".to_string(), "gpt-4".to_string(), 4096, 120).unwrap();
         assert_eq!(client.api_key.expose(), "");
         // Verify the client is created without issues
         assert_eq!(client.model, "gpt-4");
@@ -655,7 +661,8 @@ mod tests {
 
     #[test]
     fn test_openai_client_none_api_key() {
-        let client = OpenAIClient::new("none".to_string(), "local-model".to_string(), 4096, 120);
+        let client =
+            OpenAIClient::new("none".to_string(), "local-model".to_string(), 4096, 120).unwrap();
         // "none" in lowercase triggers the skip-auth-header path
         assert_eq!(client.api_key.expose(), "none");
     }
@@ -748,7 +755,8 @@ mod tests {
             "gemini-2.0-flash".to_string(),
             32768,
             120,
-        );
+        )
+        .unwrap();
         assert_eq!(client.max_tokens, 32768);
         assert_eq!(client.model, "gemini-2.0-flash");
     }

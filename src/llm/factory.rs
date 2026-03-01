@@ -48,10 +48,10 @@ pub fn create_client_from_llm_config(
             llm_config.model.clone(),
             max_tokens,
             timeout,
-        )),
+        )?),
 
         "openai" => Box::new(
-            OpenAIClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)
+            OpenAIClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
                 .with_extra_body(extra_body),
         ),
 
@@ -68,7 +68,7 @@ pub fn create_client_from_llm_config(
                     base_url,
                     max_tokens,
                     timeout,
-                )
+                )?
                 .with_extra_body(extra_body),
             )
         }
@@ -78,7 +78,7 @@ pub fn create_client_from_llm_config(
             llm_config.model.clone(),
             max_tokens,
             timeout,
-        )),
+        )?),
 
         unknown => bail!("Unknown LLM provider: {}", unknown),
     };
@@ -107,10 +107,10 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
             config.llm.model.clone(),
             max_tokens,
             timeout,
-        )),
+        )?),
 
         "openai" => Box::new(
-            OpenAIClient::new(api_key, config.llm.model.clone(), max_tokens, timeout)
+            OpenAIClient::new(api_key, config.llm.model.clone(), max_tokens, timeout)?
                 .with_extra_body(extra_body),
         ),
 
@@ -128,7 +128,7 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
                     base_url,
                     max_tokens,
                     timeout,
-                )
+                )?
                 .with_extra_body(extra_body),
             )
         }
@@ -138,7 +138,7 @@ pub fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn LlmClient
             config.llm.model.clone(),
             max_tokens,
             timeout,
-        )),
+        )?),
 
         unknown => bail!("Unknown LLM provider: {}", unknown),
     };

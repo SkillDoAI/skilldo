@@ -283,6 +283,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                             .get("severity")
                             .and_then(|v| v.as_str())
                             .unwrap_or("error")
+                            .trim()
                             .to_lowercase(),
                         category: item
                             .get("category")
@@ -304,7 +305,9 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
     // Recompute `passed` from the issues list — trust the structured issues,
     // not the LLM's boolean verdict. An LLM saying "passed: true" with
     // error-severity issues should NOT pass.
-    let has_errors = issues.iter().any(|i| i.severity == "error");
+    let has_errors = issues
+        .iter()
+        .any(|i| i.severity != "warning" && i.severity != "info");
     let passed = !has_errors;
 
     Ok(ReviewResult { passed, issues })
@@ -655,10 +658,13 @@ mod tests {
         use crate::llm::client::MockLlmClient;
 
         let client = MockLlmClient::new();
-        let container_config = crate::config::ContainerConfig::default();
+        let container_config = crate::config::ContainerConfig {
+            runtime: "__missing_runtime__".to_string(),
+            ..Default::default()
+        };
         let agent = ReviewAgent::new(&client, container_config, None).with_strict(true);
 
-        // Container will fail (no podman in test env), but review() catches container
+        // Container will fail (runtime doesn't exist), but review() catches container
         // errors and proceeds with degraded introspection + LLM verdict. MockLlmClient
         // returns a valid verdict, so review() always returns Ok here.
         let r = agent
@@ -691,12 +697,15 @@ mod tests {
         use crate::llm::client::MockLlmClient;
 
         let client = MockLlmClient::new();
-        let container_config = crate::config::ContainerConfig::default();
+        let container_config = crate::config::ContainerConfig {
+            runtime: "__missing_runtime__".to_string(),
+            ..Default::default()
+        };
         let agent = ReviewAgent::new(&client, container_config, None).with_strict(false);
 
         // In advisory (non-strict) mode, degraded introspection should NOT
-        // override the LLM verdict. Container fails but review() catches it
-        // and proceeds to Phase B. MockLlmClient returns passed=true.
+        // override the LLM verdict. Runtime doesn't exist so container fails,
+        // review() catches it and proceeds to Phase B. MockLlmClient returns passed=true.
         let r = agent
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",

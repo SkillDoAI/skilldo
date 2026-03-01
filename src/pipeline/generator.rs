@@ -282,6 +282,8 @@ impl Generator {
                 &api_surface,
                 &patterns,
                 &context,
+                data.language.as_str(),
+                data.language.ecosystem_term(),
             );
             self.get_client("create").complete(&update_prompt).await?
         } else {

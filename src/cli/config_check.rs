@@ -375,6 +375,34 @@ mod tests {
     // Tests that mutate OPENAI_API_KEY must not run in parallel.
     static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// RAII guard: acquires ENV_MUTEX, saves the env var, and restores on drop.
+    struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        var: &'static str,
+        saved: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn new(var: &'static str) -> Self {
+            let lock = ENV_MUTEX.lock().unwrap();
+            let saved = env::var(var).ok();
+            Self {
+                _lock: lock,
+                var,
+                saved,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.saved {
+                Some(val) => env::set_var(self.var, val),
+                None => env::remove_var(self.var),
+            }
+        }
+    }
+
     #[test]
     fn test_check_result_new() {
         let r = CheckResult::new();
@@ -780,16 +808,11 @@ enable_test = false
 
     #[test]
     fn test_check_api_key_inferred_openai_compatible_not_set() {
-        let _lock = ENV_MUTEX.lock().unwrap();
-        let saved = env::var("OPENAI_API_KEY").ok();
+        let _guard = EnvGuard::new("OPENAI_API_KEY");
         env::remove_var("OPENAI_API_KEY");
 
         let mut r = CheckResult::new();
         check_api_key(&None, "Test", "openai-compatible", &mut r);
-
-        if let Some(val) = saved {
-            env::set_var("OPENAI_API_KEY", val);
-        }
 
         assert_eq!(r.warnings.len(), 1);
         assert!(r.errors.is_empty());
@@ -1204,17 +1227,11 @@ extra_body_json = "[1, 2, 3]"
     // --- Coverage: inferred env var empty for openai-compatible (lines 311-320) ---
     #[test]
     fn test_check_api_key_inferred_empty_openai_compatible() {
-        let _lock = ENV_MUTEX.lock().unwrap();
-        let saved = env::var("OPENAI_API_KEY").ok();
+        let _guard = EnvGuard::new("OPENAI_API_KEY");
         env::set_var("OPENAI_API_KEY", "");
 
         let mut r = CheckResult::new();
         check_api_key(&None, "Test", "openai-compatible", &mut r);
-
-        match saved {
-            Some(val) => env::set_var("OPENAI_API_KEY", val),
-            None => env::remove_var("OPENAI_API_KEY"),
-        }
 
         // Empty inferred key for openai-compatible → warning
         assert_eq!(r.warnings.len(), 1);
@@ -1225,17 +1242,11 @@ extra_body_json = "[1, 2, 3]"
     // --- Coverage: inferred env var empty for non-openai-compatible (lines 317-320) ---
     #[test]
     fn test_check_api_key_inferred_empty_non_oai_compatible() {
-        let _lock = ENV_MUTEX.lock().unwrap();
-        let saved = env::var("OPENAI_API_KEY").ok();
+        let _guard = EnvGuard::new("OPENAI_API_KEY");
         env::set_var("OPENAI_API_KEY", "");
 
         let mut r = CheckResult::new();
         check_api_key(&None, "Test", "openai", &mut r);
-
-        match saved {
-            Some(val) => env::set_var("OPENAI_API_KEY", val),
-            None => env::remove_var("OPENAI_API_KEY"),
-        }
 
         // Empty inferred key for non-openai-compatible → error
         assert_eq!(r.errors.len(), 1);

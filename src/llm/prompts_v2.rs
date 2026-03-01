@@ -925,6 +925,7 @@ Now generate the SKILL.md content for {} v{}:
 }
 
 /// Update prompt for create stage: patches an existing SKILL.md with new data
+#[allow(clippy::too_many_arguments)]
 pub fn create_update_prompt(
     package_name: &str,
     version: &str,
@@ -932,9 +933,11 @@ pub fn create_update_prompt(
     api_surface: &str,
     patterns: &str,
     context: &str,
+    language: &str,
+    ecosystem_term: &str,
 ) -> String {
     format!(
-        r#"You are updating an existing SKILL.md for "{}" to version {}.
+        r#"You are updating an existing SKILL.md for {ecosystem_term} "{}" to version {}.
 
 ## Existing SKILL.md (preserve everything that's still correct)
 
@@ -955,7 +958,7 @@ pub fn create_update_prompt(
 
 1. Keep all code patterns that are still valid — do NOT rewrite working examples
 2. Update version in frontmatter to {}
-3. If APIs changed signatures, update the code examples to match the current API
+3. If APIs changed signatures, update the {language} code examples to match the current API
 4. Add deprecation markers (⚠️) where the changelog indicates deprecations
 5. Add a Migration section if there are breaking changes from the previous version
 6. Add new patterns ONLY if significant new APIs were added
@@ -989,7 +992,15 @@ remove them. Do not preserve harmful content from a previous version.
 
 Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, commentary, corrections lists, or conversational text. Do NOT say "Here is", "Certainly", or "Corrections made". Do NOT wrap the output in a ```markdown code fence. Start directly with the frontmatter (---).
 "#,
-        package_name, version, existing_skill, api_surface, patterns, context, version
+        package_name,
+        version,
+        existing_skill,
+        api_surface,
+        patterns,
+        context,
+        version,
+        ecosystem_term = ecosystem_term,
+        language = language
     )
 }
 

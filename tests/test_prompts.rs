@@ -1237,6 +1237,8 @@ fn test_create_update_prompt_basic() {
         "API surface",
         "Patterns",
         "Context",
+        "python",
+        "package",
     );
     assert!(prompt.contains("requests"));
     assert!(prompt.contains("2.32.0"));
@@ -1314,6 +1316,8 @@ fn test_agent4_update_contains_security_rule() {
         "apis",
         "patterns",
         "context",
+        "python",
+        "package",
     );
     // Security section exists in update prompt too
     assert!(
