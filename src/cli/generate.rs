@@ -731,7 +731,7 @@ setup(name="testpkg", version="1.0.0")
     }
 
     #[tokio::test]
-    async fn test_run_with_no_agent5() {
+    async fn test_run_with_no_test_agent() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
         let result = run(

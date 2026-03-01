@@ -8,10 +8,10 @@ use anyhow::{Context, Result};
 use std::str::FromStr;
 use tracing::{debug, warn};
 
-use crate::agent5::container_executor::ContainerExecutor;
-use crate::agent5::executor::ExecutionResult;
-use crate::agent5::LanguageExecutor;
 use crate::config::ContainerConfig;
+use crate::test_agent::container_executor::ContainerExecutor;
+use crate::test_agent::executor::ExecutionResult;
+use crate::test_agent::LanguageExecutor;
 // Re-export Severity from lint so callers can use `review::Severity`
 pub use crate::lint::Severity;
 use crate::llm::client::LlmClient;

@@ -98,7 +98,10 @@ fn test_generation_config_get_test_mode_thorough() {
     let mode = config.generation.get_test_mode();
 
     // Default mode should be thorough
-    assert!(matches!(mode, skilldo::agent5::ValidationMode::Thorough));
+    assert!(matches!(
+        mode,
+        skilldo::test_agent::ValidationMode::Thorough
+    ));
 }
 
 #[test]
@@ -176,7 +179,7 @@ fn test_config_get_api_key_inferred_from_provider() -> Result<()> {
 
 #[test]
 fn test_generation_config_get_test_mode_minimal() {
-    use skilldo::agent5::ValidationMode;
+    use skilldo::test_agent::ValidationMode;
 
     // Create config with minimal mode
     let mut config = Config::default();
@@ -188,7 +191,7 @@ fn test_generation_config_get_test_mode_minimal() {
 
 #[test]
 fn test_generation_config_get_test_mode_adaptive() {
-    use skilldo::agent5::ValidationMode;
+    use skilldo::test_agent::ValidationMode;
 
     // Create config with adaptive mode
     let mut config = Config::default();

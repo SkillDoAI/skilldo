@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use tracing::debug;
 
-use crate::agent5::ValidationMode;
+use crate::test_agent::ValidationMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -217,7 +217,7 @@ pub struct ContainerConfig {
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 
-    /// Library install source for Agent 5 validation:
+    /// Library install source for test agent validation:
     ///   "registry"       — install from PyPI (default)
     ///   "local-install"  — mount local repo, pip install /src
     ///   "local-mount"    — mount local repo, PYTHONPATH=/src
@@ -615,17 +615,29 @@ mod tests {
             test_llm: None,
             container: ContainerConfig::default(),
         };
-        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Thorough);
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Thorough
+        );
 
         gen.test_mode = "minimal".to_string();
-        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Minimal);
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Minimal
+        );
 
         gen.test_mode = "adaptive".to_string();
-        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Adaptive);
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Adaptive
+        );
 
         // Unknown defaults to thorough
         gen.test_mode = "unknown".to_string();
-        assert_eq!(gen.get_test_mode(), crate::agent5::ValidationMode::Thorough);
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Thorough
+        );
     }
 
     #[test]

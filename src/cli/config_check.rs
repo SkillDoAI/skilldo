@@ -566,7 +566,7 @@ max_source_tokens = 1000
     }
 
     #[test]
-    fn test_run_with_agent5_llm_override() {
+    fn test_run_with_test_llm_override() {
         use std::io::Write;
         let dir = tempfile::TempDir::new().unwrap();
         let config_path = dir.path().join("test.toml");
@@ -910,8 +910,8 @@ extra_body_json = '{{"top_p": 0.9}}'
     }
 
     #[test]
-    fn test_run_with_agent5_disabled_unavailable_runtime() {
-        // Lines 143-145: runtime unavailable + agent5 disabled → warning (no process::exit)
+    fn test_run_with_test_agent_disabled_unavailable_runtime() {
+        // Lines 143-145: runtime unavailable + test agent disabled → warning (no process::exit)
         use std::io::Write;
         let dir = tempfile::TempDir::new().unwrap();
         let config_path = dir.path().join("test.toml");
@@ -936,7 +936,7 @@ runtime = "nonexistent_runtime_xyz_disabled"
         )
         .unwrap();
 
-        // No errors expected: api_key=none, agent5=false, runtime only warns.
+        // No errors expected: api_key=none, test_agent=false, runtime only warns.
         let result = run(Some(config_path.to_str().unwrap().to_string()));
         assert!(result.is_ok());
     }

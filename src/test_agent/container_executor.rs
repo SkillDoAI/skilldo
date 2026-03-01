@@ -1,4 +1,4 @@
-//! Container-based code executor for Agent 5 validation
+//! Container-based code executor for test agent validation
 //! Supports Docker, Podman, and other OCI-compatible runtimes
 
 use anyhow::{bail, Context, Result};

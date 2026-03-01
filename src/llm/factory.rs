@@ -6,7 +6,7 @@ use super::client::{LlmClient, RetryClient};
 use super::client_impl::{AnthropicClient, GeminiClient, OpenAIClient};
 use crate::config::{Config, LlmConfig};
 
-/// Create an LLM client from LlmConfig (for Agent 5 or other specialized clients)
+/// Create an LLM client from LlmConfig (for test agent or other specialized clients)
 pub fn create_client_from_llm_config(
     llm_config: &LlmConfig,
     dry_run: bool,

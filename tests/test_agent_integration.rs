@@ -1,6 +1,6 @@
 use anyhow::Result;
-use skilldo::agent5::{CodePattern, PatternCategory};
 use skilldo::llm::client::LlmClient;
+use skilldo::test_agent::{CodePattern, PatternCategory};
 use std::fs;
 
 /// Mock LLM client for testing
@@ -34,8 +34,8 @@ impl LlmClient for MockLlmClient {
 
 #[tokio::test]
 async fn test_parser_extracts_patterns_from_click_skill() -> Result<()> {
-    use skilldo::agent5::parser::PythonParser;
-    use skilldo::agent5::LanguageParser;
+    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::LanguageParser;
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
     let parser = PythonParser;
@@ -68,8 +68,8 @@ async fn test_parser_extracts_patterns_from_click_skill() -> Result<()> {
 
 #[tokio::test]
 async fn test_parser_extracts_dependencies_from_click_skill() -> Result<()> {
-    use skilldo::agent5::parser::PythonParser;
-    use skilldo::agent5::LanguageParser;
+    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::LanguageParser;
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
     let parser = PythonParser;
@@ -85,8 +85,8 @@ async fn test_parser_extracts_dependencies_from_click_skill() -> Result<()> {
 
 #[tokio::test]
 async fn test_parser_extracts_patterns_from_pathlib_skill() -> Result<()> {
-    use skilldo::agent5::parser::PythonParser;
-    use skilldo::agent5::LanguageParser;
+    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::LanguageParser;
 
     let skill_md = fs::read_to_string("tests/fixtures/pathlib-SKILL.md")?;
     let parser = PythonParser;
@@ -102,8 +102,8 @@ async fn test_parser_extracts_patterns_from_pathlib_skill() -> Result<()> {
 
 #[tokio::test]
 async fn test_parser_filters_stdlib_dependencies() -> Result<()> {
-    use skilldo::agent5::parser::PythonParser;
-    use skilldo::agent5::LanguageParser;
+    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::LanguageParser;
 
     let skill_md = fs::read_to_string("tests/fixtures/pathlib-SKILL.md")?;
     let parser = PythonParser;
@@ -118,8 +118,8 @@ async fn test_parser_filters_stdlib_dependencies() -> Result<()> {
 
 #[tokio::test]
 async fn test_code_generator_creates_test_prompt() -> Result<()> {
-    use skilldo::agent5::code_generator::PythonCodeGenerator;
-    use skilldo::agent5::LanguageCodeGenerator;
+    use skilldo::test_agent::code_generator::PythonCodeGenerator;
+    use skilldo::test_agent::LanguageCodeGenerator;
 
     let mock_client = MockLlmClient::new(vec![r#"
 ```python
@@ -164,8 +164,8 @@ if __name__ == '__main__':
 
 #[tokio::test]
 async fn test_code_generator_extracts_code_from_markdown() -> Result<()> {
-    use skilldo::agent5::code_generator::PythonCodeGenerator;
-    use skilldo::agent5::LanguageCodeGenerator;
+    use skilldo::test_agent::code_generator::PythonCodeGenerator;
+    use skilldo::test_agent::LanguageCodeGenerator;
 
     let mock_client = MockLlmClient::new(vec!["```python\nprint('test')\n```".to_string()]);
 
@@ -192,8 +192,8 @@ async fn test_code_generator_extracts_code_from_markdown() -> Result<()> {
 #[tokio::test]
 // Requires uv installed (uv 0.7.7 available)
 async fn test_executor_runs_simple_python_code() -> Result<()> {
-    use skilldo::agent5::executor::PythonUvExecutor;
-    use skilldo::agent5::LanguageExecutor;
+    use skilldo::test_agent::executor::PythonUvExecutor;
+    use skilldo::test_agent::LanguageExecutor;
 
     let executor = PythonUvExecutor::new();
 
@@ -210,7 +210,7 @@ print("✓ Test passed")
     assert!(result.is_pass(), "Simple code should pass");
 
     let output = match result {
-        skilldo::agent5::executor::ExecutionResult::Pass(out) => out,
+        skilldo::test_agent::executor::ExecutionResult::Pass(out) => out,
         _ => panic!("Expected Pass result"),
     };
 
@@ -224,8 +224,8 @@ print("✓ Test passed")
 #[tokio::test]
 // Requires uv installed (uv 0.7.7 available)
 async fn test_executor_handles_failing_code() -> Result<()> {
-    use skilldo::agent5::executor::PythonUvExecutor;
-    use skilldo::agent5::LanguageExecutor;
+    use skilldo::test_agent::executor::PythonUvExecutor;
+    use skilldo::test_agent::LanguageExecutor;
 
     let executor = PythonUvExecutor::new();
     let env = executor.setup_environment(&[])?;
@@ -239,7 +239,7 @@ raise ValueError("Test error")
     assert!(result.is_fail(), "Failing code should fail");
 
     let error = match result {
-        skilldo::agent5::executor::ExecutionResult::Fail(err) => err,
+        skilldo::test_agent::executor::ExecutionResult::Fail(err) => err,
         _ => panic!("Expected Fail result"),
     };
 
@@ -254,8 +254,8 @@ raise ValueError("Test error")
 #[tokio::test]
 // Requires uv installed (uv 0.7.7 available) and network
 async fn test_executor_installs_dependencies() -> Result<()> {
-    use skilldo::agent5::executor::PythonUvExecutor;
-    use skilldo::agent5::LanguageExecutor;
+    use skilldo::test_agent::executor::PythonUvExecutor;
+    use skilldo::test_agent::LanguageExecutor;
 
     let executor = PythonUvExecutor::new();
 
@@ -278,7 +278,7 @@ print(f"✓ Click version: {click.__version__}")
 
 #[tokio::test]
 async fn test_validator_selects_patterns_thorough_mode() {
-    use skilldo::agent5::ValidationMode;
+    use skilldo::test_agent::ValidationMode;
 
     let _mock_client = MockLlmClient::new(vec![]);
 
@@ -303,7 +303,7 @@ async fn test_validator_selects_patterns_thorough_mode() {
 #[tokio::test]
 #[ignore] // Requires container runtime (docker or podman)
 async fn test_full_agent5_flow_with_click() -> Result<()> {
-    use skilldo::agent5::Agent5CodeValidator;
+    use skilldo::test_agent::TestCodeValidator;
 
     // PEP 723 header so `uv run` installs click in the container
     let pep723 =
@@ -329,7 +329,7 @@ async fn test_full_agent5_flow_with_click() -> Result<()> {
     ]);
 
     let validator =
-        Agent5CodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default());
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default());
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
 
@@ -348,16 +348,16 @@ async fn test_full_agent5_flow_with_click() -> Result<()> {
 
 #[tokio::test]
 async fn test_test_result_generates_feedback_on_failure() {
-    use skilldo::agent5::executor::ExecutionResult;
-    use skilldo::agent5::validator::TestResult;
+    use skilldo::test_agent::executor::ExecutionResult;
+    use skilldo::test_agent::validator::TestResult;
 
     let test_cases = vec![
-        skilldo::agent5::validator::TestCase {
+        skilldo::test_agent::validator::TestCase {
             pattern_name: "Good Pattern".to_string(),
             result: ExecutionResult::Pass("success".to_string()),
             generated_code: "print('ok')".to_string(),
         },
-        skilldo::agent5::validator::TestCase {
+        skilldo::test_agent::validator::TestCase {
             pattern_name: "Bad Pattern".to_string(),
             result: ExecutionResult::Fail("ImportError: No module named 'missing'".to_string()),
             generated_code: "import missing".to_string(),
@@ -382,8 +382,8 @@ async fn test_test_result_generates_feedback_on_failure() {
 
 #[tokio::test]
 async fn test_parser_handles_missing_core_patterns_section() -> Result<()> {
-    use skilldo::agent5::parser::PythonParser;
-    use skilldo::agent5::LanguageParser;
+    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::LanguageParser;
 
     // SKILL.md without Core Patterns section
     let skill_md = r#"---
@@ -420,8 +420,8 @@ None
 
 #[tokio::test]
 async fn test_parser_handles_missing_imports_section() -> Result<()> {
-    use skilldo::agent5::parser::PythonParser;
-    use skilldo::agent5::LanguageParser;
+    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::LanguageParser;
 
     // SKILL.md without Imports section
     let skill_md = r#"---
@@ -456,8 +456,8 @@ None
 
 #[tokio::test]
 async fn test_parser_deduplicates_dependencies() -> Result<()> {
-    use skilldo::agent5::parser::PythonParser;
-    use skilldo::agent5::LanguageParser;
+    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::LanguageParser;
 
     // SKILL.md with duplicate imports
     let skill_md = r#"---
@@ -499,13 +499,13 @@ None
 
 #[tokio::test]
 async fn test_validator_with_mode_method() -> Result<()> {
-    use skilldo::agent5::{Agent5CodeValidator, ValidationMode};
+    use skilldo::test_agent::{TestCodeValidator, ValidationMode};
 
     let mock_client = MockLlmClient::new(vec![]);
 
     // Test that with_mode() sets the mode
     let _validator =
-        Agent5CodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
             .with_mode(ValidationMode::Minimal);
 
     // If we get here without panic, the mode was set successfully
@@ -515,11 +515,11 @@ async fn test_validator_with_mode_method() -> Result<()> {
 
 #[tokio::test]
 async fn test_validator_with_empty_patterns() -> Result<()> {
-    use skilldo::agent5::Agent5CodeValidator;
+    use skilldo::test_agent::TestCodeValidator;
 
     let mock_client = MockLlmClient::new(vec![]);
     let validator =
-        Agent5CodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default());
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default());
 
     // SKILL.md with no patterns (no Core Patterns section)
     let skill_md = r#"---
@@ -550,7 +550,7 @@ None
 
 #[tokio::test]
 async fn test_validator_minimal_mode() -> Result<()> {
-    use skilldo::agent5::{Agent5CodeValidator, ValidationMode};
+    use skilldo::test_agent::{TestCodeValidator, ValidationMode};
 
     let mock_client = MockLlmClient::new(vec![r#"
 ```python
@@ -567,7 +567,7 @@ if __name__ == '__main__':
     .to_string()]);
 
     let validator =
-        Agent5CodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
             .with_mode(ValidationMode::Minimal);
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
@@ -585,7 +585,7 @@ if __name__ == '__main__':
 
 #[tokio::test]
 async fn test_validator_adaptive_mode() -> Result<()> {
-    use skilldo::agent5::{Agent5CodeValidator, ValidationMode};
+    use skilldo::test_agent::{TestCodeValidator, ValidationMode};
 
     let mock_client = MockLlmClient::new(vec![r#"
 ```python
@@ -602,7 +602,7 @@ if __name__ == '__main__':
     .to_string()]);
 
     let validator =
-        Agent5CodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
             .with_mode(ValidationMode::Adaptive);
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
@@ -620,7 +620,7 @@ if __name__ == '__main__':
 
 #[tokio::test]
 async fn test_execution_result_error_message_for_pass() {
-    use skilldo::agent5::executor::ExecutionResult;
+    use skilldo::test_agent::executor::ExecutionResult;
 
     let result = ExecutionResult::Pass("Test output".to_string());
     assert_eq!(result.error_message(), "Test output");
@@ -629,7 +629,7 @@ async fn test_execution_result_error_message_for_pass() {
 
 #[tokio::test]
 async fn test_execution_result_error_message_for_timeout() {
-    use skilldo::agent5::executor::ExecutionResult;
+    use skilldo::test_agent::executor::ExecutionResult;
 
     let result = ExecutionResult::Timeout;
     assert_eq!(
@@ -641,7 +641,7 @@ async fn test_execution_result_error_message_for_timeout() {
 
 #[tokio::test]
 async fn test_executor_default_constructor() {
-    use skilldo::agent5::executor::PythonUvExecutor;
+    use skilldo::test_agent::executor::PythonUvExecutor;
 
     // Should create without panicking
     let _executor = PythonUvExecutor::default();
@@ -649,7 +649,7 @@ async fn test_executor_default_constructor() {
 
 #[tokio::test]
 async fn test_executor_with_timeout_method() {
-    use skilldo::agent5::executor::PythonUvExecutor;
+    use skilldo::test_agent::executor::PythonUvExecutor;
 
     // Should set timeout without panicking
     let _executor = PythonUvExecutor::new().with_timeout(30);
@@ -657,10 +657,10 @@ async fn test_executor_with_timeout_method() {
 
 #[tokio::test]
 async fn test_test_result_generate_feedback_returns_none_on_success() {
-    use skilldo::agent5::executor::ExecutionResult;
-    use skilldo::agent5::validator::TestResult;
+    use skilldo::test_agent::executor::ExecutionResult;
+    use skilldo::test_agent::validator::TestResult;
 
-    let test_cases = vec![skilldo::agent5::validator::TestCase {
+    let test_cases = vec![skilldo::test_agent::validator::TestCase {
         pattern_name: "Pattern 1".to_string(),
         result: ExecutionResult::Pass("success".to_string()),
         generated_code: "print('ok')".to_string(),

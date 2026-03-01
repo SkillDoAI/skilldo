@@ -233,7 +233,7 @@ async fn test_pipeline_with_custom_config() {
             map_mode: None,
             learn_mode: None,
             create_mode: None,
-            extract_custom: Some("Custom Agent 1 instructions".to_string()),
+            extract_custom: Some("Custom extract agent instructions".to_string()),
             map_custom: None,
             learn_custom: None,
             create_custom: None,
