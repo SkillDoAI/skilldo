@@ -75,7 +75,7 @@ check-deps:
 	@command -v cargo-llvm-cov >/dev/null 2>&1 || cargo llvm-cov --version >/dev/null 2>&1 || { echo "❌ cargo-llvm-cov not found — run: cargo install cargo-llvm-cov"; exit 1; }
 	@echo "✅ All dependencies found"
 
-# Run all tests (requires uv for Agent 5 executor tests)
+# Run all tests (requires uv for test agent executor tests)
 test: check-deps
 	cargo test --all
 

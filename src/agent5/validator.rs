@@ -203,7 +203,7 @@ impl<'a> Agent5CodeValidator<'a> {
     /// Validate SKILL.md by generating and running test code
     pub async fn validate(&self, skill_md: &str) -> Result<TestResult> {
         info!(
-            "Agent 5: Starting code generation validation (mode: {:?})",
+            "Test agent: starting code generation validation (mode: {:?})",
             self.mode
         );
 
