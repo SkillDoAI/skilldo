@@ -223,12 +223,31 @@ pub fn run(config_path: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// Heuristic: openai-compatible with localhost base_url is likely Ollama or similar local model.
+/// Heuristic: check if any LLM used during parallel extraction is likely local (Ollama).
+/// Inspects extract/map/learn overrides if present, otherwise falls back to the main LLM config.
 fn is_likely_local_provider(config: &Config) -> bool {
-    if config.llm.provider != Provider::OpenAICompatible {
+    let llms_used_in_parallel = [
+        config.generation.extract_llm.as_ref(),
+        config.generation.map_llm.as_ref(),
+        config.generation.learn_llm.as_ref(),
+    ];
+    // If any stage override is local, warn. If no overrides, check main config.
+    let has_override = llms_used_in_parallel.iter().any(|o| o.is_some());
+    if has_override {
+        llms_used_in_parallel
+            .iter()
+            .filter_map(|o| o.as_ref())
+            .any(|llm| is_llm_local(llm))
+    } else {
+        is_llm_local(&config.llm)
+    }
+}
+
+fn is_llm_local(llm: &crate::config::LlmConfig) -> bool {
+    if llm.provider != Provider::OpenAICompatible {
         return false;
     }
-    match &config.llm.base_url {
+    match &llm.base_url {
         Some(url) => url.contains("localhost") || url.contains("127.0.0.1"),
         None => true, // default is localhost:11434
     }
@@ -282,13 +301,7 @@ fn check_api_key(
             }
         },
         None => {
-            // Infer the env var from provider (mirrors Config::get_api_key behavior)
-            let inferred = match provider {
-                Provider::OpenAI => "OPENAI_API_KEY",
-                Provider::Anthropic => "ANTHROPIC_API_KEY",
-                Provider::Gemini => "GEMINI_API_KEY",
-                Provider::OpenAICompatible => "OPENAI_API_KEY",
-            };
+            let inferred = provider.default_api_key_env();
             match env::var(inferred) {
                 Ok(v) if !v.trim().is_empty() => {
                     results.pass(format!(

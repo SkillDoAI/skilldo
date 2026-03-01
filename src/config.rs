@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::test_agent::ValidationMode;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provider {
     #[serde(rename = "anthropic")]
     Anthropic,
@@ -17,6 +17,18 @@ pub enum Provider {
     OpenAICompatible,
     #[serde(rename = "gemini")]
     Gemini,
+}
+
+impl Provider {
+    /// Canonical env var name for each provider's API key.
+    pub fn default_api_key_env(self) -> &'static str {
+        match self {
+            Provider::OpenAI => "OPENAI_API_KEY",
+            Provider::Anthropic => "ANTHROPIC_API_KEY",
+            Provider::Gemini => "GEMINI_API_KEY",
+            Provider::OpenAICompatible => "OPENAI_API_KEY",
+        }
+    }
 }
 
 impl std::fmt::Display for Provider {
@@ -512,15 +524,9 @@ impl Config {
             .map_err(|_| anyhow::anyhow!("API key not found in environment variable: {}", env_var))
     }
 
-    /// Canonical env var name for each provider.
     #[allow(dead_code)] // Called by get_api_key, used by integration tests
     fn default_api_key_env(&self) -> &str {
-        match self.llm.provider {
-            Provider::OpenAI => "OPENAI_API_KEY",
-            Provider::Anthropic => "ANTHROPIC_API_KEY",
-            Provider::Gemini => "GEMINI_API_KEY",
-            Provider::OpenAICompatible => "OPENAI_API_KEY", // Best guess; won't error if missing
-        }
+        self.llm.provider.default_api_key_env()
     }
 }
 

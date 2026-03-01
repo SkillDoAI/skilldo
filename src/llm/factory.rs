@@ -18,12 +18,7 @@ pub fn create_client_from_llm_config(
     // Get API key from environment variable (explicit or inferred from provider)
     let env_var = match &llm_config.api_key_env {
         Some(v) => v.clone(),
-        None => match llm_config.provider {
-            Provider::OpenAI => "OPENAI_API_KEY".to_string(),
-            Provider::Anthropic => "ANTHROPIC_API_KEY".to_string(),
-            Provider::Gemini => "GEMINI_API_KEY".to_string(),
-            Provider::OpenAICompatible => "OPENAI_API_KEY".to_string(),
-        },
+        None => llm_config.provider.default_api_key_env().to_string(),
     };
     // openai-compatible providers (Ollama, vLLM, etc.) often don't need API keys,
     // so missing/empty keys are silently accepted for that provider.
