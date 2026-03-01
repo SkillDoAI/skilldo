@@ -115,7 +115,7 @@ jobs:
       - name: Generate coverage
         run: cargo llvm-cov --fail-under-lines 95 --lcov --output-path lcov.info
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v5.5.2
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: SkillDoAI/skilldo
