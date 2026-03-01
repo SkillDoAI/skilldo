@@ -1,4 +1,7 @@
-.PHONY: help build test test-fast test-integration test-one clean install lint audit coverage coverage-report coverage-html release docker check-deps changelog setup-mac fmt fmt-check dev ci pre-release stats run example docker-run
+.PHONY: all help build test test-fast test-integration test-one clean install lint audit coverage coverage-report coverage-html release docker check-deps changelog setup-mac fmt fmt-check dev ci pre-release stats run example docker-run
+
+# Default target when running bare `make`
+all: build
 
 # Coverage threshold — keep in sync with .github/workflows/ci.yml
 COV_THRESHOLD := 95

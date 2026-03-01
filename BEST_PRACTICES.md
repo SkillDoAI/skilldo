@@ -113,4 +113,4 @@ The goal is a feedback loop: community finds what works → best ideas get built
 - **API signature accuracy** is the #1 issue. LLMs hallucinate parameter defaults and return types. The review stage helps, but grounded verification (running `inspect.signature()` in the test container) is planned.
 - **Large libraries** (pytorch, tensorflow, numpy) push token limits. Use `max_source_tokens` to control how much source code is sent.
 - **Local models** produce lower quality output and need more retries. This is inherent to model capability, not a pipeline issue.
-- **Single ecosystem** — Python is fully supported today. Go is next (v0.2.0). JS/TS and Rust follow after.
+- **Single ecosystem** — Python is fully supported today. Go is next (v0.2.0). JS/TS and Rust follow.
