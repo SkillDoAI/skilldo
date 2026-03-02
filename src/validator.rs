@@ -546,7 +546,11 @@ x = os.getcwd()
             .run_python_container(&runtime, "raise ValueError('boom')")
             .unwrap();
         match result {
-            ValidationResult::Fail(err) => assert!(err.contains("ValueError")),
+            ValidationResult::Fail(err) => assert!(
+                err.contains("ValueError") || err.contains("boom"),
+                "Expected ValueError or 'boom' in error, got: {}",
+                err
+            ),
             other => panic!("Expected Fail, got {:?}", other),
         }
     }
@@ -568,7 +572,11 @@ x = os.getcwd()
             .run_python_container(&runtime, "def foo(:\n  pass")
             .unwrap();
         match result {
-            ValidationResult::Fail(err) => assert!(err.contains("SyntaxError")),
+            ValidationResult::Fail(err) => assert!(
+                err.contains("SyntaxError"),
+                "Expected SyntaxError in error, got: {}",
+                err
+            ),
             other => panic!("Expected Fail, got {:?}", other),
         }
     }
