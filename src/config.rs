@@ -7,6 +7,45 @@ use tracing::debug;
 
 use crate::test_agent::ValidationMode;
 
+/// Library install source for test agent validation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstallSource {
+    /// Install from package registry (PyPI, npm, etc.) — default
+    #[default]
+    Registry,
+    /// Mount local repo, install via package manager (pip install /src)
+    LocalInstall,
+    /// Mount local repo, set module path (PYTHONPATH=/src)
+    LocalMount,
+}
+
+impl std::str::FromStr for InstallSource {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        match s {
+            "registry" => Ok(Self::Registry),
+            "local-install" => Ok(Self::LocalInstall),
+            "local-mount" => Ok(Self::LocalMount),
+            _ => anyhow::bail!(
+                "Invalid install_source '{}'. Expected: registry, local-install, or local-mount",
+                s
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for InstallSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Registry => write!(f, "registry"),
+            Self::LocalInstall => write!(f, "local-install"),
+            Self::LocalMount => write!(f, "local-mount"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provider {
     #[serde(rename = "anthropic")]
@@ -187,6 +226,8 @@ pub struct GenerationConfig {
     #[serde(default)]
     pub language: Option<String>,
 
+    /// Max retries for create -> lint/test feedback loop (default: 5).
+    /// Each retry sends lint/test errors back to the LLM for correction.
     #[serde(default = "default_max_retries")]
     pub max_retries: usize,
     #[serde(default = "default_max_source_tokens")]
@@ -279,12 +320,9 @@ pub struct ContainerConfig {
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 
-    /// Library install source for test agent validation:
-    ///   "registry"       — install from PyPI (default)
-    ///   "local-install"  — mount local repo, pip install /src
-    ///   "local-mount"    — mount local repo, PYTHONPATH=/src
-    #[serde(default = "default_install_source")]
-    pub install_source: String,
+    /// Library install source for test agent validation
+    #[serde(default)]
+    pub install_source: InstallSource,
 
     /// Path to local source repo for local-install or local-mount modes.
     /// Only used when install_source is not "registry".
@@ -309,7 +347,7 @@ impl Default for ContainerConfig {
             go_image: default_go_image(),
             cleanup: true,
             timeout: 60,
-            install_source: default_install_source(),
+            install_source: InstallSource::default(),
             source_path: None,
             extra_env: std::collections::HashMap::new(),
         }
@@ -354,10 +392,6 @@ fn default_go_image() -> String {
 
 fn default_timeout() -> u64 {
     60
-}
-
-fn default_install_source() -> String {
-    "registry".to_string()
 }
 
 fn default_true() -> bool {
@@ -462,7 +496,7 @@ impl Config {
             return Self::load_from_path(&config_path);
         }
 
-        // Try repo root first (per-repo config)
+        // Try CWD first (most common case, zero cost)
         match Self::try_load_from_path("skilldo.toml") {
             Ok(Some(config)) => {
                 debug!("Loaded config from ./skilldo.toml");
@@ -470,6 +504,25 @@ impl Config {
             }
             Ok(None) => {}           // file not found, try next
             Err(e) => return Err(e), // parse error — surface immediately
+        }
+
+        // Try git repo root (handles running from subdirectories)
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+        {
+            if output.status.success() {
+                let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let repo_config = std::path::PathBuf::from(&root).join("skilldo.toml");
+                match Self::try_load_from_path(&repo_config) {
+                    Ok(Some(config)) => {
+                        debug!("Loaded config from {}", repo_config.display());
+                        return Ok(config);
+                    }
+                    Ok(None) => {}           // file not found, try next
+                    Err(e) => return Err(e), // parse error — surface immediately
+                }
+            }
         }
 
         // Try user config directory
@@ -754,7 +807,7 @@ mod tests {
     #[test]
     fn test_install_source_defaults() {
         let config = ContainerConfig::default();
-        assert_eq!(config.install_source, "registry");
+        assert_eq!(config.install_source, InstallSource::Registry);
         assert!(config.source_path.is_none());
     }
 
@@ -776,7 +829,10 @@ install_source = "local-install"
 source_path = "/tmp/my-lib"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.generation.container.install_source, "local-install");
+        assert_eq!(
+            config.generation.container.install_source,
+            InstallSource::LocalInstall
+        );
         assert_eq!(
             config.generation.container.source_path,
             Some("/tmp/my-lib".to_string())
@@ -799,7 +855,10 @@ max_source_tokens = 100000
 install_source = "local-mount"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.generation.container.install_source, "local-mount");
+        assert_eq!(
+            config.generation.container.install_source,
+            InstallSource::LocalMount
+        );
         assert!(config.generation.container.source_path.is_none());
     }
 

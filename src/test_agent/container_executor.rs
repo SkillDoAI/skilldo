@@ -11,30 +11,27 @@ use tracing::{debug, info, warn};
 
 use super::executor::{ExecutionEnv, ExecutionResult};
 use super::LanguageExecutor;
-use crate::config::ContainerConfig;
+use crate::config::{ContainerConfig, InstallSource};
+use crate::detector::Language;
 use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 
 pub struct ContainerExecutor {
     config: ContainerConfig,
-    language: String,
+    language: Language,
 }
 
 impl ContainerExecutor {
-    pub fn new(config: ContainerConfig, language: &str) -> Self {
-        Self {
-            config,
-            language: language.to_string(),
-        }
+    pub fn new(config: ContainerConfig, language: Language) -> Self {
+        Self { config, language }
     }
 
     /// Get the container image for the current language
     fn get_image(&self) -> &str {
-        match self.language.as_str() {
-            "python" => &self.config.python_image,
-            "javascript" | "typescript" => &self.config.javascript_image,
-            "rust" => &self.config.rust_image,
-            "go" => &self.config.go_image,
-            _ => &self.config.python_image, // Default fallback
+        match self.language {
+            Language::Python => &self.config.python_image,
+            Language::JavaScript => &self.config.javascript_image,
+            Language::Rust => &self.config.rust_image,
+            Language::Go => &self.config.go_image,
         }
     }
 
@@ -57,9 +54,14 @@ impl ContainerExecutor {
             for dep in deps {
                 sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             }
+            // Single-quote each dep to prevent shell metachar interpretation
+            // (e.g., >=, ~, ^ are shell operators in unquoted context).
+            // The `--` terminator prevents dep names starting with `-` from
+            // being interpreted as npm flags.
+            let quoted: Vec<String> = deps.iter().map(|d| format!("'{}'", d)).collect();
             Ok(format!(
-                "npm install --no-save {} > /dev/null 2>&1",
-                deps.join(" ")
+                "npm install --no-save -- {} > /dev/null 2>&1",
+                quoted.join(" ")
             ))
         }
     }
@@ -67,23 +69,18 @@ impl ContainerExecutor {
     /// Generate run.sh for non-Python languages (JS, Rust, Go)
     /// Python uses `uv run test.py` directly — no run.sh needed
     fn generate_container_script(&self, deps: &[String]) -> Result<String> {
-        let install_cmd = match self.language.as_str() {
-            "javascript" | "typescript" => self.generate_node_install_script(deps)?,
+        let install_cmd = match self.language {
+            Language::JavaScript => self.generate_node_install_script(deps)?,
             _ => String::new(),
         };
 
-        let code_file = match self.language.as_str() {
-            "javascript" | "typescript" => "test.js",
-            "rust" => "main.rs",
-            "go" => "main.go",
-            _ => "test.py",
-        };
-
-        let run_line = match self.language.as_str() {
-            "javascript" | "typescript" => format!("node {}", code_file),
-            "rust" => format!("rustc {} -o main && ./main", code_file),
-            "go" => format!("go run {}", code_file),
-            _ => format!("python {}", code_file),
+        let run_line = match self.language {
+            Language::JavaScript => "node test.js",
+            Language::Rust => "rustc main.rs -o main && ./main",
+            Language::Go => "go run main.go",
+            Language::Python => {
+                bail!("generate_container_script should not be called for Python")
+            }
         };
 
         Ok(format!(
@@ -102,7 +99,7 @@ impl LanguageExecutor for ContainerExecutor {
     fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
         info!(
             "Setting up {} environment with {} dependencies",
-            self.language,
+            self.language.as_str(),
             deps.len()
         );
         // Check if runtime is available
@@ -130,24 +127,27 @@ impl LanguageExecutor for ContainerExecutor {
 
         Ok(ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: Some(container_name),
             dependencies: deps.to_vec(),
         })
     }
 
     fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
-        debug!("Running {} code ({} bytes)", self.language, code.len());
+        debug!(
+            "Running {} code ({} bytes)",
+            self.language.as_str(),
+            code.len()
+        );
 
-        let is_python = matches!(self.language.as_str(), "python");
+        let is_python = matches!(self.language, Language::Python);
 
         // Write code to file
-        let code_file = match self.language.as_str() {
-            "python" => "test.py",
-            "javascript" | "typescript" => "test.js",
-            "rust" => "main.rs",
-            "go" => "main.go",
-            _ => "test.py",
+        let code_file = match self.language {
+            Language::Python => "test.py",
+            Language::JavaScript => "test.js",
+            Language::Rust => "main.rs",
+            Language::Go => "main.go",
         };
 
         let code_path = env.temp_dir.path().join(code_file);
@@ -187,11 +187,25 @@ impl LanguageExecutor for ContainerExecutor {
             .stderr(Stdio::null())
             .status();
 
+        // Make temp dir world-writable so --user nobody can write to /workspace.
+        // Only needed when running as unprivileged user (skip for local-install).
+        #[cfg(unix)]
+        if self.config.install_source != InstallSource::LocalInstall {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(env.temp_dir.path(), std::fs::Permissions::from_mode(0o777))?;
+        }
+
         let mut cmd = Command::new(&self.config.runtime);
         cmd.arg("run");
 
         if self.config.cleanup {
             cmd.arg("--rm");
+        }
+
+        // Run as unprivileged user to limit damage from untrusted code.
+        // Skip for local-install mode which needs root for pip install.
+        if self.config.install_source != InstallSource::LocalInstall {
+            cmd.arg("--user").arg("nobody");
         }
 
         cmd.arg("--name")
@@ -200,10 +214,7 @@ impl LanguageExecutor for ContainerExecutor {
             .arg(format!("{}:/workspace", env.temp_dir.path().display()));
 
         // Mount source repo for local modes (local-install, local-mount).
-        // No allowlist check here — install_source is a user-controlled TOML config
-        // value, not untrusted input. Invalid values simply skip the PYTHONPATH
-        // optimization but still require source_path, so misconfigs surface early.
-        if self.config.install_source != "registry" {
+        if self.config.install_source != InstallSource::Registry {
             let source = self.config.source_path.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "source_path is required when install_source is '{}'",
@@ -213,9 +224,20 @@ impl LanguageExecutor for ContainerExecutor {
             cmd.arg("-v").arg(format!("{}:/src:ro", source));
         }
 
-        // Set PYTHONPATH for local-mount mode
-        if self.config.install_source == "local-mount" {
+        // Set language-specific module path for local-mount mode.
+        // Only Python needs PYTHONPATH; Go uses modules (not GOPATH) and
+        // expects `replace` directives in go.mod for local deps.
+        if self.config.install_source == InstallSource::LocalMount
+            && matches!(self.language, Language::Python)
+        {
             cmd.arg("-e").arg("PYTHONPATH=/src");
+        }
+
+        // Python uv needs a writable cache dir when running as nobody
+        if matches!(self.language, Language::Python)
+            && self.config.install_source != InstallSource::LocalInstall
+        {
+            cmd.arg("-e").arg("UV_CACHE_DIR=/tmp/uv-cache");
         }
 
         // Pass extra environment variables (private registries, proxies, etc.)
@@ -231,8 +253,8 @@ impl LanguageExecutor for ContainerExecutor {
         //   local-install: pip install /src first, then run
         // Other languages: `sh run.sh` — traditional install + run
         if is_python {
-            match self.config.install_source.as_str() {
-                "local-install" => {
+            match self.config.install_source {
+                InstallSource::LocalInstall => {
                     cmd.arg("sh")
                         .arg("-c")
                         .arg("cd /workspace && uv pip install --system /src && uv run test.py");
@@ -365,12 +387,12 @@ mod tests {
             go_image: "golang:1.20-alpine".to_string(),
             timeout: 60,
             cleanup: true,
-            install_source: "registry".to_string(),
+            install_source: InstallSource::Registry,
             source_path: None,
             extra_env: std::collections::HashMap::new(),
         };
 
-        let executor = ContainerExecutor::new(config, "javascript");
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
 
         let deps = vec!["express".to_string(), "cors".to_string()];
         let script = executor.generate_node_install_script(&deps).unwrap();
@@ -396,93 +418,123 @@ mod tests {
             go_image: "golang:1.20-alpine".to_string(),
             timeout: 60,
             cleanup: true,
-            install_source: "registry".to_string(),
+            install_source: InstallSource::Registry,
             source_path: None,
             extra_env: std::collections::HashMap::new(),
         }
     }
 
+    /// Language expectations for parameterized tests.
+    /// (language, expected_image, code_file, sample_code)
+    fn language_expectations() -> Vec<(Language, &'static str, &'static str, &'static str)> {
+        vec![
+            (
+                Language::Python,
+                "python:3.11-alpine",
+                "test.py",
+                "print('hello')",
+            ),
+            (
+                Language::JavaScript,
+                "node:18-alpine",
+                "test.js",
+                "console.log('hi')",
+            ),
+            (
+                Language::Rust,
+                "rust:1.70-alpine",
+                "main.rs",
+                "fn main() {}",
+            ),
+            (
+                Language::Go,
+                "golang:1.20-alpine",
+                "main.go",
+                "package main",
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_get_image_per_language() {
+        for (lang, expected_image, _, _) in language_expectations() {
+            let executor = ContainerExecutor::new(make_config(), lang.clone());
+            assert_eq!(
+                executor.get_image(),
+                expected_image,
+                "{}: expected image {}",
+                lang.as_str(),
+                expected_image
+            );
+        }
+    }
+
+    #[test]
+    fn test_code_file_per_language() {
+        for (lang, _, expected_file, sample_code) in language_expectations() {
+            let executor = ContainerExecutor::new(make_config(), lang.clone());
+            let temp_dir = TempDir::new().unwrap();
+            let env = ExecutionEnv {
+                temp_dir,
+                interpreter_path: None,
+                container_name: None,
+                dependencies: vec![],
+            };
+            let _ = executor.run_code(&env, sample_code);
+            let code_path = env.temp_dir.path().join(expected_file);
+            assert!(
+                code_path.exists(),
+                "{}: expected {} to exist",
+                lang.as_str(),
+                expected_file
+            );
+            let content = fs::read_to_string(&code_path).unwrap();
+            assert_eq!(
+                content,
+                sample_code,
+                "{}: file content mismatch",
+                lang.as_str()
+            );
+        }
+    }
+
     #[test]
     fn test_rust_container_script() {
-        let executor = ContainerExecutor::new(make_config(), "rust");
+        let executor = ContainerExecutor::new(make_config(), Language::Rust);
         let script = executor.generate_container_script(&[]).unwrap();
         assert!(script.contains("rustc main.rs -o main && ./main"));
     }
 
     #[test]
     fn test_go_container_script() {
-        let executor = ContainerExecutor::new(make_config(), "go");
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
         let script = executor.generate_container_script(&[]).unwrap();
         assert!(script.contains("go run main.go"));
     }
 
     #[test]
-    fn test_python_container_script() {
-        let executor = ContainerExecutor::new(make_config(), "python");
-        let script = executor.generate_container_script(&[]).unwrap();
-        assert!(script.contains("python test.py"));
-    }
-
-    #[test]
-    fn test_get_image_python() {
-        let executor = ContainerExecutor::new(make_config(), "python");
-        assert_eq!(executor.get_image(), "python:3.11-alpine");
-    }
-
-    #[test]
-    fn test_get_image_javascript() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
-        assert_eq!(executor.get_image(), "node:18-alpine");
-    }
-
-    #[test]
-    fn test_get_image_typescript() {
-        let executor = ContainerExecutor::new(make_config(), "typescript");
-        assert_eq!(executor.get_image(), "node:18-alpine");
-    }
-
-    #[test]
-    fn test_get_image_rust() {
-        let executor = ContainerExecutor::new(make_config(), "rust");
-        assert_eq!(executor.get_image(), "rust:1.70-alpine");
-    }
-
-    #[test]
-    fn test_get_image_go() {
-        let executor = ContainerExecutor::new(make_config(), "go");
-        assert_eq!(executor.get_image(), "golang:1.20-alpine");
-    }
-
-    #[test]
-    fn test_get_image_unknown_defaults_to_python() {
-        let executor = ContainerExecutor::new(make_config(), "haskell");
-        assert_eq!(executor.get_image(), "python:3.11-alpine");
+    fn test_python_container_script_not_used() {
+        // Python uses uv run directly, not run.sh — generate_container_script should error
+        let executor = ContainerExecutor::new(make_config(), Language::Python);
+        assert!(executor.generate_container_script(&[]).is_err());
     }
 
     #[test]
     fn test_javascript_container_script_with_deps() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["express".to_string(), "cors".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
-        assert!(script.contains("npm install --no-save express cors"));
+        assert!(script.contains("npm install --no-save -- 'express' 'cors'"));
         assert!(script.contains("node test.js"));
     }
 
     #[test]
-    fn test_unknown_language_container_script() {
-        let executor = ContainerExecutor::new(make_config(), "haskell");
-        let script = executor.generate_container_script(&[]).unwrap();
-        // Unknown falls through to python defaults
-        assert!(script.contains("python test.py"));
-    }
-
-    #[test]
     fn test_cleanup_no_container_name() {
-        let executor = ContainerExecutor::new(make_config(), "python");
+        let executor = ContainerExecutor::new(make_config(), Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: vec![],
         };
@@ -498,11 +550,11 @@ mod tests {
     fn test_cleanup_disabled() {
         let mut config = make_config();
         config.cleanup = false;
-        let executor = ContainerExecutor::new(config, "python");
+        let executor = ContainerExecutor::new(config, Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: Some("test-container".to_string()),
             dependencies: vec![],
         };
@@ -512,11 +564,11 @@ mod tests {
 
     #[test]
     fn test_run_code_no_container_name() {
-        let executor = ContainerExecutor::new(make_config(), "python");
+        let executor = ContainerExecutor::new(make_config(), Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: vec![],
         };
@@ -531,29 +583,29 @@ mod tests {
     #[test]
     fn test_make_config_has_install_source() {
         let config = make_config();
-        assert_eq!(config.install_source, "registry");
+        assert_eq!(config.install_source, InstallSource::Registry);
         assert!(config.source_path.is_none());
     }
 
     #[test]
     fn test_local_install_config() {
         let mut config = make_config();
-        config.install_source = "local-install".to_string();
+        config.install_source = InstallSource::LocalInstall;
         config.source_path = Some("/tmp/my-lib".to_string());
-        let executor = ContainerExecutor::new(config, "python");
-        assert_eq!(executor.config.install_source, "local-install");
+        let executor = ContainerExecutor::new(config, Language::Python);
+        assert_eq!(executor.config.install_source, InstallSource::LocalInstall);
     }
 
     #[test]
     fn test_run_code_local_install_missing_source_path() {
         let mut config = make_config();
-        config.install_source = "local-install".to_string();
+        config.install_source = InstallSource::LocalInstall;
         config.source_path = None;
-        let executor = ContainerExecutor::new(config, "python");
+        let executor = ContainerExecutor::new(config, Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: Some("test-container".to_string()),
             dependencies: vec![],
         };
@@ -568,10 +620,10 @@ mod tests {
     #[test]
     fn test_local_mount_config() {
         let mut config = make_config();
-        config.install_source = "local-mount".to_string();
+        config.install_source = InstallSource::LocalMount;
         config.source_path = Some("/tmp/my-lib".to_string());
-        let executor = ContainerExecutor::new(config, "python");
-        assert_eq!(executor.config.install_source, "local-mount");
+        let executor = ContainerExecutor::new(config, Language::Python);
+        assert_eq!(executor.config.install_source, InstallSource::LocalMount);
     }
 
     // --- ContainerExecutor::new() with Default config ---
@@ -579,7 +631,7 @@ mod tests {
     #[test]
     fn test_new_with_default_config() {
         let config = ContainerConfig::default();
-        let executor = ContainerExecutor::new(config, "python");
+        let executor = ContainerExecutor::new(config, Language::Python);
         // Runtime is auto-detected (podman or docker)
         assert!(
             executor.config.runtime == "podman" || executor.config.runtime == "docker",
@@ -595,51 +647,34 @@ mod tests {
         assert_eq!(executor.config.go_image, "golang:1.21-alpine");
         assert_eq!(executor.config.timeout, 60);
         assert!(executor.config.cleanup);
-        assert_eq!(executor.config.install_source, "registry");
+        assert_eq!(executor.config.install_source, InstallSource::Registry);
         assert!(executor.config.source_path.is_none());
         assert!(executor.config.extra_env.is_empty());
-        assert_eq!(executor.language, "python");
+        assert_eq!(executor.language, Language::Python);
     }
 
     #[test]
     fn test_new_stores_language() {
-        let executor = ContainerExecutor::new(make_config(), "go");
-        assert_eq!(executor.language, "go");
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        assert_eq!(executor.language, Language::Go);
     }
 
     // --- generate_container_script: JS/TS without deps ---
 
     #[test]
     fn test_javascript_container_script_without_deps() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let script = executor.generate_container_script(&[]).unwrap();
         assert!(script.contains("node test.js"));
         // No npm install line when no deps
         assert!(!script.contains("npm install"));
     }
 
-    #[test]
-    fn test_typescript_container_script_without_deps() {
-        let executor = ContainerExecutor::new(make_config(), "typescript");
-        let script = executor.generate_container_script(&[]).unwrap();
-        assert!(script.contains("node test.js"));
-        assert!(!script.contains("npm install"));
-    }
-
-    #[test]
-    fn test_typescript_container_script_with_deps() {
-        let executor = ContainerExecutor::new(make_config(), "typescript");
-        let deps = vec!["lodash".to_string(), "axios".to_string()];
-        let script = executor.generate_container_script(&deps).unwrap();
-        assert!(script.contains("npm install --no-save lodash axios"));
-        assert!(script.contains("node test.js"));
-    }
-
     // --- generate_container_script: Rust/Go with deps (deps should be ignored) ---
 
     #[test]
     fn test_rust_container_script_with_deps_ignores_them() {
-        let executor = ContainerExecutor::new(make_config(), "rust");
+        let executor = ContainerExecutor::new(make_config(), Language::Rust);
         let deps = vec!["serde".to_string(), "tokio".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
         assert!(script.contains("rustc main.rs -o main && ./main"));
@@ -650,7 +685,7 @@ mod tests {
 
     #[test]
     fn test_go_container_script_with_deps_ignores_them() {
-        let executor = ContainerExecutor::new(make_config(), "go");
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
         let deps = vec!["github.com/gin-gonic/gin".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
         assert!(script.contains("go run main.go"));
@@ -662,7 +697,7 @@ mod tests {
 
     #[test]
     fn test_container_script_has_shebang_and_set_e() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let script = executor.generate_container_script(&[]).unwrap();
         assert!(script.starts_with("#!/bin/sh\n"));
         assert!(script.contains("set -e"));
@@ -671,7 +706,7 @@ mod tests {
 
     #[test]
     fn test_container_script_structure_rust() {
-        let executor = ContainerExecutor::new(make_config(), "rust");
+        let executor = ContainerExecutor::new(make_config(), Language::Rust);
         let script = executor.generate_container_script(&[]).unwrap();
         assert!(script.starts_with("#!/bin/sh\n"));
         assert!(script.contains("set -e"));
@@ -680,7 +715,7 @@ mod tests {
 
     #[test]
     fn test_container_script_structure_go() {
-        let executor = ContainerExecutor::new(make_config(), "go");
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
         let script = executor.generate_container_script(&[]).unwrap();
         assert!(script.starts_with("#!/bin/sh\n"));
         assert!(script.contains("set -e"));
@@ -691,15 +726,18 @@ mod tests {
 
     #[test]
     fn test_node_install_script_single_dep() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["express".to_string()];
         let script = executor.generate_node_install_script(&deps).unwrap();
-        assert_eq!(script, "npm install --no-save express > /dev/null 2>&1");
+        assert_eq!(
+            script,
+            "npm install --no-save -- 'express' > /dev/null 2>&1"
+        );
     }
 
     #[test]
     fn test_node_install_script_multiple_deps_format() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec![
             "express".to_string(),
             "cors".to_string(),
@@ -708,13 +746,13 @@ mod tests {
         let script = executor.generate_node_install_script(&deps).unwrap();
         assert_eq!(
             script,
-            "npm install --no-save express cors helmet > /dev/null 2>&1"
+            "npm install --no-save -- 'express' 'cors' 'helmet' > /dev/null 2>&1"
         );
     }
 
     #[test]
     fn test_node_install_script_scoped_package() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["@types/node".to_string()];
         let script = executor.generate_node_install_script(&deps).unwrap();
         assert!(script.contains("@types/node"));
@@ -722,35 +760,35 @@ mod tests {
 
     #[test]
     fn test_node_install_script_rejects_backtick() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["`whoami`".to_string()];
         assert!(executor.generate_node_install_script(&deps).is_err());
     }
 
     #[test]
     fn test_node_install_script_rejects_dollar_sign() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["$(rm -rf /)".to_string()];
         assert!(executor.generate_node_install_script(&deps).is_err());
     }
 
     #[test]
     fn test_node_install_script_rejects_pipe() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["express | cat /etc/passwd".to_string()];
         assert!(executor.generate_node_install_script(&deps).is_err());
     }
 
     #[test]
     fn test_node_install_script_rejects_ampersand() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["express && rm -rf /".to_string()];
         assert!(executor.generate_node_install_script(&deps).is_err());
     }
 
     #[test]
     fn test_node_install_script_allows_version_constraint() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["express@4.18.2".to_string()];
         let script = executor.generate_node_install_script(&deps).unwrap();
         assert!(script.contains("express@4.18.2"));
@@ -787,7 +825,7 @@ mod tests {
 
     #[test]
     fn test_get_image_with_default_config_python() {
-        let executor = ContainerExecutor::new(ContainerConfig::default(), "python");
+        let executor = ContainerExecutor::new(ContainerConfig::default(), Language::Python);
         assert_eq!(
             executor.get_image(),
             "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
@@ -796,29 +834,20 @@ mod tests {
 
     #[test]
     fn test_get_image_with_default_config_javascript() {
-        let executor = ContainerExecutor::new(ContainerConfig::default(), "javascript");
+        let executor = ContainerExecutor::new(ContainerConfig::default(), Language::JavaScript);
         assert_eq!(executor.get_image(), "node:20-slim");
     }
 
     #[test]
     fn test_get_image_with_default_config_rust() {
-        let executor = ContainerExecutor::new(ContainerConfig::default(), "rust");
+        let executor = ContainerExecutor::new(ContainerConfig::default(), Language::Rust);
         assert_eq!(executor.get_image(), "rust:1.75-slim");
     }
 
     #[test]
     fn test_get_image_with_default_config_go() {
-        let executor = ContainerExecutor::new(ContainerConfig::default(), "go");
+        let executor = ContainerExecutor::new(ContainerConfig::default(), Language::Go);
         assert_eq!(executor.get_image(), "golang:1.21-alpine");
-    }
-
-    #[test]
-    fn test_get_image_with_default_config_unknown_falls_back_to_python() {
-        let executor = ContainerExecutor::new(ContainerConfig::default(), "ruby");
-        assert_eq!(
-            executor.get_image(),
-            "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
-        );
     }
 
     // --- setup_environment: runtime not found ---
@@ -827,7 +856,7 @@ mod tests {
     fn test_setup_environment_missing_runtime() {
         let mut config = make_config();
         config.runtime = "nonexistent-runtime-xyz".to_string();
-        let executor = ContainerExecutor::new(config, "python");
+        let executor = ContainerExecutor::new(config, Language::Python);
         let result = executor.setup_environment(&[]);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -844,13 +873,13 @@ mod tests {
     fn test_setup_environment_stores_dependencies() {
         // This requires a real runtime, but we can test with the actual podman/docker
         // if available. If not, this test validates the error path.
-        let executor = ContainerExecutor::new(make_config(), "python");
+        let executor = ContainerExecutor::new(make_config(), Language::Python);
         let deps = vec!["requests".to_string(), "flask".to_string()];
         match executor.setup_environment(&deps) {
             Ok(env) => {
                 assert_eq!(env.dependencies, deps);
                 assert!(env.container_name.is_some());
-                assert!(env.python_path.is_none());
+                assert!(env.interpreter_path.is_none());
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -866,11 +895,11 @@ mod tests {
 
     #[test]
     fn test_cleanup_with_container_name_and_cleanup_enabled() {
-        let executor = ContainerExecutor::new(make_config(), "python");
+        let executor = ContainerExecutor::new(make_config(), Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: Some("skilldo-test-fake123".to_string()),
             dependencies: vec![],
         };
@@ -880,102 +909,15 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // --- run_code: code file selection for different languages ---
-
-    #[test]
-    fn test_run_code_writes_js_file() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
-        let temp_dir = TempDir::new().unwrap();
-        let env = ExecutionEnv {
-            temp_dir,
-            python_path: None,
-            container_name: None,
-            dependencies: vec![],
-        };
-        // run_code writes the code file before checking container_name,
-        // so we can verify the file was written even though it errors.
-        let _ = executor.run_code(&env, "console.log('hi')");
-        let code_path = env.temp_dir.path().join("test.js");
-        assert!(code_path.exists());
-        let content = fs::read_to_string(&code_path).unwrap();
-        assert_eq!(content, "console.log('hi')");
-    }
-
-    #[test]
-    fn test_run_code_writes_rust_file() {
-        let executor = ContainerExecutor::new(make_config(), "rust");
-        let temp_dir = TempDir::new().unwrap();
-        let env = ExecutionEnv {
-            temp_dir,
-            python_path: None,
-            container_name: None,
-            dependencies: vec![],
-        };
-        let _ = executor.run_code(&env, "fn main() {}");
-        let code_path = env.temp_dir.path().join("main.rs");
-        assert!(code_path.exists());
-        let content = fs::read_to_string(&code_path).unwrap();
-        assert_eq!(content, "fn main() {}");
-    }
-
-    #[test]
-    fn test_run_code_writes_go_file() {
-        let executor = ContainerExecutor::new(make_config(), "go");
-        let temp_dir = TempDir::new().unwrap();
-        let env = ExecutionEnv {
-            temp_dir,
-            python_path: None,
-            container_name: None,
-            dependencies: vec![],
-        };
-        let _ = executor.run_code(&env, "package main");
-        let code_path = env.temp_dir.path().join("main.go");
-        assert!(code_path.exists());
-        let content = fs::read_to_string(&code_path).unwrap();
-        assert_eq!(content, "package main");
-    }
-
-    #[test]
-    fn test_run_code_writes_python_file() {
-        let executor = ContainerExecutor::new(make_config(), "python");
-        let temp_dir = TempDir::new().unwrap();
-        let env = ExecutionEnv {
-            temp_dir,
-            python_path: None,
-            container_name: None,
-            dependencies: vec![],
-        };
-        let _ = executor.run_code(&env, "print('hello')");
-        let code_path = env.temp_dir.path().join("test.py");
-        assert!(code_path.exists());
-        let content = fs::read_to_string(&code_path).unwrap();
-        assert_eq!(content, "print('hello')");
-    }
-
-    #[test]
-    fn test_run_code_unknown_language_writes_test_py() {
-        let executor = ContainerExecutor::new(make_config(), "haskell");
-        let temp_dir = TempDir::new().unwrap();
-        let env = ExecutionEnv {
-            temp_dir,
-            python_path: None,
-            container_name: None,
-            dependencies: vec![],
-        };
-        let _ = executor.run_code(&env, "main = putStrLn");
-        let code_path = env.temp_dir.path().join("test.py");
-        assert!(code_path.exists());
-    }
-
     // --- run_code: non-Python generates run.sh ---
 
     #[test]
     fn test_run_code_js_generates_run_sh() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: vec!["express".to_string()],
         };
@@ -984,17 +926,17 @@ mod tests {
         assert!(script_path.exists());
         let script = fs::read_to_string(&script_path).unwrap();
         assert!(script.contains("#!/bin/sh"));
-        assert!(script.contains("npm install --no-save express"));
+        assert!(script.contains("npm install --no-save -- 'express'"));
         assert!(script.contains("node test.js"));
     }
 
     #[test]
     fn test_run_code_python_does_not_generate_run_sh() {
-        let executor = ContainerExecutor::new(make_config(), "python");
+        let executor = ContainerExecutor::new(make_config(), Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: vec![],
         };
@@ -1015,7 +957,7 @@ mod tests {
         config
             .extra_env
             .insert("UV_INDEX".to_string(), "https://pypi.corp.com".to_string());
-        let executor = ContainerExecutor::new(config, "python");
+        let executor = ContainerExecutor::new(config, Language::Python);
         assert_eq!(executor.config.extra_env.len(), 2);
         assert_eq!(
             executor.config.extra_env.get("HTTP_PROXY").unwrap(),
@@ -1030,8 +972,8 @@ mod tests {
         let mut config = make_config();
         config.timeout = 120;
         config.cleanup = false;
-        let executor = ContainerExecutor::new(config, "rust");
-        assert_eq!(executor.language, "rust");
+        let executor = ContainerExecutor::new(config, Language::Rust);
+        assert_eq!(executor.language, Language::Rust);
         assert_eq!(executor.config.timeout, 120);
         assert!(!executor.config.cleanup);
     }
@@ -1040,7 +982,7 @@ mod tests {
 
     #[test]
     fn test_container_script_rust_no_install_line() {
-        let executor = ContainerExecutor::new(make_config(), "rust");
+        let executor = ContainerExecutor::new(make_config(), Language::Rust);
         let script = executor.generate_container_script(&[]).unwrap();
         let lines: Vec<&str> = script.lines().collect();
         // Lines should be: #!/bin/sh, set -e, cd /workspace, <empty>, rustc...
@@ -1053,7 +995,7 @@ mod tests {
 
     #[test]
     fn test_node_install_script_version_range() {
-        let executor = ContainerExecutor::new(make_config(), "javascript");
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["express@>=4.0.0".to_string()];
         let script = executor.generate_node_install_script(&deps).unwrap();
         assert!(script.contains("express@>=4.0.0"));
@@ -1086,11 +1028,11 @@ mod tests {
     #[test]
     fn test_run_code_rust_run_sh_is_executable() {
         use std::os::unix::fs::PermissionsExt;
-        let executor = ContainerExecutor::new(make_config(), "rust");
+        let executor = ContainerExecutor::new(make_config(), Language::Rust);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: vec![],
         };
@@ -1107,13 +1049,13 @@ mod tests {
     #[test]
     fn test_run_code_local_mount_missing_source_path() {
         let mut config = make_config();
-        config.install_source = "local-mount".to_string();
+        config.install_source = InstallSource::LocalMount;
         config.source_path = None;
-        let executor = ContainerExecutor::new(config, "python");
+        let executor = ContainerExecutor::new(config, Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: Some("test-container".to_string()),
             dependencies: vec![],
         };

@@ -204,7 +204,7 @@ impl<'a> ReviewAgent<'a> {
         debug!("review: introspection script ({} bytes)", script.len());
 
         // Run in container
-        let executor = ContainerExecutor::new(self.container_config.clone(), "python");
+        let executor = ContainerExecutor::new(self.container_config.clone(), Language::Python);
         let env = executor.setup_environment(&[])?;
 
         let result = executor.run_code(&env, &script);

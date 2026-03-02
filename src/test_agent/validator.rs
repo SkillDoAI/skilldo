@@ -6,7 +6,8 @@ use super::container_executor::ContainerExecutor;
 use super::executor::ExecutionResult;
 use super::parser::PythonParser;
 use super::{CodePattern, LanguageCodeGenerator, LanguageExecutor, LanguageParser};
-use crate::config::ContainerConfig;
+use crate::config::{ContainerConfig, InstallSource};
+use crate::detector::Language;
 use crate::llm::client::LlmClient;
 
 /// Validation mode for test agent
@@ -43,7 +44,7 @@ impl TestResult {
         self.failed == 0 && self.passed > 0
     }
 
-    pub fn generate_feedback(&self) -> Option<String> {
+    pub fn generate_feedback(&self, language: &Language) -> Option<String> {
         if self.all_passed() {
             return None;
         }
@@ -61,8 +62,9 @@ impl TestResult {
             .filter(|tc| !tc.result.is_pass())
             .map(|tc| {
                 format!(
-                    "Pattern: {}\nGenerated test code:\n```python\n{}\n```\nError: {}",
+                    "Pattern: {}\nGenerated test code:\n```{}\n{}\n```\nError: {}",
                     tc.pattern_name,
+                    language.as_str(),
                     tc.generated_code,
                     tc.result.error_message(),
                 )
@@ -103,26 +105,49 @@ Instructions:
 
 /// Main test agent coordinator
 pub struct TestCodeValidator<'a> {
+    language: Language,
     parser: Box<dyn LanguageParser>,
     code_generator: Box<dyn LanguageCodeGenerator + 'a>,
     executor: Box<dyn LanguageExecutor>,
     mode: ValidationMode,
-    /// Install source from config; when not "registry", local_package is set on code_generator
-    install_source: String,
+    /// Install source from config; when not Registry, local_package is set on code_generator
+    install_source: InstallSource,
 }
 
 impl<'a> TestCodeValidator<'a> {
-    /// Create a new test agent validator for Python
-    #[allow(dead_code)]
-    pub fn new_python(llm_client: &'a dyn LlmClient, config: ContainerConfig) -> Self {
-        let install_source = config.install_source.clone();
-        Self {
-            parser: Box::new(PythonParser),
-            code_generator: Box::new(PythonCodeGenerator::new(llm_client)),
-            executor: Box::new(ContainerExecutor::new(config, "python")),
-            mode: ValidationMode::default(),
-            install_source,
+    /// Create a new test agent validator for the given language.
+    /// Returns an error for unsupported languages.
+    pub fn new(
+        language: &Language,
+        llm_client: &'a dyn LlmClient,
+        config: ContainerConfig,
+        custom_instructions: Option<String>,
+    ) -> anyhow::Result<Self> {
+        let install_source = config.install_source;
+        match language {
+            Language::Python => Ok(Self {
+                language: Language::Python,
+                parser: Box::new(PythonParser),
+                code_generator: Box::new(
+                    PythonCodeGenerator::new(llm_client)
+                        .with_custom_instructions(custom_instructions),
+                ),
+                executor: Box::new(ContainerExecutor::new(config, Language::Python)),
+                mode: ValidationMode::default(),
+                install_source,
+            }),
+            _ => anyhow::bail!("Test agent not yet supported for {}", language.as_str()),
         }
+    }
+
+    /// Create a new test agent validator for Python (convenience wrapper).
+    /// Used by integration tests in tests/test_agent_integration.rs.
+    #[allow(dead_code)]
+    pub fn new_python(
+        llm_client: &'a dyn LlmClient,
+        config: ContainerConfig,
+    ) -> anyhow::Result<Self> {
+        Self::new(&Language::Python, llm_client, config, None)
     }
 
     /// Create a new test agent validator for Python with custom instructions (append-only)
@@ -130,17 +155,8 @@ impl<'a> TestCodeValidator<'a> {
         llm_client: &'a dyn LlmClient,
         config: ContainerConfig,
         custom_instructions: Option<String>,
-    ) -> Self {
-        let install_source = config.install_source.clone();
-        Self {
-            parser: Box::new(PythonParser),
-            code_generator: Box::new(
-                PythonCodeGenerator::new(llm_client).with_custom_instructions(custom_instructions),
-            ),
-            executor: Box::new(ContainerExecutor::new(config, "python")),
-            mode: ValidationMode::default(),
-            install_source,
-        }
+    ) -> anyhow::Result<Self> {
+        Self::new(&Language::Python, llm_client, config, custom_instructions)
     }
 
     /// Set the validation mode
@@ -222,7 +238,7 @@ impl<'a> TestCodeValidator<'a> {
         }
 
         // For local modes, tell the code generator to exclude the main package from PEP 723 deps
-        if self.install_source != "registry" {
+        if self.install_source != InstallSource::Registry {
             if let Some(ref name) = package_name {
                 debug!(
                     "  Local mode ({}): excluding \"{}\" from PEP 723 deps",
@@ -260,7 +276,7 @@ impl<'a> TestCodeValidator<'a> {
         }
 
         // 3. Setup environment once (reuse for all tests)
-        info!("  → Setting up Python environment...");
+        info!("  → Setting up {} environment...", self.language.as_str());
         let env = self.executor.setup_environment(&deps)?;
 
         let mut test_cases = Vec::new();
@@ -386,7 +402,7 @@ mod tests {
         };
 
         assert!(result.all_passed());
-        assert!(result.generate_feedback().is_none());
+        assert!(result.generate_feedback(&Language::Python).is_none());
     }
 
     #[test]
@@ -409,7 +425,7 @@ mod tests {
         };
 
         assert!(!result.all_passed());
-        let feedback = result.generate_feedback().unwrap();
+        let feedback = result.generate_feedback(&Language::Python).unwrap();
         assert!(feedback.contains("Test 2"));
         assert!(feedback.contains("error"));
     }
@@ -484,7 +500,7 @@ mod tests {
         };
 
         // All tests passed, so no feedback should be generated
-        assert!(result.generate_feedback().is_none());
+        assert!(result.generate_feedback(&Language::Python).is_none());
     }
 
     #[test]
@@ -612,7 +628,7 @@ mod tests {
             let temp_dir = tempfile::TempDir::new()?;
             Ok(ExecutionEnv {
                 temp_dir,
-                python_path: None,
+                interpreter_path: None,
                 container_name: None,
                 dependencies: vec![],
             })
@@ -636,14 +652,15 @@ mod tests {
         code_generator: Box<dyn LanguageCodeGenerator + 'a>,
         executor: Box<dyn LanguageExecutor>,
         mode: ValidationMode,
-        install_source: &str,
+        install_source: InstallSource,
     ) -> TestCodeValidator<'a> {
         TestCodeValidator {
+            language: Language::Python,
             parser,
             code_generator,
             executor,
             mode,
-            install_source: install_source.to_string(),
+            install_source,
         }
     }
 
@@ -701,7 +718,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         let patterns: Vec<CodePattern> = vec![];
         let selected = validator.select_patterns(&patterns);
@@ -715,7 +732,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Minimal,
-            "registry",
+            InstallSource::Registry,
         );
         let patterns = vec![config_pattern(), basic_pattern()];
         let selected = validator.select_patterns(&patterns);
@@ -730,7 +747,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Adaptive,
-            "registry",
+            InstallSource::Registry,
         );
         let patterns = vec![error_pattern(), basic_pattern()];
         let selected = validator.select_patterns(&patterns);
@@ -745,7 +762,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         let patterns = vec![
             async_pattern(),
@@ -770,7 +787,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         // Only BasicUsage category present, rest are Other
         let patterns = vec![
@@ -793,7 +810,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         let patterns = vec![basic_pattern()];
         let selected = validator.select_patterns(&patterns);
@@ -808,7 +825,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         let patterns = vec![basic_pattern(), config_pattern(), error_pattern()];
         let selected = validator.select_patterns(&patterns);
@@ -822,7 +839,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         // 5 patterns, 3 matching priority categories
         let patterns = vec![
@@ -844,7 +861,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         // All Other/Async categories -- none match BasicUsage/Configuration/ErrorHandling
         let patterns = vec![
@@ -870,7 +887,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("code")),
             Box::new(MockExecutor::passing("ok")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert_eq!(result.passed, 0);
@@ -888,7 +905,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("print('ok')")),
             Box::new(MockExecutor::passing("ok")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert_eq!(result.passed, 2);
@@ -907,7 +924,7 @@ mod tests {
             Box::new(MockCodeGenerator::failing("LLM unavailable")),
             Box::new(MockExecutor::passing("ok")),
             ValidationMode::Minimal,
-            "registry",
+            InstallSource::Registry,
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert_eq!(result.passed, 0);
@@ -928,7 +945,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("print('ok')")),
             Box::new(MockExecutor::erroring("container crashed")),
             ValidationMode::Minimal,
-            "registry",
+            InstallSource::Registry,
         );
         let err = validator.validate("# SKILL.md").await.unwrap_err();
         assert!(err.to_string().contains("container crashed"));
@@ -944,7 +961,7 @@ mod tests {
                 "ImportError: no module named foo",
             )),
             ValidationMode::Minimal,
-            "registry",
+            InstallSource::Registry,
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert_eq!(result.passed, 0);
@@ -960,7 +977,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("while True: pass")),
             Box::new(MockExecutor::timing_out()),
             ValidationMode::Minimal,
-            "registry",
+            InstallSource::Registry,
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         // Timeout is not is_pass(), so it counts as failed
@@ -978,7 +995,7 @@ mod tests {
             Box::new(code_gen),
             Box::new(MockExecutor::passing("ok")),
             ValidationMode::Minimal,
-            "local-install", // non-registry
+            InstallSource::LocalInstall, // non-registry
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert!(result.all_passed());
@@ -997,7 +1014,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("code")),
             Box::new(MockExecutor::passing("ok")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         let validator = validator.with_mode(ValidationMode::Minimal);
         assert_eq!(validator.mode, ValidationMode::Minimal);
@@ -1013,7 +1030,7 @@ mod tests {
             Box::new(code_gen),
             Box::new(MockExecutor::passing("ok")),
             ValidationMode::Minimal,
-            "registry",
+            InstallSource::Registry,
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert!(result.all_passed());
@@ -1051,7 +1068,7 @@ mod tests {
             }],
         };
         assert!(!result.all_passed());
-        let feedback = result.generate_feedback().unwrap();
+        let feedback = result.generate_feedback(&Language::Python).unwrap();
         assert!(feedback.contains("Slow Pattern"));
         assert!(feedback.contains("timed out"));
     }
@@ -1074,7 +1091,7 @@ mod tests {
                 },
             ],
         };
-        let feedback = result.generate_feedback().unwrap();
+        let feedback = result.generate_feedback(&Language::Python).unwrap();
         // No passed patterns, so the "PATTERNS THAT PASSED" section should be absent
         assert!(!feedback.contains("PATTERNS THAT PASSED"));
         assert!(feedback.contains("PATTERNS THAT FAILED"));
@@ -1103,7 +1120,7 @@ mod tests {
                 },
             ],
         };
-        let feedback = result.generate_feedback().unwrap();
+        let feedback = result.generate_feedback(&Language::Python).unwrap();
         assert!(feedback.contains("PATTERNS THAT PASSED"));
         assert!(feedback.contains("Good Pattern"));
         assert!(feedback.contains("PATTERNS THAT FAILED"));
@@ -1124,7 +1141,7 @@ mod tests {
                 generated_code: "def broken(:\n  pass".to_string(),
             }],
         };
-        let feedback = result.generate_feedback().unwrap();
+        let feedback = result.generate_feedback(&Language::Python).unwrap();
         assert!(feedback.contains("```python"));
         assert!(feedback.contains("def broken(:\n  pass"));
         assert!(feedback.contains("```"));
@@ -1163,7 +1180,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("code")),
             Box::new(MockExecutor::passing("ok")),
             ValidationMode::Minimal,
-            "local-install",
+            InstallSource::LocalInstall,
         );
         // When name is None, local package path is skipped
         let result = validator.validate("# SKILL.md").await.unwrap();
@@ -1180,7 +1197,7 @@ mod tests {
             Box::new(MockCodeGenerator::succeeding("code")),
             Box::new(MockExecutor::failing_execution("import error")),
             ValidationMode::Thorough,
-            "registry",
+            InstallSource::Registry,
         );
         let result = validator.validate("# SKILL.md").await.unwrap();
         assert_eq!(result.passed, 0);

@@ -74,9 +74,17 @@ pub async fn run(
         language.as_deref().unwrap_or("unknown")
     );
 
-    let lang_str = language.as_deref().unwrap_or("python");
+    let lang_str = language.ok_or_else(|| {
+        anyhow::anyhow!("Cannot determine ecosystem. Set `ecosystem:` in SKILL.md frontmatter.")
+    })?;
     let pkg = package_name.as_deref().unwrap_or("unknown");
-    let lang = lang_str.parse::<Language>().unwrap_or(Language::Python);
+    let lang = lang_str.parse::<Language>().map_err(|_| {
+        anyhow::anyhow!(
+            "Unsupported ecosystem '{}'. Supported: {}",
+            lang_str,
+            Language::supported_list()
+        )
+    })?;
 
     let review_agent = ReviewAgent::new(
         client.as_ref(),
@@ -575,9 +583,9 @@ base_url = "http://localhost:11434/v1"
         assert!(result.is_ok());
     }
 
-    // --- Coverage: no frontmatter defaults to "unknown" package and "python" language ---
+    // --- Coverage: no frontmatter errors with missing ecosystem ---
     #[tokio::test]
-    async fn test_run_dry_run_no_frontmatter() {
+    async fn test_run_dry_run_no_frontmatter_errors() {
         let dir = tempfile::TempDir::new().unwrap();
         let skill_path = dir.path().join("SKILL.md");
         std::fs::write(&skill_path, "# No frontmatter here\nJust content.\n").unwrap();
@@ -594,7 +602,11 @@ base_url = "http://localhost:11434/v1"
             true,
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot determine ecosystem"));
     }
 
     // --- Coverage: language field only (no ecosystem) triggers fallback ---

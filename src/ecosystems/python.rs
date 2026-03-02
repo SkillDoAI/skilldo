@@ -580,6 +580,12 @@ impl PythonHandler {
                             | "tests"
                             | "test"
                             | "testing"
+                            | "examples"
+                            | "example"
+                            | "samples"
+                            | "sample"
+                            | "demo"
+                            | "demos"
                     ) {
                         self.collect_py_files(&path, files)?;
                     }
@@ -1953,5 +1959,23 @@ mod tests {
 
         assert_eq!(files.len(), 1);
         assert!(files[0].file_name().unwrap().to_str().unwrap() == "main.py");
+    }
+
+    #[test]
+    fn test_collect_py_files_excludes_example_dirs() {
+        let dir = TempDir::new().unwrap();
+        for name in &["examples", "example", "samples", "sample", "demo", "demos"] {
+            let sub = dir.path().join(name);
+            fs::create_dir_all(&sub).unwrap();
+            fs::write(sub.join("usage.py"), "# example").unwrap();
+        }
+        fs::write(dir.path().join("core.py"), "# core").unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let mut files = Vec::new();
+        handler.collect_py_files(dir.path(), &mut files).unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert!(files[0].file_name().unwrap().to_str().unwrap() == "core.py");
     }
 }

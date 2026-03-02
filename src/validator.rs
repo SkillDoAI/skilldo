@@ -12,7 +12,12 @@ use crate::util::run_cmd_with_timeout;
 /// Default timeout for validation commands (seconds)
 const VALIDATION_TIMEOUT_SECS: u64 = 60;
 
-/// Functional validator - actually runs code from SKILL.md
+/// Functional validator - actually runs code from SKILL.md.
+/// Deprecated: use `TestCodeValidator` (test agent) instead. Will be removed in v0.2.0.
+#[deprecated(
+    since = "0.1.8",
+    note = "Use TestCodeValidator from test_agent module instead"
+)]
 pub struct FunctionalValidator {
     /// Container runtime name (e.g. "docker", "podman"), or None if unavailable
     container_runtime: Option<String>,
@@ -28,6 +33,7 @@ pub enum ValidationResult {
     Skipped(String),
 }
 
+#[allow(deprecated)]
 impl FunctionalValidator {
     pub fn new() -> Self {
         // Detect runtime; check it actually responds to `ps` (daemon running)
@@ -213,6 +219,7 @@ impl FunctionalValidator {
     }
 }
 
+#[allow(deprecated)]
 impl Default for FunctionalValidator {
     fn default() -> Self {
         Self::new()
@@ -220,6 +227,7 @@ impl Default for FunctionalValidator {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::detector::Language;

@@ -11,10 +11,33 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'src/**'
+              - 'tests/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+
   commit-lint:
     name: commit lint
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      BASE_REF: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -23,7 +46,7 @@ jobs:
         shell: bash
         run: |
           # Check all commits in the PR follow conventional format
-          MERGE_BASE=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          MERGE_BASE=$(git merge-base "origin/$BASE_REF" HEAD)
           ERRORS=0
           PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?: .+'
 
@@ -47,15 +70,21 @@ jobs:
 
   check:
     name: cargo check
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
       - run: cargo check --all-targets
 
   fmt:
     name: cargo fmt
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -66,6 +95,8 @@ jobs:
 
   clippy:
     name: cargo clippy
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -73,25 +104,35 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
       - run: cargo clippy --all-targets -- -D warnings
 
   test:
     name: cargo test
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
       - uses: astral-sh/setup-uv@v7
       - run: cargo test
 
   integration:
     name: integration tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
       - uses: astral-sh/setup-uv@v7
       - name: Pull container images
         run: |
@@ -103,6 +144,8 @@ jobs:
 
   coverage:
     name: coverage
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -110,6 +153,8 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Generate coverage
@@ -132,10 +177,10 @@ jobs:
 
   e2e:
     name: e2e smoke test
-    # Only run on main pushes (not PRs) to conserve API credits.
+    # Only run on main pushes with rust changes to conserve API credits.
     # Secrets aren't available on fork PRs anyway.
-    if: github.event_name == 'push'
-    needs: [check, fmt, clippy, test, coverage, audit]
+    if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
+    needs: [changes, check, fmt, clippy, test, integration, coverage, audit]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -145,6 +190,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
 
       - name: Check API access
         id: check-secret

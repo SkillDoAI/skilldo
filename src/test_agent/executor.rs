@@ -14,7 +14,7 @@ use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 pub struct ExecutionEnv {
     pub temp_dir: TempDir,
     #[allow(dead_code)]
-    pub python_path: Option<PathBuf>, // For uv-based execution
+    pub interpreter_path: Option<PathBuf>, // Path to language interpreter (e.g., Python venv)
     pub container_name: Option<String>, // For container-based execution
     pub dependencies: Vec<String>,      // Dependencies to install (for non-Python languages)
 }
@@ -151,7 +151,7 @@ dependencies = [
         info!("✓ Environment setup complete");
 
         // Determine Python executable path
-        let python_path = if cfg!(target_os = "windows") {
+        let interpreter_path = if cfg!(target_os = "windows") {
             temp_dir
                 .path()
                 .join(".venv")
@@ -161,16 +161,16 @@ dependencies = [
             temp_dir.path().join(".venv").join("bin").join("python")
         };
 
-        if !python_path.exists() {
+        if !interpreter_path.exists() {
             bail!(
                 "Python executable not found at expected path: {}",
-                python_path.display()
+                interpreter_path.display()
             );
         }
 
         Ok(ExecutionEnv {
             temp_dir,
-            python_path: Some(python_path),
+            interpreter_path: Some(interpreter_path),
             container_name: None,
             dependencies: deps.to_vec(),
         })
@@ -185,11 +185,11 @@ dependencies = [
 
         // Run with timeout
         let timeout = Duration::from_secs(self.timeout_secs);
-        let python_path = env
-            .python_path
+        let interpreter_path = env
+            .interpreter_path
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Python path not set in execution environment"))?;
-        let mut python_cmd = Command::new(python_path);
+            .ok_or_else(|| anyhow::anyhow!("interpreter_path not set in execution environment"))?;
+        let mut python_cmd = Command::new(interpreter_path);
         python_cmd
             .arg(&script_path)
             .current_dir(env.temp_dir.path());
@@ -296,8 +296,8 @@ mod tests {
         let executor = PythonUvExecutor::new();
         let env = executor.setup_environment(&[]).unwrap();
 
-        assert!(env.python_path.is_some());
-        assert!(env.python_path.as_ref().unwrap().exists());
+        assert!(env.interpreter_path.is_some());
+        assert!(env.interpreter_path.as_ref().unwrap().exists());
         assert!(env.temp_dir.path().exists());
     }
 
@@ -342,7 +342,7 @@ raise ValueError("Test error")
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: vec![],
         };
@@ -350,12 +350,12 @@ raise ValueError("Test error")
     }
 
     #[test]
-    fn test_run_code_missing_python_path() {
+    fn test_run_code_missing_interpreter_path() {
         let executor = PythonUvExecutor::new();
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: vec![],
         };
@@ -364,7 +364,7 @@ raise ValueError("Test error")
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Python path not set"));
+            .contains("interpreter_path not set"));
     }
 
     #[test]
@@ -373,7 +373,7 @@ raise ValueError("Test error")
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: Some(PathBuf::from("/nonexistent/python3")),
+            interpreter_path: Some(PathBuf::from("/nonexistent/python3")),
             container_name: None,
             dependencies: vec![],
         };
@@ -466,7 +466,7 @@ print(f"Click version: {click.__version__}")
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: Some(PathBuf::from("/usr/bin/python3")),
+            interpreter_path: Some(PathBuf::from("/usr/bin/python3")),
             container_name: Some("test-ctr".to_string()),
             dependencies: vec!["requests".to_string()],
         };
@@ -481,7 +481,7 @@ print(f"Click version: {click.__version__}")
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: vec![],
         };
@@ -506,7 +506,7 @@ print(f"Click version: {click.__version__}")
         let deps = vec!["numpy".to_string(), "pandas".to_string()];
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: None,
             dependencies: deps,
         };
@@ -520,7 +520,7 @@ print(f"Click version: {click.__version__}")
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: None,
+            interpreter_path: None,
             container_name: Some("my-container".to_string()),
             dependencies: vec![],
         };
@@ -528,16 +528,16 @@ print(f"Click version: {click.__version__}")
     }
 
     #[test]
-    fn test_execution_env_python_path_field() {
+    fn test_execution_env_interpreter_path_field() {
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,
-            python_path: Some(PathBuf::from("/usr/local/bin/python3")),
+            interpreter_path: Some(PathBuf::from("/usr/local/bin/python3")),
             container_name: None,
             dependencies: vec![],
         };
         assert_eq!(
-            env.python_path.as_deref(),
+            env.interpreter_path.as_deref(),
             Some(std::path::Path::new("/usr/local/bin/python3"))
         );
     }
