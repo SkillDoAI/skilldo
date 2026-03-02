@@ -1,3 +1,5 @@
+// TODO: remove #![allow(deprecated)] when FunctionalValidator is deleted (v0.1.9 backlog)
+#![allow(deprecated)]
 use skilldo::detector::Language;
 use skilldo::lint::{Severity, SkillLinter};
 use skilldo::validator::{FunctionalValidator, ValidationResult};

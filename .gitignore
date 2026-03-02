@@ -4,6 +4,9 @@ debug
 **/*.rs.bk
 *.pdb
 
+# Worktrees
+.worktrees/
+
 # Claude/Swarm tool directories
 .claude/
 .claude-flow/

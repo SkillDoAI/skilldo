@@ -243,9 +243,11 @@ fn extract_version_from_docs(docs_dir: &Path) -> Result<String> {
         }
 
         if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
+            // Sort entries for deterministic results across filesystems
+            let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+            paths.sort();
 
+            for path in paths {
                 if path.is_file() {
                     // Check release-related files
                     if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {

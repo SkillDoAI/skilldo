@@ -329,7 +329,7 @@ async fn test_full_agent5_flow_with_click() -> Result<()> {
     ]);
 
     let validator =
-        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default());
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())?;
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
 
@@ -339,7 +339,9 @@ async fn test_full_agent5_flow_with_click() -> Result<()> {
     assert_eq!(result.passed, 3, "Should have 3 passed tests");
     assert_eq!(result.failed, 0, "Should have 0 failed tests");
     assert!(
-        result.generate_feedback().is_none(),
+        result
+            .generate_feedback(&skilldo::detector::Language::Python)
+            .is_none(),
         "Should have no feedback on success"
     );
 
@@ -372,7 +374,9 @@ async fn test_test_result_generates_feedback_on_failure() {
 
     assert!(!result.all_passed());
 
-    let feedback = result.generate_feedback().unwrap();
+    let feedback = result
+        .generate_feedback(&skilldo::detector::Language::Python)
+        .unwrap();
 
     assert!(feedback.contains("Bad Pattern"));
     assert!(feedback.contains("ImportError"));
@@ -505,7 +509,7 @@ async fn test_validator_with_mode_method() -> Result<()> {
 
     // Test that with_mode() sets the mode
     let _validator =
-        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())?
             .with_mode(ValidationMode::Minimal);
 
     // If we get here without panic, the mode was set successfully
@@ -519,7 +523,7 @@ async fn test_validator_with_empty_patterns() -> Result<()> {
 
     let mock_client = MockLlmClient::new(vec![]);
     let validator =
-        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default());
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())?;
 
     // SKILL.md with no patterns (no Core Patterns section)
     let skill_md = r#"---
@@ -567,7 +571,7 @@ if __name__ == '__main__':
     .to_string()]);
 
     let validator =
-        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())?
             .with_mode(ValidationMode::Minimal);
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
@@ -602,7 +606,7 @@ if __name__ == '__main__':
     .to_string()]);
 
     let validator =
-        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())
+        TestCodeValidator::new_python(&mock_client, skilldo::config::ContainerConfig::default())?
             .with_mode(ValidationMode::Adaptive);
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
@@ -674,7 +678,9 @@ async fn test_test_result_generate_feedback_returns_none_on_success() {
 
     assert!(result.all_passed());
     assert!(
-        result.generate_feedback().is_none(),
+        result
+            .generate_feedback(&skilldo::detector::Language::Python)
+            .is_none(),
         "Should return None when all tests pass"
     );
 }

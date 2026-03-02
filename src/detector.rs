@@ -11,6 +11,23 @@ pub enum Language {
 }
 
 impl Language {
+    /// All supported languages (keep in sync with enum variants).
+    pub const ALL: &[Language] = &[
+        Language::Python,
+        Language::JavaScript,
+        Language::Rust,
+        Language::Go,
+    ];
+
+    /// Comma-separated list of supported language names.
+    pub fn supported_list() -> String {
+        Self::ALL
+            .iter()
+            .map(|l| l.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             Language::Python => "python",

@@ -5,7 +5,7 @@ use std::str::FromStr;
 use tracing::info;
 
 use crate::cli::version;
-use crate::config::{Config, Provider};
+use crate::config::{Config, InstallSource, Provider};
 use crate::detector::{self, Language};
 use crate::llm::factory;
 use crate::pipeline::collector::Collector;
@@ -106,7 +106,7 @@ pub async fn run(
     }
     if let Some(ref source) = install_source_override {
         info!("CLI override: install_source = {}", source);
-        config.generation.container.install_source = source.clone();
+        config.generation.container.install_source = source.parse()?;
     }
     if let Some(ref path) = source_path_override {
         info!("CLI override: source_path = {}", path);
@@ -119,7 +119,7 @@ pub async fn run(
 
     // Default source_path to the repo path (not CWD) for local install/mount modes
     if config.generation.container.source_path.is_none()
-        && config.generation.container.install_source != "registry"
+        && config.generation.container.install_source != InstallSource::Registry
     {
         let abs_path = repo_path
             .canonicalize()

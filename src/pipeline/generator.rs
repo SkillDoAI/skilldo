@@ -4,12 +4,15 @@ use tracing::{info, warn};
 use super::collector::CollectedData;
 use super::normalizer;
 use crate::config::{ContainerConfig, PromptsConfig};
+use crate::detector::Language;
 use crate::lint::{Severity, SkillLinter};
 use crate::llm::client::LlmClient;
 use crate::llm::prompts_v2;
 use crate::review::{ReviewAgent, ReviewIssue};
 use crate::test_agent::{TestCodeValidator, TestResult, ValidationMode};
-use crate::validator::{FunctionalValidator, ValidationResult};
+#[allow(deprecated)]
+use crate::validator::FunctionalValidator;
+use crate::validator::ValidationResult;
 
 /// Output from the generation pipeline.
 #[derive(Debug)]
@@ -333,6 +336,7 @@ impl Generator {
         let linter = SkillLinter::new();
         // Lazy-init: only construct FunctionalValidator when actually needed
         // (avoids spurious "Docker not available" warning when test agent handles validation)
+        #[allow(deprecated)]
         let mut functional_validator: Option<FunctionalValidator> = None;
 
         // Always run at least one validation pass. max_retries=0 means
@@ -388,7 +392,7 @@ impl Generator {
             // the legacy validator would just fail on any import.
             let skip_reason = if !self.enable_test {
                 Some("test agent disabled — legacy validator cannot install dependencies")
-            } else if data.language.as_str() == "python" {
+            } else if data.language == Language::Python {
                 Some("test agent enabled — using code generation validation instead")
             } else {
                 None
@@ -403,6 +407,7 @@ impl Generator {
             let functional_result = if let Some(reason) = skip_reason {
                 ValidationResult::Skipped(reason.to_string())
             } else {
+                #[allow(deprecated)]
                 let validator = functional_validator.get_or_insert_with(FunctionalValidator::new);
                 validator.validate(&skill_md, &data.language)?
             };
@@ -417,7 +422,7 @@ impl Generator {
                     info!("  ⏭️  Functional validation skipped: {}", reason);
 
                     // test: Code generation validation (if enabled for Python)
-                    if self.enable_test && data.language.as_str() == "python" {
+                    if self.enable_test && data.language == Language::Python {
                         info!("test: Testing SKILL.md with code generation...");
 
                         let test_llm = self.get_client("test");
@@ -426,7 +431,7 @@ impl Generator {
                             test_llm,
                             self.container_config.clone(),
                             self.prompts_config.test_custom.clone(),
-                        )
+                        )?
                         .with_mode(self.test_mode);
 
                         let validation_result: Result<TestResult, anyhow::Error> =
@@ -449,7 +454,9 @@ impl Generator {
 
                                     // Patch with targeted feedback if we have retries left
                                     if attempt < validation_passes - 1 {
-                                        if let Some(feedback) = test_result.generate_feedback() {
+                                        if let Some(feedback) =
+                                            test_result.generate_feedback(&data.language)
+                                        {
                                             let patch_prompt = format!(
                                                 "Here is the current SKILL.md:\n\n{}\n\n{}",
                                                 skill_md, feedback
