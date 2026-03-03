@@ -107,7 +107,7 @@ rule SD_106_authority_claim
 
     strings:
         $iam = /(i\s+am|this\s+is)\s+(your\s+)?(admin|administrator|developer|creator|owner|operator)/i
-        $mode = /(admin|maintenance|debug|developer|emergency)\s+(mode|access|override|command)/i
+        $mode = /(enter|activate|enable|switch\s+to|engage|you\s+are\s+(now\s+)?in)\s+(admin|maintenance|debug|developer|emergency)\s+(mode|access|override)/i
 
     condition:
         any of them
