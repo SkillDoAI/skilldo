@@ -1,4 +1,6 @@
-// Improved prompts based on analysis of FastAPI, Django, and Click
+//! Prompt templates for all 6 pipeline stages (extract, map, learn, create,
+//! review, test). Uses three-layer composition: generic base + language-specific
+//! hints + user custom overrides.
 
 use crate::detector::Language;
 

@@ -1,10 +1,14 @@
+//! Test code validator — orchestrates the parse → generate → execute loop.
+//! Parses patterns from SKILL.md, generates test code via LLM, and runs it
+//! in a container. Returns pass/fail with actionable feedback for retries.
+
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
-use super::code_generator::PythonCodeGenerator;
 use super::container_executor::ContainerExecutor;
 use super::executor::ExecutionResult;
-use super::parser::PythonParser;
+use super::python_code_gen::PythonCodeGenerator;
+use super::python_parser::PythonParser;
 use super::{CodePattern, LanguageCodeGenerator, LanguageExecutor, LanguageParser};
 use crate::config::{ContainerConfig, InstallSource};
 use crate::detector::Language;

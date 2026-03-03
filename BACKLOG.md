@@ -37,14 +37,44 @@ CLI args and config file options should fully overlap. For CI/CD and bot usage, 
 
 **Principle**: Config file is the full spec, CLI args are overrides.
 
-## Documentation: Model Quality Expectations
+## Changelog as Collection Input
 
-Add user-facing docs that set expectations around SKILL.md quality:
+`src/changelog.rs` has a changelog analyzer (currently dead code) that classifies changes as breaking/features/deprecations/behavior/bugfixes. Originally conceived for "should we regen?" decisions. Better use: feed changelog content into stages 1-3 as gathering input.
 
-- Generation gets you 90-95% of the way — a validated, well-structured starting point
-- Quality varies by model (frontier models nail it first try; local models may need retries)
-- The `test_llm` split lets you use a cheap local model for extract/map/learn/create and a stronger cloud model for test validation
-- Users should review generated SKILL.md files and tweak patterns for their specific needs
+**Why**: Changelogs are often more honest than stale docs about what actually shipped. They tell the LLM what's new, what's deprecated, what broke — context that improves SKILL.md accuracy.
+
+**Two uses**:
+1. **Collection input** — collector already reads changelogs (`changelog_content` in `CollectedData`). The analyzer could pre-classify sections so the LLM prompt highlights what matters most (breaking changes, new APIs) vs noise (patch fixes).
+2. **Update mode** — when an existing SKILL.md is present and relevant to the target library, diff the old skill against the changelog to decide what sections need refreshing rather than regenerating from scratch.
+
+**Existing code**: `ChangelogAnalyzer` with keyword-based classification. May want LLM-assisted classification for nuance, but the current structure (significance enum, change categories) is a reasonable scaffold.
+
+**Also**: In monorepos, need to match changelog to the specific library being generated (not assume one changelog = one library).
+
+## Flip Container Default → uv bare metal (v0.1.9)
+
+**Decision**: `uv` (bare metal) is the default execution mode. `--container` opts into podman/docker isolation. Opposite of current behavior.
+
+`PythonUvExecutor` stub in `src/test_agent/executor.rs` — needs fleshing out as the new default path.
+
+**Why uv default**:
+- **CI environments** — already in a clean container, podman-in-container is wasted overhead
+- **Local dev** — `uv` venvs are isolated enough to not trash a user's system
+- **Simpler onboarding** — no podman/docker dependency for first-time users
+
+**Container mode stays** — `--container` flag for users who want full isolation (untrusted code, paranoia, matching prod environments). Already written, no reason to remove.
+
+**Status**: Stub only. Needs: actual uv execution logic, venv creation, dep install, script running, cleanup. Then flip the default in config/CLI.
+
+## Generation Telemetry (v0.1.9)
+
+Structured run log at `~/.skilldo/runs.csv` — tracks every generation for data-driven quality analysis.
+
+**Fields**: language, library, library_version, models (per stage), retries, pass/fail, timestamp, prompt_version (or skilldo version as proxy)
+
+**Purpose**: Collect real data on what model combos work for which libraries before making formal quality docs. Optional for users (opt-in via config), always-on for us during development.
+
+**Later**: Once we have enough data, build something more formal — success rate by model, retry patterns, prompt version regression tracking.
 
 ## Multi-Language Test Agent
 
@@ -77,6 +107,24 @@ New ecosystem handlers needed for each language. Each requires: file discovery (
 
 **Pattern**: Detector already has enum entries for Python, JavaScript, Rust, Go. Each new language needs: `ecosystems/{lang}.rs` handler + `detector.rs` detection entry + test agent container support.
 
+### Go readiness (v0.2.0 prep, audited March 2026)
+
+What's already done for Go:
+- `Language::Go` enum variant, detection from `go.mod`, `Language::from_str("go"/"golang")`
+- Container executor: image selection, `go run main.go`, script generation, install scripts
+- Prompt layering: `go_hints()` placeholder in `prompts_v2.rs` (returns `""` for all stages)
+- Review agent: works without introspection (Phase B LLM verdict is language-agnostic)
+- CLI: `--language go` threaded through entire pipeline
+
+What needs building:
+- `src/ecosystems/go.rs` — GoHandler (file discovery, version from go.mod, license, deps)
+- `src/test_agent/go_parser.rs` — GoParser implementing LanguageParser
+- `src/test_agent/go_code_gen.rs` — GoCodeGenerator implementing LanguageCodeGenerator
+- Collector `collect_go()` method + validator dispatch
+- Populate `go_hints()` with stage-specific prompt guidance
+
+**Approach**: Experiment branch off v0.1.9 to see what overlaps with Python parser helpers vs what's genuinely different. Don't abstract prematurely — extract shared code when we see real duplication across two implementations.
+
 ## GitHub Bot (Phase 2)
 
 Webhook listener for `release.published` events. Auto-generates SKILL.md and submits PR.
@@ -85,11 +133,23 @@ Webhook listener for `release.published` events. Auto-generates SKILL.md and sub
 
 Publish a GitHub Action so maintainers can add SKILL.md generation to their release workflow without the bot.
 
-## Security Linter: LLM Adversarial Review (Layer 2)
+## Security: Adversarial Testing + Upstream Alerts
 
-Layer 1 (regex scan) is done — `src/lint.rs` checks for destructive commands, exfiltration, credential access, prompt injection, reverse shells, obfuscated payloads, etc. Post-normalization security hard-fail also implemented in generator.
+Two layers already exist: regex lint (`src/lint.rs`) hard-fails on destructive commands/exfiltration/injection, and the review agent's LLM verdict evaluates safety. `bail_on_security_lint` stops generation cold on security-category findings. No new infrastructure needed.
 
-Remaining: Layer 2 — LLM adversarial review before code execution ("is this code safe to run?"). Could be a dedicated security check within the review agent or a separate pipeline step.
+**What's missing**:
+1. **Red-team test suite** — three tiers of test SKILL.md files:
+   - **Legit-but-scary**: `os.remove(tempfile)`, `subprocess.run(["rm", "-rf", build_dir])`, `shutil.rmtree(cache_path)` — reviewer should PASS these. Context matters: cleanup of temp/build/cache dirs is normal library behavior.
+   - **Obviously malicious**: reverse shells, credential exfiltration, download-and-execute — reviewer should hard-FAIL.
+   - **Subtle/obfuscated**: dynamic construction of dangerous calls, encoded payloads, variable indirection that chains into something bad — the real test. This is the cat-and-mouse layer; we won't catch everything but should raise the bar.
+   - **Real-world supply chain examples**: npm/PyPI have had published packages with obfuscated exfiltration (post-mortems are public). Those make great test cases grounded in actual attacks.
+2. **Prompt tuning** — based on red-team results, teach the reviewer to evaluate *intent* (what is the target of the destructive call?) not just *presence* (does this code contain rm?). The regex linter catches presence; the LLM layer should judge intent.
+3. **Upstream alerting** — open question: if the *source library itself* has sketchy patterns that surface in the SKILL.md, should we just bail silently, or actively alert the user that something looks wrong in the library's own code? Options:
+   - Hard stop + report (current behavior for generated content)
+   - Warning report file alongside SKILL.md (lets user decide)
+   - Separate `skilldo audit` command that checks a library for suspicious patterns without generating
+
+**Status**: Infrastructure done. Needs adversarial test cases and a decision on upstream alerting behavior.
 
 ## Switch to tokio::process
 
@@ -106,16 +166,6 @@ Currently using a shared `run_cmd_with_timeout` in `src/util.rs` that uses the t
 ## Multi-Skill Test Agent
 
 Libraries like boto3 need mock frameworks (e.g., moto) for test agent validation. Requires teaching the test agent to install test dependencies alongside the target library.
-
-## Defense-in-Depth: Dual Sanitization
-
-Executor-level `sanitize_dep_name` is done (`src/test_agent/container_executor.rs`). Remaining: add validation at ingestion (parser.rs) so `CollectedData` carries clean strings from the start. Executor check stays as last line of defense.
-
-## Tighten Duplicate Frontmatter Stripping Scope
-
-`strip_duplicate_frontmatter()` in `normalizer.rs` counts all `---` lines globally. A SKILL.md using `---` as a horizontal rule could theoretically trigger false removal. Fix: only scan before the first `##` heading, and validate the candidate block contains frontmatter keys before stripping.
-
-**Risk**: Low — only runs on LLM output, and LLMs don't typically emit horizontal rules.
 
 ## Linux Dev Setup + Dockerfile
 
@@ -141,11 +191,17 @@ Allow users to authenticate via OAuth instead of raw API keys. Would open a brow
 
 Tracked items that auditors have identified but are deferred. Reference this section so automated reviews don't re-report known issues.
 
-### `max_retries` naming inconsistency
+### Per-stage retry granularity
 
-`Generator` uses `0..max_retries` (treats value as attempt count), while `RetryClient` uses `0..=max_retries` (treats value as retry count, giving `max_retries + 1` total attempts). The two components interpret the same semantic name differently. Renaming to `max_attempts` is a breaking config change — defer to v0.2.0.
+Current retry settings: `max_retries` (format lint + test agent loop) and `review_max_retries` (review loop). Both default to 5. Two design questions to resolve:
 
-**Files**: `src/pipeline/generator.rs`, `src/llm/client.rs`
+1. **Stages 1-3 (extract/map/learn)** — gathering stages. Currently no retry setting; they each call the LLM once. Do these need retry knobs? They're less unpredictable than generation, but model quality varies.
+
+2. **Stages 4-5-6 (create/review/test)** — bundled in a loop. If code writer fails, it got bad info from the skill generator and loops back. If validator rejects, it loops back. These are already retried, but the retry is shared across format+test. Should create, review, and test each have independent retry budgets?
+
+**Considerations**: More knobs = more config surface. Stages 4-5-6 are tightly coupled — a test failure may mean create needs to redo, not that test should retry in isolation. May want to think about this holistically when we see how Go behaves (different models per stage may shift where retries matter most). Don't need CLI flags for everything — config-only is fine for niche tuning.
+
+**Files**: `src/pipeline/generator.rs`, `src/config.rs`, `src/cli/generate.rs`
 
 ### `config check` runtime health insufficient
 
@@ -159,53 +215,65 @@ Tracked items that auditors have identified but are deferred. Reference this sec
 
 **Files**: `src/ecosystems/python.rs`
 
+### API key validation allows `"none"` for remote endpoints (by design)
+
+`openai-compatible` endpoints accept missing/`"none"` API keys regardless of base URL. This is intentional — supports Ollama on home networks without auth. Auditors (Codex, Gemini) flag this as a security gap; it's a deliberate design choice for flexibility.
+
+**Files**: `src/config.rs`, `src/llm/client_impl.rs`
+
+### Linter skips code blocks for security patterns (by design)
+
+`src/lint.rs` excludes fenced code blocks from destructive-command scanning. Auditors flag this as a blind spot. It's intentional — SKILL.md code examples legitimately contain `shutil.rmtree()`, `os.remove()`, etc. Scanning code blocks would produce massive false positives. Security checks target prose sections where suspicious content shouldn't appear.
+
+**Files**: `src/lint.rs`
+
+### LocalInstall runs as root in container (by design)
+
+`--user nobody` is applied to all container runs except `LocalInstall`, which needs root for `pip install /src`. Auditors flag root execution as risky. The container is ephemeral and the code being installed is the library under test — the user already trusts it.
+
+**Files**: `src/test_agent/container_executor.rs`
+
+### Review introspection is Python-only
+
+Container introspection (Phase A) only runs for Python. Non-Python languages get LLM-only review (Phase B verdict). Not a bug — Go/JS/Rust introspection would need language-specific scripts. Acceptable for v0.2.0; revisit when Go is the primary ecosystem.
+
+**Files**: `src/review/mod.rs`
+
 ### Review: `{"passed": false, "issues": []}` becomes pass
 
 `parse_review_response` recomputes `passed` from `issues.iter().any(|i| matches!(i.severity, Severity::Error))`. If the LLM returns `{"passed": false, "issues": []}`, the result becomes `passed: true`. This is intentional — we trust the issues list over the LLM's boolean verdict, since an LLM saying "failed" with no actionable issues shouldn't block the pipeline. Conversely, `{"passed": true, "issues": [{"severity": "error", ...}]}` becomes `passed: false`.
 
 **Files**: `src/review/mod.rs`
 
-### npm install missing `--` terminator (JS path)
 
-`container_executor.rs` splices dependencies directly into `npm install --no-save ...` without a `--` separator. A dependency name starting with `-` could be interpreted as a flag. Not exercised today (Python-only), but becomes a footgun when JS validation lands.
+---
 
-**Files**: `src/test_agent/container_executor.rs`
+## Fixed (v0.1.9)
 
-### Local-install mode broken with `uv run`
+Items resolved in v0.1.9. Kept for audit trail — do not re-report.
 
-When `container_runtime` is unset and the executor falls back to `uv run`, it invokes `uv run --with {dep} python script.py`. If the dep isn't already installed, `uv run` creates an ephemeral virtualenv per invocation — losing any `pip install` side effects from the introspection script. This means review introspection doesn't work outside containers.
+- **`FunctionalValidator` removed** — deprecated legacy validator deleted (`src/validator.rs` + 3 test files), generator simplified to test-agent-only path
+- **Python parser/codegen split** — `PythonParser` → `python_parser.rs`, `PythonCodeGenerator` → `python_code_gen.rs` (Go-ready module structure)
+- **Collector budget by actual consumption** — source budget computed from actual bytes consumed by fixed categories, not allocated percentages
+- **Module-level `//!` docs on all core files** — 13 files documented so future sessions don't need full code reads
+- **`///` docs on key public APIs** — traits, major structs, entry-point functions, enums documented
+- **`generate_feedback` None path explicit** — when test feedback is None during retry, logs warning and breaks instead of silently retrying with unchanged SKILL.md
+- **`TestCodeValidator` hoisted before retry loop** — avoids repeated construction on each retry attempt
+- **`max_retries` semantics inconsistency** — Generator validation loop now uses `0..=max_retries` (same as RetryClient and review loop). `max_retries=3` consistently means 1 initial + 3 retries = 4 total everywhere
 
-**Files**: `src/test_agent/container_executor.rs`
+---
 
-### Container `--user nobody` not present in code
+## Fixed (v0.1.8)
 
-v0.1.6 backlog says "Non-Root Container Execution" was fixed, but `--user nobody` is not present in `container_executor.rs` or `validator.rs`. Generated code runs as root inside containers. Needs investigation — may have been lost or never landed.
+Items resolved in v0.1.8. Kept for audit trail — do not re-report.
 
-**Files**: `src/test_agent/container_executor.rs`, `src/validator.rs`
-
-### `install_source` config field is stringly-typed
-
-Config/docs say valid values are `registry`, `local-install`, and `local-mount`, but the code stores a raw `String`. Typos silently change execution semantics (any non-`registry` value mounts `/src`). Should be a typed enum with deserialization validation.
-
-**Files**: `src/config.rs`, `src/test_agent/container_executor.rs`
-
-### Standalone `review` silently defaults to Python for unknown ecosystems
-
-When frontmatter `ecosystem:` is missing or contains an unsupported value, `cli/review.rs` defaults to Python instead of failing. This can produce misleading review results for non-Python skills.
-
-**Files**: `src/cli/review.rs`
-
-### Config discovery anchored to CWD, not target repo
-
-`generate` and `review` both load config via `Config::load_with_path()` before anchoring to the supplied repo path. Default `skilldo.toml` lookup probes CWD, not the target repo. Running from outside the target repo silently uses the wrong config.
-
-**Files**: `src/cli/generate.rs`, `src/cli/review.rs`, `src/config.rs`
-
-### Example files collected as source files
-
-Source discovery (`collect_py_files`) does not exclude `examples/`, `samples/`, or `demo*/` directories. This burns source budget on duplicate content when the collector also reads examples separately via `find_examples()`.
-
-**Files**: `src/ecosystems/python.rs`, `src/pipeline/collector.rs`
+- **npm install `--` terminator** — `generate_node_install_script()` includes `--` before dependency names
+- **Local-install mode `uv run` fix** — installs with `uv pip install --system /src` before `uv run`
+- **Container `--user nobody`** — applied to all container runs except LocalInstall (which needs root for pip)
+- **`install_source` typed enum** — `InstallSource` enum with `Registry`, `LocalInstall`, `LocalMount` variants + deser validation
+- **Standalone `review` requires ecosystem** — errors with clear message instead of defaulting to Python
+- **Config discovery CWD-first** — search order: explicit path → CWD → git root → user config dir → defaults
+- **Example files excluded from source collection** — `collect_py_files()` skips `examples/`, `samples/`, `demo/` directories
 
 ---
 
@@ -221,6 +289,8 @@ Items resolved in v0.1.7. Kept for audit trail — do not re-report.
 - **Test agent failures swallowed by generator** — `has_unresolved_errors` flag + `--best-effort` CLI option
 - **Review malformed verdicts silently pass** — `malformed` flag on `ReviewResult` with retry logic
 - **Test agent parser case-sensitive headings** — case-insensitive regex for section headings and code fences
+- **Dual sanitization (defense-in-depth)** — ingestion-side `sanitize_dep_name` check in collector, executor check stays as last line of defense
+- **Duplicate frontmatter stripping scope** — stops at first `##` heading, validates candidate block has YAML keys before stripping
 
 ---
 

@@ -1,9 +1,16 @@
+//! LLM client trait and retry wrapper. Provides the `LlmClient` trait that all
+//! provider implementations (OpenAI, Anthropic, Gemini, Ollama) must satisfy,
+//! plus `RetryClient` for transient-error resilience.
+
 use anyhow::Result;
 use async_trait::async_trait;
 use tracing::warn;
 
+/// Trait for LLM provider implementations. Each provider (OpenAI, Anthropic,
+/// Gemini, Ollama) implements this to send a prompt and return the completion.
 #[async_trait]
 pub trait LlmClient: Send + Sync {
+    /// Send a prompt to the LLM and return the generated text.
     async fn complete(&self, prompt: &str) -> Result<String>;
 }
 

@@ -1,3 +1,7 @@
+//! Local execution environment for test code — creates isolated temp directories,
+//! installs dependencies, and runs generated test scripts outside containers.
+//! Used as a fallback when container runtime is unavailable.
+
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::PathBuf;

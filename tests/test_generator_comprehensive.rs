@@ -2,7 +2,7 @@
 // Comprehensive test suite for src/pipeline/generator.rs
 // Coverage goals:
 // - 4-agent pipeline execution (all agents called in sequence)
-// - Dual validation (SkillLinter + FunctionalValidator)
+// - Dual validation (SkillLinter + TestCodeValidator)
 // - Markdown fence stripping (initial and regeneration)
 // - Validation loop (success on attempt 1, 2, 3, and failure after max retries)
 // - Custom instructions handling

@@ -1,3 +1,6 @@
+//! Pipeline orchestrator — runs the 6-agent sequence (extract → map → learn →
+//! create → review → test) with retry loops, normalization, and lint checks.
+
 use anyhow::Result;
 use tracing::{info, warn};
 
@@ -10,9 +13,6 @@ use crate::llm::client::LlmClient;
 use crate::llm::prompts_v2;
 use crate::review::{ReviewAgent, ReviewIssue};
 use crate::test_agent::{TestCodeValidator, TestResult, ValidationMode};
-#[allow(deprecated)]
-use crate::validator::FunctionalValidator;
-use crate::validator::ValidationResult;
 
 /// Output from the generation pipeline.
 #[derive(Debug)]
@@ -75,6 +75,8 @@ fn bail_on_security_lint(issues: &[crate::lint::LintIssue]) -> Result<()> {
     Ok(())
 }
 
+/// Pipeline orchestrator that runs the 6-agent sequence to produce SKILL.md.
+/// Supports per-stage LLM clients, retry loops, and optional review/test validation.
 pub struct Generator {
     client: Box<dyn LlmClient>,
     extract_client: Option<Box<dyn LlmClient>>,
@@ -332,19 +334,32 @@ impl Generator {
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
 
-        // Dual validation loop: Format + Functional
+        // Validation loop: Format (linter) + Code (test agent)
         let linter = SkillLinter::new();
-        // Lazy-init: only construct FunctionalValidator when actually needed
-        // (avoids spurious "Docker not available" warning when test agent handles validation)
-        #[allow(deprecated)]
-        let mut functional_validator: Option<FunctionalValidator> = None;
 
-        // Always run at least one validation pass. max_retries=0 means
-        // "one pass, no retries on failure" (not "skip all validation").
-        let validation_passes = self.max_retries.max(1);
+        // max_retries=0 means one attempt with no retries on failure.
+        // max_retries=3 means one initial attempt + up to 3 retries (4 total).
 
-        for attempt in 0..validation_passes {
-            info!("Validation pass {} of {}", attempt + 1, validation_passes);
+        // Construct test validator once before the loop (avoids re-allocation on retries)
+        let test_validator = if self.enable_test && data.language == Language::Python {
+            Some(
+                TestCodeValidator::new_python_with_custom(
+                    self.get_client("test"),
+                    self.container_config.clone(),
+                    self.prompts_config.test_custom.clone(),
+                )?
+                .with_mode(self.test_mode),
+            )
+        } else {
+            None
+        };
+
+        for attempt in 0..=self.max_retries {
+            info!(
+                "Validation pass {} of {}",
+                attempt + 1,
+                self.max_retries + 1
+            );
 
             // 1. Format Validation (Linter) - Fast
             info!("  → Running format validation (linter)...");
@@ -364,7 +379,7 @@ impl Generator {
                 // Security errors bail IMMEDIATELY — never sent back to the model.
                 bail_on_security_lint(&lint_issues)?;
 
-                if attempt == validation_passes - 1 {
+                if attempt == self.max_retries {
                     info!("Max retries reached, returning best attempt despite format issues");
                     had_unresolved_errors = true;
                     break;
@@ -384,134 +399,68 @@ impl Generator {
 
             info!("  ✓ Format validation passed");
 
-            // 2. Functional Validation - Runs code
-            // The legacy functional validator runs code in a bare container without
-            // dependency installation — it only works for stdlib-only snippets.
-            // When test agent is enabled, it handles validation properly (uv + deps).
-            // When test agent is disabled, skip functional validation entirely since
-            // the legacy validator would just fail on any import.
-            let skip_reason = if !self.enable_test {
-                Some("test agent disabled — legacy validator cannot install dependencies")
-            } else if data.language == Language::Python {
-                Some("test agent enabled — using code generation validation instead")
-            } else {
-                None
-            };
+            // 2. Code validation (test agent)
+            if let Some(ref test_validator) = test_validator {
+                info!("  → Running code validation (test agent)...");
 
-            if let Some(reason) = skip_reason {
-                info!("  ⏭️  Skipping functional validation ({reason})");
-            } else {
-                info!("  → Running functional validation (code execution)...");
-            }
+                let validation_result: Result<TestResult, anyhow::Error> =
+                    test_validator.validate(&skill_md).await;
+                match validation_result {
+                    Ok(test_result) => {
+                        if test_result.test_cases.is_empty() {
+                            info!("  ⏭️  test: No testable patterns found, skipping");
+                            break;
+                        }
+                        if test_result.all_passed() {
+                            info!("  ✓ test: All {} tests passed", test_result.passed);
+                            break;
+                        } else {
+                            warn!(
+                                "  ✗ test: {} passed, {} failed",
+                                test_result.passed, test_result.failed
+                            );
 
-            let functional_result = if let Some(reason) = skip_reason {
-                ValidationResult::Skipped(reason.to_string())
-            } else {
-                #[allow(deprecated)]
-                let validator = functional_validator.get_or_insert_with(FunctionalValidator::new);
-                validator.validate(&skill_md, &data.language)?
-            };
-
-            match functional_result {
-                ValidationResult::Pass(output) => {
-                    info!("  ✓ Functional validation passed");
-                    info!("    Output: {}", output.lines().next().unwrap_or(""));
-                    break; // Format and functional passed, skip test agent if not Python
-                }
-                ValidationResult::Skipped(reason) => {
-                    info!("  ⏭️  Functional validation skipped: {}", reason);
-
-                    // test: Code generation validation (if enabled for Python)
-                    if self.enable_test && data.language == Language::Python {
-                        info!("test: Testing SKILL.md with code generation...");
-
-                        let test_llm = self.get_client("test");
-
-                        let test_validator = TestCodeValidator::new_python_with_custom(
-                            test_llm,
-                            self.container_config.clone(),
-                            self.prompts_config.test_custom.clone(),
-                        )?
-                        .with_mode(self.test_mode);
-
-                        let validation_result: Result<TestResult, anyhow::Error> =
-                            test_validator.validate(&skill_md).await;
-                        match validation_result {
-                            Ok(test_result) => {
-                                if test_result.test_cases.is_empty() {
-                                    // No patterns found to test — nothing to validate, not a failure
-                                    info!("  ⏭️  test: No testable patterns found, skipping");
-                                    break;
-                                }
-                                if test_result.all_passed() {
-                                    info!("  ✓ test: All {} tests passed", test_result.passed);
-                                    break; // All validations passed!
-                                } else {
-                                    warn!(
-                                        "  ✗ test: {} passed, {} failed",
-                                        test_result.passed, test_result.failed
+                            if attempt < self.max_retries {
+                                if let Some(feedback) =
+                                    test_result.generate_feedback(&data.language)
+                                {
+                                    let patch_prompt = format!(
+                                        "Here is the current SKILL.md:\n\n{}\n\n{}",
+                                        skill_md, feedback
                                     );
 
-                                    // Patch with targeted feedback if we have retries left
-                                    if attempt < validation_passes - 1 {
-                                        if let Some(feedback) =
-                                            test_result.generate_feedback(&data.language)
-                                        {
-                                            let patch_prompt = format!(
-                                                "Here is the current SKILL.md:\n\n{}\n\n{}",
-                                                skill_md, feedback
-                                            );
-
-                                            skill_md = self
-                                                .get_client("create")
-                                                .complete(&patch_prompt)
-                                                .await?;
-                                            skill_md = strip_markdown_fences(&skill_md);
-                                            continue; // Retry with patched content
-                                        }
-                                    } else {
-                                        warn!("  Max retries reached, proceeding despite test failures");
-                                        had_unresolved_errors = true;
-                                        break;
-                                    }
+                                    skill_md =
+                                        self.get_client("create").complete(&patch_prompt).await?;
+                                    skill_md = strip_markdown_fences(&skill_md);
+                                    continue;
+                                } else {
+                                    warn!("  No actionable feedback from test failures, stopping retries");
+                                    had_unresolved_errors = true;
+                                    break;
                                 }
-                            }
-                            Err(e) => {
-                                warn!("  ✗ test error: {}", e);
-                                warn!("    Continuing without test validation");
-                                break; // Don't fail the whole pipeline for test agent errors
+                            } else {
+                                warn!("  Max retries reached, proceeding despite test failures");
+                                had_unresolved_errors = true;
+                                break;
                             }
                         }
-                    } else {
-                        // No test agent, format passed, functional skipped - good enough
+                    }
+                    Err(e) => {
+                        warn!("  ✗ test error: {}", e);
+                        warn!("    Continuing without test validation");
                         break;
                     }
                 }
-                ValidationResult::Fail(error) => {
-                    warn!("  ✗ Functional validation failed");
-                    warn!("    Error: {}", error.lines().next().unwrap_or(""));
-
-                    if attempt == validation_passes - 1 {
-                        // Final safety check: re-lint to catch any security issues
-                        // introduced during fix attempts
-                        let final_lint = linter.lint(&skill_md)?;
-                        bail_on_security_lint(&final_lint)?;
-                        info!("Max retries reached, returning best attempt despite code issues");
-                        had_unresolved_errors = true;
-                        break;
-                    }
-
-                    // Patch with code execution error
-                    let fix_prompt = format!(
-                        "Here is the current SKILL.md:\n\n{}\n\nCODE EXECUTION FAILED:\n{}\n\nFix the code examples that don't work. Keep all other content intact.",
-                        skill_md,
-                        error
+            } else {
+                if !self.enable_test {
+                    info!("  ⏭️  Skipping code validation (test agent disabled)");
+                } else {
+                    info!(
+                        "  ⏭️  Skipping code validation ({:?} not yet supported)",
+                        data.language
                     );
-
-                    skill_md = self.get_client("create").complete(&fix_prompt).await?;
-                    skill_md = strip_markdown_fences(&skill_md);
-                    continue;
                 }
+                break;
             }
         }
 
@@ -2137,7 +2086,7 @@ print(json.dumps(result))
 
     #[tokio::test]
     async fn test_generate_format_max_retries_one_exhausted() {
-        // max_retries=1 means 1 validation pass, no retry on failure
+        // max_retries=1 means 1 initial attempt + 1 retry on failure (2 total)
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(false)

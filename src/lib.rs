@@ -16,4 +16,3 @@ pub mod pipeline;
 pub mod review;
 pub mod test_agent;
 pub mod util;
-pub mod validator;

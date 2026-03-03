@@ -1,8 +1,13 @@
+//! Security linter — data-driven regex scanner that checks SKILL.md for
+//! destructive commands, credential access, prompt injection, reverse shells,
+//! and obfuscated payloads. Hard-fails on security violations.
+
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
+/// A single issue found by the security linter.
 #[derive(Debug, Clone)]
 pub struct LintIssue {
     pub severity: Severity,
@@ -11,11 +16,12 @@ pub struct LintIssue {
     pub suggestion: Option<String>,
 }
 
+/// Issue severity levels for lint and review results.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Severity {
     #[default]
-    Error, // Must fix
-    Warning, // Should fix
+    Error, // Must fix — blocks pipeline
+    Warning, // Should fix — reported but non-blocking
     Info,    // Nice to have
 }
 
@@ -42,6 +48,9 @@ impl FromStr for Severity {
     }
 }
 
+/// Data-driven regex scanner for SKILL.md security and quality checks.
+/// Rules are defined declaratively; the linter scans prose sections
+/// (code blocks are excluded to avoid false positives on legitimate examples).
 pub struct SkillLinter;
 
 impl Default for SkillLinter {

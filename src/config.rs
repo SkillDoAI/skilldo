@@ -1,3 +1,7 @@
+//! Configuration loading and merging — parses TOML config files, resolves
+//! environment variables for API keys, and merges CLI overrides. Discovery
+//! order: explicit path → CWD → git root → user config dir → defaults.
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -46,6 +50,8 @@ impl std::fmt::Display for InstallSource {
     }
 }
 
+/// Supported LLM providers. `OpenAICompatible` covers Ollama and any
+/// endpoint that speaks the OpenAI chat completions API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provider {
     #[serde(rename = "anthropic")]
@@ -97,6 +103,8 @@ impl std::str::FromStr for Provider {
     }
 }
 
+/// Root configuration — loaded from TOML, merged with CLI overrides.
+/// Discovery: explicit path → CWD → git root → user config dir → defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub llm: LlmConfig,
@@ -105,6 +113,7 @@ pub struct Config {
     pub prompts: PromptsConfig,
 }
 
+/// LLM provider configuration — model, API key, base URL, retry settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub provider: Provider,
@@ -290,6 +299,7 @@ pub struct GenerationConfig {
     pub container: ContainerConfig,
 }
 
+/// Container runtime settings — runtime binary, per-language images, timeouts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerConfig {
     /// Container runtime: "podman", "docker", etc. (default: auto-detected)
@@ -425,6 +435,7 @@ impl GenerationConfig {
     }
 }
 
+/// User-customizable prompt overrides — per-stage append/overwrite modes.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PromptsConfig {
     /// Global default: if true, custom prompts replace defaults. If false, append.

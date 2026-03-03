@@ -12,7 +12,6 @@ mod pipeline;
 mod review;
 mod test_agent;
 mod util;
-mod validator;
 
 #[derive(Parser)]
 #[command(name = "skilldo", version)]
