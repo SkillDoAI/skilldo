@@ -994,12 +994,14 @@ mod tests {
         assert!(!cli.verbose);
         assert_generate!(cli, |no_test,
                                no_review,
+                               no_security_scan,
                                container,
                                no_parallel,
                                best_effort,
                                dry_run| {
             assert!(!no_test);
             assert!(!no_review);
+            assert!(!no_security_scan);
             assert!(!container);
             assert!(!no_parallel);
             assert!(!best_effort);

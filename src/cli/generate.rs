@@ -695,6 +695,18 @@ setup(name="testpkg", version="1.0.0")
     }
 
     #[tokio::test]
+    async fn test_run_with_no_security_scan() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            no_security_scan: true,
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
     async fn test_run_with_test_mode_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
