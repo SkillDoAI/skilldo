@@ -14,6 +14,7 @@ pub mod lint;
 pub mod llm;
 pub mod pipeline;
 pub mod review;
+pub mod security;
 pub mod telemetry;
 pub mod test_agent;
 pub mod util;

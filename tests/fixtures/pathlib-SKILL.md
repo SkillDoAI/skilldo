@@ -1,9 +1,10 @@
 ---
 name: pathlib
-description: Object-oriented filesystem paths
-version: 3.11
-ecosystem: python
+description: Object-oriented filesystem paths for Python.
 license: PSF
+metadata:
+  version: "3.11"
+  ecosystem: python
 ---
 
 ## Imports

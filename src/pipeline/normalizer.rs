@@ -3,7 +3,7 @@
 
 use tracing::warn;
 
-/// Create proper frontmatter
+/// Create proper frontmatter (agentskills.io compliant)
 fn create_frontmatter(
     package_name: &str,
     version: &str,
@@ -16,12 +16,12 @@ fn create_frontmatter(
         .unwrap_or_else(|| "# license: Unknown".to_string());
 
     let generated_field = generated_with
-        .map(|m| format!("\ngenerated_with: {}", m))
+        .map(|m| format!("\n  generated-by: skilldo/{}", m))
         .unwrap_or_default();
 
     format!(
-        "---\nname: {}\ndescription: {ecosystem} library\nversion: {}\necosystem: {}\n{}{}\n---\n\n",
-        package_name, version, ecosystem, license_field, generated_field
+        "---\nname: {}\ndescription: {ecosystem} library\n{}\nmetadata:\n  version: \"{}\"\n  ecosystem: {}{}\n---\n\n",
+        package_name, license_field, version, ecosystem, generated_field
     )
 }
 
@@ -44,10 +44,10 @@ pub fn ensure_frontmatter(
             let has_name = fm_block.contains("name:");
             let has_description = fm_block.contains("description:");
             let has_version = fm_block.contains("version:");
-            let has_ecosystem = fm_block.contains("ecosystem:");
+            let has_metadata = fm_block.contains("metadata:");
 
-            // If missing any required field, replace the frontmatter
-            if !has_name || !has_description || !has_version || !has_ecosystem {
+            // Accept both old format (top-level version/ecosystem) and new (inside metadata:)
+            if !has_name || !has_description || (!has_version && !has_metadata) {
                 warn!("Frontmatter has wrong format - replacing it");
 
                 let content_after = &after_start[end_pos + 3..];
@@ -58,15 +58,25 @@ pub fn ensure_frontmatter(
                 );
             }
 
-            // Has correct fields — inject generated_with if missing
+            // Has correct fields — inject generated-by inside metadata if missing
             if let Some(model) = generated_with {
-                if !fm_block.contains("generated_with:") {
+                if !fm_block.contains("generated-by:") && !fm_block.contains("generated_with:") {
                     let frontmatter = fm_block.trim_end();
                     let content_after = &after_start[end_pos + 3..];
-                    return format!(
-                        "---\n{}\ngenerated_with: {}\n---{}",
-                        frontmatter, model, content_after
-                    );
+
+                    if has_metadata {
+                        // Append inside metadata block (metadata is last in our format)
+                        return format!(
+                            "---\n{}\n  generated-by: skilldo/{}\n---{}",
+                            frontmatter, model, content_after
+                        );
+                    } else {
+                        // No metadata block (old format) — add one
+                        return format!(
+                            "---\n{}\nmetadata:\n  generated-by: skilldo/{}\n---{}",
+                            frontmatter, model, content_after
+                        );
+                    }
                 }
             }
             return content.to_string();
@@ -383,16 +393,25 @@ mod tests {
 
         assert!(result.starts_with("---\n"));
         assert!(result.contains("name: torch"));
-        assert!(result.contains("version: 2.0.0"));
         assert!(result.contains("license: BSD"));
+        assert!(result.contains("metadata:"));
+        assert!(result.contains("  version: \"2.0.0\""));
+        assert!(result.contains("  ecosystem: python"));
     }
 
     #[test]
-    fn test_keep_existing_frontmatter() {
+    fn test_keep_existing_frontmatter_old_format() {
+        // Old format (top-level version/ecosystem) should be kept as-is
         let content = "---\nname: torch\ndescription: python library\nversion: 2.0.0\necosystem: python\n---\n\n## Imports";
         let result = ensure_frontmatter(content, "torch", "2.0.0", "python", None, None);
+        assert_eq!(result, content);
+    }
 
-        // Should not duplicate frontmatter (has all required fields)
+    #[test]
+    fn test_keep_existing_frontmatter_new_format() {
+        // New format (metadata block) should be kept as-is
+        let content = "---\nname: torch\ndescription: Deep learning framework for Python.\nlicense: BSD-3-Clause\nmetadata:\n  version: \"2.0.0\"\n  ecosystem: python\n---\n\n## Imports";
+        let result = ensure_frontmatter(content, "torch", "2.0.0", "python", None, None);
         assert_eq!(result, content);
     }
 
@@ -469,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generated_with_in_new_frontmatter() {
+    fn test_generated_by_in_new_frontmatter() {
         let content = "## Imports\n\nSome content";
         let result = normalize_skill_md(
             content,
@@ -481,20 +500,21 @@ mod tests {
             Some("gpt-5.2"),
         );
 
-        assert!(result.contains("generated_with: gpt-5.2"));
+        assert!(result.contains("  generated-by: skilldo/gpt-5.2"));
+        assert!(result.contains("metadata:"));
     }
 
     #[test]
-    fn test_generated_with_none_omitted() {
+    fn test_generated_by_none_omitted() {
         let content = "## Imports\n\nSome content";
         let result = normalize_skill_md(content, "torch", "2.0.0", "python", None, &[], None);
 
-        assert!(!result.contains("generated_with"));
+        assert!(!result.contains("generated-by"));
     }
 
     #[test]
     fn test_strip_meta_text_below_is() {
-        let content = "---\nname: click\ndescription: python library\nversion: 8.0.0\necosystem: python\nlicense: MIT\n---\n\nBelow is the generated SKILL.md file with exact sections as requested:\n\n## Imports\n```python\nimport click\n```\n";
+        let content = "---\nname: click\ndescription: CLI creation toolkit for Python.\nlicense: MIT\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n---\n\nBelow is the generated SKILL.md file with exact sections as requested:\n\n## Imports\n```python\nimport click\n```\n";
         let result = strip_meta_text(content);
         assert!(
             !result.contains("Below is the"),
@@ -509,7 +529,7 @@ mod tests {
 
     #[test]
     fn test_strip_meta_text_here_is() {
-        let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\n---\n\nHere is the SKILL.md for the requests library:\n\n## Imports\n";
+        let content = "---\nname: test\ndescription: test library.\nlicense: MIT\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\nHere is the SKILL.md for the requests library:\n\n## Imports\n";
         let result = strip_meta_text(content);
         assert!(!result.contains("Here is the"));
         assert!(result.contains("## Imports"));
@@ -517,14 +537,14 @@ mod tests {
 
     #[test]
     fn test_strip_meta_text_preserves_clean_content() {
-        let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n";
+        let content = "---\nname: test\ndescription: test library.\nlicense: MIT\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n";
         let result = strip_meta_text(content);
         assert_eq!(result, content, "Clean content should not be modified");
     }
 
     #[test]
     fn test_strip_duplicate_frontmatter() {
-        let content = "---\nname: click\ndescription: python library\nversion: 8.0.0\necosystem: python\nlicense: BSD\ngenerated_with: phi4\n---\n\nBelow is the generated SKILL.md:\n\n---\nname: click\ndescription: CLI library\nversion: 8.0.0\necosystem: python\nlicense: BSD\n---\n\n## Imports\n```python\nimport click\n```\n";
+        let content = "---\nname: click\ndescription: CLI creation toolkit.\nlicense: BSD\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n  generated-by: skilldo/phi4\n---\n\nBelow is the generated SKILL.md:\n\n---\nname: click\ndescription: CLI library\nlicense: BSD\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport click\n```\n";
         let result = strip_duplicate_frontmatter(content);
 
         // Count --- lines — should be exactly 2 (one frontmatter block)
@@ -561,15 +581,15 @@ mod tests {
 
     #[test]
     fn test_strip_duplicate_frontmatter_no_duplicate() {
-        let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\n---\n\n## Imports\n";
+        let content = "---\nname: test\ndescription: test library.\nlicense: MIT\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n";
         let result = strip_duplicate_frontmatter(content);
         assert_eq!(result, content, "No duplicate should mean no changes");
     }
 
     #[test]
     fn test_full_normalization_strips_meta_and_duplicate() {
-        // Simulates the phi4 output pattern exactly
-        let raw_llm_output = "Below is the generated SKILL.md file with exact sections as requested:\n\n---\nname: click\ndescription: A Python package for CLI.\nversion: 8.3.dev\necosystem: python\nlicense: BSD-3-Clause\n---\n\n## Imports\n```python\nimport click\n```\n";
+        // Simulates the phi4 output pattern: preamble before frontmatter
+        let raw_llm_output = "Below is the generated SKILL.md file with exact sections as requested:\n\n---\nname: click\ndescription: CLI creation toolkit for Python.\nlicense: BSD-3-Clause\nmetadata:\n  version: \"8.3.dev\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport click\n```\n";
 
         let result = normalize_skill_md(
             raw_llm_output,
@@ -581,8 +601,8 @@ mod tests {
             Some("phi4-reasoning"),
         );
 
-        // Should have clean frontmatter with generated_with
-        assert!(result.contains("generated_with: phi4-reasoning"));
+        // Should have generated-by inside metadata
+        assert!(result.contains("  generated-by: skilldo/phi4-reasoning"));
         // Should NOT have meta-text
         assert!(!result.contains("Below is the"));
         // Should NOT have duplicate frontmatter
@@ -593,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generated_with_hybrid_model() {
+    fn test_generated_by_hybrid_model() {
         let content = "## Imports\n\nSome content";
         let result = normalize_skill_md(
             content,
@@ -605,13 +625,13 @@ mod tests {
             Some("qwen3-coder + gpt-5.2 (agent5)"),
         );
 
-        assert!(result.contains("generated_with: qwen3-coder + gpt-5.2 (agent5)"));
+        assert!(result.contains("  generated-by: skilldo/qwen3-coder + gpt-5.2 (agent5)"));
     }
 
     #[test]
     fn test_strip_body_markdown_fence() {
         // Simulates the Sonnet 4.6 pattern: frontmatter then ```markdown wrapper
-        let content = "---\nname: click\ndescription: python library\nversion: 8.3.1\necosystem: python\nlicense: BSD-3-Clause\n---\n\n```markdown\n## Imports\n\n```python\nimport click\n```\n\n## Core Patterns\nSome patterns\n```\n";
+        let content = "---\nname: click\ndescription: CLI toolkit for Python.\nlicense: BSD-3-Clause\nmetadata:\n  version: \"8.3.1\"\n  ecosystem: python\n---\n\n```markdown\n## Imports\n\n```python\nimport click\n```\n\n## Core Patterns\nSome patterns\n```\n";
         let result = strip_body_markdown_fence(content);
 
         assert!(
@@ -630,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_strip_body_markdown_fence_no_wrapper() {
-        let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n";
+        let content = "---\nname: test\ndescription: test library.\nlicense: MIT\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n";
         let result = strip_body_markdown_fence(content);
         assert_eq!(result, content, "No wrapper should mean no changes");
     }
@@ -658,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_strip_meta_text_certainly_preamble() {
-        let content = "---\nname: pillow\ndescription: python library\nversion: 12.1.1\necosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n## Imports\n```python\nfrom PIL import Image\n```\n";
+        let content = "---\nname: pillow\ndescription: Image processing library for Python.\nlicense: MIT\nmetadata:\n  version: \"12.1.1\"\n  ecosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n## Imports\n```python\nfrom PIL import Image\n```\n";
         let result = strip_meta_text(content);
         assert!(
             !result.contains("Certainly!"),
@@ -670,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_strip_meta_text_corrections_list() {
-        let content = "---\nname: typer\ndescription: python library\nversion: 0.24.1\necosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n**Corrections made:**\n- Fixed import order\n- Added missing examples\n\n## Imports\n```python\nimport typer\n```\n";
+        let content = "---\nname: typer\ndescription: CLI framework for Python.\nlicense: MIT\nmetadata:\n  version: \"0.24.1\"\n  ecosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n**Corrections made:**\n- Fixed import order\n- Added missing examples\n\n## Imports\n```python\nimport typer\n```\n";
         let result = strip_meta_text(content);
         assert!(!result.contains("Certainly!"), "Should strip preamble");
         assert!(
@@ -683,7 +703,7 @@ mod tests {
     #[test]
     fn test_strip_meta_text_then_markdown_fence() {
         // The pillow pattern: preamble + ```markdown fence
-        let content = "---\nname: pillow\ndescription: python library\nversion: 12.1.1\necosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n```markdown\n## Imports\n```python\nfrom PIL import Image\n```\n\n## Core Patterns\nPatterns\n```\n";
+        let content = "---\nname: pillow\ndescription: Image processing library for Python.\nlicense: MIT\nmetadata:\n  version: \"12.1.1\"\n  ecosystem: python\n---\n\nCertainly! Here is your corrected SKILL.md.\n\n```markdown\n## Imports\n```python\nfrom PIL import Image\n```\n\n## Core Patterns\nPatterns\n```\n";
         // strip_meta_text should remove preamble, leaving fence as first line
         let after_meta = strip_meta_text(content);
         assert!(
@@ -702,7 +722,7 @@ mod tests {
     #[test]
     fn test_full_normalization_strips_markdown_wrapper() {
         // The exact pattern from CI: frontmatter + ```markdown wrapper
-        let raw = "---\nname: click\ndescription: python library\nversion: 8.3.1\necosystem: python\nlicense: BSD-3-Clause\ngenerated_with: claude-sonnet-4-6\n---\n\n```markdown\n## Imports\n\n```python\nimport click\n```\n\n## Core Patterns\nPatterns here\n\n## Pitfalls\nPitfalls here\n```\n";
+        let raw = "---\nname: click\ndescription: CLI toolkit for Python.\nlicense: BSD-3-Clause\nmetadata:\n  version: \"8.3.1\"\n  ecosystem: python\n  generated-by: skilldo/claude-sonnet-4-6\n---\n\n```markdown\n## Imports\n\n```python\nimport click\n```\n\n## Core Patterns\nPatterns here\n\n## Pitfalls\nPitfalls here\n```\n";
 
         let result = normalize_skill_md(
             raw,
@@ -738,17 +758,18 @@ mod tests {
         let content = "---\ndescription: a library\n---\n\n## Core Patterns\n\n```python\nname: my_config\nvalue: 42\n```";
         let result = ensure_frontmatter(content, "mylib", "1.0.0", "python", None, None);
 
-        // Frontmatter should be replaced (missing name/version/ecosystem in fm block)
+        // Frontmatter should be replaced (missing name/version/metadata in fm block)
         assert!(result.starts_with("---\n"));
         assert!(result.contains("name: mylib"));
-        assert!(result.contains("version: 1.0.0"));
-        assert!(result.contains("ecosystem: python"));
+        assert!(result.contains("metadata:"));
+        assert!(result.contains("  version: \"1.0.0\""));
+        assert!(result.contains("  ecosystem: python"));
     }
 
     #[test]
     fn test_frontmatter_scoped_to_fm_block() {
         // Frontmatter has all fields — body also has "name:" which should not cause replacement
-        let content = "---\nname: mylib\ndescription: test\nversion: 1.0.0\necosystem: python\n---\n\nname: something_else\n";
+        let content = "---\nname: mylib\ndescription: test library.\nlicense: MIT\nmetadata:\n  version: \"1.0.0\"\n  ecosystem: python\n---\n\nname: something_else\n";
         let result = ensure_frontmatter(content, "mylib", "1.0.0", "python", None, None);
 
         // Should keep existing frontmatter unchanged

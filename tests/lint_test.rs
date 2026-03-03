@@ -134,7 +134,7 @@ None
 
     let issues = linter.lint(missing_fields)?;
 
-    // Should have errors for missing description, version, ecosystem
+    // description is required (error), version/ecosystem are warnings
     let field_errors: Vec<_> = issues
         .iter()
         .filter(|i| {
@@ -143,8 +143,23 @@ None
         .collect();
 
     assert!(
-        field_errors.len() >= 3,
-        "Should detect missing required fields: description, version, ecosystem"
+        !field_errors.is_empty(),
+        "Should detect missing required field: description"
+    );
+
+    // version and ecosystem should be warnings
+    let field_warnings: Vec<_> = issues
+        .iter()
+        .filter(|i| {
+            matches!(i.severity, Severity::Warning)
+                && (i.message.contains("Missing version")
+                    || i.message.contains("Missing ecosystem"))
+        })
+        .collect();
+
+    assert!(
+        field_warnings.len() >= 2,
+        "Should warn about missing version and ecosystem"
     );
 
     Ok(())

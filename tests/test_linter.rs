@@ -117,7 +117,7 @@ Issues
 }
 
 #[test]
-fn test_missing_required_field_version_should_return_error() {
+fn test_missing_version_should_return_warning() {
     let linter = SkillLinter::new();
     let content = r#"---
 name: test
@@ -143,11 +143,11 @@ Issues
     let issues = result.unwrap();
     assert!(issues
         .iter()
-        .any(|i| i.message.contains("Missing required field: version")));
+        .any(|i| i.severity == Severity::Warning && i.message.contains("Missing version")));
 }
 
 #[test]
-fn test_missing_required_field_ecosystem_should_return_error() {
+fn test_missing_ecosystem_should_return_warning() {
     let linter = SkillLinter::new();
     let content = r#"---
 name: test
@@ -173,7 +173,7 @@ Issues
     let issues = result.unwrap();
     assert!(issues
         .iter()
-        .any(|i| i.message.contains("Missing required field: ecosystem")));
+        .any(|i| i.severity == Severity::Warning && i.message.contains("Missing ecosystem")));
 }
 
 #[test]
@@ -204,8 +204,8 @@ Issues
         .filter(|i| i.severity == Severity::Error && i.category == "frontmatter")
         .collect();
 
-    // Should have errors for name, description, version, ecosystem
-    assert!(errors.len() >= 4);
+    // Should have errors for name and description (version/ecosystem are warnings)
+    assert!(errors.len() >= 2);
 }
 
 #[test]
@@ -1059,7 +1059,7 @@ Issues
         .filter(|i| i.message.contains("Missing required field") && i.severity == Severity::Error)
         .collect();
 
-    assert_eq!(field_errors.len(), 4); // name, description, version, ecosystem
+    assert_eq!(field_errors.len(), 2); // name and description (version/ecosystem are warnings now)
 }
 
 #[test]

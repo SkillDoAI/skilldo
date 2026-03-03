@@ -1,9 +1,10 @@
 ---
 name: click
-description: Command Line Interface Creation Kit
-version: 8.1.7
-ecosystem: python
+description: Command Line Interface Creation Kit for Python.
 license: BSD-3-Clause
+metadata:
+  version: "8.1.7"
+  ecosystem: python
 ---
 
 ## Imports

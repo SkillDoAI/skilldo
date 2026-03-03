@@ -150,6 +150,18 @@ Checks for: missing frontmatter, missing required sections, unclosed code blocks
 
 The linter runs automatically after generation and also in CI.
 
+### Security Scanner
+
+Skilldo includes a three-layer security scanner that runs during the review stage:
+
+1. **Regex patterns** — credential access, destructive commands, exfiltration URLs, reverse shells, obfuscated payloads
+2. **Prompt injection detection** — instruction overrides, identity reassignment, secrecy demands, indirect injection
+3. **YARA rules** — 24 SkillDo rules (SD-001 to SD-211) + 17 vendored [Cisco AI Defense](https://github.com/cisco-ai-defense/skill-scanner) rules (Apache 2.0)
+
+YARA rules are evaluated at runtime via [boreal](https://github.com/vthib/boreal), a pure Rust YARA engine. All SkillDo and Cisco rules ship in `rules/`.
+
+**YARA compatibility note:** The YARA specification (libyara) does not support non-capturing groups `(?:...)` in regex patterns. Cisco's rules use `(?:...)` because their scanner runs on [YARA-X](https://github.com/VirusTotal/yara-x), VirusTotal's Rust rewrite that delegates regex parsing to the `regex_syntax` crate — which accepts `(?:` as an extension beyond the spec. Boreal and libyara both reject this syntax. Skilldo includes a `patch_for_boreal()` preprocessor that rewrites `(?:...)` → `(...)` at load time, which is safe because YARA has no backreferences (capturing and non-capturing groups are functionally identical).
+
 ### Config Check
 
 Validate your configuration file without running a generation:

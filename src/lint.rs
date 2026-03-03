@@ -145,16 +145,15 @@ impl SkillLinter {
                 category: "frontmatter".to_string(),
                 message: "Missing frontmatter (---...---)".to_string(),
                 suggestion: Some(
-                    "Add frontmatter with name, description, version, ecosystem".to_string(),
+                    "Add frontmatter with name, description, license, metadata".to_string(),
                 ),
             });
             return issues;
         }
 
-        // Required fields
-        let required_fields = vec!["name", "description", "version", "ecosystem"];
-        for field in required_fields {
-            if !frontmatter.contains_key(field) {
+        // Required fields (agentskills.io spec: name and description are required)
+        for field in &["name", "description"] {
+            if !frontmatter.contains_key(*field) {
                 issues.push(LintIssue {
                     severity: Severity::Error,
                     category: "frontmatter".to_string(),
@@ -164,8 +163,38 @@ impl SkillLinter {
             }
         }
 
-        // Check for problematic versions
-        if let Some(version) = frontmatter.get("version") {
+        // version and ecosystem: check both top-level (old format) and metadata (new format)
+        let version = frontmatter
+            .get("metadata.version")
+            .or_else(|| frontmatter.get("version"));
+        let ecosystem = frontmatter
+            .get("metadata.ecosystem")
+            .or_else(|| frontmatter.get("ecosystem"));
+
+        if version.is_none() {
+            issues.push(LintIssue {
+                severity: Severity::Warning,
+                category: "frontmatter".to_string(),
+                message: "Missing version (expected in metadata.version or top-level version)"
+                    .to_string(),
+                suggestion: Some(
+                    "Add 'metadata:\\n  version: \"1.0.0\"' to frontmatter".to_string(),
+                ),
+            });
+        }
+        if ecosystem.is_none() {
+            issues.push(LintIssue {
+                severity: Severity::Warning,
+                category: "frontmatter".to_string(),
+                message:
+                    "Missing ecosystem (expected in metadata.ecosystem or top-level ecosystem)"
+                        .to_string(),
+                suggestion: Some(
+                    "Add 'metadata:\\n  ecosystem: python' to frontmatter".to_string(),
+                ),
+            });
+        }
+        if let Some(version) = version {
             if version == "unknown" {
                 issues.push(LintIssue {
                     severity: Severity::Warning,
@@ -1105,6 +1134,8 @@ impl SkillLinter {
         }
 
         let mut in_frontmatter = false;
+        let mut current_block: Option<String> = None;
+
         for line in lines {
             if line.trim() == "---" {
                 if in_frontmatter {
@@ -1115,11 +1146,29 @@ impl SkillLinter {
             }
 
             if in_frontmatter && line.contains(':') {
+                let is_indented = line.starts_with(' ') || line.starts_with('\t');
                 let parts: Vec<&str> = line.splitn(2, ':').collect();
                 if parts.len() == 2 {
                     let key = parts[0].trim().to_string();
                     let value = parts[1].trim().to_string();
-                    frontmatter.insert(key, value);
+
+                    let clean_value = value.trim_matches('"').to_string();
+
+                    if is_indented {
+                        // Indented line — belongs to current block (e.g. metadata.version)
+                        if let Some(ref block) = current_block {
+                            let full_key = format!("{}.{}", block, key);
+                            frontmatter.insert(full_key, clean_value);
+                        }
+                    } else if value.is_empty() {
+                        // Block start (e.g. "metadata:")
+                        current_block = Some(key.clone());
+                        frontmatter.insert(key, String::new());
+                    } else {
+                        // Top-level key: value
+                        current_block = None;
+                        frontmatter.insert(key, clean_value);
+                    }
                 }
             }
         }

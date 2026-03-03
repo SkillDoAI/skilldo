@@ -122,7 +122,7 @@ pub struct Generator {
     container_config: ContainerConfig,
     parallel_extraction: bool,      // Run extract/map/learn in parallel
     existing_skill: Option<String>, // Existing SKILL.md for update mode
-    model_name: Option<String>,     // For generated_with frontmatter field
+    model_name: Option<String>,     // For metadata.generated-by frontmatter field
 }
 
 impl Generator {
@@ -859,8 +859,8 @@ mod tests {
         let data = make_test_data();
         let output = gen.generate(&data).await.unwrap();
 
-        // Normalizer should inject generated_with into frontmatter
-        assert!(output.skill_md.contains("generated_with:"));
+        // Normalizer should inject generated-by inside metadata block
+        assert!(output.skill_md.contains("generated-by: skilldo/gpt-5.2"));
     }
 
     #[tokio::test]

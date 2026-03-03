@@ -293,12 +293,13 @@ fn extract_section<'a>(skill_md: &'a str, header_pattern: &str) -> Result<Option
 }
 
 /// Extract a value from SKILL.md YAML frontmatter by key (e.g. "version", "name").
+/// Handles both top-level fields and fields nested under `metadata:`.
 fn frontmatter_field(skill_md: &str, key: &str) -> Option<String> {
     let prefix = format!("{}:", key);
-    for line in skill_md.lines().take(10) {
+    for line in skill_md.lines().take(15) {
         let trimmed = line.trim();
         if let Some(val) = trimmed.strip_prefix(&prefix) {
-            let val = val.trim().to_string();
+            let val = val.trim().trim_matches('"').trim_matches('\'').to_string();
             if !val.is_empty() {
                 return Some(val);
             }
