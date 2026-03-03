@@ -92,7 +92,7 @@ impl LanguageExecutor for PythonUvExecutor {
 
         // Check if uv is available
         if !Self::check_uv_available() {
-            bail!("uv is not installed or not in PATH. Install with: pip install uv");
+            bail!("uv is not installed or not in PATH (install: https://docs.astral.sh/uv/)");
         }
 
         // Create temporary directory

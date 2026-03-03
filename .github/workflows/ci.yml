@@ -197,6 +197,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}
+      - uses: astral-sh/setup-uv@v7
 
       - name: Check API access
         id: check-secret
