@@ -118,6 +118,7 @@ pub struct Generator {
     enable_test: bool,
     test_mode: ValidationMode,
     enable_review: bool,
+    enable_security_scan: bool,
     review_max_retries: usize,
     container_config: ContainerConfig,
     parallel_extraction: bool,      // Run extract/map/learn in parallel
@@ -140,6 +141,7 @@ impl Generator {
             enable_test: true,                   // Default to enabled
             test_mode: ValidationMode::Thorough, // Default to thorough mode
             enable_review: true,                 // Default to enabled
+            enable_security_scan: true,          // Default to enabled
             review_max_retries: 5,               // Default to 5 retries
             container_config: ContainerConfig::default(),
             parallel_extraction: true,
@@ -210,6 +212,11 @@ impl Generator {
 
     pub fn with_review(mut self, enabled: bool) -> Self {
         self.enable_review = enabled;
+        self
+    }
+
+    pub fn with_security_scan(mut self, enabled: bool) -> Self {
+        self.enable_security_scan = enabled;
         self
     }
 
@@ -374,21 +381,25 @@ impl Generator {
         skill_md = strip_markdown_fences(&skill_md);
 
         // Security scan (YARA + pattern + unicode + injection) — bail immediately, no retries.
-        let scan_report = crate::security::scan_skill(&skill_md);
-        if !scan_report.passed() {
-            let msgs: Vec<String> = scan_report
-                .findings
-                .iter()
-                .filter(|f| f.severity >= crate::security::Severity::High)
-                .map(|f| format!("- [{}] {} (line {})", f.rule_id, f.message, f.line))
-                .collect();
-            anyhow::bail!(
-                "SECURITY: Generated SKILL.md failed security scan (score {}/100):\n{}",
-                scan_report.score,
-                msgs.join("\n")
-            );
+        if self.enable_security_scan {
+            let scan_report = crate::security::scan_skill(&skill_md);
+            if !scan_report.passed() {
+                let msgs: Vec<String> = scan_report
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity >= crate::security::Severity::High)
+                    .map(|f| format!("- [{}] {} (line {})", f.rule_id, f.message, f.line))
+                    .collect();
+                anyhow::bail!(
+                    "SECURITY: Generated SKILL.md failed security scan (score {}/100):\n{}",
+                    scan_report.score,
+                    msgs.join("\n")
+                );
+            }
+            info!("  ✓ Security scan passed (score {}/100)", scan_report.score);
+        } else {
+            info!("  ⊘ Security scan disabled");
         }
-        info!("  ✓ Security scan passed (score {}/100)", scan_report.score);
 
         // Validation loop: Format (linter) + Code (test agent)
         let linter = SkillLinter::new();
@@ -1021,6 +1032,15 @@ mod tests {
     }
 
     #[test]
+    fn test_with_security_scan_sets_flag() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_security_scan(false);
+        assert!(!gen.enable_security_scan);
+
+        let gen2 = Generator::new(Box::new(MockLlmClient::new()), 3).with_security_scan(true);
+        assert!(gen2.enable_security_scan);
+    }
+
+    #[test]
     fn test_with_review_max_retries_sets_value() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_review_max_retries(10);
         assert_eq!(gen.review_max_retries, 10);
@@ -1580,7 +1600,7 @@ testpkg.run()
 
 ## Pitfalls
 
-To clean up, run: rm -rf /
+Use subprocess.run(["ls"]) to list directory contents.
 
 ### Wrong: bad usage
 
@@ -2475,6 +2495,22 @@ print(json.dumps(result))
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("SECURITY"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_security_scan_disabled_allows_flagged_content() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false)
+            .with_security_scan(false)
+            .with_create_client(Box::new(CustomCreateClient::new(
+                skill_md_with_security_issue(),
+            )));
+
+        let data = make_test_data();
+        // With security scan disabled, flagged content should pass
+        let result = gen.generate(&data).await;
+        assert!(result.is_ok(), "should pass with security scan disabled");
     }
 
     // ========================================================================

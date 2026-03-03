@@ -68,19 +68,6 @@ jobs:
           fi
           echo "All commits follow conventional commit format"
 
-  check:
-    name: cargo check
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-${{ runner.os }}
-      - run: cargo check --all-targets
-
   fmt:
     name: cargo fmt
     needs: changes
@@ -125,6 +112,8 @@ jobs:
           docker pull python:3.11-alpine &
           docker pull ghcr.io/astral-sh/uv:python3.11-bookworm-slim &
           wait
+      - name: Run container executor unit tests
+        run: cargo test container_executor
       - name: Run integration tests
         run: cargo test -- --ignored --test-threads=1
 
@@ -157,20 +146,6 @@ jobs:
           slug: SkillDoAI/skilldo
           files: lcov.info
 
-  test-container-unit:
-    name: container executor tests
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-${{ runner.os }}
-      - name: Run container executor unit tests (skipped in coverage due to llvm-cov hangs)
-        run: cargo test container_executor
-
   audit:
     name: security audit
     runs-on: ubuntu-latest
@@ -185,7 +160,7 @@ jobs:
     # Only run on main pushes with rust changes to conserve API credits.
     # Secrets aren't available on fork PRs anyway.
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
-    needs: [changes, check, fmt, clippy, test-cov, test-container-unit, integration, audit]
+    needs: [changes, fmt, clippy, test-cov, integration, audit]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
