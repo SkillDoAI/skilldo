@@ -209,14 +209,21 @@ static COMPILED_RULES: Lazy<Vec<CompiledRule>> = Lazy::new(|| {
     ];
 
     defs.iter()
-        .filter_map(|(id, severity, pattern, message)| {
-            Some(CompiledRule {
-                id,
-                severity: *severity,
-                pattern: Regex::new(pattern).ok()?,
-                message,
-            })
-        })
+        .filter_map(
+            |(id, severity, pattern, message)| match Regex::new(pattern) {
+                Ok(re) => Some(CompiledRule {
+                    id,
+                    severity: *severity,
+                    pattern: re,
+                    message,
+                }),
+                Err(e) => {
+                    debug_assert!(false, "BUG: invalid regex in injection rule {id}: {e}");
+                    eprintln!("WARNING: Skipping broken injection rule {id}: {e}");
+                    None
+                }
+            },
+        )
         .collect()
 });
 
@@ -283,7 +290,7 @@ fn detect_markdown_injection(content: &str, findings: &mut Vec<Finding>) {
                 category: Category::PromptInjection,
                 message: format!(
                     "Instruction-like content hidden in image alt text: \"{}\"",
-                    &alt[..alt.len().min(80)]
+                    alt.chars().take(80).collect::<String>()
                 ),
                 line: line_number(content, offset),
                 snippet: snippet_at(content, offset),

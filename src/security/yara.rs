@@ -183,10 +183,11 @@ impl YaraScanner {
             let rule_id = meta_str(&self.scanner, rule.metadatas, "id")
                 .unwrap_or_else(|| rule.name.to_string());
             let severity = meta_str(&self.scanner, rule.metadatas, "severity")
-                .map(|s| parse_severity(&s))
+                .map(|s| parse_severity(&s.to_lowercase()))
                 .unwrap_or(Severity::Medium);
             let category = meta_str(&self.scanner, rule.metadatas, "category")
-                .map(|s| parse_category(&s))
+                .or_else(|| meta_str(&self.scanner, rule.metadatas, "threat_type"))
+                .map(|s| parse_category(&s.to_lowercase().replace(' ', "-")))
                 .unwrap_or(Category::CodeExecution);
             let description = meta_str(&self.scanner, rule.metadatas, "description")
                 .unwrap_or_else(|| rule.name.to_string());
@@ -259,16 +260,16 @@ fn parse_severity(s: &str) -> Severity {
 
 fn parse_category(s: &str) -> Category {
     match s {
-        "unicode-attack" => Category::UnicodeAttack,
-        "prompt-injection" => Category::PromptInjection,
+        "unicode-attack" | "unicode-steganography" => Category::UnicodeAttack,
+        "prompt-injection" | "injection-attack" => Category::PromptInjection,
         "code-execution" => Category::CodeExecution,
-        "credential-access" => Category::CredentialAccess,
+        "credential-access" | "credential-harvesting" => Category::CredentialAccess,
         "data-exfiltration" => Category::DataExfiltration,
         "obfuscation" => Category::Obfuscation,
         "persistence" => Category::Persistence,
-        "privilege-escalation" => Category::PrivilegeEscalation,
-        "filesystem-write" => Category::FilesystemWrite,
-        "resource-abuse" => Category::ResourceAbuse,
+        "privilege-escalation" | "autonomy-abuse" => Category::PrivilegeEscalation,
+        "filesystem-write" | "system-manipulation" => Category::FilesystemWrite,
+        "resource-abuse" | "tool-chaining-abuse" => Category::ResourceAbuse,
         _ => Category::CodeExecution,
     }
 }

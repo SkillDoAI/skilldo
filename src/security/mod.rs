@@ -140,6 +140,10 @@ pub fn scan_skill(content: &str) -> ScanReport {
         }
     }
 
+    // Deduplicate cross-scanner findings by (rule_id, line)
+    findings.sort_by(|a, b| a.rule_id.cmp(&b.rule_id).then(a.line.cmp(&b.line)));
+    findings.dedup_by(|a, b| a.rule_id == b.rule_id && a.line == b.line);
+
     // Score: start at 100, deduct per finding weighted by severity
     let deductions: i32 = findings
         .iter()
