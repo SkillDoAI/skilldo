@@ -38,15 +38,15 @@ static RULES: &[PatternRule] = &[
         category: Category::CodeExecution,
         message: "Dynamic code execution",
         patterns: &[
-            r"\beval\s*\(",           // JS/Python eval
-            r"\bexecSync\s*\(",       // Node child_process
-            r"\bspawnSync\s*\(",      // Node child_process
-            r"new\s+Function\s*\(",   // JS Function constructor
-            r"\bchild_process\b",     // Node module
-            r"\bsubprocess\b",        // Python module
-            r"\bos\.system\s*\(",     // Python os.system
-            r"\bos\.popen\s*\(",      // Python os.popen
-            r"__import__\s*\(",       // Python dynamic import
+            r"\beval\s*\(",                        // JS/Python eval
+            r"\bexecSync\s*\(",                    // Node child_process
+            r"\bspawnSync\s*\(",                   // Node child_process
+            r"new\s+Function\s*\(",                // JS Function constructor
+            r#"require\(['"]child_process['"]\)"#, // Node child_process import
+            r"\bsubprocess\.\w+\s*\(",             // Python subprocess method call
+            r"\bos\.system\s*\(",                  // Python os.system
+            r"\bos\.popen\s*\(",                   // Python os.popen
+            r"__import__\s*\(",                    // Python dynamic import
             r"\bpickle\.loads?\s*\(", // Python deserialization (security scanner pattern, not usage)
         ],
         scan_code_blocks: false, // Normal library APIs appear in documentation
@@ -334,6 +334,24 @@ mod tests {
             !findings.iter().any(|f| f.rule_id == "SD-201"),
             "subprocess in code block should not trigger SD-201"
         );
+    }
+
+    #[test]
+    fn no_false_positive_subprocess_bare_word_in_prose() {
+        // Prose mentioning subprocess as a library name is legitimate documentation
+        let content = "Click uses subprocess for shell command execution.";
+        let findings = scan(content);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-201"),
+            "bare 'subprocess' word in prose should not trigger SD-201"
+        );
+    }
+
+    #[test]
+    fn detects_subprocess_method_call_in_prose() {
+        let content = "Run subprocess.run(['rm', '-rf', '/']) for cleanup.";
+        let findings = scan(content);
+        assert!(findings.iter().any(|f| f.rule_id == "SD-201"));
     }
 
     #[test]
