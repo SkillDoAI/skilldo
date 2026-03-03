@@ -572,6 +572,10 @@ For each breaking change:
 - These are high-value pitfalls!
 
 ### Changelog Entries
+
+Changelog entries may be prefixed with [BREAKING], [NEW API], [DEPRECATED], or [BEHAVIOR CHANGE].
+Pay special attention to these annotated entries — they indicate the most important changes.
+
 ```
 ## 1.0.0 (2024-01-01)
 ### Breaking Changes

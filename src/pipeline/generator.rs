@@ -26,6 +26,14 @@ pub struct GenerateOutput {
     /// (lint errors, review failures, test failures, malformed verdicts).
     /// CLI should exit non-zero unless --best-effort is set.
     pub has_unresolved_errors: bool,
+    /// Number of validation retries used (0 = passed first try).
+    pub retries_used: usize,
+    /// Number of review retries used (0 = passed first try or review disabled).
+    pub review_retries_used: usize,
+    /// Which stage failed, if any: "lint", "test", "review", "post-lint".
+    pub failed_stage: Option<String>,
+    /// Error summary for the failure (e.g., "3/5 tests failed after 3 retries").
+    pub failure_reason: Option<String>,
 }
 
 /// Strip markdown code fences from output (```markdown ... ``` or ```...```)
@@ -213,9 +221,20 @@ impl Generator {
     pub async fn generate(&self, data: &CollectedData) -> Result<GenerateOutput> {
         info!("Starting pipeline for {}", data.package_name);
         let mut had_unresolved_errors = false;
+        #[allow(unused_assignments)] // overwritten by last_attempt after loop
+        let mut retries_used: usize = 0;
+        let mut review_retries_used: usize = 0;
+        let mut failed_stage: Option<String> = None;
+        let mut failure_reason: Option<String> = None;
 
-        // Combine docs and changelog for learn stage
-        let docs_and_changelog = format!("{}\n\n{}", data.docs_content, data.changelog_content);
+        // Combine docs and annotated changelog for learn stage
+        let annotated_changelog = if !data.changelog_content.is_empty() {
+            crate::changelog::ChangelogAnalyzer::new(data.changelog_content.clone())
+                .annotate_changelog()
+        } else {
+            String::new()
+        };
+        let docs_and_changelog = format!("{}\n\n{}", data.docs_content, annotated_changelog);
 
         // Combine examples and tests for map stage (examples first - they're cleaner)
         let examples_and_tests = if !data.examples_content.is_empty() {
@@ -354,7 +373,9 @@ impl Generator {
             None
         };
 
+        let mut last_attempt = 0;
         for attempt in 0..=self.max_retries {
+            last_attempt = attempt;
             info!(
                 "Validation pass {} of {}",
                 attempt + 1,
@@ -382,6 +403,12 @@ impl Generator {
                 if attempt == self.max_retries {
                     info!("Max retries reached, returning best attempt despite format issues");
                     had_unresolved_errors = true;
+                    failed_stage = Some("lint".to_string());
+                    failure_reason = Some(format!(
+                        "{} lint errors after {} retries",
+                        error_msgs.len(),
+                        attempt
+                    ));
                     break;
                 }
 
@@ -436,11 +463,24 @@ impl Generator {
                                 } else {
                                     warn!("  No actionable feedback from test failures, stopping retries");
                                     had_unresolved_errors = true;
+                                    failed_stage = Some("test".to_string());
+                                    failure_reason = Some(format!(
+                                        "{}/{} tests failed, no actionable feedback",
+                                        test_result.failed,
+                                        test_result.passed + test_result.failed
+                                    ));
                                     break;
                                 }
                             } else {
                                 warn!("  Max retries reached, proceeding despite test failures");
                                 had_unresolved_errors = true;
+                                failed_stage = Some("test".to_string());
+                                failure_reason = Some(format!(
+                                    "{}/{} tests failed after {} retries",
+                                    test_result.failed,
+                                    test_result.passed + test_result.failed,
+                                    attempt
+                                ));
                                 break;
                             }
                         }
@@ -463,6 +503,7 @@ impl Generator {
                 break;
             }
         }
+        retries_used = last_attempt;
 
         // Review: accuracy + safety validation
         let mut unresolved_warnings: Vec<ReviewIssue> = Vec::new();
@@ -473,7 +514,9 @@ impl Generator {
                 self.prompts_config.review_custom.clone(),
             );
 
+            let mut last_review_attempt = 0;
             for review_attempt in 0..=self.review_max_retries {
+                last_review_attempt = review_attempt;
                 info!(
                     "review: Checking accuracy and safety (attempt {}/{})",
                     review_attempt + 1,
@@ -491,6 +534,8 @@ impl Generator {
                     }
                     warn!("  ⚠ review: malformed verdict on final attempt, proceeding with unresolved error");
                     had_unresolved_errors = true;
+                    failed_stage = Some("review".to_string());
+                    failure_reason = Some("malformed verdict after all retries".to_string());
                     break;
                 }
 
@@ -529,6 +574,12 @@ impl Generator {
                     }
                     unresolved_warnings = result.issues;
                     had_unresolved_errors = true;
+                    failed_stage = Some("review".to_string());
+                    failure_reason = Some(format!(
+                        "{} review issues after {} retries",
+                        unresolved_warnings.len(),
+                        review_attempt
+                    ));
                     break;
                 }
 
@@ -549,6 +600,7 @@ impl Generator {
                 let lint_issues = linter.lint(&skill_md)?;
                 bail_on_security_lint(&lint_issues)?;
             }
+            review_retries_used = last_review_attempt;
         }
 
         // Normalize output (ensure frontmatter + References)
@@ -581,12 +633,23 @@ impl Generator {
                 warn!("  - [{}] {}", issue.category, issue.message);
             }
             had_unresolved_errors = true;
+            if failed_stage.is_none() {
+                failed_stage = Some("post-lint".to_string());
+                failure_reason = Some(format!(
+                    "{} post-normalization lint errors",
+                    post_errors.len()
+                ));
+            }
         }
 
         Ok(GenerateOutput {
             skill_md,
             unresolved_warnings,
             has_unresolved_errors: had_unresolved_errors,
+            retries_used,
+            review_retries_used,
+            failed_stage,
+            failure_reason,
         })
     }
 }
@@ -1023,6 +1086,10 @@ mod tests {
             skill_md: "# Test SKILL.md".to_string(),
             unresolved_warnings: vec![],
             has_unresolved_errors: false,
+            retries_used: 0,
+            review_retries_used: 0,
+            failed_stage: None,
+            failure_reason: None,
         };
         assert_eq!(output.skill_md, "# Test SKILL.md");
         assert!(output.unresolved_warnings.is_empty());
@@ -1042,6 +1109,10 @@ mod tests {
             skill_md: "# SKILL".to_string(),
             unresolved_warnings: vec![warning],
             has_unresolved_errors: true,
+            retries_used: 0,
+            review_retries_used: 0,
+            failed_stage: None,
+            failure_reason: None,
         };
         assert_eq!(output.unresolved_warnings.len(), 1);
         assert_eq!(
@@ -1062,6 +1133,10 @@ mod tests {
             skill_md: "test".to_string(),
             unresolved_warnings: vec![],
             has_unresolved_errors: false,
+            retries_used: 0,
+            review_retries_used: 0,
+            failed_stage: None,
+            failure_reason: None,
         };
         // GenerateOutput derives Debug, ensure it doesn't panic
         let debug_str = format!("{:?}", output);
@@ -1965,6 +2040,10 @@ print(json.dumps(result))
             skill_md: "content".to_string(),
             unresolved_warnings: vec![warning],
             has_unresolved_errors: false,
+            retries_used: 0,
+            review_retries_used: 0,
+            failed_stage: None,
+            failure_reason: None,
         };
         let debug_str = format!("{:?}", output);
         assert!(debug_str.contains("GenerateOutput"));

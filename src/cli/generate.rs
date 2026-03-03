@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Instant;
 use tracing::info;
 
 use crate::cli::version;
@@ -36,6 +37,7 @@ pub async fn run(
     timeout_override: Option<u64>,
     install_source_override: Option<String>,
     source_path_override: Option<String>,
+    container: bool,
     no_parallel: bool,
     best_effort: bool,
     dry_run: bool,
@@ -114,6 +116,26 @@ pub async fn run(
     if let Some(ref path) = source_path_override {
         info!("CLI override: source_path = {}", path);
         config.generation.container.source_path = Some(path.clone());
+    }
+    if container {
+        info!("CLI override: execution_mode = container");
+        config.generation.container.execution_mode = crate::config::ExecutionMode::Container;
+    }
+    // Auto-upgrade: local-install/local-mount require container mode
+    if config.generation.container.install_source != InstallSource::Registry
+        && config.generation.container.execution_mode == crate::config::ExecutionMode::BareMetal
+    {
+        tracing::warn!(
+            "install_source={:?} requires container mode; auto-switching to --container",
+            config.generation.container.install_source
+        );
+        config.generation.container.execution_mode = crate::config::ExecutionMode::Container;
+    }
+    // Warn if --runtime passed without --container
+    if runtime_override.is_some()
+        && config.generation.container.execution_mode == crate::config::ExecutionMode::BareMetal
+    {
+        tracing::warn!("--runtime has no effect without --container");
     }
     if no_parallel {
         info!("CLI override: parallel_extraction = false");
@@ -229,6 +251,7 @@ pub async fn run(
 
     // Collect files
     info!("Collecting files...");
+    let language_str = detected_language.as_str().to_string();
     let collector = Collector::new(repo_path, detected_language)
         .with_max_source_chars(config.generation.max_source_tokens);
     let mut collected_data = collector.collect().await?;
@@ -363,6 +386,7 @@ pub async fn run(
 
     // Generate SKILL.md
     info!("Generating SKILL.md...");
+    let start = Instant::now();
     let mut generator = generator
         .with_model_name(model_name)
         .with_prompts_config(config.prompts.clone())
@@ -398,6 +422,36 @@ pub async fn run(
         review::print_review_issues(&output_result.unresolved_warnings);
         println!("\nThese could not be automatically verified or fixed.");
         println!("Consider adjusting your review prompts via the review_custom config option.");
+    }
+
+    // Record telemetry (non-fatal — warn on failure)
+    if config.generation.telemetry {
+        let duration = start.elapsed();
+        let test_llm = config.generation.test_llm.as_ref();
+        let review_llm = config.generation.review_llm.as_ref();
+        let record = crate::telemetry::RunRecord {
+            language: language_str,
+            library: collected_data.package_name.clone(),
+            library_version: collected_data.version.clone(),
+            provider: config.llm.provider.to_string(),
+            model: config.llm.model.clone(),
+            test_provider: test_llm.map(|c| c.provider.to_string()),
+            test_model: test_llm.map(|c| c.model.clone()),
+            review_provider: review_llm.map(|c| c.provider.to_string()),
+            review_model: review_llm.map(|c| c.model.clone()),
+            max_retries: config.generation.max_retries,
+            retries_used: output_result.retries_used,
+            review_retries_used: output_result.review_retries_used,
+            passed: !output_result.has_unresolved_errors,
+            failed_stage: output_result.failed_stage.clone(),
+            failure_reason: output_result.failure_reason.clone(),
+            duration_secs: duration.as_secs_f64(),
+            timestamp: crate::telemetry::iso8601_now(),
+            skilldo_version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        if let Err(e) = crate::telemetry::append_run(&record, None) {
+            tracing::warn!("Failed to write telemetry: {}", e);
+        }
     }
 
     // Exit non-zero when unresolved errors remain (unless --best-effort)
@@ -472,6 +526,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,  // dry_run
         )
@@ -511,6 +566,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -545,6 +601,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -582,6 +639,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -616,6 +674,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -661,6 +720,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -703,6 +763,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -737,6 +798,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -773,6 +835,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -807,6 +870,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -843,6 +907,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -877,6 +942,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -913,6 +979,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -947,6 +1014,7 @@ setup(name="testpkg", version="1.0.0")
             Some(300), // timeout
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -983,6 +1051,7 @@ setup(name="testpkg", version="1.0.0")
             Some("local-mount".to_string()), // install_source
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -1018,6 +1087,7 @@ setup(name="testpkg", version="1.0.0")
             None,
             Some("/tmp/test".to_string()), // source_path
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -1052,9 +1122,10 @@ setup(name="testpkg", version="1.0.0")
             None,                        // timeout
             None,                        // install_source
             None,                        // source_path
-            false,                       // no_parallel
-            false,                       // best_effort
-            true,                        // dry_run
+            false,
+            false, // no_parallel
+            false, // best_effort
+            true,  // dry_run
         )
         .await;
         assert!(result.is_ok());
@@ -1087,9 +1158,10 @@ setup(name="testpkg", version="1.0.0")
             Some(300),                                     // timeout
             Some("local-mount".to_string()),               // install_source
             Some("/tmp/test".to_string()),                 // source_path
-            true,                                          // no_parallel
-            false,                                         // best_effort
-            true,                                          // dry_run
+            false,
+            true,  // no_parallel
+            false, // best_effort
+            true,  // dry_run
         )
         .await;
         assert!(result.is_ok());
@@ -1181,6 +1253,7 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -1220,6 +1293,7 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -1279,6 +1353,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -1313,6 +1388,7 @@ install_source = "registry"
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -1349,6 +1425,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -1384,6 +1461,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -1416,6 +1494,7 @@ install_source = "registry"
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -1454,6 +1533,7 @@ install_source = "registry"
             None,
             None,
             None,
+            false,
             false,
             false, // best_effort
             true,
@@ -1499,6 +1579,7 @@ install_source = "registry"
             None,
             None,
             false,
+            false,
             false, // best_effort
             true,
         )
@@ -1533,6 +1614,7 @@ install_source = "registry"
             None,
             None,
             None,
+            false,
             true,  // no_parallel
             false, // best_effort
             true,
@@ -1568,6 +1650,7 @@ install_source = "registry"
             None,
             None,
             None,
+            false,
             false,
             true, // best_effort
             true, // dry_run

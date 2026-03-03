@@ -28,7 +28,6 @@ pub struct ExecutionEnv {
 pub enum ExecutionResult {
     Pass(String), // stdout
     Fail(String), // stderr
-    #[allow(dead_code)]
     Timeout,
 }
 
@@ -52,12 +51,10 @@ impl ExecutionResult {
 }
 
 /// Python executor using `uv` for fast environment setup
-#[allow(dead_code)]
 pub struct PythonUvExecutor {
     timeout_secs: u64,
 }
 
-#[allow(dead_code)]
 impl PythonUvExecutor {
     pub fn new() -> Self {
         Self { timeout_secs: 60 }

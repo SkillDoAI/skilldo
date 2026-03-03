@@ -6,11 +6,11 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
-use super::executor::ExecutionResult;
+use super::executor::{ExecutionResult, PythonUvExecutor};
 use super::python_code_gen::PythonCodeGenerator;
 use super::python_parser::PythonParser;
 use super::{CodePattern, LanguageCodeGenerator, LanguageExecutor, LanguageParser};
-use crate::config::{ContainerConfig, InstallSource};
+use crate::config::{ContainerConfig, ExecutionMode, InstallSource};
 use crate::detector::Language;
 use crate::llm::client::LlmClient;
 
@@ -128,18 +128,29 @@ impl<'a> TestCodeValidator<'a> {
         custom_instructions: Option<String>,
     ) -> anyhow::Result<Self> {
         let install_source = config.install_source;
+        let execution_mode = config.execution_mode;
         match language {
-            Language::Python => Ok(Self {
-                language: Language::Python,
-                parser: Box::new(PythonParser),
-                code_generator: Box::new(
-                    PythonCodeGenerator::new(llm_client)
-                        .with_custom_instructions(custom_instructions),
-                ),
-                executor: Box::new(ContainerExecutor::new(config, Language::Python)),
-                mode: ValidationMode::default(),
-                install_source,
-            }),
+            Language::Python => {
+                let executor: Box<dyn LanguageExecutor> = match execution_mode {
+                    ExecutionMode::BareMetal => {
+                        Box::new(PythonUvExecutor::new().with_timeout(config.timeout))
+                    }
+                    ExecutionMode::Container => {
+                        Box::new(ContainerExecutor::new(config, Language::Python))
+                    }
+                };
+                Ok(Self {
+                    language: Language::Python,
+                    parser: Box::new(PythonParser),
+                    code_generator: Box::new(
+                        PythonCodeGenerator::new(llm_client)
+                            .with_custom_instructions(custom_instructions),
+                    ),
+                    executor,
+                    mode: ValidationMode::default(),
+                    install_source,
+                })
+            }
             _ => anyhow::bail!("Test agent not yet supported for {}", language.as_str()),
         }
     }

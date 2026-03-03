@@ -376,10 +376,12 @@ fn warn_dangerous_env_var(key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ExecutionMode;
 
     #[test]
     fn test_generate_node_install_script() {
         let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
             runtime: "podman".to_string(),
             python_image: "python:3.11-alpine".to_string(),
             javascript_image: "node:18-alpine".to_string(),
@@ -411,6 +413,7 @@ mod tests {
 
     fn make_config() -> ContainerConfig {
         ContainerConfig {
+            execution_mode: ExecutionMode::Container,
             runtime: "podman".to_string(),
             python_image: "python:3.11-alpine".to_string(),
             javascript_image: "node:18-alpine".to_string(),

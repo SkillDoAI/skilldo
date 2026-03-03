@@ -10,6 +10,7 @@ mod lint;
 mod llm;
 mod pipeline;
 mod review;
+mod telemetry;
 mod test_agent;
 mod util;
 
@@ -109,6 +110,10 @@ enum Commands {
         /// Path to local source for local-install/local-mount modes
         #[arg(long)]
         source_path: Option<String>,
+
+        /// Run test agent in container mode (default: bare-metal with uv)
+        #[arg(long)]
+        container: bool,
 
         /// Disable review agent validation
         #[arg(long = "no-review")]
@@ -239,6 +244,7 @@ async fn main() -> Result<()> {
             timeout,
             install_source,
             source_path,
+            container,
             no_parallel,
             best_effort,
             dry_run,
@@ -266,6 +272,7 @@ async fn main() -> Result<()> {
                 timeout,
                 install_source,
                 source_path,
+                container,
                 no_parallel,
                 best_effort,
                 dry_run,
@@ -632,6 +639,7 @@ mod tests {
             "local-mount",
             "--source-path",
             "/tmp/mylib",
+            "--container",
             "--no-parallel",
             "--best-effort",
             "--dry-run",
@@ -659,6 +667,7 @@ mod tests {
                                timeout,
                                install_source,
                                source_path,
+                               container,
                                no_parallel,
                                best_effort,
                                dry_run| {
@@ -683,6 +692,7 @@ mod tests {
             assert_eq!(runtime.unwrap(), "podman");
             assert_eq!(timeout.unwrap(), 300);
             assert_eq!(install_source.unwrap(), "local-mount");
+            assert!(container);
             assert!(no_parallel);
             assert!(best_effort);
             assert_eq!(source_path.unwrap(), "/tmp/mylib");
@@ -967,11 +977,13 @@ mod tests {
         assert!(!cli.verbose);
         assert_generate!(cli, |no_test,
                                no_review,
+                               container,
                                no_parallel,
                                best_effort,
                                dry_run| {
             assert!(!no_test);
             assert!(!no_review);
+            assert!(!container);
             assert!(!no_parallel);
             assert!(!best_effort);
             assert!(!dry_run);

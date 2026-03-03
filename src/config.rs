@@ -11,6 +11,17 @@ use tracing::debug;
 
 use crate::test_agent::ValidationMode;
 
+/// Execution mode for test agent validation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecutionMode {
+    /// Run tests using local tools (uv, pip, etc.) — default
+    #[default]
+    BareMetal,
+    /// Run tests inside a container (podman/docker)
+    Container,
+}
+
 /// Library install source for test agent validation.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -299,6 +310,10 @@ pub struct GenerationConfig {
     #[serde(default)]
     pub version_from: Option<String>,
 
+    /// Append run telemetry to ~/.skilldo/runs.csv (default: true)
+    #[serde(default = "default_true")]
+    pub telemetry: bool,
+
     /// Container configuration for test agent validation
     #[serde(default)]
     pub container: ContainerConfig,
@@ -307,6 +322,10 @@ pub struct GenerationConfig {
 /// Container runtime settings — runtime binary, per-language images, timeouts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerConfig {
+    /// Execution mode: bare-metal (default) or container
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
+
     /// Container runtime: "podman", "docker", etc. (default: auto-detected)
     #[serde(default = "default_runtime")]
     pub runtime: String,
@@ -355,6 +374,7 @@ pub struct ContainerConfig {
 impl Default for ContainerConfig {
     fn default() -> Self {
         Self {
+            execution_mode: ExecutionMode::default(),
             runtime: default_runtime(),
             python_image: default_python_image(),
             javascript_image: default_node_image(),
@@ -644,6 +664,7 @@ impl Default for Config {
                 review_llm: None,
                 test_llm: None,
                 version_from: None,
+                telemetry: true,
                 container: ContainerConfig::default(),
             },
             prompts: PromptsConfig::default(),
@@ -767,6 +788,7 @@ mod tests {
             review_llm: None,
             test_llm: None,
             version_from: None,
+            telemetry: true,
             container: ContainerConfig::default(),
         };
         assert_eq!(
