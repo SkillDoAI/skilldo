@@ -2253,6 +2253,8 @@ Avoid using cryptography.hazmat.primitives.ciphers.algorithms.ARC4 as it is depr
 // ============================================================================
 
 // -- Destructive commands in prose --
+// NOTE: Canonical adversarial security coverage is in test_adversarial_linter.rs (3-tier).
+// Tests below are kept for regression but new security tests should go there.
 
 #[test]
 fn test_security_rm_rf_in_prose_should_warn() {

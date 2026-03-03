@@ -1221,6 +1221,8 @@ from dates. Verify format token semantics (HH vs hh, MM vs mm). Check argument o
 Read every code block character by character. The tiniest provable inaccuracy — a wrong
 weekday, a misnamed parameter, an incorrect format token — is an error that must be flagged.
 
+List ALL issues found. Do not stop after the first issue — report every defect in the document.
+
 Rules:
 - "passed" is true ONLY if there are ZERO error-severity issues.
 - Warnings alone do NOT cause failure.

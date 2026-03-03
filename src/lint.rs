@@ -768,8 +768,8 @@ impl SkillLinter {
             "ignore all previous instructions",
             "ignore previous instructions",
             "you are now a",
-            "disregard your",
-            "override your",
+            "disregard your instructions",
+            "override your instructions",
         ];
         for (idx, line) in lines.iter().enumerate() {
             if !code_block_lines[idx] {
@@ -840,7 +840,8 @@ impl SkillLinter {
                 "format c:",
                 "mkfs.",
                 "dd if=",
-                ":(){ :|:&};:", // fork bomb
+                ":(){ :|:&};:",  // fork bomb (no spaces)
+                ":(){ :|:& };:", // fork bomb (with spaces)
                 "> /dev/sda",
                 "> /dev/nvme",
                 "shutil.rmtree('/')",
@@ -928,12 +929,12 @@ impl SkillLinter {
                 "ignore all previous instructions",
                 "ignore previous instructions",
                 "ignore your instructions",
-                "disregard your",
+                "disregard your instructions",
                 "disregard all previous",
                 "disregard safety",
                 "you are now a",
                 "you are now an",
-                "override your",
+                "override your instructions",
                 "forget your instructions",
                 "forget everything",
                 "new system prompt",
@@ -1077,7 +1078,7 @@ impl SkillLinter {
             "ignore all previous",
             "disregard",
             "you are now",
-            "override your",
+            "override your instructions",
             "curl ",
             "wget ",
             "fetch ",
