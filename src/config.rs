@@ -310,6 +310,10 @@ pub struct GenerationConfig {
     #[serde(default = "default_true")]
     pub enable_review: bool,
 
+    /// Enable security scan (YARA + pattern + unicode + injection) on generated output (default: true)
+    #[serde(default = "default_true")]
+    pub enable_security_scan: bool,
+
     /// Max retries for review -> create feedback loop (default: 5)
     #[serde(default = "default_review_max_retries")]
     pub review_max_retries: usize,
@@ -694,6 +698,7 @@ impl Default for Config {
                 enable_test: true,
                 test_mode: "thorough".to_string(),
                 enable_review: true,
+                enable_security_scan: true,
                 review_max_retries: default_review_max_retries(),
                 extract_llm: None,
                 map_llm: None,
@@ -818,6 +823,7 @@ mod tests {
             enable_test: true,
             test_mode: "thorough".to_string(),
             enable_review: true,
+            enable_security_scan: true,
             review_max_retries: 5,
             extract_llm: None,
             map_llm: None,

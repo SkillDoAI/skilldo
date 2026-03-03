@@ -221,6 +221,7 @@ async fn test_pipeline_with_custom_config() {
             enable_test: true,
             test_mode: "thorough".to_string(),
             enable_review: false,
+            enable_security_scan: true,
             review_max_retries: 5,
             extract_llm: None,
             map_llm: None,

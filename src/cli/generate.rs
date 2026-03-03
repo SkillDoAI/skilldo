@@ -32,6 +32,7 @@ pub struct GenerateOptions {
     pub no_test: bool,
     pub test_mode_override: Option<String>,
     pub no_review: bool,
+    pub no_security_scan: bool,
     pub review_model_override: Option<String>,
     pub review_provider_override: Option<String>,
     pub runtime_override: Option<String>,
@@ -62,6 +63,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         no_test,
         test_mode_override,
         no_review,
+        no_security_scan,
         review_model_override,
         review_provider_override,
         runtime_override,
@@ -204,6 +206,12 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             test_llm.provider = provider.parse::<Provider>()?;
         }
         config.generation.test_llm = Some(test_llm);
+    }
+
+    // Security scan CLI override
+    if no_security_scan {
+        info!("CLI override: security scan disabled");
+        config.generation.enable_security_scan = false;
     }
 
     // Review agent CLI overrides
@@ -424,6 +432,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         .with_test(config.generation.enable_test)
         .with_test_mode(config.generation.get_test_mode())
         .with_review(config.generation.enable_review)
+        .with_security_scan(config.generation.enable_security_scan)
         .with_review_max_retries(config.generation.review_max_retries)
         .with_container_config(config.generation.container.clone())
         .with_parallel_extraction(config.generation.parallel_extraction);

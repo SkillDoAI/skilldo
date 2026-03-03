@@ -120,6 +120,10 @@ enum Commands {
         #[arg(long = "no-review")]
         no_review: bool,
 
+        /// Disable security scan (YARA + pattern + unicode + injection)
+        #[arg(long = "no-security-scan")]
+        no_security_scan: bool,
+
         /// Override review stage LLM model
         #[arg(long = "review-model")]
         review_model: Option<String>,
@@ -239,6 +243,7 @@ async fn main() -> Result<()> {
             no_test,
             test_mode,
             no_review,
+            no_security_scan,
             review_model,
             review_provider,
             runtime,
@@ -269,6 +274,7 @@ async fn main() -> Result<()> {
                 no_test,
                 test_mode_override: test_mode,
                 no_review,
+                no_security_scan,
                 review_model_override: review_model,
                 review_provider_override: review_provider,
                 runtime_override: runtime,
@@ -552,6 +558,14 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "generate", "--no-review"]).unwrap();
         assert_generate!(cli, |no_review| {
             assert!(no_review);
+        });
+    }
+
+    #[test]
+    fn test_parse_generate_no_security_scan() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--no-security-scan"]).unwrap();
+        assert_generate!(cli, |no_security_scan| {
+            assert!(no_security_scan);
         });
     }
 
