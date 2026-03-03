@@ -119,15 +119,14 @@ Write the complete test script now:"#,
             let code_start = start + "```".len();
             if let Some(end) = trimmed[code_start..].find("```") {
                 let mut code = trimmed[code_start..code_start + end].trim();
-                // Strip language tag (e.g., "py", "sh") if the first line is a bare identifier
+                // Strip known language tags (e.g., "python", "py", "sh")
                 if let Some((first_line, rest)) = code.split_once('\n') {
-                    let tag = first_line.trim();
-                    if !tag.is_empty()
-                        && tag.len() <= 12
-                        && tag
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-                    {
+                    let tag = first_line.trim().to_ascii_lowercase();
+                    const KNOWN_TAGS: &[&str] = &[
+                        "py", "python", "python3", "bash", "sh", "shell", "zsh", "fish", "text",
+                        "txt", "json", "yaml", "yml", "toml",
+                    ];
+                    if KNOWN_TAGS.contains(&tag.as_str()) {
                         code = rest.trim();
                     }
                 }
