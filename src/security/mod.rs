@@ -1,10 +1,11 @@
 //! Security scanning for generated SKILL.md files.
 //!
-//! Three-layer static analysis for AI agent skill files:
+//! Four-layer static analysis for AI agent skill files:
 //!
 //! 1. **Pattern matching** — dangerous code patterns in examples (exec, creds, exfil)
 //! 2. **Unicode attacks** — homoglyphs, invisible chars, bidi overrides, mixed scripts
 //! 3. **Prompt injection** — instruction overrides, encoded payloads, markdown injection
+//! 4. **YARA rules** — SkillDo + Cisco skill-scanner rule packs (prompt injection, code exec, etc.)
 //!
 //! Detection categories informed by public security research including the Trojan Source
 //! paper (Boucher & Anderson, 2021), OWASP LLM Top 10, and common adversarial skill

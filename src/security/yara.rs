@@ -274,8 +274,17 @@ fn parse_category(s: &str) -> Category {
     }
 }
 
+/// Clamp a byte offset to the nearest valid UTF-8 char boundary.
+fn to_char_boundary(content: &str, mut offset: usize) -> usize {
+    offset = offset.min(content.len());
+    while offset > 0 && !content.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
 fn line_number(content: &str, byte_offset: usize) -> usize {
-    let safe_offset = byte_offset.min(content.len());
+    let safe_offset = to_char_boundary(content, byte_offset);
     content[..safe_offset]
         .chars()
         .filter(|&c| c == '\n')
@@ -284,7 +293,7 @@ fn line_number(content: &str, byte_offset: usize) -> usize {
 }
 
 fn snippet_at(content: &str, byte_offset: usize) -> String {
-    let safe_offset = byte_offset.min(content.len());
+    let safe_offset = to_char_boundary(content, byte_offset);
     let start = content[..safe_offset]
         .rfind('\n')
         .map(|i| i + 1)
