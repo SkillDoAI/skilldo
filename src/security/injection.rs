@@ -139,7 +139,7 @@ static COMPILED_RULES: Lazy<Vec<CompiledRule>> = Lazy::new(|| {
         (
             "SD-106",
             Severity::High,
-            r"(?i)(?:admin|maintenance|debug|developer|emergency)\s+(?:mode|access|override|command)",
+            r"(?i)(?:enter|activate|enable|switch\s+to|engage|you\s+are\s+(?:now\s+)?in)\s+(?:admin|maintenance|debug|developer|emergency)\s+(?:mode|access|override)",
             "Claims special access mode",
         ),
         // Role-play / jailbreak (SD-107)
