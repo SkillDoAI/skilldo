@@ -380,7 +380,7 @@ impl Generator {
                 .findings
                 .iter()
                 .filter(|f| f.severity >= crate::security::Severity::High)
-                .map(|f| format!("- [{}] {}", f.rule_id, f.message))
+                .map(|f| format!("- [{}] {} (line {})", f.rule_id, f.message, f.line))
                 .collect();
             anyhow::bail!(
                 "SECURITY: Generated SKILL.md failed security scan (score {}/100):\n{}",
