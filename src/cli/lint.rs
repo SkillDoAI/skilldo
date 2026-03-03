@@ -20,12 +20,38 @@ pub fn run(path: &str) -> Result<()> {
 
     linter.print_issues(&issues);
 
-    let errors = issues
+    // Security scan (YARA + pattern + unicode + injection)
+    let scan_report = crate::security::scan_skill(&content);
+    if !scan_report.findings.is_empty() {
+        println!("\nSecurity scan (score {}/100):", scan_report.score);
+        for f in &scan_report.findings {
+            let icon = if f.severity >= crate::security::Severity::High {
+                "error"
+            } else {
+                "warn"
+            };
+            println!("  [{icon}] {} — {} (line {})", f.rule_id, f.message, f.line);
+        }
+    } else {
+        println!("\nSecurity scan passed (score {}/100)", scan_report.score);
+    }
+
+    let lint_errors = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
         .count();
-    if errors > 0 {
-        bail!("{} lint error(s) found", errors);
+    let security_errors = scan_report
+        .findings
+        .iter()
+        .filter(|f| f.severity >= crate::security::Severity::High)
+        .count();
+
+    if lint_errors > 0 || security_errors > 0 {
+        bail!(
+            "{} lint error(s), {} security error(s) found",
+            lint_errors,
+            security_errors
+        );
     }
 
     Ok(())

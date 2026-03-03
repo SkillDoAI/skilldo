@@ -62,24 +62,32 @@ rule prompt_injection_generic{
 
         not $python_type_comment and
         not $legitimate_ignore and
-        not $negation_context and
-        not $security_doc_context and
-        not $test_context and
-
         (
-            // Instruction overrides
-            $instruction_override_strong or
-            $instruction_override_your or
-            $do_not_obey or
+            // Strong signals — fire regardless of doc/test context
 
-            // Advanced overrides
-            $advanced_overrides or
-
-            // These are suspicious regardless
+            // Tool injection commands
             $tool_injection_commands or
+            // Shadow parameter names
             $shadow_parameters or
+            // Hidden behavior
             $hidden_behavior or
+            // Role redefinition attempts
             $role_redefinition or
-            $privilege_escalation
+            // Privilege escalation patterns
+            $privilege_escalation or
+
+            // Instruction overrides — suppress in security doc/test/negation context
+            (
+                (// Instruction override patterns
+                 $instruction_override_strong or
+                 $instruction_override_your or
+                 $do_not_obey or
+
+                 // Advanced command override patterns
+                 $advanced_overrides) and
+                not $negation_context and
+                not $security_doc_context and
+                not $test_context
+            )
         )
 }

@@ -120,6 +120,7 @@ impl YaraScanner {
     ///
     /// Use this to load additional third-party YARA packs beyond what ships
     /// in the binary.
+    #[allow(dead_code)]
     pub fn with_rules_dir(dir: &Path) -> Result<Self, String> {
         let mut compiler = boreal::Compiler::new();
 
@@ -200,7 +201,7 @@ impl YaraScanner {
                 .unwrap_or(0);
 
             findings.push(Finding {
-                rule_id: leak_str(&rule_id),
+                rule_id,
                 severity,
                 category,
                 message: description,
@@ -209,7 +210,7 @@ impl YaraScanner {
             });
         }
 
-        findings.sort_by(|a, b| a.rule_id.cmp(b.rule_id).then(a.line.cmp(&b.line)));
+        findings.sort_by(|a, b| a.rule_id.cmp(&b.rule_id).then(a.line.cmp(&b.line)));
         findings.dedup_by(|a, b| a.rule_id == b.rule_id && a.line == b.line);
 
         findings
@@ -272,10 +273,6 @@ fn parse_category(s: &str) -> Category {
     }
 }
 
-fn leak_str(s: &str) -> &'static str {
-    Box::leak(s.to_string().into_boxed_str())
-}
-
 fn line_number(content: &str, byte_offset: usize) -> usize {
     let safe_offset = byte_offset.min(content.len());
     content[..safe_offset]
@@ -317,7 +314,10 @@ mod tests {
         assert!(
             findings.iter().any(|f| f.rule_id == "SD-101"),
             "must detect system tag, got: {:?}",
-            findings.iter().map(|f| f.rule_id).collect::<Vec<_>>()
+            findings
+                .iter()
+                .map(|f| f.rule_id.as_str())
+                .collect::<Vec<_>>()
         );
     }
 

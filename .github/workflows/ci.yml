@@ -128,11 +128,12 @@ jobs:
       - name: Run integration tests
         run: cargo test -- --ignored --test-threads=1
 
-  test-cov:
-    name: test-cov
+  test-cov-lib:
+    name: test-cov (lib)
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -143,14 +144,43 @@ jobs:
           shared-key: ci-${{ runner.os }}
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
-      - name: Run tests with coverage
-        run: cargo llvm-cov --fail-under-lines 95 --lcov --output-path lcov.info
+      - name: Run lib tests with coverage
+        run: cargo llvm-cov --lib --fail-under-lines 95 --lcov --output-path lcov-lib.info -- --skip container_executor
       - name: Upload to Codecov
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: SkillDoAI/skilldo
-          files: lcov.info
+          files: lcov-lib.info
+          flags: unit
+
+  test-cov-tests:
+    name: test-cov (tests)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: astral-sh/setup-uv@v7
+      - name: Run integration test binaries with coverage
+        run: cargo llvm-cov --tests --lcov --output-path lcov-tests.info
+      - name: Upload to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: SkillDoAI/skilldo
+          files: lcov-tests.info
+          flags: integration
 
   audit:
     name: security audit
@@ -166,7 +196,7 @@ jobs:
     # Only run on main pushes with rust changes to conserve API credits.
     # Secrets aren't available on fork PRs anyway.
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
-    needs: [changes, check, fmt, clippy, test-cov, integration, audit]
+    needs: [changes, check, fmt, clippy, test-cov-lib, test-cov-tests, integration, audit]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

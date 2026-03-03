@@ -94,19 +94,10 @@ rule credential_harvesting_generic{
 
     condition:
 
-        not $python_imports and
-        not $python_type_hints and
-        not $function_definitions and
         not $template_indicators and
-        not $documentation_env_setup and
-        not $documentation_config_hint and
-        not $documentation_env_var_hint and
-        not $markdown_export_example and
-        not $shell_var_reference and
-        not $negation_context and
-        not $security_doc_context and
-
         (
+            // High confidence: actual keys/certs — always flag (only exclude templates)
+
             // Real API credentials (high confidence specific patterns)
             $api_credentials_aws or
             $api_credentials_github or
@@ -115,34 +106,47 @@ rule credential_harvesting_generic{
             // Actual private key content
             $key_certificate_content or
 
-            // Specific credential file access
-            $credential_file_access or
+            // Medium confidence: action/path patterns — scope exclusions
+            (
+                (// Specific credential file access
+                 $credential_file_access or
 
-            // Hardcoded credential paths
-            $hardcoded_credential_paths or
+                 // Hardcoded credential paths
+                 $hardcoded_credential_paths or
 
-            // AI model API keys with actual values
-            $ai_model_credential_names or
+                 // AI model API keys with actual values
+                 $ai_model_credential_names or
 
-            // Credential theft actions
-            $credential_theft_actions or
+                 // Credential theft actions
+                 $credential_theft_actions or
 
-            // Network credential transfer
-            $network_credential_transfer or
+                 // Network credential transfer
+                 $network_credential_transfer or
 
-            // Environment variable theft
-            $env_var_theft or
+                 // Environment variable theft
+                 $env_var_theft or
 
-            // Exfiltration attempts
-            $leak_param or
+                 // Exfiltration attempts
+                 $leak_param or
 
-            // Credential dumping
-            $dump_creds or
+                 // Credential dumping
+                 $dump_creds or
 
-            // Base64 credential encoding
-            $base64_credential_encoding or
+                 // Base64 credential encoding
+                 $base64_credential_encoding or
 
-            // WhatsApp exploit
-            $whatsapp_exploit
+                 // WhatsApp exploit
+                 $whatsapp_exploit) and
+                not $python_imports and
+                not $python_type_hints and
+                not $function_definitions and
+                not $documentation_env_setup and
+                not $documentation_config_hint and
+                not $documentation_env_var_hint and
+                not $markdown_export_example and
+                not $shell_var_reference and
+                not $negation_context and
+                not $security_doc_context
+            )
         )
 }

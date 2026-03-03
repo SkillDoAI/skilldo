@@ -227,7 +227,7 @@ pub fn scan(content: &str) -> Vec<Finding> {
     for rule in COMPILED_RULES.iter() {
         for mat in rule.pattern.find_iter(content) {
             findings.push(Finding {
-                rule_id: rule.id,
+                rule_id: rule.id.to_string(),
                 severity: rule.severity,
                 category: Category::PromptInjection,
                 message: rule.message.into(),
@@ -242,7 +242,7 @@ pub fn scan(content: &str) -> Vec<Finding> {
     detect_exfil_instructions(content, &mut findings);
 
     // Deduplicate by (rule_id, line)
-    findings.sort_by(|a, b| a.rule_id.cmp(b.rule_id).then(a.line.cmp(&b.line)));
+    findings.sort_by(|a, b| a.rule_id.cmp(&b.rule_id).then(a.line.cmp(&b.line)));
     findings.dedup_by(|a, b| a.rule_id == b.rule_id && a.line == b.line);
 
     findings
@@ -278,7 +278,7 @@ fn detect_markdown_injection(content: &str, findings: &mut Vec<Finding>) {
         if looks_like_instruction(alt) {
             let offset = cap.get(0).unwrap().start();
             findings.push(Finding {
-                rule_id: "SD-110",
+                rule_id: "SD-110".to_string(),
                 severity: Severity::Critical,
                 category: Category::PromptInjection,
                 message: format!(
@@ -296,7 +296,7 @@ fn detect_markdown_injection(content: &str, findings: &mut Vec<Finding>) {
         if looks_like_instruction(comment) {
             let offset = cap.get(0).unwrap().start();
             findings.push(Finding {
-                rule_id: "SD-110",
+                rule_id: "SD-110".to_string(),
                 severity: Severity::Critical,
                 category: Category::PromptInjection,
                 message: format!(
@@ -327,7 +327,7 @@ fn detect_encoded_instructions(content: &str, findings: &mut Vec<Finding>) {
                     && (looks_like_instruction(&text) || looks_like_code(&text))
                 {
                     findings.push(Finding {
-                        rule_id: "SD-111",
+                        rule_id: "SD-111".to_string(),
                         severity: Severity::Critical,
                         category: Category::PromptInjection,
                         message: format!(
@@ -358,7 +358,7 @@ fn detect_exfil_instructions(content: &str, findings: &mut Vec<Finding>) {
         let context = &content[ctx_start..ctx_end];
         if SENSITIVE.is_match(context) {
             findings.push(Finding {
-                rule_id: "SD-112",
+                rule_id: "SD-112".to_string(),
                 severity: Severity::Critical,
                 category: Category::DataExfiltration,
                 message: format!(

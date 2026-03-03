@@ -23,7 +23,7 @@ rule code_execution_generic{
         $pickle_network = /\b(requests|urllib|urlopen|http\.client)[^;]{0,80}pickle\.(loads?)\s*\(/i
 
         // Shell injection: command + variable interpolation with user input
-        $shell_injection_var = /\b(os\.system|subprocess\.(run|call|Popen)|popen)\s*\([^)]*(\$\{|\%s|\.format\(|f['"]).{0,60}(input|user|param|arg|request)/i
+        $shell_injection_var = /\b(os\.system|subprocess\.(run|call|Popen)|popen)\s*\([^)]*(\$\{|%s|\.format\(|f['"]).{0,60}(input|user|param|arg|request)/i
 
         // Eval/exec with user input explicitly
         $eval_user_input = /\b(eval|exec)\s*\([^)]*\b(user_input|user_data|request\.body|request\.data|request\.args|request\.form|untrusted)\b[^)]*\)/i
@@ -54,7 +54,6 @@ rule code_execution_generic{
     condition:
         not $zig_rust_fn and
         not $js_eval_json and
-        not $security_doc and
         (
             // High confidence patterns - always flag
             $obfuscated_exec or
@@ -65,10 +64,11 @@ rule code_execution_generic{
             $eval_variable_network or
             $exec_fstring
             or
-            // Medium confidence - flag unless clearly documentation
+            // Medium confidence - suppress in documentation context
             (
                 ($system_format or $exec_network) and
-                not $markdown_codeblock
+                not $markdown_codeblock and
+                not $security_doc
             )
         )
 }

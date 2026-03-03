@@ -53,35 +53,39 @@ rule sql_injection_generic{
 
     condition:
 
-        // Exclude non-SQL sleep functions from all checks
-        not $non_sql_sleep and
-        // Exclude documentation showing SQL examples
-        not $documentation_markers and
-        not $schema_exploration and (
-
-        // SQL injection tautologies
-        ($injection_tautologies and not $common_sql_ops and not $common_context_phrases) or
+        (
+        // High confidence — always flag (destructive + system object access)
 
         // Destructive SQL injections
-        ($destructive_injections and not $common_sql_ops and not $common_context_phrases) or
-
-        // Union-based attacks
-        ($union_based_attacks and not $common_sql_ops and not $common_context_phrases) or
-
-        // Time-based blind injection
-        ($time_based_injections and not $common_sql_ops and not $common_context_phrases) or
-
-        // Error-based injection techniques
-        ($error_based_techniques and not $common_sql_ops and not $common_context_phrases) or
-
-        // SQL CAST injection
-        ($sql_cast_injection and not $common_sql_ops and not $common_context_phrases) or
+        ($destructive_injections and not $common_sql_ops) or
 
         // Database system object access
-        ($database_system_objects and not $common_sql_ops and not $common_context_phrases) or
+        ($database_system_objects and not $common_sql_ops and not $schema_exploration) or
 
-        // Malicious USER() function usage
-        ($malicious_user_functions and not $common_sql_ops and not $common_context_phrases)
+        // Medium confidence — apply doc/context exclusions
+        (
+            // Exclude documentation showing SQL examples
+            not $documentation_markers and
+            not $schema_exploration and
+            (
+                // SQL injection tautologies
+                ($injection_tautologies and not $common_sql_ops and not $common_context_phrases) or
 
+                // Union-based attacks
+                ($union_based_attacks and not $common_sql_ops and not $common_context_phrases) or
+
+                // Time-based blind injection (exclude non-SQL sleep functions)
+                ($time_based_injections and not $common_sql_ops and not $common_context_phrases and not $non_sql_sleep) or
+
+                // Error-based injection techniques
+                ($error_based_techniques and not $common_sql_ops and not $common_context_phrases) or
+
+                // SQL CAST injection
+                ($sql_cast_injection and not $common_sql_ops and not $common_context_phrases) or
+
+                // Malicious USER() function usage
+                ($malicious_user_functions and not $common_sql_ops and not $common_context_phrases)
+            )
+        )
         )
 }

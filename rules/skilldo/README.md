@@ -46,7 +46,7 @@ YARA rules for detecting security threats in AI agent skill files (SKILL.md).
 
 ## License
 
-Apache 2.0 — use these however you want. See LICENSE in this directory.
+Distributed under the Apache License 2.0. See LICENSE in this directory for terms and required notices.
 
 ## Compatibility
 

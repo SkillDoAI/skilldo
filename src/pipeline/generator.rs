@@ -373,6 +373,23 @@ impl Generator {
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
 
+        // Security scan (YARA + pattern + unicode + injection) — bail immediately, no retries.
+        let scan_report = crate::security::scan_skill(&skill_md);
+        if !scan_report.passed() {
+            let msgs: Vec<String> = scan_report
+                .findings
+                .iter()
+                .filter(|f| f.severity >= crate::security::Severity::High)
+                .map(|f| format!("- [{}] {}", f.rule_id, f.message))
+                .collect();
+            anyhow::bail!(
+                "SECURITY: Generated SKILL.md failed security scan (score {}/100):\n{}",
+                scan_report.score,
+                msgs.join("\n")
+            );
+        }
+        info!("  ✓ Security scan passed (score {}/100)", scan_report.score);
+
         // Validation loop: Format (linter) + Code (test agent)
         let linter = SkillLinter::new();
 
@@ -507,7 +524,9 @@ impl Generator {
                     }
                     Err(e) => {
                         warn!("  ✗ test error: {}", e);
-                        warn!("    Continuing without test validation");
+                        had_unresolved_errors = true;
+                        failed_stage = Some(FailedStage::Test);
+                        failure_reason = Some(format!("test validation error: {e}"));
                         break;
                     }
                 }

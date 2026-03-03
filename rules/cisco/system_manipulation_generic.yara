@@ -61,33 +61,27 @@ rule system_manipulation_generic{
         $security_doc_context = /\b(security[_\s]?(check|audit|scan|best.practice|guide)|threat[_\s]?pattern|vulnerability|remediat)\b/i
 
     condition:
-        not $safe_cleanup and
-        not $testing_commands and
-        not $safe_mkdir and
-        not $security_doc_context and
         (
-            // Environment variable manipulation
-            $env_var_manipulation or
+            // High confidence — always flag
 
             // File destruction
             $file_destruction or
-
-            // Permission manipulation
+            // Dangerous file permission changes
             $permission_manipulation or
-
-            // Critical system file writes
+            // Critical system file access
             $critical_system_write or
+            // Suspicious environment variable manipulation
+            $env_var_manipulation or
+            // System path manipulation
+            $path_manipulation or
 
-            // Privilege escalation
-            $privilege_escalation or
+            // Medium confidence — scope exclusions
 
-            // Process manipulation
-            $process_manipulation or
-
-            // Recursive operations on system paths
-            $recursive_operations or
-
-            // PATH manipulation
-            $path_manipulation
+            // Privilege escalation patterns
+            ($privilege_escalation and not $security_doc_context and not $testing_commands) or
+            // Dangerous process operations
+            ($process_manipulation and not $testing_commands) or
+            // Dangerous recursive operations with system-critical paths
+            ($recursive_operations and not $safe_cleanup and not $safe_mkdir and not $security_doc_context)
         )
 }

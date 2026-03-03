@@ -10,6 +10,7 @@ mod lint;
 mod llm;
 mod pipeline;
 mod review;
+mod security;
 mod telemetry;
 mod test_agent;
 mod util;

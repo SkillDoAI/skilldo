@@ -214,7 +214,11 @@ pub fn scan(content: &str) -> Vec<Finding> {
         for pattern_str in rule.patterns {
             let re = match Regex::new(pattern_str) {
                 Ok(r) => r,
-                Err(_) => continue,
+                Err(e) => {
+                    debug_assert!(false, "BUG: invalid regex in rule {}: {e}", rule.id);
+                    tracing::warn!("Skipping broken regex in rule {}: {e}", rule.id);
+                    continue;
+                }
             };
 
             // Scan code blocks
@@ -222,7 +226,7 @@ pub fn scan(content: &str) -> Vec<Finding> {
                 for mat in re.find_iter(block_content) {
                     let abs_offset = block_offset + mat.start();
                     findings.push(Finding {
-                        rule_id: rule.id,
+                        rule_id: rule.id.to_string(),
                         severity: rule.severity,
                         category: rule.category,
                         message: format!("{}: {}", rule.message, mat.as_str()),
@@ -232,8 +236,8 @@ pub fn scan(content: &str) -> Vec<Finding> {
                 }
             }
 
-            // For critical priv-esc and exfil, also scan outside code blocks
-            if rule.severity == Severity::Critical
+            // For high/critical priv-esc and exfil, also scan outside code blocks
+            if rule.severity >= Severity::High
                 && matches!(
                     rule.category,
                     Category::PrivilegeEscalation | Category::DataExfiltration
@@ -246,7 +250,7 @@ pub fn scan(content: &str) -> Vec<Finding> {
                         .any(|&(start, block)| offset >= start && offset < start + block.len());
                     if !in_code_block {
                         findings.push(Finding {
-                            rule_id: rule.id,
+                            rule_id: rule.id.to_string(),
                             severity: rule.severity,
                             category: rule.category,
                             message: format!("{}: {}", rule.message, mat.as_str()),
@@ -259,7 +263,7 @@ pub fn scan(content: &str) -> Vec<Finding> {
         }
     }
 
-    findings.sort_by(|a, b| a.rule_id.cmp(b.rule_id).then(a.line.cmp(&b.line)));
+    findings.sort_by(|a, b| a.rule_id.cmp(&b.rule_id).then(a.line.cmp(&b.line)));
     findings.dedup_by(|a, b| a.rule_id == b.rule_id && a.line == b.line);
 
     findings

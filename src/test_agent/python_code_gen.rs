@@ -118,7 +118,19 @@ Write the complete test script now:"#,
         if let Some(start) = trimmed.find("```") {
             let code_start = start + "```".len();
             if let Some(end) = trimmed[code_start..].find("```") {
-                let code = trimmed[code_start..code_start + end].trim();
+                let mut code = trimmed[code_start..code_start + end].trim();
+                // Strip language tag (e.g., "py", "sh") if the first line is a bare identifier
+                if let Some((first_line, rest)) = code.split_once('\n') {
+                    let tag = first_line.trim();
+                    if !tag.is_empty()
+                        && tag.len() <= 12
+                        && tag
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    {
+                        code = rest.trim();
+                    }
+                }
                 return Ok(code.to_string());
             }
         }

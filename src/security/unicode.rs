@@ -144,7 +144,7 @@ fn detect_homoglyphs(content: &str, findings: &mut Vec<Finding>) {
     };
 
     findings.push(Finding {
-        rule_id: "SD-001",
+        rule_id: "SD-001".to_string(),
         severity,
         category: Category::UnicodeAttack,
         message: format!(
@@ -187,7 +187,7 @@ fn detect_invisible_chars(content: &str, findings: &mut Vec<Finding>) {
     };
 
     findings.push(Finding {
-        rule_id: "SD-002",
+        rule_id: "SD-002".to_string(),
         severity,
         category: Category::UnicodeAttack,
         message: format!(
@@ -222,7 +222,7 @@ fn detect_bidi_chars(content: &str, findings: &mut Vec<Finding>) {
     let (first_offset, _) = found[0];
 
     findings.push(Finding {
-        rule_id: "SD-003",
+        rule_id: "SD-003".to_string(),
         severity: Severity::Critical,
         category: Category::UnicodeAttack,
         message: format!(
@@ -239,7 +239,7 @@ fn detect_bidi_chars(content: &str, findings: &mut Vec<Finding>) {
             .map(|(o, _)| *o)
             .unwrap_or(0);
         findings.push(Finding {
-            rule_id: "SD-004",
+            rule_id: "SD-004".to_string(),
             severity: Severity::Critical,
             category: Category::UnicodeAttack,
             message:
@@ -269,7 +269,7 @@ fn detect_mixed_scripts(content: &str, findings: &mut Vec<Finding>) {
     // Latin + Cyrillic is the classic homoglyph attack vector
     if latin_count > 0 && cyrillic_count > 0 {
         findings.push(Finding {
-            rule_id: "SD-005",
+            rule_id: "SD-005".to_string(),
             severity: Severity::High,
             category: Category::UnicodeAttack,
             message: format!(
@@ -283,7 +283,7 @@ fn detect_mixed_scripts(content: &str, findings: &mut Vec<Finding>) {
     // Latin + Greek (less common but still a vector)
     if latin_count > 0 && greek_count > 2 {
         findings.push(Finding {
-            rule_id: "SD-005",
+            rule_id: "SD-005".to_string(),
             severity: Severity::Medium,
             category: Category::UnicodeAttack,
             message: format!(
@@ -324,7 +324,7 @@ fn detect_tag_steganography(content: &str, findings: &mut Vec<Finding>) {
 
     let offset = first_offset.unwrap_or(0);
     findings.push(Finding {
-        rule_id: "SD-006",
+        rule_id: "SD-006".to_string(),
         severity: Severity::Critical,
         category: Category::UnicodeAttack,
         message: format!(

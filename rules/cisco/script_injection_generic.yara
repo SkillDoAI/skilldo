@@ -61,25 +61,36 @@ rule script_injection_generic{
         $legitimate_html_app = /<!DOCTYPE html>|<html\b/i
 
     condition:
-        not $xml_namespace and
-        not $react_component and
-        not $markdown_code and
-        not $documentation_example and
-        not $inline_code_marker and
-        not $vue_template and
-        not $svelte_component and
         (
-            // High confidence - always flag (but localStorage in HTML apps is not suspicious alone)
-            ($script_suspicious and not $legitimate_html_app) or
+            // High confidence — fire regardless of framework context
+            // JavaScript protocol handler in href/action (XSS vector)
             $js_protocol_handler or
+            // Base64 data URI with script content
             $data_uri_script or
+            // VBScript with shell execution
             $vbs_shell or
-            $event_handler_injection or
-            $eval_decode or
-            $doc_write_encoded or
-            // ANSI attacks
+            // ANSI terminal deception
             ($ansi_clear_rewrite and $ansi_cursor_hide) or
-            // Hidden instructions
-            $hidden_overflow
+
+            // Medium confidence — scope exclusions to these patterns
+            (
+                (// Script tag with suspicious content (but localStorage in HTML apps is not suspicious alone)
+                 ($script_suspicious and not $legitimate_html_app) or
+                 // Inline event handler injection
+                 $event_handler_injection or
+                 // Eval with decode/unescape chain
+                 $eval_decode or
+                 // Document.write with encoded content
+                 $doc_write_encoded or
+                 // Hidden instruction obfuscation
+                 $hidden_overflow) and
+                not $xml_namespace and
+                not $react_component and
+                not $markdown_code and
+                not $documentation_example and
+                not $inline_code_marker and
+                not $vue_template and
+                not $svelte_component
+            )
         )
 }

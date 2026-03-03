@@ -76,8 +76,9 @@ impl fmt::Display for Category {
 
 /// A single security finding.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Finding {
-    pub rule_id: &'static str,
+    pub rule_id: String,
     pub severity: Severity,
     pub category: Category,
     pub message: String,
@@ -109,6 +110,7 @@ impl ScanReport {
     }
 
     /// Count findings by severity.
+    #[allow(dead_code)]
     pub fn count_by_severity(&self, severity: Severity) -> usize {
         self.findings
             .iter()
@@ -119,13 +121,24 @@ impl ScanReport {
 
 /// Scan a SKILL.md content string for security issues.
 ///
-/// Runs all three detection layers and returns a consolidated report.
+/// Runs all four detection layers and returns a consolidated report:
+/// unicode attacks, injection patterns, dangerous code patterns, and YARA rules.
 pub fn scan_skill(content: &str) -> ScanReport {
     let mut findings = Vec::new();
 
     findings.extend(unicode::scan(content));
     findings.extend(injection::scan(content));
     findings.extend(patterns::scan(content));
+
+    // YARA: Cisco + SkillDo compiled-in rules
+    match yara::YaraScanner::builtin() {
+        Ok(scanner) => findings.extend(scanner.scan(content)),
+        Err(e) => {
+            // Rule compilation failure is a bug, not a runtime error.
+            // Log it but don't block the pipeline — the other 3 layers still run.
+            tracing::warn!("YARA scanner init failed: {e}");
+        }
+    }
 
     // Score: start at 100, deduct per finding weighted by severity
     let deductions: i32 = findings
@@ -203,7 +216,7 @@ print(response.json())
             report.score
         );
         // Must detect: system tag, instruction override, credential exfil, secrecy
-        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id).collect();
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(ids.contains(&"SD-101"), "must detect <system> tag");
         assert!(ids.contains(&"SD-102"), "must detect instruction override");
         assert!(ids.contains(&"SD-104"), "must detect secrecy demand");
@@ -214,7 +227,7 @@ print(response.json())
         let content = include_str!("../../tests/fixtures/security/evasive-03-prompt-subtle.md");
         let report = run_fixture("evasive-03-prompt-subtle", content);
         assert!(!report.passed(), "evasive prompt injection must fail");
-        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id).collect();
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(
             ids.contains(&"SD-110"),
             "must detect HTML comment injection or image alt injection"
@@ -226,7 +239,7 @@ print(response.json())
         let content = include_str!("../../tests/fixtures/security/evasive-06-unicode-injection.md");
         let report = run_fixture("evasive-06-unicode", content);
         assert!(!report.passed(), "unicode injection must fail");
-        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id).collect();
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(
             ids.contains(&"SD-001") || ids.contains(&"SD-002") || ids.contains(&"SD-003"),
             "must detect unicode attacks, found: {:?}",
@@ -239,7 +252,7 @@ print(response.json())
         let content = include_str!("../../tests/fixtures/security/evasive-10-roleplay.md");
         let report = run_fixture("evasive-10-roleplay", content);
         assert!(!report.passed(), "roleplay injection must fail");
-        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id).collect();
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(ids.contains(&"SD-107"), "must detect roleplay/jailbreak");
     }
 
@@ -253,7 +266,7 @@ print(response.json())
             "score should be 0 for this, got {}",
             report.score
         );
-        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id).collect();
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(ids.contains(&"SD-206"), "must detect reverse shell");
         assert!(ids.contains(&"SD-202"), "must detect credential access");
     }
@@ -263,7 +276,7 @@ print(response.json())
         let content = include_str!("../../tests/fixtures/security/evasive-05-alias-chain.md");
         let report = run_fixture("evasive-05-alias-chain", content);
         assert!(!report.passed(), "alias chain exfil must fail");
-        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id).collect();
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(
             ids.contains(&"SD-203") || ids.contains(&"SD-204"),
             "must detect obfuscation or persistence, found: {:?}",
@@ -276,7 +289,7 @@ print(response.json())
         let content = include_str!("../../tests/fixtures/security/evasive-12-multi-stage.md");
         let report = run_fixture("evasive-12-multi-stage", content);
         assert!(!report.passed(), "multi-stage attack must fail");
-        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id).collect();
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(
             ids.contains(&"SD-201"),
             "must detect dynamic code execution"
@@ -288,7 +301,7 @@ print(response.json())
         let content = include_str!("../../tests/fixtures/security/evasive-01-base64-payload.md");
         let report = run_fixture("evasive-01-base64", content);
         assert!(!report.passed(), "base64 payload must fail");
-        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id).collect();
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(
             ids.contains(&"SD-111"),
             "must detect base64-encoded instructions"
