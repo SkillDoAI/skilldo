@@ -294,6 +294,11 @@ pub struct GenerationConfig {
     #[serde(default, alias = "agent5_llm")]
     pub test_llm: Option<LlmConfig>,
 
+    /// Default version extraction strategy: git-tag, package, branch, commit
+    /// CLI --version-from overrides this.
+    #[serde(default)]
+    pub version_from: Option<String>,
+
     /// Container configuration for test agent validation
     #[serde(default)]
     pub container: ContainerConfig,
@@ -638,6 +643,7 @@ impl Default for Config {
                 create_llm: None,
                 review_llm: None,
                 test_llm: None,
+                version_from: None,
                 container: ContainerConfig::default(),
             },
             prompts: PromptsConfig::default(),
@@ -760,6 +766,7 @@ mod tests {
             create_llm: None,
             review_llm: None,
             test_llm: None,
+            version_from: None,
             container: ContainerConfig::default(),
         };
         assert_eq!(
@@ -785,6 +792,25 @@ mod tests {
             gen.get_test_mode(),
             crate::test_agent::ValidationMode::Thorough
         );
+    }
+
+    #[test]
+    fn test_version_from_config_deser() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+api_key_env = "none"
+
+[generation]
+version_from = "git-tag"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.generation.version_from.as_deref(), Some("git-tag"));
+
+        // Default: None
+        let config2 = Config::default();
+        assert!(config2.generation.version_from.is_none());
     }
 
     #[test]

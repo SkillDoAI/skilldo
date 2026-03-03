@@ -228,6 +228,7 @@ async fn test_pipeline_with_custom_config() {
             create_llm: None,
             review_llm: None,
             test_llm: None,
+            version_from: None,
             container: skilldo::config::ContainerConfig::default(),
         },
         prompts: PromptsConfig {

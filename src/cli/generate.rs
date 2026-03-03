@@ -29,6 +29,9 @@ pub async fn run(
     test_provider_override: Option<String>,
     no_test: bool,
     test_mode_override: Option<String>,
+    no_review: bool,
+    review_model_override: Option<String>,
+    review_provider_override: Option<String>,
     runtime_override: Option<String>,
     timeout_override: Option<u64>,
     install_source_override: Option<String>,
@@ -150,6 +153,35 @@ pub async fn run(
         config.generation.test_llm = Some(test_llm);
     }
 
+    // Review agent CLI overrides
+    if no_review {
+        info!("CLI override: review agent disabled");
+        config.generation.enable_review = false;
+        if review_model_override.is_some() || review_provider_override.is_some() {
+            tracing::warn!(
+                "--no-review is set; --review-model/--review-provider will have no effect"
+            );
+        }
+    }
+    if config.generation.enable_review
+        && (review_model_override.is_some() || review_provider_override.is_some())
+    {
+        let mut review_llm = config
+            .generation
+            .review_llm
+            .take()
+            .unwrap_or_else(|| config.llm.clone());
+        if let Some(ref model) = review_model_override {
+            info!("CLI override: review model = {}", model);
+            review_llm.model = model.clone();
+        }
+        if let Some(ref provider) = review_provider_override {
+            info!("CLI override: review provider = {}", provider);
+            review_llm.provider = provider.parse::<Provider>()?;
+        }
+        config.generation.review_llm = Some(review_llm);
+    }
+
     // Log per-stage override info so users know what's being used
     if model_override.is_some() || provider_override.is_some() {
         let stage_overrides: Vec<String> = [
@@ -201,7 +233,8 @@ pub async fn run(
         .with_max_source_chars(config.generation.max_source_tokens);
     let mut collected_data = collector.collect().await?;
 
-    // Override version if CLI args provided
+    // Override version if CLI args provided (CLI > config > auto-detect)
+    let version_from = version_from.or(config.generation.version_from.clone());
     let final_version = version::extract_version(repo_path, version_override, version_from)?;
     collected_data.version = final_version;
 
@@ -431,6 +464,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -467,6 +503,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -499,6 +538,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -532,6 +574,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -564,6 +609,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -605,6 +653,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -644,6 +695,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -676,6 +730,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -708,6 +765,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -740,6 +800,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -772,6 +835,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             true, // no_agent5
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -804,6 +870,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             Some("minimal".to_string()), // test_mode
+            false,                       // no_review
+            None,                        // review_model
+            None,                        // review_provider
             None,
             None,
             None,
@@ -836,6 +905,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false,                      // no_review
+            None,                       // review_model
+            None,                       // review_provider
             Some("podman".to_string()), // runtime
             None,
             None,
@@ -868,6 +940,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             Some(300), // timeout
             None,
@@ -900,6 +975,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             Some("local-mount".to_string()), // install_source
@@ -932,6 +1010,9 @@ setup(name="testpkg", version="1.0.0")
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -962,15 +1043,18 @@ setup(name="testpkg", version="1.0.0")
             None,
             Some("gpt-5.2".to_string()), // test_model
             Some("openai".to_string()),  // test_provider
-            false,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            false, // best_effort
-            true,
+            false,                       // no_test
+            None,                        // test_mode
+            false,                       // no_review
+            None,                        // review_model
+            None,                        // review_provider
+            None,                        // runtime
+            None,                        // timeout
+            None,                        // install_source
+            None,                        // source_path
+            false,                       // no_parallel
+            false,                       // best_effort
+            true,                        // dry_run
         )
         .await;
         assert!(result.is_ok());
@@ -996,6 +1080,9 @@ setup(name="testpkg", version="1.0.0")
             Some("openai".to_string()),                    // test_provider
             true,                                          // no_test
             Some("minimal".to_string()),                   // test_mode
+            true,                                          // no_review
+            Some("gpt-5.2".to_string()),                   // review_model
+            Some("openai".to_string()),                    // review_provider
             Some("podman".to_string()),                    // runtime
             Some(300),                                     // timeout
             Some("local-mount".to_string()),               // install_source
@@ -1086,6 +1173,9 @@ base_url = "http://localhost:11434/v1"
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1123,6 +1213,9 @@ base_url = "http://localhost:11434/v1"
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1178,6 +1271,9 @@ install_source = "registry"
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1210,6 +1306,9 @@ install_source = "registry"
             None,
             true, // no_test — should warn about test_model having no effect
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1242,6 +1341,9 @@ install_source = "registry"
             None,                        // no test_provider
             false,                       // test enabled
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1274,6 +1376,9 @@ install_source = "registry"
             Some("openai".to_string()), // test_provider only
             false,                      // test enabled
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1304,6 +1409,9 @@ install_source = "registry"
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1339,6 +1447,9 @@ install_source = "registry"
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1380,6 +1491,9 @@ install_source = "registry"
             None,
             true,                        // no_test
             Some("minimal".to_string()), // test_mode — should trigger warning
+            false,                       // no_review
+            None,                        // review_model
+            None,                        // review_provider
             None,
             None,
             None,
@@ -1412,6 +1526,9 @@ install_source = "registry"
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,
@@ -1444,6 +1561,9 @@ install_source = "registry"
             None,
             false,
             None,
+            false, // no_review
+            None,  // review_model
+            None,  // review_provider
             None,
             None,
             None,

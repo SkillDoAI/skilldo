@@ -110,6 +110,18 @@ enum Commands {
         #[arg(long)]
         source_path: Option<String>,
 
+        /// Disable review agent validation
+        #[arg(long = "no-review")]
+        no_review: bool,
+
+        /// Override review stage LLM model
+        #[arg(long = "review-model")]
+        review_model: Option<String>,
+
+        /// Override review stage LLM provider
+        #[arg(long = "review-provider")]
+        review_provider: Option<String>,
+
         /// Run agents 1-3 sequentially instead of in parallel
         #[arg(long)]
         no_parallel: bool,
@@ -220,6 +232,9 @@ async fn main() -> Result<()> {
             test_provider,
             no_test,
             test_mode,
+            no_review,
+            review_model,
+            review_provider,
             runtime,
             timeout,
             install_source,
@@ -244,6 +259,9 @@ async fn main() -> Result<()> {
                 test_provider,
                 no_test,
                 test_mode,
+                no_review,
+                review_model,
+                review_provider,
                 runtime,
                 timeout,
                 install_source,
@@ -520,6 +538,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_generate_no_review() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--no-review"]).unwrap();
+        assert_generate!(cli, |no_review| {
+            assert!(no_review);
+        });
+    }
+
+    #[test]
+    fn test_parse_generate_review_overrides() {
+        let cli = Cli::try_parse_from([
+            "skilldo",
+            "generate",
+            "--review-model",
+            "gpt-5.2",
+            "--review-provider",
+            "openai",
+        ])
+        .unwrap();
+        assert_generate!(cli, |review_model, review_provider| {
+            assert_eq!(review_model.unwrap(), "gpt-5.2");
+            assert_eq!(review_provider.unwrap(), "openai");
+        });
+    }
+
+    #[test]
     fn test_parse_generate_runtime_timeout() {
         let cli = Cli::try_parse_from([
             "skilldo",
@@ -576,6 +619,11 @@ mod tests {
             "--no-test",
             "--test-mode",
             "minimal",
+            "--no-review",
+            "--review-model",
+            "gpt-5.2",
+            "--review-provider",
+            "openai",
             "--runtime",
             "podman",
             "--timeout",
@@ -604,6 +652,9 @@ mod tests {
                                test_provider,
                                no_test,
                                test_mode,
+                               no_review,
+                               review_model,
+                               review_provider,
                                runtime,
                                timeout,
                                install_source,
@@ -626,6 +677,9 @@ mod tests {
             assert_eq!(test_provider.unwrap(), "openai");
             assert!(no_test);
             assert_eq!(test_mode.unwrap(), "minimal");
+            assert!(no_review);
+            assert_eq!(review_model.unwrap(), "gpt-5.2");
+            assert_eq!(review_provider.unwrap(), "openai");
             assert_eq!(runtime.unwrap(), "podman");
             assert_eq!(timeout.unwrap(), 300);
             assert_eq!(install_source.unwrap(), "local-mount");
@@ -911,8 +965,13 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "generate"]).unwrap();
         assert!(!cli.quiet);
         assert!(!cli.verbose);
-        assert_generate!(cli, |no_test, no_parallel, best_effort, dry_run| {
+        assert_generate!(cli, |no_test,
+                               no_review,
+                               no_parallel,
+                               best_effort,
+                               dry_run| {
             assert!(!no_test);
+            assert!(!no_review);
             assert!(!no_parallel);
             assert!(!best_effort);
             assert!(!dry_run);
@@ -936,6 +995,8 @@ mod tests {
                                test_model,
                                test_provider,
                                test_mode,
+                               review_model,
+                               review_provider,
                                runtime,
                                timeout,
                                install_source,
@@ -952,6 +1013,8 @@ mod tests {
             assert!(test_model.is_none());
             assert!(test_provider.is_none());
             assert!(test_mode.is_none());
+            assert!(review_model.is_none());
+            assert!(review_provider.is_none());
             assert!(runtime.is_none());
             assert!(timeout.is_none());
             assert!(install_source.is_none());
