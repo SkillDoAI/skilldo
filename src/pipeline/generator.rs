@@ -14,6 +14,26 @@ use crate::llm::prompts_v2;
 use crate::review::{ReviewAgent, ReviewIssue};
 use crate::test_agent::{TestCodeValidator, TestResult, ValidationMode};
 
+/// Which pipeline stage failed (if any).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailedStage {
+    Lint,
+    Test,
+    Review,
+    PostLint,
+}
+
+impl std::fmt::Display for FailedStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lint => write!(f, "lint"),
+            Self::Test => write!(f, "test"),
+            Self::Review => write!(f, "review"),
+            Self::PostLint => write!(f, "post-lint"),
+        }
+    }
+}
+
 /// Output from the generation pipeline.
 #[derive(Debug)]
 pub struct GenerateOutput {
@@ -30,8 +50,8 @@ pub struct GenerateOutput {
     pub retries_used: usize,
     /// Number of review retries used (0 = passed first try or review disabled).
     pub review_retries_used: usize,
-    /// Which stage failed, if any: "lint", "test", "review", "post-lint".
-    pub failed_stage: Option<String>,
+    /// Which stage failed, if any.
+    pub failed_stage: Option<FailedStage>,
     /// Error summary for the failure (e.g., "3/5 tests failed after 3 retries").
     pub failure_reason: Option<String>,
 }
@@ -224,7 +244,7 @@ impl Generator {
         #[allow(unused_assignments)] // overwritten by last_attempt after loop
         let mut retries_used: usize = 0;
         let mut review_retries_used: usize = 0;
-        let mut failed_stage: Option<String> = None;
+        let mut failed_stage: Option<FailedStage> = None;
         let mut failure_reason: Option<String> = None;
 
         // Combine docs and annotated changelog for learn stage
@@ -403,7 +423,7 @@ impl Generator {
                 if attempt == self.max_retries {
                     info!("Max retries reached, returning best attempt despite format issues");
                     had_unresolved_errors = true;
-                    failed_stage = Some("lint".to_string());
+                    failed_stage = Some(FailedStage::Lint);
                     failure_reason = Some(format!(
                         "{} lint errors after {} retries",
                         error_msgs.len(),
@@ -463,7 +483,7 @@ impl Generator {
                                 } else {
                                     warn!("  No actionable feedback from test failures, stopping retries");
                                     had_unresolved_errors = true;
-                                    failed_stage = Some("test".to_string());
+                                    failed_stage = Some(FailedStage::Test);
                                     failure_reason = Some(format!(
                                         "{}/{} tests failed, no actionable feedback",
                                         test_result.failed,
@@ -474,7 +494,7 @@ impl Generator {
                             } else {
                                 warn!("  Max retries reached, proceeding despite test failures");
                                 had_unresolved_errors = true;
-                                failed_stage = Some("test".to_string());
+                                failed_stage = Some(FailedStage::Test);
                                 failure_reason = Some(format!(
                                     "{}/{} tests failed after {} retries",
                                     test_result.failed,
@@ -534,7 +554,7 @@ impl Generator {
                     }
                     warn!("  ⚠ review: malformed verdict on final attempt, proceeding with unresolved error");
                     had_unresolved_errors = true;
-                    failed_stage = Some("review".to_string());
+                    failed_stage = Some(FailedStage::Review);
                     failure_reason = Some("malformed verdict after all retries".to_string());
                     break;
                 }
@@ -574,7 +594,7 @@ impl Generator {
                     }
                     unresolved_warnings = result.issues;
                     had_unresolved_errors = true;
-                    failed_stage = Some("review".to_string());
+                    failed_stage = Some(FailedStage::Review);
                     failure_reason = Some(format!(
                         "{} review issues after {} retries",
                         unresolved_warnings.len(),
@@ -634,7 +654,7 @@ impl Generator {
             }
             had_unresolved_errors = true;
             if failed_stage.is_none() {
-                failed_stage = Some("post-lint".to_string());
+                failed_stage = Some(FailedStage::PostLint);
                 failure_reason = Some(format!(
                     "{} post-normalization lint errors",
                     post_errors.len()
@@ -2529,5 +2549,13 @@ print(json.dumps(result))
 
         let output = gen.generate(&data).await.unwrap();
         assert!(!output.skill_md.is_empty());
+    }
+
+    #[test]
+    fn test_failed_stage_display() {
+        assert_eq!(FailedStage::Lint.to_string(), "lint");
+        assert_eq!(FailedStage::Test.to_string(), "test");
+        assert_eq!(FailedStage::Review.to_string(), "review");
+        assert_eq!(FailedStage::PostLint.to_string(), "post-lint");
     }
 }

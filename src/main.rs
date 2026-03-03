@@ -249,34 +249,36 @@ async fn main() -> Result<()> {
             best_effort,
             dry_run,
         } => {
-            cli::generate::run(
+            cli::generate::run(cli::generate::GenerateOptions {
                 path,
                 language,
                 input,
                 output,
-                version,
-                version_from,
-                config,
-                model,
-                provider,
-                base_url,
-                max_retries,
-                test_model,
-                test_provider,
+                version_override: version,
+                version_from: version_from
+                    .map(|s| s.parse::<crate::config::VersionStrategy>())
+                    .transpose()?,
+                config_path: config,
+                model_override: model,
+                provider_override: provider,
+                base_url_override: base_url,
+                max_retries_override: max_retries,
+                test_model_override: test_model,
+                test_provider_override: test_provider,
                 no_test,
-                test_mode,
+                test_mode_override: test_mode,
                 no_review,
-                review_model,
-                review_provider,
-                runtime,
-                timeout,
-                install_source,
-                source_path,
+                review_model_override: review_model,
+                review_provider_override: review_provider,
+                runtime_override: runtime,
+                timeout_override: timeout,
+                install_source_override: install_source,
+                source_path_override: source_path,
                 container,
                 no_parallel,
                 best_effort,
                 dry_run,
-            )
+            })
             .await?;
         }
         Commands::Lint { path } => {

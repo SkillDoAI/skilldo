@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::env;
 use std::process::Command;
 
-use crate::config::{Config, Provider};
+use crate::config::{Config, ExecutionMode, Provider};
 
 struct CheckResult {
     passed: Vec<String>,
@@ -151,20 +151,38 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         }
     }
 
-    // 8. Check container runtime
-    let runtime = &config.generation.container.runtime;
-    if check_runtime_available(runtime) {
-        results.pass(format!("Container runtime: {} (available)", runtime));
-    } else if config.generation.enable_test {
-        results.error(format!(
-            "Container runtime '{}' not found — test agent validation will fail",
-            runtime
-        ));
-    } else {
-        results.warn(format!(
-            "Container runtime '{}' not found (test agent disabled, so this is OK)",
-            runtime
-        ));
+    // 8. Check runtime availability based on execution mode
+    match config.generation.container.execution_mode {
+        ExecutionMode::Container => {
+            let runtime = &config.generation.container.runtime;
+            if check_runtime_available(runtime) {
+                results.pass(format!("Container runtime: {} (available)", runtime));
+            } else if config.generation.enable_test {
+                results.error(format!(
+                    "Container runtime '{}' not found — test agent validation will fail",
+                    runtime
+                ));
+            } else {
+                results.warn(format!(
+                    "Container runtime '{}' not found (test agent disabled, so this is OK)",
+                    runtime
+                ));
+            }
+        }
+        ExecutionMode::BareMetal => {
+            if check_runtime_available("uv") {
+                results.pass("Bare-metal mode: uv available".to_string());
+            } else if config.generation.enable_test {
+                results.error(
+                    "Bare-metal mode: 'uv' not found — test agent validation will fail".to_string(),
+                );
+            } else {
+                results.warn(
+                    "Bare-metal mode: 'uv' not found (test agent disabled, so this is OK)"
+                        .to_string(),
+                );
+            }
+        }
     }
 
     // 9. Validate extra_body_json for main and per-agent LLM configs
@@ -945,6 +963,7 @@ max_source_tokens = 1000
 enable_test = false
 
 [generation.container]
+execution_mode = "container"
 runtime = "nonexistent_runtime_xyz_disabled"
 "#
         )
@@ -1123,12 +1142,13 @@ enable_test = true
 enable_review = false
 
 [generation.container]
+execution_mode = "container"
 runtime = "nonexistent_runtime_xyz"
 "#
         )
         .unwrap();
 
-        // Test agent enabled + bad runtime → should produce errors → run(strict=true) returns Err
+        // Container mode + test agent enabled + bad runtime → error
         let result = run(Some(config_path.to_str().unwrap().to_string()), true);
         assert!(result.is_err());
     }
@@ -1302,6 +1322,43 @@ api_key_env = "none"
         // Config load failure with --strict → error exit
         let result = run(Some(config_path.to_str().unwrap().to_string()), true);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bare_metal_mode_no_container_runtime_error() {
+        // Bare-metal mode (default) with a nonexistent container runtime should NOT
+        // produce a container runtime error — it checks `uv` instead.
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+enable_review = false
+
+[generation.container]
+execution_mode = "bare-metal"
+runtime = "nonexistent_runtime_xyz"
+"#
+        )
+        .unwrap();
+
+        // In bare-metal mode, the bad container runtime should be irrelevant.
+        // The result depends on whether `uv` is installed, but should NOT mention
+        // container runtime errors.
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
     }
 
     #[test]

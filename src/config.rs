@@ -22,6 +22,44 @@ pub enum ExecutionMode {
     Container,
 }
 
+/// Version extraction strategy for determining library version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VersionStrategy {
+    /// Extract from latest git tag (e.g., "v1.2.3" → "1.2.3")
+    GitTag,
+    /// Extract from package metadata (pyproject.toml, Cargo.toml, etc.)
+    Package,
+    /// Use current git branch name as version
+    Branch,
+    /// Use short git commit hash as version
+    Commit,
+}
+
+impl std::fmt::Display for VersionStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GitTag => write!(f, "git-tag"),
+            Self::Package => write!(f, "package"),
+            Self::Branch => write!(f, "branch"),
+            Self::Commit => write!(f, "commit"),
+        }
+    }
+}
+
+impl std::str::FromStr for VersionStrategy {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "git-tag" => Ok(Self::GitTag),
+            "package" => Ok(Self::Package),
+            "branch" => Ok(Self::Branch),
+            "commit" => Ok(Self::Commit),
+            _ => anyhow::bail!("unknown version strategy: '{s}'"),
+        }
+    }
+}
+
 /// Library install source for test agent validation.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -305,10 +343,10 @@ pub struct GenerationConfig {
     #[serde(default, alias = "agent5_llm")]
     pub test_llm: Option<LlmConfig>,
 
-    /// Default version extraction strategy: git-tag, package, branch, commit
+    /// Default version extraction strategy.
     /// CLI --version-from overrides this.
     #[serde(default)]
-    pub version_from: Option<String>,
+    pub version_from: Option<VersionStrategy>,
 
     /// Append run telemetry to ~/.skilldo/runs.csv (default: true)
     #[serde(default = "default_true")]
@@ -828,7 +866,10 @@ api_key_env = "none"
 version_from = "git-tag"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.generation.version_from.as_deref(), Some("git-tag"));
+        assert_eq!(
+            config.generation.version_from,
+            Some(VersionStrategy::GitTag)
+        );
 
         // Default: None
         let config2 = Config::default();
@@ -1245,5 +1286,61 @@ agent5_custom = "test instructions"
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Failed to parse"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_version_strategy_deser_roundtrip() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "test"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+version_from = "git-tag"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.generation.version_from,
+            Some(VersionStrategy::GitTag)
+        );
+    }
+
+    #[test]
+    fn test_version_strategy_bad_value() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "test"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+version_from = "invalid-strategy"
+"#;
+        let result: std::result::Result<Config, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_version_strategy_from_str() {
+        assert_eq!(
+            "git-tag".parse::<VersionStrategy>().unwrap(),
+            VersionStrategy::GitTag
+        );
+        assert_eq!(
+            "package".parse::<VersionStrategy>().unwrap(),
+            VersionStrategy::Package
+        );
+        assert_eq!(
+            "branch".parse::<VersionStrategy>().unwrap(),
+            VersionStrategy::Branch
+        );
+        assert_eq!(
+            "commit".parse::<VersionStrategy>().unwrap(),
+            VersionStrategy::Commit
+        );
+        assert!("bad".parse::<VersionStrategy>().is_err());
     }
 }

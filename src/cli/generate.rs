@@ -13,35 +13,66 @@ use crate::pipeline::collector::Collector;
 use crate::pipeline::generator::Generator;
 use crate::review;
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    path: String,
-    language: Option<String>,
-    input: Option<String>,
-    output: Option<String>,
-    version_override: Option<String>,
-    version_from: Option<String>,
-    config_path: Option<String>,
-    model_override: Option<String>,
-    provider_override: Option<String>,
-    base_url_override: Option<String>,
-    max_retries_override: Option<usize>,
-    test_model_override: Option<String>,
-    test_provider_override: Option<String>,
-    no_test: bool,
-    test_mode_override: Option<String>,
-    no_review: bool,
-    review_model_override: Option<String>,
-    review_provider_override: Option<String>,
-    runtime_override: Option<String>,
-    timeout_override: Option<u64>,
-    install_source_override: Option<String>,
-    source_path_override: Option<String>,
-    container: bool,
-    no_parallel: bool,
-    best_effort: bool,
-    dry_run: bool,
-) -> Result<()> {
+/// Options for the `generate` command — replaces 26 positional parameters.
+#[derive(Debug, Default)]
+pub struct GenerateOptions {
+    pub path: String,
+    pub language: Option<String>,
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub version_override: Option<String>,
+    pub version_from: Option<crate::config::VersionStrategy>,
+    pub config_path: Option<String>,
+    pub model_override: Option<String>,
+    pub provider_override: Option<String>,
+    pub base_url_override: Option<String>,
+    pub max_retries_override: Option<usize>,
+    pub test_model_override: Option<String>,
+    pub test_provider_override: Option<String>,
+    pub no_test: bool,
+    pub test_mode_override: Option<String>,
+    pub no_review: bool,
+    pub review_model_override: Option<String>,
+    pub review_provider_override: Option<String>,
+    pub runtime_override: Option<String>,
+    pub timeout_override: Option<u64>,
+    pub install_source_override: Option<String>,
+    pub source_path_override: Option<String>,
+    pub container: bool,
+    pub no_parallel: bool,
+    pub best_effort: bool,
+    pub dry_run: bool,
+}
+
+pub async fn run(opts: GenerateOptions) -> Result<()> {
+    let GenerateOptions {
+        path,
+        language,
+        input,
+        output,
+        version_override,
+        version_from,
+        config_path,
+        model_override,
+        provider_override,
+        base_url_override,
+        max_retries_override,
+        test_model_override,
+        test_provider_override,
+        no_test,
+        test_mode_override,
+        no_review,
+        review_model_override,
+        review_provider_override,
+        runtime_override,
+        timeout_override,
+        install_source_override,
+        source_path_override,
+        container,
+        no_parallel,
+        best_effort,
+        dry_run,
+    } = opts;
     let repo_path = Path::new(&path);
 
     // Load config (explicit path, repo root, or user config dir)
@@ -257,8 +288,8 @@ pub async fn run(
     let mut collected_data = collector.collect().await?;
 
     // Override version if CLI args provided (CLI > config > auto-detect)
-    let version_from = version_from.or(config.generation.version_from.clone());
-    let final_version = version::extract_version(repo_path, version_override, version_from)?;
+    let version_strategy = version_from.or(config.generation.version_from);
+    let final_version = version::extract_version(repo_path, version_override, version_strategy)?;
     collected_data.version = final_version;
 
     info!(
@@ -443,7 +474,7 @@ pub async fn run(
             retries_used: output_result.retries_used,
             review_retries_used: output_result.review_retries_used,
             passed: !output_result.has_unresolved_errors,
-            failed_stage: output_result.failed_stage.clone(),
+            failed_stage: output_result.failed_stage.map(|s| s.to_string()),
             failure_reason: output_result.failure_reason.clone(),
             duration_secs: duration.as_secs_f64(),
             timestamp: crate::telemetry::iso8601_now(),
@@ -498,38 +529,27 @@ setup(name="testpkg", version="1.0.0")
         dir
     }
 
+    /// Helper to build common test opts: path + output + dry_run + language=python
+    fn test_opts(repo: &TempDir, output: &Path) -> GenerateOptions {
+        GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            dry_run: true,
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_run_dry_run_defaults() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            None, // auto-detect
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,  // dry_run
-        )
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            output: Some(output.to_str().unwrap().to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
         .await;
         assert!(result.is_ok(), "dry run failed: {:?}", result.err());
         assert!(output.exists(), "SKILL.md should be written");
@@ -542,35 +562,7 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_explicit_language() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
-        .await;
+        let result = run(test_opts(&repo, &output)).await;
         assert!(result.is_ok());
     }
 
@@ -578,34 +570,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_version_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            Some("9.9.9".to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            version_override: Some("9.9.9".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
         assert!(output.exists());
@@ -615,34 +583,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_model_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            Some("custom-model-v1".to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            model_override: Some("custom-model-v1".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -651,34 +595,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_max_retries_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(10),
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            max_retries_override: Some(10),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -687,7 +607,6 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_update_mode_with_input() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        // Create an existing SKILL.md as input
         let input_path = repo.path().join("old-SKILL.md");
         let mut f = fs::File::create(&input_path).unwrap();
         writeln!(
@@ -696,34 +615,10 @@ setup(name="testpkg", version="1.0.0")
         )
         .unwrap();
 
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            Some(input_path.to_str().unwrap().to_string()),
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            input: Some(input_path.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -732,42 +627,13 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_update_mode_existing_output() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        // Pre-create output file — run() should detect and use update mode
         fs::write(
             &output,
             "---\npackage: testpkg\nversion: 0.5.0\n---\n# Existing",
         )
         .unwrap();
 
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None, // no explicit input
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
-        .await;
+        let result = run(test_opts(&repo, &output)).await;
         assert!(result.is_ok());
     }
 
@@ -775,34 +641,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_invalid_language() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("brainfuck".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            language: Some("brainfuck".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_err(), "should reject unknown language");
     }
@@ -811,34 +653,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_provider_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            Some("openai".to_string()), // provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            provider_override: Some("openai".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -847,34 +665,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_base_url_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("http://localhost:11434/v1".to_string()), // base_url
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            base_url_override: Some("http://localhost:11434/v1".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -883,34 +677,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_no_test_agent() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            true, // no_agent5
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            no_test: true,
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -919,34 +689,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_test_mode_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            Some("minimal".to_string()), // test_mode
-            false,                       // no_review
-            None,                        // review_model
-            None,                        // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            test_mode_override: Some("minimal".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -955,34 +701,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_runtime_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false,                      // no_review
-            None,                       // review_model
-            None,                       // review_provider
-            Some("podman".to_string()), // runtime
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            runtime_override: Some("podman".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -991,34 +713,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_timeout_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            Some(300), // timeout
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            timeout_override: Some(300),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1027,34 +725,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_install_source_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            Some("local-mount".to_string()), // install_source
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            install_source_override: Some("local-mount".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1063,34 +737,10 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_source_path_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            Some("/tmp/test".to_string()), // source_path
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            source_path_override: Some("/tmp/test".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1099,34 +749,11 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_test_model_provider_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("gpt-5.2".to_string()), // test_model
-            Some("openai".to_string()),  // test_provider
-            false,                       // no_test
-            None,                        // test_mode
-            false,                       // no_review
-            None,                        // review_model
-            None,                        // review_provider
-            None,                        // runtime
-            None,                        // timeout
-            None,                        // install_source
-            None,                        // source_path
-            false,
-            false, // no_parallel
-            false, // best_effort
-            true,  // dry_run
-        )
+        let result = run(GenerateOptions {
+            test_model_override: Some("gpt-5.2".to_string()),
+            test_provider_override: Some("openai".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1135,34 +762,26 @@ setup(name="testpkg", version="1.0.0")
     async fn test_run_with_all_overrides() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            Some("1.2.3".to_string()),                     // version
-            None,                                          // version_from
-            None,                                          // config
-            Some("gpt-4".to_string()),                     // model
-            Some("openai".to_string()),                    // provider
-            Some("http://localhost:11434/v1".to_string()), // base_url
-            Some(5),                                       // max_retries
-            Some("gpt-5.2".to_string()),                   // test_model
-            Some("openai".to_string()),                    // test_provider
-            true,                                          // no_test
-            Some("minimal".to_string()),                   // test_mode
-            true,                                          // no_review
-            Some("gpt-5.2".to_string()),                   // review_model
-            Some("openai".to_string()),                    // review_provider
-            Some("podman".to_string()),                    // runtime
-            Some(300),                                     // timeout
-            Some("local-mount".to_string()),               // install_source
-            Some("/tmp/test".to_string()),                 // source_path
-            false,
-            true,  // no_parallel
-            false, // best_effort
-            true,  // dry_run
-        )
+        let result = run(GenerateOptions {
+            version_override: Some("1.2.3".to_string()),
+            model_override: Some("gpt-4".to_string()),
+            provider_override: Some("openai".to_string()),
+            base_url_override: Some("http://localhost:11434/v1".to_string()),
+            max_retries_override: Some(5),
+            test_model_override: Some("gpt-5.2".to_string()),
+            test_provider_override: Some("openai".to_string()),
+            no_test: true,
+            test_mode_override: Some("minimal".to_string()),
+            no_review: true,
+            review_model_override: Some("gpt-5.2".to_string()),
+            review_provider_override: Some("openai".to_string()),
+            runtime_override: Some("podman".to_string()),
+            timeout_override: Some(300),
+            install_source_override: Some("local-mount".to_string()),
+            source_path_override: Some("/tmp/test".to_string()),
+            no_parallel: true,
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1229,34 +848,10 @@ base_url = "http://localhost:11434/v1"
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
         let config_path = write_per_stage_config(repo.path());
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            Some(config_path),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            config_path: Some(config_path),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(
             result.is_ok(),
@@ -1270,34 +865,12 @@ base_url = "http://localhost:11434/v1"
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
         let config_path = write_per_stage_config(repo.path());
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            Some(config_path),
-            Some("override-model".to_string()),
-            Some("openai".to_string()),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            config_path: Some(config_path),
+            model_override: Some("override-model".to_string()),
+            provider_override: Some("openai".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(
             result.is_ok(),
@@ -1310,7 +883,6 @@ base_url = "http://localhost:11434/v1"
     async fn test_run_with_install_source_registry_skips_source_path_default() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        // Config with install_source = "registry" — source_path default should be skipped
         let config_path = repo.path().join("skilldo.toml");
         fs::write(
             &config_path,
@@ -1329,34 +901,10 @@ install_source = "registry"
 "#,
         )
         .unwrap();
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            Some(config_path.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            config_path: Some(config_path.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1365,34 +913,11 @@ install_source = "registry"
     async fn test_run_with_no_test_and_test_model_only() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("gpt-5.2".to_string()), // test_model only, no test_provider
-            None,
-            true, // no_test — should warn about test_model having no effect
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            test_model_override: Some("gpt-5.2".to_string()),
+            no_test: true,
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1401,34 +926,10 @@ install_source = "registry"
     async fn test_run_with_test_model_only_no_provider() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("gpt-5.2".to_string()), // test_model only
-            None,                        // no test_provider
-            false,                       // test enabled
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            test_model_override: Some("gpt-5.2".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1437,68 +938,22 @@ install_source = "registry"
     async fn test_run_with_test_provider_only_no_model() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,                       // no test_model
-            Some("openai".to_string()), // test_provider only
-            false,                      // test enabled
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            test_provider_override: Some("openai".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_generate_dry_run_nonexistent_path() {
-        let result = run(
-            "/tmp/skilldo-nonexistent-path-xyz".to_string(),
-            None, // auto-detect should fail on missing path
-            None,
-            Some("/tmp/skilldo-nonexistent-output.md".to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            path: "/tmp/skilldo-nonexistent-path-xyz".to_string(),
+            output: Some("/tmp/skilldo-nonexistent-output.md".to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
         .await;
         assert!(result.is_err(), "nonexistent repo path should error");
     }
@@ -1506,39 +961,10 @@ install_source = "registry"
     #[tokio::test]
     async fn test_generate_dry_run_with_output_path() {
         let repo = make_test_repo();
-        // Write output to a separate temp dir (not inside the repo)
         let output_dir = TempDir::new().unwrap();
         let output = output_dir.path().join("custom-output/SKILL.md");
         fs::create_dir_all(output.parent().unwrap()).unwrap();
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
-        .await;
+        let result = run(test_opts(&repo, &output)).await;
         assert!(
             result.is_ok(),
             "custom output path failed: {:?}",
@@ -1552,37 +978,13 @@ install_source = "registry"
 
     #[tokio::test]
     async fn test_generate_dry_run_with_no_test_and_test_mode() {
-        // Covers the warning branch: no_test=true + test_mode_override set
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            true,                        // no_test
-            Some("minimal".to_string()), // test_mode — should trigger warning
-            false,                       // no_review
-            None,                        // review_model
-            None,                        // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            no_test: true,
+            test_mode_override: Some("minimal".to_string()),
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1591,34 +993,10 @@ install_source = "registry"
     async fn test_generate_dry_run_with_no_parallel() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            Some("python".to_string()),
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,  // no_parallel
-            false, // best_effort
-            true,
-        )
+        let result = run(GenerateOptions {
+            no_parallel: true,
+            ..test_opts(&repo, &output)
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -1627,34 +1005,13 @@ install_source = "registry"
     async fn test_run_best_effort_flag() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
-        let result = run(
-            repo.path().to_str().unwrap().to_string(),
-            None,
-            None,
-            Some(output.to_str().unwrap().to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false, // no_review
-            None,  // review_model
-            None,  // review_provider
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-            true, // best_effort
-            true, // dry_run
-        )
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            output: Some(output.to_str().unwrap().to_string()),
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
         .await;
         assert!(
             result.is_ok(),
