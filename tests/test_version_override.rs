@@ -2,6 +2,7 @@
 // Test FIRST, then implement!
 
 use anyhow::Result;
+use skilldo::config::VersionStrategy;
 use std::fs;
 use tempfile::TempDir;
 
@@ -95,7 +96,7 @@ fn test_version_from_git_tag() {
     // THEN: Should extract "1.2.3" from the tag (strip 'v' prefix)
 
     let extracted =
-        skilldo::cli::version::extract_version(repo.path(), None, Some("git-tag".to_string()))
+        skilldo::cli::version::extract_version(repo.path(), None, Some(VersionStrategy::GitTag))
             .unwrap();
 
     assert_eq!(extracted, "1.2.3", "Should extract version from git tag");
@@ -129,7 +130,7 @@ fn test_version_from_branch() {
     // THEN: Should return "branch-feature-awesome-stuff"
 
     let extracted =
-        skilldo::cli::version::extract_version(repo.path(), None, Some("branch".to_string()))
+        skilldo::cli::version::extract_version(repo.path(), None, Some(VersionStrategy::Branch))
             .unwrap();
 
     assert_eq!(
@@ -147,7 +148,7 @@ fn test_version_from_commit() {
     // THEN: Should return "dev-<short-sha>"
 
     let extracted =
-        skilldo::cli::version::extract_version(repo.path(), None, Some("commit".to_string()))
+        skilldo::cli::version::extract_version(repo.path(), None, Some(VersionStrategy::Commit))
             .unwrap();
 
     assert!(extracted.starts_with("dev-"), "Should start with 'dev-'");
@@ -165,7 +166,7 @@ fn test_explicit_version_overrides_version_from() {
     let extracted = skilldo::cli::version::extract_version(
         repo.path(),
         Some("9.9.9".to_string()),
-        Some("git-tag".to_string()),
+        Some(VersionStrategy::GitTag),
     )
     .unwrap();
 
@@ -181,31 +182,10 @@ fn test_version_from_package_when_specified() {
     // THEN: Should extract from package metadata
 
     let extracted =
-        skilldo::cli::version::extract_version(repo.path(), None, Some("package".to_string()))
+        skilldo::cli::version::extract_version(repo.path(), None, Some(VersionStrategy::Package))
             .unwrap();
 
     assert_eq!(extracted, "7.8.9", "Should extract from package");
-}
-
-#[test]
-fn test_version_from_invalid_source() {
-    // GIVEN: A repo
-    let repo = create_test_repo_with_version("1.0.0").unwrap();
-
-    // WHEN: We pass --version-from invalid-source
-    // THEN: Should return an error
-
-    let result = skilldo::cli::version::extract_version(
-        repo.path(),
-        None,
-        Some("invalid-source".to_string()),
-    );
-
-    assert!(result.is_err(), "Should error on invalid version source");
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Unknown version source"));
 }
 
 #[test]

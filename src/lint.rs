@@ -1,8 +1,13 @@
+//! Security linter — data-driven regex scanner that checks SKILL.md for
+//! destructive commands, credential access, prompt injection, reverse shells,
+//! and obfuscated payloads. Hard-fails on security violations.
+
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
+/// A single issue found by the security linter.
 #[derive(Debug, Clone)]
 pub struct LintIssue {
     pub severity: Severity,
@@ -11,11 +16,12 @@ pub struct LintIssue {
     pub suggestion: Option<String>,
 }
 
+/// Issue severity levels for lint and review results.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Severity {
     #[default]
-    Error, // Must fix
-    Warning, // Should fix
+    Error, // Must fix — blocks pipeline
+    Warning, // Should fix — reported but non-blocking
     Info,    // Nice to have
 }
 
@@ -42,6 +48,9 @@ impl FromStr for Severity {
     }
 }
 
+/// Data-driven regex scanner for SKILL.md security and quality checks.
+/// Rules are defined declaratively; the linter scans prose sections
+/// (code blocks are excluded to avoid false positives on legitimate examples).
 pub struct SkillLinter;
 
 impl Default for SkillLinter {
@@ -136,16 +145,15 @@ impl SkillLinter {
                 category: "frontmatter".to_string(),
                 message: "Missing frontmatter (---...---)".to_string(),
                 suggestion: Some(
-                    "Add frontmatter with name, description, version, ecosystem".to_string(),
+                    "Add frontmatter with name, description, license, metadata".to_string(),
                 ),
             });
             return issues;
         }
 
-        // Required fields
-        let required_fields = vec!["name", "description", "version", "ecosystem"];
-        for field in required_fields {
-            if !frontmatter.contains_key(field) {
+        // Required fields (agentskills.io spec: name and description are required)
+        for field in &["name", "description"] {
+            if !frontmatter.contains_key(*field) {
                 issues.push(LintIssue {
                     severity: Severity::Error,
                     category: "frontmatter".to_string(),
@@ -155,8 +163,38 @@ impl SkillLinter {
             }
         }
 
-        // Check for problematic versions
-        if let Some(version) = frontmatter.get("version") {
+        // version and ecosystem: check both top-level (old format) and metadata (new format)
+        let version = frontmatter
+            .get("metadata.version")
+            .or_else(|| frontmatter.get("version"));
+        let ecosystem = frontmatter
+            .get("metadata.ecosystem")
+            .or_else(|| frontmatter.get("ecosystem"));
+
+        if version.is_none() {
+            issues.push(LintIssue {
+                severity: Severity::Warning,
+                category: "frontmatter".to_string(),
+                message: "Missing version (expected in metadata.version or top-level version)"
+                    .to_string(),
+                suggestion: Some(
+                    "Add 'metadata:\\n  version: \"1.0.0\"' to frontmatter".to_string(),
+                ),
+            });
+        }
+        if ecosystem.is_none() {
+            issues.push(LintIssue {
+                severity: Severity::Warning,
+                category: "frontmatter".to_string(),
+                message:
+                    "Missing ecosystem (expected in metadata.ecosystem or top-level ecosystem)"
+                        .to_string(),
+                suggestion: Some(
+                    "Add 'metadata:\\n  ecosystem: python' to frontmatter".to_string(),
+                ),
+            });
+        }
+        if let Some(version) = version {
             if version == "unknown" {
                 issues.push(LintIssue {
                     severity: Severity::Warning,
@@ -759,8 +797,8 @@ impl SkillLinter {
             "ignore all previous instructions",
             "ignore previous instructions",
             "you are now a",
-            "disregard your",
-            "override your",
+            "disregard your instructions",
+            "override your instructions",
         ];
         for (idx, line) in lines.iter().enumerate() {
             if !code_block_lines[idx] {
@@ -831,7 +869,8 @@ impl SkillLinter {
                 "format c:",
                 "mkfs.",
                 "dd if=",
-                ":(){ :|:&};:", // fork bomb
+                ":(){ :|:&};:",  // fork bomb (no spaces)
+                ":(){ :|:& };:", // fork bomb (with spaces)
                 "> /dev/sda",
                 "> /dev/nvme",
                 "shutil.rmtree('/')",
@@ -919,12 +958,12 @@ impl SkillLinter {
                 "ignore all previous instructions",
                 "ignore previous instructions",
                 "ignore your instructions",
-                "disregard your",
+                "disregard your instructions",
                 "disregard all previous",
                 "disregard safety",
                 "you are now a",
                 "you are now an",
-                "override your",
+                "override your instructions",
                 "forget your instructions",
                 "forget everything",
                 "new system prompt",
@@ -1068,7 +1107,7 @@ impl SkillLinter {
             "ignore all previous",
             "disregard",
             "you are now",
-            "override your",
+            "override your instructions",
             "curl ",
             "wget ",
             "fetch ",
@@ -1095,6 +1134,8 @@ impl SkillLinter {
         }
 
         let mut in_frontmatter = false;
+        let mut current_block: Option<String> = None;
+
         for line in lines {
             if line.trim() == "---" {
                 if in_frontmatter {
@@ -1105,11 +1146,29 @@ impl SkillLinter {
             }
 
             if in_frontmatter && line.contains(':') {
+                let is_indented = line.starts_with(' ') || line.starts_with('\t');
                 let parts: Vec<&str> = line.splitn(2, ':').collect();
                 if parts.len() == 2 {
                     let key = parts[0].trim().to_string();
                     let value = parts[1].trim().to_string();
-                    frontmatter.insert(key, value);
+
+                    let clean_value = value.trim_matches('"').to_string();
+
+                    if is_indented {
+                        // Indented line — belongs to current block (e.g. metadata.version)
+                        if let Some(ref block) = current_block {
+                            let full_key = format!("{}.{}", block, key);
+                            frontmatter.insert(full_key, clean_value);
+                        }
+                    } else if value.is_empty() {
+                        // Block start (e.g. "metadata:")
+                        current_block = Some(key.clone());
+                        frontmatter.insert(key, String::new());
+                    } else {
+                        // Top-level key: value
+                        current_block = None;
+                        frontmatter.insert(key, clean_value);
+                    }
                 }
             }
         }

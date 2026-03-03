@@ -34,7 +34,7 @@ impl LlmClient for MockLlmClient {
 
 #[tokio::test]
 async fn test_parser_extracts_patterns_from_click_skill() -> Result<()> {
-    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::python_parser::PythonParser;
     use skilldo::test_agent::LanguageParser;
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
@@ -68,7 +68,7 @@ async fn test_parser_extracts_patterns_from_click_skill() -> Result<()> {
 
 #[tokio::test]
 async fn test_parser_extracts_dependencies_from_click_skill() -> Result<()> {
-    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::python_parser::PythonParser;
     use skilldo::test_agent::LanguageParser;
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
@@ -85,7 +85,7 @@ async fn test_parser_extracts_dependencies_from_click_skill() -> Result<()> {
 
 #[tokio::test]
 async fn test_parser_extracts_patterns_from_pathlib_skill() -> Result<()> {
-    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::python_parser::PythonParser;
     use skilldo::test_agent::LanguageParser;
 
     let skill_md = fs::read_to_string("tests/fixtures/pathlib-SKILL.md")?;
@@ -102,7 +102,7 @@ async fn test_parser_extracts_patterns_from_pathlib_skill() -> Result<()> {
 
 #[tokio::test]
 async fn test_parser_filters_stdlib_dependencies() -> Result<()> {
-    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::python_parser::PythonParser;
     use skilldo::test_agent::LanguageParser;
 
     let skill_md = fs::read_to_string("tests/fixtures/pathlib-SKILL.md")?;
@@ -118,7 +118,7 @@ async fn test_parser_filters_stdlib_dependencies() -> Result<()> {
 
 #[tokio::test]
 async fn test_code_generator_creates_test_prompt() -> Result<()> {
-    use skilldo::test_agent::code_generator::PythonCodeGenerator;
+    use skilldo::test_agent::python_code_gen::PythonCodeGenerator;
     use skilldo::test_agent::LanguageCodeGenerator;
 
     let mock_client = MockLlmClient::new(vec![r#"
@@ -164,7 +164,7 @@ if __name__ == '__main__':
 
 #[tokio::test]
 async fn test_code_generator_extracts_code_from_markdown() -> Result<()> {
-    use skilldo::test_agent::code_generator::PythonCodeGenerator;
+    use skilldo::test_agent::python_code_gen::PythonCodeGenerator;
     use skilldo::test_agent::LanguageCodeGenerator;
 
     let mock_client = MockLlmClient::new(vec!["```python\nprint('test')\n```".to_string()]);
@@ -386,7 +386,7 @@ async fn test_test_result_generates_feedback_on_failure() {
 
 #[tokio::test]
 async fn test_parser_handles_missing_core_patterns_section() -> Result<()> {
-    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::python_parser::PythonParser;
     use skilldo::test_agent::LanguageParser;
 
     // SKILL.md without Core Patterns section
@@ -424,7 +424,7 @@ None
 
 #[tokio::test]
 async fn test_parser_handles_missing_imports_section() -> Result<()> {
-    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::python_parser::PythonParser;
     use skilldo::test_agent::LanguageParser;
 
     // SKILL.md without Imports section
@@ -460,7 +460,7 @@ None
 
 #[tokio::test]
 async fn test_parser_deduplicates_dependencies() -> Result<()> {
-    use skilldo::test_agent::parser::PythonParser;
+    use skilldo::test_agent::python_parser::PythonParser;
     use skilldo::test_agent::LanguageParser;
 
     // SKILL.md with duplicate imports

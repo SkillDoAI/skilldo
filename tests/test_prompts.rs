@@ -814,7 +814,7 @@ fn test_create_includes_version_in_frontmatter() {
         false,
     );
 
-    assert!(prompt.contains("version: 2.5.8"));
+    assert!(prompt.contains("version: \"2.5.8\""));
 }
 
 #[test]

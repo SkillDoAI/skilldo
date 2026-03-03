@@ -125,6 +125,7 @@ print("Should not reach here")
 }
 
 #[tokio::test]
+#[ignore] // Hangs under llvm-cov instrumentation (child process kill + profiling runtime deadlock)
 async fn test_executor_with_very_short_timeout() -> Result<()> {
     // Create executor with 1 second timeout
     let executor = PythonUvExecutor::new().with_timeout(1);

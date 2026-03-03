@@ -1,0 +1,21 @@
+Hey Cisco!
+
+Thanks for open-sourcing your YARA rules under Apache 2.0. We've bundled
+them into SkillDo (https://github.com/SkilldoAI/skilldo) — a Rust CLI that
+generates SKILL.md files for AI agent ecosystems. Your rules run through
+boreal (pure Rust YARA engine) alongside our own detection rules.
+
+We'd love to contribute our rules upstream to your project, but honestly
+we're too lazy to test them against your Python pipeline. That said, please
+have a look at our YARA rules and use them however you'd like:
+
+  https://github.com/SkilldoAI/skilldo/tree/main/rules/skilldo
+
+Our rules are Apache 2.0 licensed — take what's useful. They cover some
+patterns your rules don't (and vice versa), so between the two sets there's
+pretty solid coverage for AI agent skill file security.
+
+Your product: https://github.com/cisco-ai-defense/skill-scanner
+
+Cheers,
+— The SkillDo team

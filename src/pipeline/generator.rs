@@ -1,3 +1,6 @@
+//! Pipeline orchestrator — runs the 6-agent sequence (extract → map → learn →
+//! create → review → test) with retry loops, normalization, and lint checks.
+
 use anyhow::Result;
 use tracing::{info, warn};
 
@@ -10,9 +13,26 @@ use crate::llm::client::LlmClient;
 use crate::llm::prompts_v2;
 use crate::review::{ReviewAgent, ReviewIssue};
 use crate::test_agent::{TestCodeValidator, TestResult, ValidationMode};
-#[allow(deprecated)]
-use crate::validator::FunctionalValidator;
-use crate::validator::ValidationResult;
+
+/// Which pipeline stage failed (if any).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailedStage {
+    Lint,
+    Test,
+    Review,
+    PostLint,
+}
+
+impl std::fmt::Display for FailedStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lint => write!(f, "lint"),
+            Self::Test => write!(f, "test"),
+            Self::Review => write!(f, "review"),
+            Self::PostLint => write!(f, "post-lint"),
+        }
+    }
+}
 
 /// Output from the generation pipeline.
 #[derive(Debug)]
@@ -26,6 +46,14 @@ pub struct GenerateOutput {
     /// (lint errors, review failures, test failures, malformed verdicts).
     /// CLI should exit non-zero unless --best-effort is set.
     pub has_unresolved_errors: bool,
+    /// Number of validation retries used (0 = passed first try).
+    pub retries_used: usize,
+    /// Number of review retries used (0 = passed first try or review disabled).
+    pub review_retries_used: usize,
+    /// Which stage failed, if any.
+    pub failed_stage: Option<FailedStage>,
+    /// Error summary for the failure (e.g., "3/5 tests failed after 3 retries").
+    pub failure_reason: Option<String>,
 }
 
 /// Strip markdown code fences from output (```markdown ... ``` or ```...```)
@@ -75,6 +103,8 @@ fn bail_on_security_lint(issues: &[crate::lint::LintIssue]) -> Result<()> {
     Ok(())
 }
 
+/// Pipeline orchestrator that runs the 6-agent sequence to produce SKILL.md.
+/// Supports per-stage LLM clients, retry loops, and optional review/test validation.
 pub struct Generator {
     client: Box<dyn LlmClient>,
     extract_client: Option<Box<dyn LlmClient>>,
@@ -92,7 +122,7 @@ pub struct Generator {
     container_config: ContainerConfig,
     parallel_extraction: bool,      // Run extract/map/learn in parallel
     existing_skill: Option<String>, // Existing SKILL.md for update mode
-    model_name: Option<String>,     // For generated_with frontmatter field
+    model_name: Option<String>,     // For metadata.generated-by frontmatter field
 }
 
 impl Generator {
@@ -211,9 +241,20 @@ impl Generator {
     pub async fn generate(&self, data: &CollectedData) -> Result<GenerateOutput> {
         info!("Starting pipeline for {}", data.package_name);
         let mut had_unresolved_errors = false;
+        #[allow(unused_assignments)] // overwritten by last_attempt after loop
+        let mut retries_used: usize = 0;
+        let mut review_retries_used: usize = 0;
+        let mut failed_stage: Option<FailedStage> = None;
+        let mut failure_reason: Option<String> = None;
 
-        // Combine docs and changelog for learn stage
-        let docs_and_changelog = format!("{}\n\n{}", data.docs_content, data.changelog_content);
+        // Combine docs and annotated changelog for learn stage
+        let annotated_changelog = if !data.changelog_content.is_empty() {
+            crate::changelog::ChangelogAnalyzer::new(data.changelog_content.clone())
+                .annotate_changelog()
+        } else {
+            String::new()
+        };
+        let docs_and_changelog = format!("{}\n\n{}", data.docs_content, annotated_changelog);
 
         // Combine examples and tests for map stage (examples first - they're cleaner)
         let examples_and_tests = if !data.examples_content.is_empty() {
@@ -332,19 +373,51 @@ impl Generator {
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
 
-        // Dual validation loop: Format + Functional
+        // Security scan (YARA + pattern + unicode + injection) — bail immediately, no retries.
+        let scan_report = crate::security::scan_skill(&skill_md);
+        if !scan_report.passed() {
+            let msgs: Vec<String> = scan_report
+                .findings
+                .iter()
+                .filter(|f| f.severity >= crate::security::Severity::High)
+                .map(|f| format!("- [{}] {}", f.rule_id, f.message))
+                .collect();
+            anyhow::bail!(
+                "SECURITY: Generated SKILL.md failed security scan (score {}/100):\n{}",
+                scan_report.score,
+                msgs.join("\n")
+            );
+        }
+        info!("  ✓ Security scan passed (score {}/100)", scan_report.score);
+
+        // Validation loop: Format (linter) + Code (test agent)
         let linter = SkillLinter::new();
-        // Lazy-init: only construct FunctionalValidator when actually needed
-        // (avoids spurious "Docker not available" warning when test agent handles validation)
-        #[allow(deprecated)]
-        let mut functional_validator: Option<FunctionalValidator> = None;
 
-        // Always run at least one validation pass. max_retries=0 means
-        // "one pass, no retries on failure" (not "skip all validation").
-        let validation_passes = self.max_retries.max(1);
+        // max_retries=0 means one attempt with no retries on failure.
+        // max_retries=3 means one initial attempt + up to 3 retries (4 total).
 
-        for attempt in 0..validation_passes {
-            info!("Validation pass {} of {}", attempt + 1, validation_passes);
+        // Construct test validator once before the loop (avoids re-allocation on retries)
+        let test_validator = if self.enable_test && data.language == Language::Python {
+            Some(
+                TestCodeValidator::new_python_with_custom(
+                    self.get_client("test"),
+                    self.container_config.clone(),
+                    self.prompts_config.test_custom.clone(),
+                )?
+                .with_mode(self.test_mode),
+            )
+        } else {
+            None
+        };
+
+        let mut last_attempt = 0;
+        for attempt in 0..=self.max_retries {
+            last_attempt = attempt;
+            info!(
+                "Validation pass {} of {}",
+                attempt + 1,
+                self.max_retries + 1
+            );
 
             // 1. Format Validation (Linter) - Fast
             info!("  → Running format validation (linter)...");
@@ -364,9 +437,15 @@ impl Generator {
                 // Security errors bail IMMEDIATELY — never sent back to the model.
                 bail_on_security_lint(&lint_issues)?;
 
-                if attempt == validation_passes - 1 {
+                if attempt == self.max_retries {
                     info!("Max retries reached, returning best attempt despite format issues");
                     had_unresolved_errors = true;
+                    failed_stage = Some(FailedStage::Lint);
+                    failure_reason = Some(format!(
+                        "{} lint errors after {} retries",
+                        error_msgs.len(),
+                        attempt
+                    ));
                     break;
                 }
 
@@ -384,136 +463,86 @@ impl Generator {
 
             info!("  ✓ Format validation passed");
 
-            // 2. Functional Validation - Runs code
-            // The legacy functional validator runs code in a bare container without
-            // dependency installation — it only works for stdlib-only snippets.
-            // When test agent is enabled, it handles validation properly (uv + deps).
-            // When test agent is disabled, skip functional validation entirely since
-            // the legacy validator would just fail on any import.
-            let skip_reason = if !self.enable_test {
-                Some("test agent disabled — legacy validator cannot install dependencies")
-            } else if data.language == Language::Python {
-                Some("test agent enabled — using code generation validation instead")
-            } else {
-                None
-            };
+            // 2. Code validation (test agent)
+            if let Some(ref test_validator) = test_validator {
+                info!("  → Running code validation (test agent)...");
 
-            if let Some(reason) = skip_reason {
-                info!("  ⏭️  Skipping functional validation ({reason})");
-            } else {
-                info!("  → Running functional validation (code execution)...");
-            }
+                let validation_result: Result<TestResult, anyhow::Error> =
+                    test_validator.validate(&skill_md).await;
+                match validation_result {
+                    Ok(test_result) => {
+                        if test_result.test_cases.is_empty() {
+                            info!("  ⏭️  test: No testable patterns found, skipping");
+                            break;
+                        }
+                        if test_result.all_passed() {
+                            info!("  ✓ test: All {} tests passed", test_result.passed);
+                            break;
+                        } else {
+                            warn!(
+                                "  ✗ test: {} passed, {} failed",
+                                test_result.passed, test_result.failed
+                            );
 
-            let functional_result = if let Some(reason) = skip_reason {
-                ValidationResult::Skipped(reason.to_string())
-            } else {
-                #[allow(deprecated)]
-                let validator = functional_validator.get_or_insert_with(FunctionalValidator::new);
-                validator.validate(&skill_md, &data.language)?
-            };
-
-            match functional_result {
-                ValidationResult::Pass(output) => {
-                    info!("  ✓ Functional validation passed");
-                    info!("    Output: {}", output.lines().next().unwrap_or(""));
-                    break; // Format and functional passed, skip test agent if not Python
-                }
-                ValidationResult::Skipped(reason) => {
-                    info!("  ⏭️  Functional validation skipped: {}", reason);
-
-                    // test: Code generation validation (if enabled for Python)
-                    if self.enable_test && data.language == Language::Python {
-                        info!("test: Testing SKILL.md with code generation...");
-
-                        let test_llm = self.get_client("test");
-
-                        let test_validator = TestCodeValidator::new_python_with_custom(
-                            test_llm,
-                            self.container_config.clone(),
-                            self.prompts_config.test_custom.clone(),
-                        )?
-                        .with_mode(self.test_mode);
-
-                        let validation_result: Result<TestResult, anyhow::Error> =
-                            test_validator.validate(&skill_md).await;
-                        match validation_result {
-                            Ok(test_result) => {
-                                if test_result.test_cases.is_empty() {
-                                    // No patterns found to test — nothing to validate, not a failure
-                                    info!("  ⏭️  test: No testable patterns found, skipping");
-                                    break;
-                                }
-                                if test_result.all_passed() {
-                                    info!("  ✓ test: All {} tests passed", test_result.passed);
-                                    break; // All validations passed!
-                                } else {
-                                    warn!(
-                                        "  ✗ test: {} passed, {} failed",
-                                        test_result.passed, test_result.failed
+                            if attempt < self.max_retries {
+                                if let Some(feedback) =
+                                    test_result.generate_feedback(&data.language)
+                                {
+                                    let patch_prompt = format!(
+                                        "Here is the current SKILL.md:\n\n{}\n\n{}",
+                                        skill_md, feedback
                                     );
 
-                                    // Patch with targeted feedback if we have retries left
-                                    if attempt < validation_passes - 1 {
-                                        if let Some(feedback) =
-                                            test_result.generate_feedback(&data.language)
-                                        {
-                                            let patch_prompt = format!(
-                                                "Here is the current SKILL.md:\n\n{}\n\n{}",
-                                                skill_md, feedback
-                                            );
-
-                                            skill_md = self
-                                                .get_client("create")
-                                                .complete(&patch_prompt)
-                                                .await?;
-                                            skill_md = strip_markdown_fences(&skill_md);
-                                            continue; // Retry with patched content
-                                        }
-                                    } else {
-                                        warn!("  Max retries reached, proceeding despite test failures");
-                                        had_unresolved_errors = true;
-                                        break;
-                                    }
+                                    skill_md =
+                                        self.get_client("create").complete(&patch_prompt).await?;
+                                    skill_md = strip_markdown_fences(&skill_md);
+                                    continue;
+                                } else {
+                                    warn!("  No actionable feedback from test failures, stopping retries");
+                                    had_unresolved_errors = true;
+                                    failed_stage = Some(FailedStage::Test);
+                                    failure_reason = Some(format!(
+                                        "{}/{} tests failed, no actionable feedback",
+                                        test_result.failed,
+                                        test_result.passed + test_result.failed
+                                    ));
+                                    break;
                                 }
-                            }
-                            Err(e) => {
-                                warn!("  ✗ test error: {}", e);
-                                warn!("    Continuing without test validation");
-                                break; // Don't fail the whole pipeline for test agent errors
+                            } else {
+                                warn!("  Max retries reached, proceeding despite test failures");
+                                had_unresolved_errors = true;
+                                failed_stage = Some(FailedStage::Test);
+                                failure_reason = Some(format!(
+                                    "{}/{} tests failed after {} retries",
+                                    test_result.failed,
+                                    test_result.passed + test_result.failed,
+                                    attempt
+                                ));
+                                break;
                             }
                         }
-                    } else {
-                        // No test agent, format passed, functional skipped - good enough
-                        break;
                     }
-                }
-                ValidationResult::Fail(error) => {
-                    warn!("  ✗ Functional validation failed");
-                    warn!("    Error: {}", error.lines().next().unwrap_or(""));
-
-                    if attempt == validation_passes - 1 {
-                        // Final safety check: re-lint to catch any security issues
-                        // introduced during fix attempts
-                        let final_lint = linter.lint(&skill_md)?;
-                        bail_on_security_lint(&final_lint)?;
-                        info!("Max retries reached, returning best attempt despite code issues");
+                    Err(e) => {
+                        warn!("  ✗ test error: {}", e);
                         had_unresolved_errors = true;
+                        failed_stage = Some(FailedStage::Test);
+                        failure_reason = Some(format!("test validation error: {e}"));
                         break;
                     }
-
-                    // Patch with code execution error
-                    let fix_prompt = format!(
-                        "Here is the current SKILL.md:\n\n{}\n\nCODE EXECUTION FAILED:\n{}\n\nFix the code examples that don't work. Keep all other content intact.",
-                        skill_md,
-                        error
-                    );
-
-                    skill_md = self.get_client("create").complete(&fix_prompt).await?;
-                    skill_md = strip_markdown_fences(&skill_md);
-                    continue;
                 }
+            } else {
+                if !self.enable_test {
+                    info!("  ⏭️  Skipping code validation (test agent disabled)");
+                } else {
+                    info!(
+                        "  ⏭️  Skipping code validation ({:?} not yet supported)",
+                        data.language
+                    );
+                }
+                break;
             }
         }
+        retries_used = last_attempt;
 
         // Review: accuracy + safety validation
         let mut unresolved_warnings: Vec<ReviewIssue> = Vec::new();
@@ -524,7 +553,9 @@ impl Generator {
                 self.prompts_config.review_custom.clone(),
             );
 
+            let mut last_review_attempt = 0;
             for review_attempt in 0..=self.review_max_retries {
+                last_review_attempt = review_attempt;
                 info!(
                     "review: Checking accuracy and safety (attempt {}/{})",
                     review_attempt + 1,
@@ -542,6 +573,8 @@ impl Generator {
                     }
                     warn!("  ⚠ review: malformed verdict on final attempt, proceeding with unresolved error");
                     had_unresolved_errors = true;
+                    failed_stage = Some(FailedStage::Review);
+                    failure_reason = Some("malformed verdict after all retries".to_string());
                     break;
                 }
 
@@ -580,6 +613,12 @@ impl Generator {
                     }
                     unresolved_warnings = result.issues;
                     had_unresolved_errors = true;
+                    failed_stage = Some(FailedStage::Review);
+                    failure_reason = Some(format!(
+                        "{} review issues after {} retries",
+                        unresolved_warnings.len(),
+                        review_attempt
+                    ));
                     break;
                 }
 
@@ -600,6 +639,7 @@ impl Generator {
                 let lint_issues = linter.lint(&skill_md)?;
                 bail_on_security_lint(&lint_issues)?;
             }
+            review_retries_used = last_review_attempt;
         }
 
         // Normalize output (ensure frontmatter + References)
@@ -632,12 +672,23 @@ impl Generator {
                 warn!("  - [{}] {}", issue.category, issue.message);
             }
             had_unresolved_errors = true;
+            if failed_stage.is_none() {
+                failed_stage = Some(FailedStage::PostLint);
+                failure_reason = Some(format!(
+                    "{} post-normalization lint errors",
+                    post_errors.len()
+                ));
+            }
         }
 
         Ok(GenerateOutput {
             skill_md,
             unresolved_warnings,
             has_unresolved_errors: had_unresolved_errors,
+            retries_used,
+            review_retries_used,
+            failed_stage,
+            failure_reason,
         })
     }
 }
@@ -827,8 +878,8 @@ mod tests {
         let data = make_test_data();
         let output = gen.generate(&data).await.unwrap();
 
-        // Normalizer should inject generated_with into frontmatter
-        assert!(output.skill_md.contains("generated_with:"));
+        // Normalizer should inject generated-by inside metadata block
+        assert!(output.skill_md.contains("generated-by: skilldo/gpt-5.2"));
     }
 
     #[tokio::test]
@@ -1074,6 +1125,10 @@ mod tests {
             skill_md: "# Test SKILL.md".to_string(),
             unresolved_warnings: vec![],
             has_unresolved_errors: false,
+            retries_used: 0,
+            review_retries_used: 0,
+            failed_stage: None,
+            failure_reason: None,
         };
         assert_eq!(output.skill_md, "# Test SKILL.md");
         assert!(output.unresolved_warnings.is_empty());
@@ -1093,6 +1148,10 @@ mod tests {
             skill_md: "# SKILL".to_string(),
             unresolved_warnings: vec![warning],
             has_unresolved_errors: true,
+            retries_used: 0,
+            review_retries_used: 0,
+            failed_stage: None,
+            failure_reason: None,
         };
         assert_eq!(output.unresolved_warnings.len(), 1);
         assert_eq!(
@@ -1113,6 +1172,10 @@ mod tests {
             skill_md: "test".to_string(),
             unresolved_warnings: vec![],
             has_unresolved_errors: false,
+            retries_used: 0,
+            review_retries_used: 0,
+            failed_stage: None,
+            failure_reason: None,
         };
         // GenerateOutput derives Debug, ensure it doesn't panic
         let debug_str = format!("{:?}", output);
@@ -2016,6 +2079,10 @@ print(json.dumps(result))
             skill_md: "content".to_string(),
             unresolved_warnings: vec![warning],
             has_unresolved_errors: false,
+            retries_used: 0,
+            review_retries_used: 0,
+            failed_stage: None,
+            failure_reason: None,
         };
         let debug_str = format!("{:?}", output);
         assert!(debug_str.contains("GenerateOutput"));
@@ -2137,7 +2204,7 @@ print(json.dumps(result))
 
     #[tokio::test]
     async fn test_generate_format_max_retries_one_exhausted() {
-        // max_retries=1 means 1 validation pass, no retry on failure
+        // max_retries=1 means 1 initial attempt + 1 retry on failure (2 total)
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(false)
@@ -2501,5 +2568,13 @@ print(json.dumps(result))
 
         let output = gen.generate(&data).await.unwrap();
         assert!(!output.skill_md.is_empty());
+    }
+
+    #[test]
+    fn test_failed_stage_display() {
+        assert_eq!(FailedStage::Lint.to_string(), "lint");
+        assert_eq!(FailedStage::Test.to_string(), "test");
+        assert_eq!(FailedStage::Review.to_string(), "review");
+        assert_eq!(FailedStage::PostLint.to_string(), "post-lint");
     }
 }

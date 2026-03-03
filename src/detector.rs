@@ -1,7 +1,13 @@
+//! Language detector — identifies a project's ecosystem from marker files
+//! (pyproject.toml → Python, Cargo.toml → Rust, go.mod → Go, package.json → JS).
+
 use anyhow::{bail, Result};
 use std::path::Path;
 use std::str::FromStr;
 
+/// Supported programming languages. Detection is based on marker files;
+/// only Python is fully implemented for collection/generation. Others
+/// are detected but error at collection time with "not yet implemented."
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Language {
     Python,
@@ -61,6 +67,8 @@ impl FromStr for Language {
     }
 }
 
+/// Detect the project's language from marker files in `path`.
+/// Checks pyproject.toml/setup.py → Cargo.toml → package.json → go.mod.
 pub fn detect_language(path: &Path) -> Result<Language> {
     // Check for language-specific files in order of confidence
     if path.join("pyproject.toml").exists() || path.join("setup.py").exists() {

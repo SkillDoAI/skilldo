@@ -1,12 +1,13 @@
-// Test agent: Code Generation Validator
-//
-// Meta-validation that tests if the generated SKILL.md is actually useful
-// for AI agents writing real code.
+//! Test agent — meta-validates generated SKILL.md by asking an LLM to write
+//! real code from it, then executing that code in a container to verify it works.
+//! Language-specific logic lives in parser/codegen submodules (e.g. `python_parser`).
 
 pub mod code_generator;
 pub mod container_executor;
 pub mod executor;
 pub mod parser;
+pub mod python_code_gen;
+pub mod python_parser;
 pub mod validator;
 
 pub use executor::{ExecutionEnv, ExecutionResult};

@@ -2,7 +2,6 @@ use anyhow::Result;
 use tracing::{debug, info};
 
 /// Analyze changelog to determine if regeneration is needed
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ChangelogAnalyzer {
     changelog_content: String,
@@ -25,13 +24,42 @@ pub struct ChangelogAnalysis {
     pub changes_found: Vec<String>,
 }
 
-#[allow(dead_code)]
 impl ChangelogAnalyzer {
     pub fn new(changelog_content: String) -> Self {
         Self { changelog_content }
     }
 
+    /// Annotate changelog lines with classification tags for LLM consumption.
+    /// Returns the annotated content (empty string if changelog is empty).
+    pub fn annotate_changelog(&self) -> String {
+        if self.changelog_content.is_empty() {
+            return String::new();
+        }
+        let mut annotated = Vec::new();
+        for line in self.changelog_content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("---") {
+                annotated.push(line.to_string());
+                continue;
+            }
+            let lower = trimmed.to_lowercase();
+            if self.is_breaking_change(&lower) {
+                annotated.push(format!("[BREAKING] {}", trimmed));
+            } else if self.is_new_feature(&lower) {
+                annotated.push(format!("[NEW API] {}", trimmed));
+            } else if self.is_deprecation(&lower) {
+                annotated.push(format!("[DEPRECATED] {}", trimmed));
+            } else if self.is_behavior_change(&lower) {
+                annotated.push(format!("[BEHAVIOR CHANGE] {}", trimmed));
+            } else {
+                annotated.push(line.to_string());
+            }
+        }
+        annotated.join("\n")
+    }
+
     /// Analyze changelog between two versions
+    #[allow(dead_code)]
     pub fn analyze_between_versions(
         &self,
         old_version: &str,
@@ -301,6 +329,40 @@ mod tests {
 
         assert_eq!(analysis.significance, ChangeSignificance::Regenerate);
         assert!(analysis.reason.contains("deprecation"));
+    }
+
+    #[test]
+    fn test_annotate_changelog_tags() {
+        let changelog = r#"## 2.2.0
+
+- BREAKING: Removed torch.jit.script API
+- Added new torch.compile() function for optimization
+- Deprecated torch.nn.functional.relu6 (use relu instead)
+- The default now returns a dict instead of tuple
+- Fixed memory leak in optimizer"#;
+        let analyzer = ChangelogAnalyzer::new(changelog.to_string());
+        let annotated = analyzer.annotate_changelog();
+        assert!(annotated.contains("[BREAKING] - BREAKING: Removed"));
+        assert!(annotated.contains("[NEW API] - Added new torch.compile() function"));
+        assert!(annotated.contains("[DEPRECATED] - Deprecated torch.nn.functional"));
+        assert!(annotated.contains("[BEHAVIOR CHANGE] - The default now returns"));
+        // Bug fix lines pass through without tag
+        assert!(annotated.contains("- Fixed memory leak in optimizer"));
+        assert!(!annotated.contains("[BREAKING] - Fixed"));
+    }
+
+    #[test]
+    fn test_annotate_changelog_empty() {
+        let analyzer = ChangelogAnalyzer::new(String::new());
+        assert_eq!(analyzer.annotate_changelog(), "");
+    }
+
+    #[test]
+    fn test_annotate_changelog_unannotated_passthrough() {
+        let changelog = "- Performance improvements\n- Internal refactoring";
+        let analyzer = ChangelogAnalyzer::new(changelog.to_string());
+        let annotated = analyzer.annotate_changelog();
+        assert_eq!(annotated, changelog);
     }
 
     #[test]

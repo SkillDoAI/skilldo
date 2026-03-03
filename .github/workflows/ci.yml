@@ -132,7 +132,8 @@ jobs:
     name: test-cov
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -144,13 +145,31 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Run tests with coverage
-        run: cargo llvm-cov --fail-under-lines 95 --lcov --output-path lcov.info
+        run: |
+          cargo llvm-cov --no-report
+          cargo llvm-cov report --fail-under-lines 95
+          cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: SkillDoAI/skilldo
           files: lcov.info
+
+  test-container-unit:
+    name: container executor tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
+      - name: Run container executor unit tests (skipped in coverage due to llvm-cov hangs)
+        run: cargo test container_executor
 
   audit:
     name: security audit
@@ -166,7 +185,7 @@ jobs:
     # Only run on main pushes with rust changes to conserve API credits.
     # Secrets aren't available on fork PRs anyway.
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
-    needs: [changes, check, fmt, clippy, test-cov, integration, audit]
+    needs: [changes, check, fmt, clippy, test-cov, test-container-unit, integration, audit]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

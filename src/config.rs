@@ -1,3 +1,7 @@
+//! Configuration loading and merging — parses TOML config files, resolves
+//! environment variables for API keys, and merges CLI overrides. Discovery
+//! order: explicit path → CWD → git root → user config dir → defaults.
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -6,6 +10,55 @@ use std::path::Path;
 use tracing::debug;
 
 use crate::test_agent::ValidationMode;
+
+/// Execution mode for test agent validation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecutionMode {
+    /// Run tests using local tools (uv, pip, etc.) — default
+    #[default]
+    BareMetal,
+    /// Run tests inside a container (podman/docker)
+    Container,
+}
+
+/// Version extraction strategy for determining library version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VersionStrategy {
+    /// Extract from latest git tag (e.g., "v1.2.3" → "1.2.3")
+    GitTag,
+    /// Extract from package metadata (pyproject.toml, Cargo.toml, etc.)
+    Package,
+    /// Use current git branch name as version
+    Branch,
+    /// Use short git commit hash as version
+    Commit,
+}
+
+impl std::fmt::Display for VersionStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GitTag => write!(f, "git-tag"),
+            Self::Package => write!(f, "package"),
+            Self::Branch => write!(f, "branch"),
+            Self::Commit => write!(f, "commit"),
+        }
+    }
+}
+
+impl std::str::FromStr for VersionStrategy {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "git-tag" => Ok(Self::GitTag),
+            "package" => Ok(Self::Package),
+            "branch" => Ok(Self::Branch),
+            "commit" => Ok(Self::Commit),
+            _ => anyhow::bail!("unknown version strategy: '{s}'"),
+        }
+    }
+}
 
 /// Library install source for test agent validation.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +99,8 @@ impl std::fmt::Display for InstallSource {
     }
 }
 
+/// Supported LLM providers. `OpenAICompatible` covers Ollama and any
+/// endpoint that speaks the OpenAI chat completions API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provider {
     #[serde(rename = "anthropic")]
@@ -97,6 +152,8 @@ impl std::str::FromStr for Provider {
     }
 }
 
+/// Root configuration — loaded from TOML, merged with CLI overrides.
+/// Discovery: explicit path → CWD → git root → user config dir → defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub llm: LlmConfig,
@@ -105,6 +162,7 @@ pub struct Config {
     pub prompts: PromptsConfig,
 }
 
+/// LLM provider configuration — model, API key, base URL, retry settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub provider: Provider,
@@ -285,13 +343,27 @@ pub struct GenerationConfig {
     #[serde(default, alias = "agent5_llm")]
     pub test_llm: Option<LlmConfig>,
 
+    /// Default version extraction strategy.
+    /// CLI --version-from overrides this.
+    #[serde(default)]
+    pub version_from: Option<VersionStrategy>,
+
+    /// Append run telemetry to ~/.skilldo/runs.csv (default: true)
+    #[serde(default = "default_true")]
+    pub telemetry: bool,
+
     /// Container configuration for test agent validation
     #[serde(default)]
     pub container: ContainerConfig,
 }
 
+/// Container runtime settings — runtime binary, per-language images, timeouts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerConfig {
+    /// Execution mode: bare-metal (default) or container
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
+
     /// Container runtime: "podman", "docker", etc. (default: auto-detected)
     #[serde(default = "default_runtime")]
     pub runtime: String,
@@ -340,6 +412,7 @@ pub struct ContainerConfig {
 impl Default for ContainerConfig {
     fn default() -> Self {
         Self {
+            execution_mode: ExecutionMode::default(),
             runtime: default_runtime(),
             python_image: default_python_image(),
             javascript_image: default_node_image(),
@@ -425,6 +498,7 @@ impl GenerationConfig {
     }
 }
 
+/// User-customizable prompt overrides — per-stage append/overwrite modes.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PromptsConfig {
     /// Global default: if true, custom prompts replace defaults. If false, append.
@@ -627,6 +701,8 @@ impl Default for Config {
                 create_llm: None,
                 review_llm: None,
                 test_llm: None,
+                version_from: None,
+                telemetry: true,
                 container: ContainerConfig::default(),
             },
             prompts: PromptsConfig::default(),
@@ -749,6 +825,8 @@ mod tests {
             create_llm: None,
             review_llm: None,
             test_llm: None,
+            version_from: None,
+            telemetry: true,
             container: ContainerConfig::default(),
         };
         assert_eq!(
@@ -774,6 +852,28 @@ mod tests {
             gen.get_test_mode(),
             crate::test_agent::ValidationMode::Thorough
         );
+    }
+
+    #[test]
+    fn test_version_from_config_deser() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+api_key_env = "none"
+
+[generation]
+version_from = "git-tag"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.generation.version_from,
+            Some(VersionStrategy::GitTag)
+        );
+
+        // Default: None
+        let config2 = Config::default();
+        assert!(config2.generation.version_from.is_none());
     }
 
     #[test]
@@ -1186,5 +1286,61 @@ agent5_custom = "test instructions"
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Failed to parse"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_version_strategy_deser_roundtrip() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "test"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+version_from = "git-tag"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.generation.version_from,
+            Some(VersionStrategy::GitTag)
+        );
+    }
+
+    #[test]
+    fn test_version_strategy_bad_value() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "test"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+version_from = "invalid-strategy"
+"#;
+        let result: std::result::Result<Config, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_version_strategy_from_str() {
+        assert_eq!(
+            "git-tag".parse::<VersionStrategy>().unwrap(),
+            VersionStrategy::GitTag
+        );
+        assert_eq!(
+            "package".parse::<VersionStrategy>().unwrap(),
+            VersionStrategy::Package
+        );
+        assert_eq!(
+            "branch".parse::<VersionStrategy>().unwrap(),
+            VersionStrategy::Branch
+        );
+        assert_eq!(
+            "commit".parse::<VersionStrategy>().unwrap(),
+            VersionStrategy::Commit
+        );
+        assert!("bad".parse::<VersionStrategy>().is_err());
     }
 }

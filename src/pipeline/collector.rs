@@ -1,3 +1,7 @@
+//! Project data collector — gathers source, test, doc, example, and changelog
+//! content from a library's directory tree. Budget-aware: caps each category to
+//! stay within LLM context limits.
+
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +22,8 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
     i
 }
 
+/// Gathers source, test, doc, example, and changelog content from a project
+/// directory. Delegates to language-specific handlers (currently Python only).
 pub struct Collector {
     repo_path: PathBuf,
     language: Language,
@@ -40,6 +46,8 @@ impl Collector {
         self
     }
 
+    /// Collect all project data (source, tests, docs, examples, changelog).
+    /// Returns an error for unsupported languages or empty projects.
     pub async fn collect(&self) -> Result<CollectedData> {
         info!("Collecting files for {:?}", self.language);
 
@@ -79,26 +87,31 @@ impl Collector {
         let test_budget = budget * 30 / 100;
         let docs_budget = budget * 20 / 100;
         let changelog_budget = budget * 5 / 100;
-        let fixed_total = examples_budget + test_budget + docs_budget + changelog_budget;
 
         let examples_content = Self::read_files(&example_paths, examples_budget)?;
         let test_content = Self::read_files(&test_paths, test_budget)?;
         let docs_content = Self::read_files(&doc_paths, docs_budget)?;
-
-        // Source budget = whatever remains after fixed categories, scaled by project size
-        let remaining = budget.saturating_sub(fixed_total);
-        let source_budget = match source_paths.len() {
-            n if n > 2000 => remaining,            // Massive — use full remainder
-            n if n > 1000 => remaining * 60 / 100, // Very large
-            n if n > 300 => remaining * 40 / 100,  // Large
-            _ => remaining,                        // Small — use full remainder (it's only 15%)
-        };
-        let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
         let changelog_content = if let Some(path) = changelog_path {
             Self::read_file_limited(&path, changelog_budget)?
         } else {
             String::new()
         };
+
+        // Source budget = whatever remains after actual consumption by fixed categories.
+        // Uses actual bytes consumed (not allocated budgets) so surplus flows to source.
+        // IMPORTANT: All fixed categories must be read BEFORE this point.
+        let fixed_actual = examples_content.len()
+            + test_content.len()
+            + docs_content.len()
+            + changelog_content.len();
+        let remaining = budget.saturating_sub(fixed_actual);
+        let source_budget = match source_paths.len() {
+            n if n > 2000 => remaining,            // Massive — use full remainder
+            n if n > 1000 => remaining * 60 / 100, // Very large
+            n if n > 300 => remaining * 40 / 100,  // Large
+            _ => remaining,                        // Small — use full remainder
+        };
+        let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
         // Get package name - try multiple strategies, then validate
         let mut package_name = Self::detect_package_name(&self.repo_path)?;
@@ -1347,6 +1360,8 @@ setup(
     }
 }
 
+/// All data collected from a library project, ready for the pipeline agents.
+/// Fields are populated by language-specific collectors and capped by budget.
 #[derive(Debug, Clone)]
 pub struct CollectedData {
     pub package_name: String,

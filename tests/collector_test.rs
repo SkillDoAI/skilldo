@@ -237,10 +237,12 @@ async fn test_collector_respects_max_source_tokens() -> Result<()> {
     let collector = Collector::new(temp_dir.path(), Language::Python);
     let data = collector.collect().await?;
 
-    // Source should be limited by token budget (15K chars for source)
+    // Source should be limited by overall budget (100K default).
+    // Actual source budget = total budget - actual consumption of fixed categories.
     assert!(
-        data.source_content.len() <= 20000,
-        "Source should respect token budget of ~15K chars"
+        data.source_content.len() <= 100_000,
+        "Source should respect token budget (got {} chars)",
+        data.source_content.len()
     );
 
     // Should still have version
@@ -275,9 +277,10 @@ async fn test_collector_with_custom_budget() -> Result<()> {
     let collector = Collector::new(temp_dir.path(), Language::Python).with_max_source_chars(10_000);
     let data = collector.collect().await?;
 
-    // Source budget = 10K * 15% = 1,500 chars for small project
+    // Source budget = 10K - actual fixed consumption (small test files ≈ few hundred bytes).
+    // Source should not exceed the total custom budget.
     assert!(
-        data.source_content.len() <= 2000,
+        data.source_content.len() <= 10_000,
         "Source should respect custom budget (got {} chars)",
         data.source_content.len()
     );

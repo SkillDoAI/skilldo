@@ -1,3 +1,7 @@
+//! Python ecosystem handler — discovers source/test/doc/example files, extracts
+//! metadata (name, version, license, URLs) from pyproject.toml and setup.cfg,
+//! and detects dependencies. Used by the collector for Python projects.
+
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};

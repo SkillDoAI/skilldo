@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 use std::path::Path;
 use std::process::Command;
 
+use crate::config::VersionStrategy;
 use crate::ecosystems::python::pyproject_version;
 
 /// Extract version from various sources
@@ -9,7 +10,7 @@ use crate::ecosystems::python::pyproject_version;
 pub fn extract_version(
     repo_path: &Path,
     explicit_version: Option<String>,
-    version_from: Option<String>,
+    version_from: Option<VersionStrategy>,
 ) -> Result<String> {
     // Priority 1: Explicit version always wins
     if let Some(version) = explicit_version {
@@ -18,15 +19,11 @@ pub fn extract_version(
 
     // Priority 2: version_from strategy
     if let Some(strategy) = version_from {
-        return match strategy.as_str() {
-            "git-tag" => extract_from_git_tag(repo_path),
-            "package" => extract_from_package(repo_path),
-            "branch" => extract_from_branch(repo_path),
-            "commit" => extract_from_commit(repo_path),
-            _ => bail!(
-                "Unknown version source: {}. Valid options: git-tag, package, branch, commit",
-                strategy
-            ),
+        return match strategy {
+            VersionStrategy::GitTag => extract_from_git_tag(repo_path),
+            VersionStrategy::Package => extract_from_package(repo_path),
+            VersionStrategy::Branch => extract_from_branch(repo_path),
+            VersionStrategy::Commit => extract_from_commit(repo_path),
         };
     }
 
@@ -378,19 +375,9 @@ mod tests {
         let result = extract_version(
             Path::new("/tmp"),
             Some("explicit-1.0.0".to_string()),
-            Some("git-tag".to_string()),
+            Some(VersionStrategy::GitTag),
         );
         assert_eq!(result.unwrap(), "explicit-1.0.0");
-    }
-
-    #[test]
-    fn test_unknown_version_strategy() {
-        let result = extract_version(Path::new("/tmp"), None, Some("nonsense".to_string()));
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unknown version source"));
     }
 
     #[test]
@@ -1107,7 +1094,7 @@ mod tests {
         // Call extract_version with version_from = "git-tag" on our own repo
         // Tags may not exist in CI shallow clones, so allow graceful failure
         let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let result = extract_version(repo, None, Some("git-tag".to_string()));
+        let result = extract_version(repo, None, Some(VersionStrategy::GitTag));
         if let Ok(tag) = result {
             assert!(!tag.is_empty());
         }
@@ -1116,21 +1103,21 @@ mod tests {
     #[test]
     fn test_extract_version_package_strategy() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let result = extract_version(repo, None, Some("package".to_string()));
+        let result = extract_version(repo, None, Some(VersionStrategy::Package));
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_extract_version_branch_strategy() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let result = extract_version(repo, None, Some("branch".to_string()));
+        let result = extract_version(repo, None, Some(VersionStrategy::Branch));
         assert!(result.unwrap().starts_with("branch-"));
     }
 
     #[test]
     fn test_extract_version_commit_strategy() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let result = extract_version(repo, None, Some("commit".to_string()));
+        let result = extract_version(repo, None, Some(VersionStrategy::Commit));
         assert!(result.unwrap().starts_with("dev-"));
     }
 

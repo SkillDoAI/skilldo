@@ -1,3 +1,7 @@
+//! Local execution environment for test code — creates isolated temp directories,
+//! installs dependencies, and runs generated test scripts outside containers.
+//! Used as a fallback when container runtime is unavailable.
+
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::PathBuf;
@@ -24,7 +28,6 @@ pub struct ExecutionEnv {
 pub enum ExecutionResult {
     Pass(String), // stdout
     Fail(String), // stderr
-    #[allow(dead_code)]
     Timeout,
 }
 
@@ -48,12 +51,10 @@ impl ExecutionResult {
 }
 
 /// Python executor using `uv` for fast environment setup
-#[allow(dead_code)]
 pub struct PythonUvExecutor {
     timeout_secs: u64,
 }
 
-#[allow(dead_code)]
 impl PythonUvExecutor {
     pub fn new() -> Self {
         Self { timeout_secs: 60 }

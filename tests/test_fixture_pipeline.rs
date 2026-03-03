@@ -371,10 +371,10 @@ async fn test_fixture_normalizer_injects_metadata() {
     let data = fastapi_collected_data();
     let output = generator.generate(&data).await.unwrap();
 
-    // Normalizer should inject generated_with into frontmatter
+    // Normalizer should inject generated-by inside metadata block
     assert!(
-        output.skill_md.contains("generated_with:"),
-        "should have generated_with field"
+        output.skill_md.contains("generated-by: skilldo/gpt-4.1"),
+        "should have generated-by field in metadata"
     );
     // Normalizer should preserve/add homepage from project_urls
     assert!(
