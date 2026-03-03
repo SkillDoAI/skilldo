@@ -25,8 +25,8 @@ rule SD_201_dynamic_code_execution
         $execSync = /\bexecSync\s*\(/
         $spawnSync = /\bspawnSync\s*\(/
         $funcCtor = /new\s+Function\s*\(/
-        $child_proc = /\bchild_process\b/
-        $subprocess = /\bsubprocess\b/
+        $child_proc = /require\s*\(\s*['"]child_process['"]\s*\)/
+        $subprocess = /\bsubprocess\.\w+\s*\(/
         $os_system = /\bos\.system\s*\(/
         $os_popen = /\bos\.popen\s*\(/
         $dyn_import = /__import__\s*\(/
