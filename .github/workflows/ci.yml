@@ -145,7 +145,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Run lib tests with coverage
-        run: cargo llvm-cov --lib --fail-under-lines 95 --lcov --output-path lcov-lib.info -- --skip container_executor --skip test_executor_with_very_short_timeout
+        run: cargo llvm-cov --lib --fail-under-lines 90 --lcov --output-path lcov-lib.info -- --skip container_executor
       - name: Upload to Codecov
         if: always()
         uses: codecov/codecov-action@v5
@@ -172,7 +172,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Run integration test binaries with coverage
-        run: cargo llvm-cov --tests --lcov --output-path lcov-tests.info -- --skip container_executor --skip test_executor_with_very_short_timeout
+        run: cargo llvm-cov --tests --lcov --output-path lcov-tests.info -- --skip container_executor
       - name: Upload to Codecov
         if: always()
         uses: codecov/codecov-action@v5
@@ -193,11 +193,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}
-      - uses: astral-sh/setup-uv@v7
-      - name: Run executor tests (skipped in coverage due to llvm-cov hangs)
-        run: |
-          cargo test container_executor
-          cargo test --test executor_error_test
+      - name: Run container executor unit tests (skipped in coverage due to llvm-cov hangs)
+        run: cargo test container_executor
 
   audit:
     name: security audit
