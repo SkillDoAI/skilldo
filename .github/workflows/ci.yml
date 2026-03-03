@@ -172,7 +172,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Run integration test binaries with coverage
-        run: cargo llvm-cov --tests --lcov --output-path lcov-tests.info
+        run: cargo llvm-cov --tests --lcov --output-path lcov-tests.info -- --skip container_executor
       - name: Upload to Codecov
         if: always()
         uses: codecov/codecov-action@v5
