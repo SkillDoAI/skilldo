@@ -48,7 +48,9 @@ impl LlmClient for RetryClient {
                         || err_str.contains("429")
                         || err_str.contains("503")
                         || err_str.contains("502")
-                        || err_str.contains("500 Internal");
+                        || err_str.contains("500 Internal")
+                        || err_str.contains("529")
+                        || err_str.contains("overloaded");
 
                     if is_transient && attempt < self.max_retries {
                         warn!(
@@ -492,6 +494,8 @@ mod tests {
             "HTTP 503 service unavailable",
             "HTTP 502 bad gateway",
             "500 Internal server error",
+            "HTTP 529 unknown status",
+            "Anthropic API error: overloaded",
         ];
 
         for error_msg in &transient_errors {

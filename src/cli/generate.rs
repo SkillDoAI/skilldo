@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::cli::version;
 use crate::config::{Config, InstallSource, Provider};
@@ -77,8 +77,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     } = opts;
     let repo_path = Path::new(&path);
 
-    // Load config (explicit path, repo root, or user config dir)
-    let mut config = Config::load_with_path(config_path)?;
+    // Load config (explicit path, CWD, target repo, git root, or user config dir)
+    let mut config = Config::load_with_path_and_repo(config_path, Some(repo_path))?;
 
     // Resolve defaults: CLI > config > hardcoded
     let output = output
@@ -120,7 +120,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         config.generation.max_retries = retries;
     }
     if no_test {
-        info!("CLI override: test agent disabled");
+        warn!("CLI override: test agent disabled");
         config.generation.enable_test = false;
         if test_model_override.is_some()
             || test_provider_override.is_some()
@@ -210,13 +210,13 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
 
     // Security scan CLI override
     if no_security_scan {
-        info!("CLI override: security scan disabled");
+        warn!("CLI override: security scan disabled");
         config.generation.enable_security_scan = false;
     }
 
     // Review agent CLI overrides
     if no_review {
-        info!("CLI override: review agent disabled");
+        warn!("CLI override: review agent disabled");
         config.generation.enable_review = false;
         if review_model_override.is_some() || review_provider_override.is_some() {
             tracing::warn!(
@@ -443,9 +443,31 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
 
     let output_result = generator.generate(&collected_data).await?;
 
-    // Write output
-    fs::write(&output, &output_result.skill_md)?;
-    info!("✓ Generated SKILL.md written to {}", output);
+    // Write output — use temp file + rename to avoid overwriting known-good
+    // SKILL.md with a failed result (atomic on same filesystem)
+    let output_path = Path::new(&output);
+    let output_dir = output_path.parent().unwrap_or(Path::new("."));
+    let tmp_path = output_dir.join(format!(
+        ".{}.{}.tmp",
+        output_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
+        std::process::id()
+    ));
+    fs::write(&tmp_path, &output_result.skill_md)?;
+
+    // Only promote to final path if the run succeeded (or --best-effort)
+    if !output_result.has_unresolved_errors || best_effort {
+        fs::rename(&tmp_path, &output)?;
+        info!("✓ Generated SKILL.md written to {}", output);
+        cleanup_stale_tmp_files(output_dir, output_path);
+    } else {
+        info!(
+            "⚠ Output written to {} (unresolved errors — original preserved)",
+            tmp_path.display()
+        );
+    }
 
     // Lint the generated file
     info!("Running linter...");
@@ -502,6 +524,28 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Remove stale `.SKILL.md.*.tmp` files from prior failed runs.
+fn cleanup_stale_tmp_files(dir: &Path, output_path: &Path) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let prefix = format!(
+        ".{}.",
+        output_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+    );
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name.ends_with(".tmp") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1039,5 +1083,29 @@ install_source = "registry"
             "best_effort=true should always succeed: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn cleanup_stale_tmp_files_removes_matching() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("click-SKILL.md");
+
+        // Create stale tmp files from "prior runs"
+        fs::write(dir.path().join(".click-SKILL.md.12345.tmp"), "stale1").unwrap();
+        fs::write(dir.path().join(".click-SKILL.md.67890.tmp"), "stale2").unwrap();
+        // Unrelated file should survive
+        fs::write(dir.path().join("other.txt"), "keep").unwrap();
+
+        cleanup_stale_tmp_files(dir.path(), &output);
+
+        assert!(!dir.path().join(".click-SKILL.md.12345.tmp").exists());
+        assert!(!dir.path().join(".click-SKILL.md.67890.tmp").exists());
+        assert!(dir.path().join("other.txt").exists());
+    }
+
+    #[test]
+    fn cleanup_stale_tmp_files_nonexistent_dir() {
+        // Should not panic on a missing directory
+        cleanup_stale_tmp_files(Path::new("/nonexistent/dir"), Path::new("SKILL.md"));
     }
 }

@@ -157,6 +157,7 @@ impl std::str::FromStr for Provider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub llm: LlmConfig,
+    #[serde(default)]
     pub generation: GenerationConfig,
     #[serde(default)]
     pub prompts: PromptsConfig,
@@ -310,7 +311,7 @@ pub struct GenerationConfig {
     #[serde(default = "default_true")]
     pub enable_review: bool,
 
-    /// Enable security scan (YARA + pattern + unicode + injection) on generated output (default: true)
+    /// Enable security scan (YARA + unicode + injection) on generated output (default: true)
     #[serde(default = "default_true")]
     pub enable_security_scan: bool,
 
@@ -568,13 +569,37 @@ impl Config {
     /// Load configuration from a specific path, or use default search paths.
     /// Parse errors in existing config files are surfaced immediately (not silently ignored).
     pub fn load_with_path(path: Option<String>) -> Result<Self> {
+        Self::load_with_path_and_repo(path, None)
+    }
+
+    /// Load configuration with optional target repo path for config discovery.
+    /// Search order: explicit path > target repo > CWD > git root > user config > defaults.
+    pub fn load_with_path_and_repo(
+        path: Option<String>,
+        repo_path: Option<&std::path::Path>,
+    ) -> Result<Self> {
         // If explicit path provided, use it (both missing and malformed are errors)
         if let Some(config_path) = path {
             debug!("Loading config from explicit path: {}", config_path);
             return Self::load_from_path(&config_path);
         }
 
-        // Try CWD first (most common case, zero cost)
+        // Try target repo root first (when generating a different repo from outside).
+        // This must come before CWD so `generate --path <other-repo>` picks up
+        // the target's config, not the caller's CWD config.
+        if let Some(repo) = repo_path {
+            let repo_config = repo.join("skilldo.toml");
+            match Self::try_load_from_path(&repo_config) {
+                Ok(Some(config)) => {
+                    debug!("Loaded config from target repo: {}", repo_config.display());
+                    return Ok(config);
+                }
+                Ok(None) => {}           // file not found, try next
+                Err(e) => return Err(e), // parse error — surface immediately
+            }
+        }
+
+        // Try CWD (common case when generating from within the repo)
         match Self::try_load_from_path("skilldo.toml") {
             Ok(Some(config)) => {
                 debug!("Loaded config from ./skilldo.toml");
@@ -688,29 +713,35 @@ impl Default for Config {
                 extra_body_json: None,
                 request_timeout_secs: default_request_timeout(),
             },
-            generation: GenerationConfig {
-                output: None,
-                input: None,
-                language: None,
-                max_retries: 5,
-                max_source_tokens: 100000,
-                parallel_extraction: true,
-                enable_test: true,
-                test_mode: "thorough".to_string(),
-                enable_review: true,
-                enable_security_scan: true,
-                review_max_retries: default_review_max_retries(),
-                extract_llm: None,
-                map_llm: None,
-                learn_llm: None,
-                create_llm: None,
-                review_llm: None,
-                test_llm: None,
-                version_from: None,
-                telemetry: true,
-                container: ContainerConfig::default(),
-            },
+            generation: GenerationConfig::default(),
             prompts: PromptsConfig::default(),
+        }
+    }
+}
+
+impl Default for GenerationConfig {
+    fn default() -> Self {
+        Self {
+            output: None,
+            input: None,
+            language: None,
+            max_retries: default_max_retries(),
+            max_source_tokens: default_max_source_tokens(),
+            parallel_extraction: default_true(),
+            enable_test: default_true(),
+            test_mode: default_test_mode(),
+            enable_review: default_true(),
+            enable_security_scan: default_true(),
+            review_max_retries: default_review_max_retries(),
+            extract_llm: None,
+            map_llm: None,
+            learn_llm: None,
+            create_llm: None,
+            review_llm: None,
+            test_llm: None,
+            version_from: None,
+            telemetry: default_true(),
+            container: ContainerConfig::default(),
         }
     }
 }
@@ -726,6 +757,33 @@ mod tests {
         assert_eq!(config.llm.api_key_env, None); // Inferred from provider
         assert_eq!(config.generation.max_retries, 5);
         assert!(!config.prompts.override_prompts);
+    }
+
+    #[test]
+    fn generation_config_defaults_match_serde() {
+        // Verify Default impl uses the same helper functions as serde defaults.
+        // If someone adds a field with #[serde(default = "...")] but forgets to
+        // update the Default impl, this test catches the drift.
+        let gen = GenerationConfig::default();
+        assert_eq!(gen.max_retries, default_max_retries());
+        assert_eq!(gen.max_source_tokens, default_max_source_tokens());
+        assert_eq!(gen.parallel_extraction, default_true());
+        assert_eq!(gen.enable_test, default_true());
+        assert_eq!(gen.test_mode, default_test_mode());
+        assert_eq!(gen.enable_review, default_true());
+        assert_eq!(gen.enable_security_scan, default_true());
+        assert_eq!(gen.review_max_retries, default_review_max_retries());
+        assert_eq!(gen.telemetry, default_true());
+        assert!(gen.output.is_none());
+        assert!(gen.input.is_none());
+        assert!(gen.language.is_none());
+        assert!(gen.extract_llm.is_none());
+        assert!(gen.map_llm.is_none());
+        assert!(gen.learn_llm.is_none());
+        assert!(gen.create_llm.is_none());
+        assert!(gen.review_llm.is_none());
+        assert!(gen.test_llm.is_none());
+        assert!(gen.version_from.is_none());
     }
 
     #[test]
@@ -1348,5 +1406,58 @@ version_from = "invalid-strategy"
             VersionStrategy::Commit
         );
         assert!("bad".parse::<VersionStrategy>().is_err());
+    }
+
+    #[test]
+    fn test_load_with_repo_path_finds_target_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_content = r#"
+[llm]
+provider = "openai"
+model = "gpt-4o-test"
+"#;
+        std::fs::write(dir.path().join("skilldo.toml"), config_content).unwrap();
+
+        // When CWD doesn't have a config, repo_path should be tried
+        let config = Config::load_with_path_and_repo(None, Some(dir.path())).unwrap();
+        assert_eq!(config.llm.provider, Provider::OpenAI);
+        assert_eq!(config.llm.model, "gpt-4o-test");
+    }
+
+    #[test]
+    fn test_load_with_repo_path_explicit_overrides_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_config = r#"
+[llm]
+provider = "openai"
+model = "gpt-4o"
+"#;
+        let explicit_config = r#"
+[llm]
+provider = "gemini"
+model = "gemini-2.5-pro"
+"#;
+        std::fs::write(dir.path().join("skilldo.toml"), repo_config).unwrap();
+        let explicit_path = dir.path().join("explicit.toml");
+        std::fs::write(&explicit_path, explicit_config).unwrap();
+
+        let config = Config::load_with_path_and_repo(
+            Some(explicit_path.to_string_lossy().to_string()),
+            Some(dir.path()),
+        )
+        .unwrap();
+        // Explicit path wins over repo_path
+        assert_eq!(config.llm.provider, Provider::Gemini);
+    }
+
+    #[test]
+    fn test_load_with_repo_path_malformed_config_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("skilldo.toml"), "not valid {{{ toml").unwrap();
+        let result = Config::load_with_path_and_repo(None, Some(dir.path()));
+        assert!(
+            result.is_err(),
+            "malformed config in repo_path should error"
+        );
     }
 }
