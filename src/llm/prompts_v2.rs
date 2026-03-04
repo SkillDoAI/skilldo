@@ -1300,9 +1300,51 @@ fn python_hints(stage: &str) -> &'static str {
     }
 }
 
-fn go_hints(_stage: &str) -> &'static str {
-    // Placeholder — Go hints will be populated in v0.2.0
-    ""
+fn go_hints(stage: &str) -> &'static str {
+    match stage {
+        "extract" => {
+            "\
+\n\nGO-SPECIFIC HINTS:\n\
+- Exported identifiers start with uppercase (e.g., `NewRouter`, `Handle`)\n\
+- `go.mod` defines module path and Go version — use for version detection\n\
+- `doc.go` files contain package-level documentation\n\
+- Interface types define the public API contract — prioritize these"
+        }
+        "map" => {
+            "\
+\n\nGO-SPECIFIC HINTS:\n\
+- Table-driven tests (`tests := []struct{...}`) are the idiomatic test pattern\n\
+- `context.Context` as first parameter indicates cancellation/timeout support\n\
+- `func (r *Type) Method()` receiver methods define the core API surface\n\
+- `interface{}` or `any` parameters indicate generic/flexible APIs\n\
+- Error wrapping with `fmt.Errorf(\"%w\", err)` shows error chain patterns"
+        }
+        "learn" => {
+            "\
+\n\nGO-SPECIFIC HINTS:\n\
+- Godoc comments directly above exported identifiers are the documentation system\n\
+- `Example` functions in `_test.go` files are runnable, verified documentation\n\
+- Look for `go:generate` directives that indicate code generation patterns\n\
+- `internal/` packages are not importable outside the module"
+        }
+        "create" => {
+            "\
+\n\nGO-SPECIFIC HINTS:\n\
+- Use Go import conventions: group stdlib, then blank line, then third-party\n\
+- Always show `if err != nil` error handling in examples\n\
+- Use `func main()` in runnable examples with `package main`\n\
+- Follow Go conventions: short variable names, CamelCase exports, lowercase unexported"
+        }
+        "review_verdict" => {
+            "\
+\n\nGO-SPECIFIC GUIDANCE:\n\
+- Short variable names are idiomatic Go (e.g., `r` for request, `w` for writer)\n\
+- Omitting error variable names (`_ = f.Close()`) is acceptable for non-critical cleanup\n\
+- `interface{}` vs `any` differences are not errors (alias since Go 1.18)\n\
+- Receiver names should be short (1-2 chars) — this is standard Go style"
+        }
+        _ => "",
+    }
 }
 
 /// Generate a UTC timestamp string without depending on the chrono crate.
@@ -1344,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn test_go_extract_prompt_has_no_python_hints_section() {
+    fn test_go_extract_prompt_has_go_hints() {
         let prompt = extract_prompt(
             "cobra",
             "1.8.0",
@@ -1357,6 +1399,14 @@ mod tests {
         assert!(
             !prompt.contains("PYTHON-SPECIFIC HINTS"),
             "Go extract should not have Python-specific hints section"
+        );
+        assert!(
+            prompt.contains("GO-SPECIFIC HINTS"),
+            "Go extract should have Go-specific hints"
+        );
+        assert!(
+            prompt.contains("go.mod"),
+            "Go extract hints should mention go.mod"
         );
     }
 
@@ -1381,7 +1431,7 @@ mod tests {
     }
 
     #[test]
-    fn test_go_create_prompt_does_not_contain_pep8() {
+    fn test_go_create_prompt_has_go_hints() {
         let prompt = create_prompt(
             "cobra",
             "1.8.0",
@@ -1397,6 +1447,14 @@ mod tests {
         assert!(
             !prompt.contains("PEP 8"),
             "Go create should not mention PEP 8"
+        );
+        assert!(
+            prompt.contains("GO-SPECIFIC HINTS"),
+            "Go create should have Go-specific hints"
+        );
+        assert!(
+            prompt.contains("err != nil"),
+            "Go create hints should mention error handling"
         );
     }
 
@@ -1444,11 +1502,15 @@ mod tests {
     }
 
     #[test]
-    fn test_verdict_prompt_go_no_python_hints() {
+    fn test_verdict_prompt_go_has_go_hints() {
         let prompt = review_verdict_prompt("# skill", "{}", None, &Language::Go);
         assert!(
             !prompt.contains("PYTHON-SPECIFIC"),
             "Go verdict should not have Python hints"
+        );
+        assert!(
+            prompt.contains("GO-SPECIFIC GUIDANCE"),
+            "Go verdict should have Go-specific guidance"
         );
     }
 
@@ -1456,6 +1518,47 @@ mod tests {
     fn test_language_hints_unknown_stage_returns_empty() {
         let hints = language_hints(&Language::Python, "nonexistent_stage");
         assert!(hints.is_empty(), "Unknown stage should return empty hints");
+    }
+
+    #[test]
+    fn test_go_hints_all_stages_non_empty() {
+        for stage in &["extract", "map", "learn", "create", "review_verdict"] {
+            let hints = go_hints(stage);
+            assert!(
+                !hints.is_empty(),
+                "Go hints for '{}' should not be empty",
+                stage
+            );
+            assert!(
+                hints.contains("GO-SPECIFIC"),
+                "Go hints for '{}' should contain 'GO-SPECIFIC'",
+                stage
+            );
+        }
+    }
+
+    #[test]
+    fn test_go_hints_unknown_stage_returns_empty() {
+        let hints = go_hints("nonexistent_stage");
+        assert!(hints.is_empty(), "Unknown stage should return empty hints");
+    }
+
+    #[test]
+    fn test_go_map_hints_mention_table_driven() {
+        let hints = go_hints("map");
+        assert!(
+            hints.contains("Table-driven"),
+            "Go map hints should mention table-driven tests"
+        );
+    }
+
+    #[test]
+    fn test_go_learn_hints_mention_godoc() {
+        let hints = go_hints("learn");
+        assert!(
+            hints.contains("Godoc"),
+            "Go learn hints should mention Godoc"
+        );
     }
 
     #[test]
