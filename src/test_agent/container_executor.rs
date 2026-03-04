@@ -660,7 +660,7 @@ mod tests {
         );
         assert_eq!(executor.config.javascript_image, "node:20-slim");
         assert_eq!(executor.config.rust_image, "rust:1.75-slim");
-        assert_eq!(executor.config.go_image, "golang:1.21-alpine");
+        assert_eq!(executor.config.go_image, "golang:1.22-alpine");
         assert_eq!(executor.config.timeout, 60);
         assert!(executor.config.cleanup);
         assert_eq!(executor.config.install_source, InstallSource::Registry);
@@ -863,7 +863,7 @@ mod tests {
     #[test]
     fn test_get_image_with_default_config_go() {
         let executor = ContainerExecutor::new(ContainerConfig::default(), Language::Go);
-        assert_eq!(executor.get_image(), "golang:1.21-alpine");
+        assert_eq!(executor.get_image(), "golang:1.22-alpine");
     }
 
     // --- setup_environment: runtime not found ---

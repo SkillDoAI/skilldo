@@ -121,15 +121,18 @@ impl GoHandler {
 
     // ── Metadata extraction ────────────────────────────────────────────
 
-    /// Extract package name from go.mod module path (last path segment).
+    /// Extract package name from go.mod module path.
+    /// Skips major-version suffixes (v2, v3, etc.) per Go module conventions.
     pub fn get_package_name(&self) -> Result<String> {
         let module_path = self.read_module_path()?;
-        let name = module_path
-            .rsplit('/')
-            .next()
-            .unwrap_or(&module_path)
-            .to_string();
-        Ok(name)
+        let segments: Vec<&str> = module_path.rsplit('/').collect();
+        // If the last segment is a major-version suffix (v2, v3, ...), use the parent
+        let name = if segments.len() > 1 && is_major_version_suffix(segments[0]) {
+            segments[1]
+        } else {
+            segments[0]
+        };
+        Ok(name.to_string())
     }
 
     /// Extract version. Tries git tags first, then falls back to "latest".
@@ -428,6 +431,14 @@ fn extract_version_constant(content: &str) -> Option<String> {
     VERSION_RE.captures(content).map(|cap| cap[1].to_string())
 }
 
+/// Check if a path segment is a Go major-version suffix (v2, v3, ...).
+fn is_major_version_suffix(segment: &str) -> bool {
+    segment.starts_with('v')
+        && segment.len() >= 2
+        && segment[1..].chars().all(|c| c.is_ascii_digit())
+        && segment[1..].parse::<u32>().is_ok_and(|n| n >= 2)
+}
+
 /// Classify a license file by its content (first few hundred chars).
 fn classify_license(content: &str) -> Option<String> {
     let lower = content.to_lowercase();
@@ -673,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn get_package_name_nested_module() {
+    fn get_package_name_skips_major_version_suffix() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("go.mod"),
@@ -681,7 +692,40 @@ mod tests {
         )
         .unwrap();
         let handler = GoHandler::new(dir.path());
-        assert_eq!(handler.get_package_name().unwrap(), "v2");
+        assert_eq!(
+            handler.get_package_name().unwrap(),
+            "repo",
+            "Should skip v2 suffix and use parent segment"
+        );
+    }
+
+    #[test]
+    fn get_package_name_v5_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("go.mod"),
+            "module github.com/go-chi/chi/v5\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_package_name().unwrap(), "chi");
+    }
+
+    #[test]
+    fn get_package_name_v1_not_skipped() {
+        // v1 is not a major version suffix in Go conventions (v0, v1 = no suffix)
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("go.mod"),
+            "module github.com/org/v1\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(
+            handler.get_package_name().unwrap(),
+            "v1",
+            "v1 is not a major version suffix, should be kept"
+        );
     }
 
     #[test]
@@ -828,5 +872,28 @@ mod tests {
         assert!(!GoHandler::should_skip_dir("internal"));
         assert!(!GoHandler::should_skip_dir("pkg"));
         assert!(!GoHandler::should_skip_dir("cmd"));
+    }
+
+    #[test]
+    fn is_major_version_suffix_recognizes_v2_plus() {
+        assert!(is_major_version_suffix("v2"));
+        assert!(is_major_version_suffix("v3"));
+        assert!(is_major_version_suffix("v5"));
+        assert!(is_major_version_suffix("v10"));
+    }
+
+    #[test]
+    fn is_major_version_suffix_rejects_v0_v1() {
+        assert!(!is_major_version_suffix("v0"));
+        assert!(!is_major_version_suffix("v1"));
+    }
+
+    #[test]
+    fn is_major_version_suffix_rejects_non_versions() {
+        assert!(!is_major_version_suffix("vendor"));
+        assert!(!is_major_version_suffix("v"));
+        assert!(!is_major_version_suffix("2"));
+        assert!(!is_major_version_suffix("v2a"));
+        assert!(!is_major_version_suffix("version"));
     }
 }

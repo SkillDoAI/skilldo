@@ -385,7 +385,7 @@ pub struct ContainerConfig {
     #[serde(default = "default_rust_image")]
     pub rust_image: String,
 
-    /// Container image for Go (default: "golang:1.21-alpine")
+    /// Container image for Go (default: "golang:1.22-alpine")
     #[serde(default = "default_go_image")]
     pub go_image: String,
 
@@ -465,7 +465,7 @@ fn default_rust_image() -> String {
 }
 
 fn default_go_image() -> String {
-    "golang:1.21-alpine".to_string()
+    "golang:1.22-alpine".to_string()
 }
 
 fn default_timeout() -> u64 {
