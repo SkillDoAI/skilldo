@@ -112,25 +112,28 @@ pub struct YaraScanner {
 /// Process-wide cached builtin scanner (compiled once, reused across scans).
 static BUILTIN_SCANNER: OnceLock<Result<YaraScanner, String>> = OnceLock::new();
 
+/// Load all embedded rules (Cisco + SkillDo) into a compiler.
+fn add_embedded_rules(compiler: &mut boreal::Compiler) -> Result<(), String> {
+    for (name, content) in CISCO_RULES {
+        let patched = patch_for_boreal(content);
+        compiler
+            .add_rules_str(&patched)
+            .map_err(|e| format!("Failed to compile cisco/{name}: {e}"))?;
+    }
+    for (name, content) in SKILLDO_RULES {
+        compiler
+            .add_rules_str(content)
+            .map_err(|e| format!("Failed to compile skilldo/{name}: {e}"))?;
+    }
+    Ok(())
+}
+
 impl YaraScanner {
     /// Get a reference to the cached builtin scanner (compiled on first call).
     pub fn builtin() -> Result<&'static Self, String> {
         let cached = BUILTIN_SCANNER.get_or_init(|| {
             let mut compiler = boreal::Compiler::new();
-
-            for (name, content) in CISCO_RULES {
-                let patched = patch_for_boreal(content);
-                compiler
-                    .add_rules_str(&patched)
-                    .map_err(|e| format!("Failed to compile cisco/{name}: {e}"))?;
-            }
-
-            for (name, content) in SKILLDO_RULES {
-                compiler
-                    .add_rules_str(content)
-                    .map_err(|e| format!("Failed to compile skilldo/{name}: {e}"))?;
-            }
-
+            add_embedded_rules(&mut compiler)?;
             Ok(YaraScanner {
                 scanner: compiler.finalize(),
             })
@@ -145,19 +148,7 @@ impl YaraScanner {
     #[allow(dead_code)]
     pub fn with_rules_dir(dir: &Path) -> Result<Self, String> {
         let mut compiler = boreal::Compiler::new();
-
-        for (name, content) in CISCO_RULES {
-            let patched = patch_for_boreal(content);
-            compiler
-                .add_rules_str(&patched)
-                .map_err(|e| format!("Failed to compile cisco/{name}: {e}"))?;
-        }
-
-        for (name, content) in SKILLDO_RULES {
-            compiler
-                .add_rules_str(content)
-                .map_err(|e| format!("Failed to compile skilldo/{name}: {e}"))?;
-        }
+        add_embedded_rules(&mut compiler)?;
 
         if dir.is_dir() {
             let mut entries: Vec<_> = std::fs::read_dir(dir)
