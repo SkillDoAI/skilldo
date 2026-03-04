@@ -4,10 +4,11 @@
 
 use anyhow::Result;
 use regex::Regex;
-use tracing::debug;
+use tracing::{debug, warn};
 
-use super::parser::{CodePattern, PatternCategory};
+use super::parser::{extract_section, CodePattern, PatternCategory};
 use super::LanguageParser;
+use crate::util::sanitize_dep_name;
 
 /// Go-specific parser for SKILL.md files
 pub struct GoParser;
@@ -105,65 +106,7 @@ impl GoParser {
     }
 }
 
-/// Extract the content of a `## Section` from SKILL.md, bounded by the next `## ` heading.
-fn extract_section<'a>(skill_md: &'a str, header_pattern: &str) -> Result<Option<&'a str>> {
-    let header_re = Regex::new(header_pattern)?;
-    let start_pos = match header_re.find(skill_md) {
-        Some(m) => m.end(),
-        None => return Ok(None),
-    };
-    let after = &skill_md[start_pos..];
-    let next_section_re = Regex::new(r"(?m)^##\s+")?;
-    let end_pos = next_section_re
-        .find(after)
-        .map(|m| m.start())
-        .unwrap_or(after.len());
-    Ok(Some(&after[..end_pos]))
-}
-
-/// Extract a value from SKILL.md YAML frontmatter by key.
-fn frontmatter_field(skill_md: &str, key: &str) -> Option<String> {
-    let prefix = format!("{}:", key);
-    for line in skill_md.lines().take(15) {
-        let trimmed = line.trim();
-        if let Some(val) = trimmed.strip_prefix(&prefix) {
-            let val = val.trim().trim_matches('"').trim_matches('\'').to_string();
-            if !val.is_empty() {
-                return Some(val);
-            }
-        }
-    }
-    None
-}
-
 impl LanguageParser for GoParser {
-    fn extract_version(&self, skill_md: &str) -> Result<Option<String>> {
-        match frontmatter_field(skill_md, "version") {
-            Some(v) if v == "unknown" => {
-                debug!("Version field found but set to 'unknown'");
-                Ok(None)
-            }
-            Some(v) => {
-                debug!("Extracted version from SKILL.md: {}", v);
-                Ok(Some(v))
-            }
-            None => {
-                debug!("No version field found in SKILL.md frontmatter");
-                Ok(None)
-            }
-        }
-    }
-
-    fn extract_name(&self, skill_md: &str) -> Result<Option<String>> {
-        match frontmatter_field(skill_md, "name") {
-            Some(name) => {
-                debug!("Extracted package name from SKILL.md: {}", name);
-                Ok(Some(name))
-            }
-            None => Ok(None),
-        }
-    }
-
     fn extract_patterns(&self, skill_md: &str) -> Result<Vec<CodePattern>> {
         let mut patterns = Vec::new();
 
@@ -270,6 +213,14 @@ impl LanguageParser for GoParser {
                 dependencies.push(pkg);
             }
         }
+
+        dependencies.retain(|dep| match sanitize_dep_name(dep) {
+            Ok(_) => true,
+            Err(e) => {
+                warn!("Dropping invalid dependency at ingestion: {}", e);
+                false
+            }
+        });
 
         debug!(
             "Extracted {} dependencies from SKILL.md",

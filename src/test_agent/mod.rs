@@ -18,6 +18,9 @@ pub use parser::{CodePattern, PatternCategory};
 pub use validator::{TestCodeValidator, TestResult, ValidationMode};
 
 use anyhow::Result;
+use tracing::debug;
+
+use parser::frontmatter_field;
 
 /// Core trait for extracting patterns and dependencies from SKILL.md
 /// Language-agnostic interface that each language implements.
@@ -30,11 +33,34 @@ pub trait LanguageParser: Send + Sync {
 
     /// Extract version from frontmatter (e.g., "version: 3.0.0")
     /// Returns None if no version found or "unknown"
-    fn extract_version(&self, skill_md: &str) -> Result<Option<String>>;
+    fn extract_version(&self, skill_md: &str) -> Result<Option<String>> {
+        match frontmatter_field(skill_md, "version") {
+            Some(v) if v == "unknown" => {
+                debug!("Version field found but set to 'unknown'");
+                Ok(None)
+            }
+            Some(v) => {
+                debug!("Extracted version from SKILL.md: {}", v);
+                Ok(Some(v))
+            }
+            None => {
+                debug!("No version field found in SKILL.md frontmatter");
+                Ok(None)
+            }
+        }
+    }
 
     /// Extract package name from frontmatter (e.g., "name: scikit-learn")
     /// Used for `pip install <name>` / `npm install <name>` instead of import names
-    fn extract_name(&self, skill_md: &str) -> Result<Option<String>>;
+    fn extract_name(&self, skill_md: &str) -> Result<Option<String>> {
+        match frontmatter_field(skill_md, "name") {
+            Some(name) => {
+                debug!("Extracted package name from SKILL.md: {}", name);
+                Ok(Some(name))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 /// Core trait for generating test code from patterns
