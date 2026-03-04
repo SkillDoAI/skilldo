@@ -205,4 +205,45 @@ mod tests {
         let homoglyph = findings.iter().find(|f| f.rule_id == "SD-001").unwrap();
         assert_eq!(homoglyph.severity, Severity::Critical);
     }
+
+    #[test]
+    fn detects_mixed_latin_greek() {
+        // Latin text with enough Greek chars (>2) to trigger
+        let content = "The function uses αβγ parameters";
+        let findings = scan(content);
+        let mixed = findings
+            .iter()
+            .find(|f| f.rule_id == "SD-005" && f.message.contains("Greek"));
+        assert!(mixed.is_some(), "should detect Latin+Greek mix");
+        assert_eq!(mixed.unwrap().severity, Severity::Medium);
+    }
+
+    #[test]
+    fn no_greek_finding_for_few_chars() {
+        // Only 2 Greek chars — below the >2 threshold
+        let content = "Use αβ notation";
+        let findings = scan(content);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "SD-005" && f.message.contains("Greek")),
+            "2 Greek chars should not trigger"
+        );
+    }
+
+    #[test]
+    fn homoglyph_samples_capped_at_five() {
+        // 8 distinct homoglyphs — samples list should cap at 5
+        let content = "аеосухАВ test";
+        let findings = scan(content);
+        let f = findings.iter().find(|f| f.rule_id == "SD-001").unwrap();
+        let arrow_count = f.message.matches('→').count();
+        assert!(arrow_count <= 5, "samples should be capped at 5");
+    }
+
+    #[test]
+    fn rlo_not_found_on_clean_text() {
+        let findings = scan("perfectly normal text with no tricks");
+        assert!(!findings.iter().any(|f| f.rule_id == "SD-004"));
+    }
 }
