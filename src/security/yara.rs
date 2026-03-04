@@ -535,4 +535,51 @@ mod tests {
             "embedded rules should still fire on prompt injection"
         );
     }
+
+    #[test]
+    fn with_rules_dir_loads_custom_yara_files() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write a valid YARA rule to the temp dir
+        std::fs::write(
+            dir.path().join("custom.yara"),
+            r#"
+rule custom_test_rule {
+    meta:
+        description = "Test custom rule loading"
+        severity = "high"
+        category = "prompt-injection"
+    strings:
+        $trigger = "SKILLDO_CUSTOM_TRIGGER_PHRASE"
+    condition:
+        $trigger
+}
+"#,
+        )
+        .unwrap();
+
+        // Also write a non-.yara file that should be skipped
+        std::fs::write(dir.path().join("readme.txt"), "not a rule").unwrap();
+
+        let scanner = YaraScanner::with_rules_dir(dir.path()).unwrap();
+
+        // Custom rule should fire
+        let findings = scanner.scan("SKILLDO_CUSTOM_TRIGGER_PHRASE");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("Test custom rule loading")),
+            "custom rule should fire, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+
+        // Clean content should not trigger custom rule
+        let clean = scanner.scan("Normal safe content.");
+        assert!(
+            !clean
+                .iter()
+                .any(|f| f.message.contains("Test custom rule loading")),
+            "custom rule should not fire on clean content"
+        );
+    }
 }
