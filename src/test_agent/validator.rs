@@ -7,6 +7,8 @@ use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
 use super::executor::{ExecutionResult, PythonUvExecutor};
+use super::go_code_gen::GoCodeGenerator;
+use super::go_parser::GoParser;
 use super::python_code_gen::PythonCodeGenerator;
 use super::python_parser::PythonParser;
 use super::{CodePattern, LanguageCodeGenerator, LanguageExecutor, LanguageParser};
@@ -144,6 +146,22 @@ impl<'a> TestCodeValidator<'a> {
                     parser: Box::new(PythonParser),
                     code_generator: Box::new(
                         PythonCodeGenerator::new(llm_client)
+                            .with_custom_instructions(custom_instructions),
+                    ),
+                    executor,
+                    mode: ValidationMode::default(),
+                    install_source,
+                })
+            }
+            Language::Go => {
+                // Go only supports container execution (no bare-metal executor yet)
+                let executor: Box<dyn LanguageExecutor> =
+                    Box::new(ContainerExecutor::new(config, Language::Go));
+                Ok(Self {
+                    language: Language::Go,
+                    parser: Box::new(GoParser),
+                    code_generator: Box::new(
+                        GoCodeGenerator::new(llm_client)
                             .with_custom_instructions(custom_instructions),
                     ),
                     executor,
