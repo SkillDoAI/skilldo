@@ -1,11 +1,16 @@
 //! Security scanning for generated SKILL.md files.
 //!
-//! Four-layer static analysis for AI agent skill files:
+//! Three-layer static analysis for AI agent skill files:
 //!
-//! 1. **Pattern matching** — dangerous code patterns in examples (exec, creds, exfil)
-//! 2. **Unicode attacks** — homoglyphs, invisible chars, bidi overrides, mixed scripts
-//! 3. **Prompt injection** — instruction overrides, encoded payloads, markdown injection
-//! 4. **YARA rules** — SkillDo + Cisco skill-scanner rule packs (prompt injection, code exec, etc.)
+//! 1. **YARA rules** — SkillDo + Cisco rule packs: dangerous patterns, prompt injection,
+//!    unicode attacks, credential harvesting, code execution (primary detection layer)
+//! 2. **Unicode analysis** — Rust-level homoglyph detection, RLO override, mixed-script
+//!    analysis (requires character-level logic beyond YARA)
+//! 3. **Injection analysis** — markdown injection (HTML comments, image alt), base64-encoded
+//!    instructions, exfiltration instruction detection (requires decode/context logic)
+//!
+//! YARA handles code-block filtering for prose-only rules (e.g. eval/subprocess in code
+//! examples are legitimate documentation, not threats).
 //!
 //! Detection categories informed by public security research including the Trojan Source
 //! paper (Boucher & Anderson, 2021), OWASP LLM Top 10, and common adversarial skill
@@ -15,7 +20,6 @@
 //! LLM-based review (see `src/review/`).
 
 pub mod injection;
-pub mod patterns;
 pub mod unicode;
 pub mod yara;
 
@@ -75,6 +79,45 @@ impl fmt::Display for Category {
     }
 }
 
+/// Clamp a byte offset to the nearest valid UTF-8 char boundary.
+pub(super) fn to_char_boundary(content: &str, mut offset: usize) -> usize {
+    offset = offset.min(content.len());
+    while offset > 0 && !content.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+/// Return the 1-based line number for a byte offset in content.
+pub(super) fn line_number(content: &str, byte_offset: usize) -> usize {
+    let safe_offset = to_char_boundary(content, byte_offset);
+    content[..safe_offset]
+        .chars()
+        .filter(|&c| c == '\n')
+        .count()
+        + 1
+}
+
+/// Extract a snippet (up to 120 chars) from the line containing byte_offset.
+pub(super) fn snippet_at(content: &str, byte_offset: usize) -> String {
+    let safe_offset = to_char_boundary(content, byte_offset);
+    let start = content[..safe_offset]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let end = content[safe_offset..]
+        .find('\n')
+        .map(|i| safe_offset + i)
+        .unwrap_or(content.len());
+    content[start..end].chars().take(120).collect()
+}
+
+/// Deduplicate findings by (rule_id, line).
+pub(super) fn dedup_findings(findings: &mut Vec<Finding>) {
+    findings.sort_by(|a, b| a.rule_id.cmp(&b.rule_id).then(a.line.cmp(&b.line)));
+    findings.dedup_by(|a, b| a.rule_id == b.rule_id && a.line == b.line);
+}
+
 /// A single security finding.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -122,28 +165,33 @@ impl ScanReport {
 
 /// Scan a SKILL.md content string for security issues.
 ///
-/// Runs all four detection layers and returns a consolidated report:
-/// unicode attacks, injection patterns, dangerous code patterns, and YARA rules.
+/// Runs all three detection layers and returns a consolidated report:
+/// YARA rules, unicode analysis, and injection analysis.
 pub fn scan_skill(content: &str) -> ScanReport {
     let mut findings = Vec::new();
 
     findings.extend(unicode::scan(content));
     findings.extend(injection::scan(content));
-    findings.extend(patterns::scan(content));
 
     // YARA: Cisco + SkillDo compiled-in rules
     match yara::YaraScanner::builtin() {
         Ok(scanner) => findings.extend(scanner.scan(content)),
         Err(e) => {
-            // Rule compilation failure is a bug, not a runtime error.
-            // Log it but don't block the pipeline — the other 3 layers still run.
-            tracing::warn!("YARA scanner init failed: {e}");
+            // YARA is the primary security gate — fail closed.
+            tracing::error!("YARA scanner init failed: {e}");
+            findings.push(Finding {
+                rule_id: "SD-000".to_string(),
+                severity: Severity::Critical,
+                category: Category::Obfuscation,
+                message: format!("YARA scanner init failed: {e}"),
+                line: 1,
+                snippet: String::new(),
+            });
         }
     }
 
     // Deduplicate cross-scanner findings by (rule_id, line)
-    findings.sort_by(|a, b| a.rule_id.cmp(&b.rule_id).then(a.line.cmp(&b.line)));
-    findings.dedup_by(|a, b| a.rule_id == b.rule_id && a.line == b.line);
+    dedup_findings(&mut findings);
 
     // Score: start at 100, deduct per finding weighted by severity
     let deductions: i32 = findings
@@ -206,6 +254,120 @@ print(response.json())
             eprintln!("  {}", f);
         }
         report
+    }
+
+    // --- Shared helper unit tests ---
+
+    #[test]
+    fn to_char_boundary_ascii() {
+        let s = "hello world";
+        assert_eq!(to_char_boundary(s, 5), 5);
+        assert_eq!(to_char_boundary(s, 0), 0);
+        assert_eq!(to_char_boundary(s, 100), s.len());
+    }
+
+    #[test]
+    fn to_char_boundary_multibyte() {
+        let s = "café"; // é is 2 bytes (0xC3 0xA9)
+        let e_start = s.find('é').unwrap(); // byte 3
+                                            // Offset inside the é (byte 4) should clamp back to byte 3
+        assert_eq!(to_char_boundary(s, e_start + 1), e_start);
+        // Exact boundary stays
+        assert_eq!(to_char_boundary(s, e_start), e_start);
+    }
+
+    #[test]
+    fn line_number_basics() {
+        let content = "line1\nline2\nline3\n";
+        assert_eq!(line_number(content, 0), 1); // start of line1
+        assert_eq!(line_number(content, 6), 2); // start of line2
+        assert_eq!(line_number(content, 12), 3); // start of line3
+    }
+
+    #[test]
+    fn line_number_single_line() {
+        assert_eq!(line_number("no newlines here", 5), 1);
+    }
+
+    #[test]
+    fn snippet_at_extracts_line() {
+        let content = "first line\nsecond line\nthird line";
+        let snippet = snippet_at(content, 12); // 's' of "second"
+        assert_eq!(snippet, "second line");
+    }
+
+    #[test]
+    fn snippet_at_first_line() {
+        let content = "hello\nworld";
+        assert_eq!(snippet_at(content, 0), "hello");
+    }
+
+    #[test]
+    fn snippet_at_last_line_no_trailing_newline() {
+        let content = "aaa\nbbb";
+        assert_eq!(snippet_at(content, 4), "bbb");
+    }
+
+    #[test]
+    fn dedup_findings_removes_duplicates() {
+        let mut findings = vec![
+            Finding {
+                rule_id: "SD-001".into(),
+                severity: Severity::High,
+                category: Category::UnicodeAttack,
+                message: "dup1".into(),
+                line: 5,
+                snippet: String::new(),
+            },
+            Finding {
+                rule_id: "SD-001".into(),
+                severity: Severity::High,
+                category: Category::UnicodeAttack,
+                message: "dup2".into(),
+                line: 5,
+                snippet: String::new(),
+            },
+            Finding {
+                rule_id: "SD-002".into(),
+                severity: Severity::Medium,
+                category: Category::UnicodeAttack,
+                message: "different rule".into(),
+                line: 5,
+                snippet: String::new(),
+            },
+        ];
+        dedup_findings(&mut findings);
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].rule_id, "SD-001");
+        assert_eq!(findings[1].rule_id, "SD-002");
+    }
+
+    #[test]
+    fn dedup_findings_keeps_different_lines() {
+        let mut findings = vec![
+            Finding {
+                rule_id: "SD-001".into(),
+                severity: Severity::High,
+                category: Category::UnicodeAttack,
+                message: "line3".into(),
+                line: 3,
+                snippet: String::new(),
+            },
+            Finding {
+                rule_id: "SD-001".into(),
+                severity: Severity::High,
+                category: Category::UnicodeAttack,
+                message: "line7".into(),
+                line: 7,
+                snippet: String::new(),
+            },
+        ];
+        dedup_findings(&mut findings);
+        assert_eq!(
+            findings.len(),
+            2,
+            "same rule on different lines should both remain"
+        );
     }
 
     // --- Malicious fixtures: MUST detect ---

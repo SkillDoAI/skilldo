@@ -1,12 +1,16 @@
 // Unicode attack detection for SKILL.md content.
 //
-// Detects homoglyphs, invisible characters, bidirectional overrides,
-// and mixed-script attacks that can hide malicious instructions.
+// Detects homoglyphs, right-to-left override (RLO), and mixed-script
+// attacks that require character-level Unicode analysis beyond YARA.
+//
+// Invisible character detection (SD-002), general bidirectional control
+// character detection (SD-003), and tag steganography detection (SD-006)
+// have been migrated to YARA rules (rules/skilldo/unicode_attacks.yara).
 //
 // Based on the Trojan Source paper (Boucher & Anderson, 2021) and Unicode
 // Technical Report #36 (Unicode Security Considerations).
 
-use super::{Category, Finding, Severity};
+use super::{line_number, snippet_at, Category, Finding, Severity};
 
 /// Known homoglyph pairs: (non-Latin char, Latin lookalike).
 /// Cyrillic and Greek characters that are visually identical to Latin.
@@ -46,72 +50,13 @@ const HOMOGLYPHS: &[(char, char)] = &[
     ('χ', 'x'),
 ];
 
-/// Invisible/zero-width Unicode characters that can hide instructions.
-const INVISIBLE_CHARS: &[(char, &str)] = &[
-    ('\u{200B}', "zero-width space"),
-    ('\u{200C}', "zero-width non-joiner"),
-    ('\u{200D}', "zero-width joiner"),
-    ('\u{FEFF}', "byte order mark"),
-    ('\u{00AD}', "soft hyphen"),
-    ('\u{2060}', "word joiner"),
-    ('\u{2061}', "function application"),
-    ('\u{2062}', "invisible times"),
-    ('\u{2063}', "invisible separator"),
-    ('\u{2064}', "invisible plus"),
-    ('\u{180E}', "mongolian vowel separator"),
-];
-
-/// Bidirectional control characters (Trojan Source attack vectors).
-const BIDI_CHARS: &[(char, &str)] = &[
-    ('\u{200E}', "left-to-right mark"),
-    ('\u{200F}', "right-to-left mark"),
-    ('\u{202A}', "left-to-right embedding"),
-    ('\u{202B}', "right-to-left embedding"),
-    ('\u{202C}', "pop directional formatting"),
-    ('\u{202D}', "left-to-right override"),
-    ('\u{202E}', "right-to-left override"),
-    ('\u{2066}', "left-to-right isolate"),
-    ('\u{2067}', "right-to-left isolate"),
-    ('\u{2068}', "first strong isolate"),
-    ('\u{2069}', "pop directional isolate"),
-];
-
-/// Unicode tag characters (U+E0001-U+E007F) used for steganographic encoding.
-/// The os-info-checker-es6 malware (2025) used these to hide payloads in npm packages.
-const TAG_CHAR_RANGE: (u32, u32) = (0xE0001, 0xE007F);
-
-/// Variation selectors (U+E0100-U+E01EF) that can encode hidden data.
-const VARIATION_SEL_RANGE: (u32, u32) = (0xE0100, 0xE01EF);
-
 /// Scan content for unicode-based attacks.
 pub fn scan(content: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     detect_homoglyphs(content, &mut findings);
-    detect_invisible_chars(content, &mut findings);
-    detect_bidi_chars(content, &mut findings);
+    detect_rlo(content, &mut findings);
     detect_mixed_scripts(content, &mut findings);
-    detect_tag_steganography(content, &mut findings);
     findings
-}
-
-fn line_number(content: &str, byte_offset: usize) -> usize {
-    content[..byte_offset]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count()
-        + 1
-}
-
-fn snippet_at(content: &str, byte_offset: usize) -> String {
-    let start = content[..byte_offset]
-        .rfind('\n')
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let end = content[byte_offset..]
-        .find('\n')
-        .map(|i| byte_offset + i)
-        .unwrap_or(content.len());
-    content[start..end].chars().take(120).collect()
 }
 
 fn detect_homoglyphs(content: &str, findings: &mut Vec<Finding>) {
@@ -156,98 +101,23 @@ fn detect_homoglyphs(content: &str, findings: &mut Vec<Finding>) {
     });
 }
 
-fn detect_invisible_chars(content: &str, findings: &mut Vec<Finding>) {
-    let mut found: Vec<(usize, char, &str)> = Vec::new();
-
+/// Detect right-to-left override (U+202E) — the most dangerous bidi control char.
+/// General bidi detection (SD-003) is handled by YARA.
+fn detect_rlo(content: &str, findings: &mut Vec<Finding>) {
     for (byte_offset, ch) in content.char_indices() {
-        for &(invisible, name) in INVISIBLE_CHARS {
-            if ch == invisible {
-                found.push((byte_offset, invisible, name));
-            }
+        if ch == '\u{202E}' {
+            findings.push(Finding {
+                rule_id: "SD-004".to_string(),
+                severity: Severity::Critical,
+                category: Category::UnicodeAttack,
+                message:
+                    "Right-to-left override (U+202E) — reverses displayed text to hide true content"
+                        .into(),
+                line: line_number(content, byte_offset),
+                snippet: snippet_at(content, byte_offset),
+            });
+            return; // One finding is enough
         }
-    }
-
-    if found.is_empty() {
-        return;
-    }
-
-    let count = found.len();
-    let unique_types: Vec<&str> = {
-        let mut types: Vec<&str> = found.iter().map(|(_, _, name)| *name).collect();
-        types.sort_unstable();
-        types.dedup();
-        types
-    };
-
-    let (first_offset, _, _) = found[0];
-    let severity = if count > 5 {
-        Severity::Critical
-    } else {
-        Severity::High
-    };
-
-    findings.push(Finding {
-        rule_id: "SD-002".to_string(),
-        severity,
-        category: Category::UnicodeAttack,
-        message: format!(
-            "{count} invisible Unicode character(s) detected ({}) — may hide instructions between visible text",
-            unique_types.join(", ")
-        ),
-        line: line_number(content, first_offset),
-        snippet: snippet_at(content, first_offset),
-    });
-}
-
-fn detect_bidi_chars(content: &str, findings: &mut Vec<Finding>) {
-    let mut found: Vec<(usize, &str)> = Vec::new();
-    let mut has_rlo = false;
-
-    for (byte_offset, ch) in content.char_indices() {
-        for &(bidi, name) in BIDI_CHARS {
-            if ch == bidi {
-                found.push((byte_offset, name));
-                if ch == '\u{202E}' {
-                    has_rlo = true;
-                }
-            }
-        }
-    }
-
-    if found.is_empty() {
-        return;
-    }
-
-    let count = found.len();
-    let (first_offset, _) = found[0];
-
-    findings.push(Finding {
-        rule_id: "SD-003".to_string(),
-        severity: Severity::Critical,
-        category: Category::UnicodeAttack,
-        message: format!(
-            "{count} bidirectional control character(s) — text may display differently than it executes (Trojan Source)"
-        ),
-        line: line_number(content, first_offset),
-        snippet: snippet_at(content, first_offset),
-    });
-
-    if has_rlo {
-        let rlo_offset = found
-            .iter()
-            .find(|(_, n)| *n == "right-to-left override")
-            .map(|(o, _)| *o)
-            .unwrap_or(0);
-        findings.push(Finding {
-            rule_id: "SD-004".to_string(),
-            severity: Severity::Critical,
-            category: Category::UnicodeAttack,
-            message:
-                "Right-to-left override (U+202E) — reverses displayed text to hide true content"
-                    .into(),
-            line: line_number(content, rlo_offset),
-            snippet: snippet_at(content, rlo_offset),
-        });
     }
 }
 
@@ -295,47 +165,6 @@ fn detect_mixed_scripts(content: &str, findings: &mut Vec<Finding>) {
     }
 }
 
-/// Detect Unicode tag characters and variation selectors used for steganographic encoding.
-/// These are supplemental plane characters that encode hidden ASCII payloads.
-fn detect_tag_steganography(content: &str, findings: &mut Vec<Finding>) {
-    let mut tag_count = 0u32;
-    let mut var_sel_count = 0u32;
-    let mut first_offset: Option<usize> = None;
-
-    for (byte_offset, ch) in content.char_indices() {
-        let cp = ch as u32;
-        if cp >= TAG_CHAR_RANGE.0 && cp <= TAG_CHAR_RANGE.1 {
-            tag_count += 1;
-            if first_offset.is_none() {
-                first_offset = Some(byte_offset);
-            }
-        } else if cp >= VARIATION_SEL_RANGE.0 && cp <= VARIATION_SEL_RANGE.1 {
-            var_sel_count += 1;
-            if first_offset.is_none() {
-                first_offset = Some(byte_offset);
-            }
-        }
-    }
-
-    let total = tag_count + var_sel_count;
-    if total == 0 {
-        return;
-    }
-
-    let offset = first_offset.unwrap_or(0);
-    findings.push(Finding {
-        rule_id: "SD-006".to_string(),
-        severity: Severity::Critical,
-        category: Category::UnicodeAttack,
-        message: format!(
-            "{total} Unicode steganography character(s) — {tag_count} tag chars (U+E0001-E007F), \
-             {var_sel_count} variation selectors (U+E0100-E01EF) — may encode hidden payloads"
-        ),
-        line: line_number(content, offset),
-        snippet: snippet_at(content, offset),
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,17 +184,9 @@ mod tests {
     }
 
     #[test]
-    fn detects_invisible_zero_width_space() {
-        let content = "normal\u{200B}text\u{200B}here";
-        let findings = scan(content);
-        assert!(findings.iter().any(|f| f.rule_id == "SD-002"));
-    }
-
-    #[test]
-    fn detects_bidi_override() {
+    fn detects_rlo_override() {
         let content = "display \u{202E}txet neddih this";
         let findings = scan(content);
-        assert!(findings.iter().any(|f| f.rule_id == "SD-003"));
         assert!(findings.iter().any(|f| f.rule_id == "SD-004"));
     }
 
@@ -386,39 +207,43 @@ mod tests {
     }
 
     #[test]
-    fn bom_detected_as_invisible() {
-        let content = "\u{FEFF}# Normal looking header";
+    fn detects_mixed_latin_greek() {
+        // Latin text with enough Greek chars (>2) to trigger
+        let content = "The function uses αβγ parameters";
         let findings = scan(content);
-        assert!(findings.iter().any(|f| f.rule_id == "SD-002"));
+        let mixed = findings
+            .iter()
+            .find(|f| f.rule_id == "SD-005" && f.message.contains("Greek"));
+        assert!(mixed.is_some(), "should detect Latin+Greek mix");
+        assert_eq!(mixed.unwrap().severity, Severity::Medium);
     }
 
     #[test]
-    fn detects_tag_characters() {
-        // U+E0001 (language tag) through U+E007F — used in os-info-checker-es6 attack
-        let content = format!(
-            "normal text{}{}{}more text",
-            '\u{E0001}', '\u{E0041}', '\u{E007F}'
-        );
-        let findings = scan(&content);
+    fn no_greek_finding_for_few_chars() {
+        // Only 2 Greek chars — below the >2 threshold
+        let content = "Use αβ notation";
+        let findings = scan(content);
         assert!(
-            findings.iter().any(|f| f.rule_id == "SD-006"),
-            "must detect tag steganography chars, got: {:?}",
-            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "SD-005" && f.message.contains("Greek")),
+            "2 Greek chars should not trigger"
         );
     }
 
     #[test]
-    fn detects_variation_selectors() {
-        // U+E0100-U+E01EF — variation selectors supplement
-        let content = format!("normal{}text{}here", '\u{E0100}', '\u{E0101}');
-        let findings = scan(&content);
-        assert!(findings.iter().any(|f| f.rule_id == "SD-006"));
+    fn homoglyph_samples_capped_at_five() {
+        // 8 distinct homoglyphs — samples list should cap at 5
+        let content = "аеосухАВ test";
+        let findings = scan(content);
+        let f = findings.iter().find(|f| f.rule_id == "SD-001").unwrap();
+        let arrow_count = f.message.matches('→').count();
+        assert!(arrow_count <= 5, "samples should be capped at 5");
     }
 
     #[test]
-    fn no_tag_false_positive_on_clean_text() {
-        let content = "This is perfectly normal ASCII text with no tricks.";
-        let findings = scan(content);
-        assert!(!findings.iter().any(|f| f.rule_id == "SD-006"));
+    fn rlo_not_found_on_clean_text() {
+        let findings = scan("perfectly normal text with no tricks");
+        assert!(!findings.iter().any(|f| f.rule_id == "SD-004"));
     }
 }

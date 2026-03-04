@@ -140,7 +140,16 @@ impl PythonHandler {
 
     /// Recursively collect test files with multiple pattern support
     fn collect_test_files(&self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-        if !dir.is_dir() {
+        self.collect_test_files_inner(dir, files, 0)
+    }
+
+    fn collect_test_files_inner(
+        &self,
+        dir: &Path,
+        files: &mut Vec<PathBuf>,
+        depth: usize,
+    ) -> Result<()> {
+        if !dir.is_dir() || depth > Self::MAX_DEPTH {
             return Ok(());
         }
 
@@ -171,7 +180,7 @@ impl PythonHandler {
                             | "dist"
                             | ".eggs"
                     ) {
-                        self.collect_test_files(&path, files)?;
+                        self.collect_test_files_inner(&path, files, depth + 1)?;
                     }
                 }
             }
@@ -298,13 +307,19 @@ impl PythonHandler {
             }
         }
 
-        // Strategy 2: Try package __init__.py
+        // Strategy 2: Try package __init__.py (flat layout and src/ layout)
         if let Some(pkg_name) = self.repo_path.file_name().and_then(|n| n.to_str()) {
-            let init_path = self.repo_path.join(pkg_name).join("__init__.py");
-            if init_path.exists() {
-                if let Ok(content) = fs::read_to_string(&init_path) {
+            let candidates = [
+                self.repo_path.join(pkg_name).join("__init__.py"),
+                self.repo_path
+                    .join("src")
+                    .join(pkg_name)
+                    .join("__init__.py"),
+            ];
+            for init_path in &candidates {
+                if let Ok(content) = fs::read_to_string(init_path) {
                     for line in content.lines() {
-                        if line.contains("__version__") && line.contains("=") {
+                        if line.contains("__version__") && line.contains('=') {
                             if let Some(version) = line.split('=').nth(1) {
                                 let version = version.trim().trim_matches('"').trim_matches('\'');
                                 if !version.is_empty()
@@ -541,9 +556,21 @@ impl PythonHandler {
         urls
     }
 
+    /// Maximum recursion depth for file discovery (guards against symlink loops).
+    const MAX_DEPTH: usize = 20;
+
     /// Recursively collect .py files from a directory (Python only, no C++/C)
     fn collect_py_files(&self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-        if !dir.is_dir() {
+        self.collect_py_files_inner(dir, files, 0)
+    }
+
+    fn collect_py_files_inner(
+        &self,
+        dir: &Path,
+        files: &mut Vec<PathBuf>,
+        depth: usize,
+    ) -> Result<()> {
+        if !dir.is_dir() || depth > Self::MAX_DEPTH {
             return Ok(());
         }
 
@@ -591,7 +618,7 @@ impl PythonHandler {
                             | "demo"
                             | "demos"
                     ) {
-                        self.collect_py_files(&path, files)?;
+                        self.collect_py_files_inner(&path, files, depth + 1)?;
                     }
                 }
             }
@@ -990,6 +1017,26 @@ mod tests {
         let handler = PythonHandler::new(dir.path());
         let version = handler.get_version().unwrap();
         assert_eq!(version, "1.2.3");
+    }
+
+    #[test]
+    fn test_get_version_from_src_layout_init_py() {
+        let dir = TempDir::new().unwrap();
+        let pkg_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        // src/ layout: src/<pkg>/__init__.py
+        let src_pkg_dir = dir.path().join("src").join(&pkg_name);
+        fs::create_dir_all(&src_pkg_dir).unwrap();
+        fs::write(src_pkg_dir.join("__init__.py"), "__version__ = \"4.5.6\"\n").unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let version = handler.get_version().unwrap();
+        assert_eq!(version, "4.5.6");
     }
 
     #[test]

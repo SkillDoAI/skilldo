@@ -257,19 +257,15 @@ impl PythonParser {
         STDLIB_MODULES.contains(&name)
     }
 
-    /// Check if a package name is likely a local module rather than a PyPI package
+    /// Check if a package name is likely a local module rather than a PyPI package.
+    /// Uses an explicit list of common local names — no length heuristic, since
+    /// short names like `ray`, `gym`, `dbt`, `jax`, `six`, `bs4` are valid PyPI packages.
     fn is_likely_local_module(name: &str) -> bool {
-        // Common patterns for local modules in test/example code
         const LOCAL_MODULE_PATTERNS: &[&str] = &[
             "cli", "main", "app", "config", "utils", "helpers", "models", "views", "routes",
             "handlers", "tests", "test", "example", "src", "lib", "core", "api", "client",
             "server",
         ];
-
-        // Very short names (2-3 chars) are often local modules unless they're known packages
-        if name.len() <= 3 && !matches!(name, "jwt" | "aws" | "grpc" | "PIL") {
-            return true;
-        }
 
         LOCAL_MODULE_PATTERNS.contains(&name)
     }
@@ -706,6 +702,66 @@ import mylib
         assert!(
             patterns.is_empty(),
             "no Core Patterns section should return empty Vec"
+        );
+    }
+
+    #[test]
+    fn short_package_names_not_dropped() {
+        // Valid 2-3 char PyPI packages must not be treated as local modules
+        let skill_md = r#"
+# Test
+
+## Imports
+
+```python
+from ray import serve
+from gym import spaces
+from jax import numpy
+from six import moves
+from bs4 import BeautifulSoup
+from dbt import cli
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        for pkg in &["ray", "gym", "jax", "six", "bs4", "dbt"] {
+            assert!(
+                deps.contains(&pkg.to_string()),
+                "short package '{pkg}' should not be dropped"
+            );
+        }
+    }
+
+    #[test]
+    fn local_module_names_still_filtered() {
+        let skill_md = r#"
+# Test
+
+## Imports
+
+```python
+from cli import run
+from config import settings
+from utils import helpers
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            !deps.contains(&"cli".to_string()),
+            "cli should be filtered as local"
+        );
+        assert!(
+            !deps.contains(&"config".to_string()),
+            "config should be filtered as local"
+        );
+        assert!(
+            !deps.contains(&"utils".to_string()),
+            "utils should be filtered as local"
         );
     }
 }

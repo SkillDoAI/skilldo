@@ -120,7 +120,7 @@ enum Commands {
         #[arg(long = "no-review")]
         no_review: bool,
 
-        /// Disable security scan (YARA + pattern + unicode + injection)
+        /// Disable security scan (YARA + unicode + injection)
         #[arg(long = "no-security-scan")]
         no_security_scan: bool,
 

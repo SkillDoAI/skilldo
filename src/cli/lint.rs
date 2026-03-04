@@ -20,7 +20,7 @@ pub fn run(path: &str) -> Result<()> {
 
     linter.print_issues(&issues);
 
-    // Security scan (YARA + pattern + unicode + injection)
+    // Security scan (YARA + unicode + injection)
     let scan_report = crate::security::scan_skill(&content);
     if !scan_report.findings.is_empty() {
         println!("\nSecurity scan (score {}/100):", scan_report.score);
