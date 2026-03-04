@@ -10,7 +10,9 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::{dedup_findings, line_number, snippet_at, Category, Finding, Severity};
+use super::{
+    dedup_findings, line_number, snippet_at, to_char_boundary, Category, Finding, Severity,
+};
 
 /// Scan content for prompt injection patterns that require Rust analysis.
 pub fn scan(content: &str) -> Vec<Finding> {
@@ -110,14 +112,8 @@ fn detect_exfil_instructions(content: &str, findings: &mut Vec<Finding>) {
     });
 
     for mat in EXFIL_PROSE.find_iter(content) {
-        let mut ctx_start = mat.start().saturating_sub(100);
-        while ctx_start > 0 && !content.is_char_boundary(ctx_start) {
-            ctx_start -= 1;
-        }
-        let mut ctx_end = (mat.end() + 100).min(content.len());
-        while ctx_end < content.len() && !content.is_char_boundary(ctx_end) {
-            ctx_end += 1;
-        }
+        let ctx_start = to_char_boundary(content, mat.start().saturating_sub(100));
+        let ctx_end = to_char_boundary(content, (mat.end() + 100).min(content.len()));
         let context = &content[ctx_start..ctx_end];
         if SENSITIVE.is_match(context) {
             findings.push(Finding {
