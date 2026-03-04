@@ -362,7 +362,34 @@ impl GoHandler {
     }
 
     fn version_from_git_tags(&self) -> Option<String> {
-        // Run `git describe --tags --abbrev=0` to get latest tag
+        // Strategy 1: git describe (fast, works for full clones with reachable tags)
+        if let Some(v) = self.git_describe_version() {
+            return Some(v);
+        }
+
+        // Strategy 2: git tag -l sorted by version (works when tags exist but
+        // aren't reachable from HEAD, e.g. shallow clones after tag fetch)
+        if let Some(v) = self.latest_version_tag() {
+            return Some(v);
+        }
+
+        // Strategy 3: fetch tags then retry (shallow clones start with no tags)
+        debug!("No local tags found, fetching tags from remote");
+        let fetch = std::process::Command::new("git")
+            .args(["fetch", "--tags", "--quiet"])
+            .current_dir(&self.repo_path)
+            .output();
+        if fetch.is_ok_and(|o| o.status.success()) {
+            if let Some(v) = self.latest_version_tag() {
+                return Some(v);
+            }
+        }
+
+        None
+    }
+
+    /// Try `git describe --tags --abbrev=0` for the tag reachable from HEAD.
+    fn git_describe_version(&self) -> Option<String> {
         let output = std::process::Command::new("git")
             .args(["describe", "--tags", "--abbrev=0"])
             .current_dir(&self.repo_path)
@@ -374,19 +401,24 @@ impl GoHandler {
         }
 
         let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if tag.is_empty() {
+        parse_version_tag(&tag)
+    }
+
+    /// Get the latest semver tag via `git tag -l --sort=-v:refname`.
+    fn latest_version_tag(&self) -> Option<String> {
+        let output = std::process::Command::new("git")
+            .args(["tag", "-l", "--sort=-v:refname"])
+            .current_dir(&self.repo_path)
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
             return None;
         }
 
-        // Strip 'v' prefix: v1.2.3 → 1.2.3
-        let version = tag.strip_prefix('v').unwrap_or(&tag);
-        // Basic semver-ish validation
-        if version.contains('.') && version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-            debug!("Version from git tag: {version}");
-            Some(version.to_string())
-        } else {
-            None
-        }
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|tag| parse_version_tag(tag.trim()))
     }
 
     fn version_from_source(&self) -> Option<String> {
@@ -418,6 +450,20 @@ pub(crate) fn parse_module_path(content: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Parse a git tag into a version string. Strips `v` prefix and validates semver shape.
+fn parse_version_tag(tag: &str) -> Option<String> {
+    if tag.is_empty() {
+        return None;
+    }
+    let version = tag.strip_prefix('v').unwrap_or(tag);
+    if version.contains('.') && version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        debug!("Version from git tag: {version}");
+        Some(version.to_string())
+    } else {
+        None
+    }
 }
 
 /// Extract a version string from Go source (e.g., `Version = "1.2.3"`).
@@ -895,5 +941,39 @@ mod tests {
         assert!(!is_major_version_suffix("2"));
         assert!(!is_major_version_suffix("v2a"));
         assert!(!is_major_version_suffix("version"));
+    }
+
+    // ── parse_version_tag tests ──────────────────────────────────────
+
+    #[test]
+    fn parse_version_tag_strips_v_prefix() {
+        assert_eq!(parse_version_tag("v1.18.0"), Some("1.18.0".into()));
+    }
+
+    #[test]
+    fn parse_version_tag_no_prefix() {
+        assert_eq!(parse_version_tag("1.2.3"), Some("1.2.3".into()));
+    }
+
+    #[test]
+    fn parse_version_tag_two_part() {
+        assert_eq!(parse_version_tag("v1.2"), Some("1.2".into()));
+    }
+
+    #[test]
+    fn parse_version_tag_empty() {
+        assert_eq!(parse_version_tag(""), None);
+    }
+
+    #[test]
+    fn parse_version_tag_non_version() {
+        assert_eq!(parse_version_tag("release"), None);
+        assert_eq!(parse_version_tag("v"), None);
+    }
+
+    #[test]
+    fn parse_version_tag_prerelease() {
+        // "0.9.0-beta" contains '.' and starts with digit — valid
+        assert_eq!(parse_version_tag("v0.9.0-beta"), Some("0.9.0-beta".into()));
     }
 }
