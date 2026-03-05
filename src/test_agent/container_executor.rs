@@ -69,8 +69,8 @@ impl ContainerExecutor {
     /// Generate dependency installation script for Go.
     /// Initializes a Go module and runs `go get` for each dependency.
     fn generate_go_install_script(&self, deps: &[String]) -> Result<String> {
-        // go.mod may already exist from a previous pattern run in the same workspace
-        let mut lines = vec!["go mod init test 2>/dev/null || true".to_string()];
+        // go.mod may already exist from a previous pattern run; only init if missing
+        let mut lines = vec!["[ -f go.mod ] || go mod init test >/dev/null 2>&1".to_string()];
         for dep in deps {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             lines.push(format!("go get '{}'", dep));
@@ -1122,7 +1122,7 @@ mod tests {
     fn test_go_install_script_empty_deps() {
         let executor = ContainerExecutor::new(make_config(), Language::Go);
         let script = executor.generate_go_install_script(&[]).unwrap();
-        assert!(script.contains("go mod init test"));
+        assert!(script.contains("go mod init"));
         assert!(!script.contains("go get"));
     }
 
@@ -1131,7 +1131,7 @@ mod tests {
         let executor = ContainerExecutor::new(make_config(), Language::Go);
         let deps = vec!["github.com/go-chi/chi/v5".to_string()];
         let script = executor.generate_go_install_script(&deps).unwrap();
-        assert!(script.contains("go mod init test"));
+        assert!(script.contains("go mod init"));
         assert!(script.contains("go get 'github.com/go-chi/chi/v5'"));
     }
 
@@ -1145,6 +1145,16 @@ mod tests {
         let script = executor.generate_go_install_script(&deps).unwrap();
         assert!(script.contains("go get 'github.com/go-chi/chi/v5'"));
         assert!(script.contains("go get 'github.com/rs/zerolog'"));
+    }
+
+    #[test]
+    fn test_go_install_script_skips_init_if_gomod_exists() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let script = executor.generate_go_install_script(&[]).unwrap();
+        assert!(
+            script.contains("[ -f go.mod ]"),
+            "should guard go mod init behind existence check"
+        );
     }
 
     #[test]

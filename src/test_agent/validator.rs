@@ -155,6 +155,9 @@ impl<'a> TestCodeValidator<'a> {
             }
             Language::Go => {
                 // Go only supports container execution (no bare-metal executor yet)
+                if execution_mode == ExecutionMode::BareMetal {
+                    warn!("Go bare-metal executor not available; using container instead");
+                }
                 let executor: Box<dyn LanguageExecutor> =
                     Box::new(ContainerExecutor::new(config, Language::Go));
                 Ok(Self {
@@ -1296,6 +1299,23 @@ mod tests {
             Some("Use table-driven tests".to_string()),
         );
         assert!(validator.is_ok());
+    }
+
+    #[test]
+    fn test_new_go_baremetal_falls_back_to_container() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            ..Default::default()
+        };
+        // Go doesn't have a bare-metal executor; should still construct (with warning)
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Go should fall back to container even when bare-metal requested"
+        );
     }
 
     #[test]
