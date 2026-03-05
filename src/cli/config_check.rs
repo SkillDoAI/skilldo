@@ -892,10 +892,11 @@ enable_test = false
     }
 
     #[test]
-    fn test_check_runtime_daemon_bash_no_info() {
-        // `bash --version` succeeds, but `bash info` fails (no such subcommand).
+    fn test_check_runtime_daemon_git_no_info() {
+        // `git --version` succeeds, but `git info` fails (no such subcommand).
         // This exercises the Some(false) daemon-not-responding path.
-        let result = check_runtime_daemon("bash");
+        // Uses `git` instead of `bash` for portability (bash not on Alpine).
+        let result = check_runtime_daemon("git");
         assert_eq!(result, Some(false));
     }
 

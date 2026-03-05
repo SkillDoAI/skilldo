@@ -50,7 +50,7 @@ impl Git2Repo {
                 let before_g = &tag[..g_pos];
                 if let Some(dash_pos) = before_g.rfind('-') {
                     let distance = &before_g[dash_pos + 1..];
-                    if distance.chars().all(|c| c.is_ascii_digit()) {
+                    if !distance.is_empty() && distance.chars().all(|c| c.is_ascii_digit()) {
                         let candidate = &before_g[..dash_pos];
                         // Only accept the stripped result if it exists as a tag
                         let tag_ref = format!("refs/tags/{candidate}");
@@ -231,36 +231,30 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
+    fn run_git_ok(repo_dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(repo_dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     /// Create a temp git repo with an initial commit.
     fn init_test_repo() -> TempDir {
         let dir = TempDir::new().unwrap();
         let p = dir.path();
-        Command::new("git")
-            .args(["init"])
-            .current_dir(p)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(p)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(p)
-            .output()
-            .unwrap();
+        run_git_ok(p, &["init"]);
+        run_git_ok(p, &["config", "user.email", "test@test.com"]);
+        run_git_ok(p, &["config", "user.name", "Test"]);
         std::fs::write(p.join("file.txt"), "hello").unwrap();
-        Command::new("git")
-            .args(["add", "file.txt"])
-            .current_dir(p)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "init", "--no-gpg-sign"])
-            .current_dir(p)
-            .output()
-            .unwrap();
+        run_git_ok(p, &["add", "file.txt"]);
+        run_git_ok(p, &["commit", "-m", "init", "--no-gpg-sign"]);
         dir
     }
 
@@ -318,11 +312,7 @@ mod tests {
     #[test]
     fn test_describe_tags_with_tag() {
         let dir = init_test_repo();
-        Command::new("git")
-            .args(["tag", "v1.0.0"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        run_git_ok(dir.path(), &["tag", "v1.0.0"]);
         let repo = Git2Repo::open(dir.path()).unwrap();
         let tag = repo.describe_tags().unwrap();
         assert_eq!(tag, "v1.0.0");
@@ -331,23 +321,11 @@ mod tests {
     #[test]
     fn test_describe_tags_head_past_tag() {
         let dir = init_test_repo();
-        Command::new("git")
-            .args(["tag", "v1.0.0"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        run_git_ok(dir.path(), &["tag", "v1.0.0"]);
         // Make another commit so HEAD is past the tag
         std::fs::write(dir.path().join("extra.txt"), "extra").unwrap();
-        Command::new("git")
-            .args(["add", "extra.txt"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "extra", "--no-gpg-sign"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        run_git_ok(dir.path(), &["add", "extra.txt"]);
+        run_git_ok(dir.path(), &["commit", "-m", "extra", "--no-gpg-sign"]);
         let repo = Git2Repo::open(dir.path()).unwrap();
         let tag = repo.describe_tags().unwrap();
         // Should return just the tag, not "v1.0.0-1-gabcdef"
@@ -360,11 +338,7 @@ mod tests {
         let repo = Git2Repo::open(dir.path()).unwrap();
         let sha = repo.short_sha().unwrap();
         // Detach HEAD
-        Command::new("git")
-            .args(["checkout", "--detach"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        run_git_ok(dir.path(), &["checkout", "--detach"]);
         let repo = Git2Repo::open(dir.path()).unwrap();
         let branch = repo.branch_name().unwrap();
         assert_eq!(branch, "HEAD");
@@ -377,11 +351,7 @@ mod tests {
     fn test_list_tags_sorted() {
         let dir = init_test_repo();
         for tag in &["v0.1.0", "v1.0.0", "v0.2.0", "v0.10.0"] {
-            Command::new("git")
-                .args(["tag", tag])
-                .current_dir(dir.path())
-                .output()
-                .unwrap();
+            run_git_ok(dir.path(), &["tag", tag]);
         }
         let repo = Git2Repo::open(dir.path()).unwrap();
         let tags = repo.list_tags_sorted().unwrap();
@@ -453,11 +423,7 @@ mod tests {
     fn test_list_tags_stable_before_prerelease() {
         let dir = init_test_repo();
         for tag in &["v1.0.0-rc1", "v1.0.0", "v1.0.0-beta"] {
-            Command::new("git")
-                .args(["tag", tag])
-                .current_dir(dir.path())
-                .output()
-                .unwrap();
+            run_git_ok(dir.path(), &["tag", tag]);
         }
         let repo = Git2Repo::open(dir.path()).unwrap();
         let tags = repo.list_tags_sorted().unwrap();
@@ -470,11 +436,7 @@ mod tests {
         // Tag name that looks like a git-describe suffix: "v1.0-0-gcafe"
         // HEAD on this tag should return the full name, not strip it to "v1.0"
         let dir = init_test_repo();
-        Command::new("git")
-            .args(["tag", "v1.0-0-gcafe"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        run_git_ok(dir.path(), &["tag", "v1.0-0-gcafe"]);
         let repo = Git2Repo::open(dir.path()).unwrap();
         let tag = repo.describe_tags().unwrap();
         assert_eq!(tag, "v1.0-0-gcafe");
@@ -485,23 +447,11 @@ mod tests {
         // When HEAD is past a tag with an ambiguous name, stripping should
         // still work because the real base tag exists.
         let dir = init_test_repo();
-        Command::new("git")
-            .args(["tag", "v1.0-0-gcafe"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        run_git_ok(dir.path(), &["tag", "v1.0-0-gcafe"]);
         // Make another commit past the tag
         std::fs::write(dir.path().join("extra.txt"), "extra").unwrap();
-        Command::new("git")
-            .args(["add", "extra.txt"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "extra", "--no-gpg-sign"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        run_git_ok(dir.path(), &["add", "extra.txt"]);
+        run_git_ok(dir.path(), &["commit", "-m", "extra", "--no-gpg-sign"]);
         let repo = Git2Repo::open(dir.path()).unwrap();
         let tag = repo.describe_tags().unwrap();
         // Should return the full tag name since it's the only tag
