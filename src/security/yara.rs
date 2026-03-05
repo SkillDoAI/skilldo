@@ -1036,5 +1036,13 @@ rule custom_prose_str_test {
             "prose_only=\"true\" rule should skip code-block matches, got: {:?}",
             findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
         );
+
+        // In prose → should match (prose_only string "true" fires on prose text)
+        let in_prose = "# Title\n\nSTRING_PROSE_TRIGGER in plain text\n";
+        let findings = s.scan(in_prose);
+        assert!(
+            findings.iter().any(|f| f.rule_id == "CUSTOM-003"),
+            "prose_only=\"true\" rule should match prose text"
+        );
     }
 }
