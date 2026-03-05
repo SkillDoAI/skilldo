@@ -407,10 +407,8 @@ fn check_runtime_available(runtime: &str) -> bool {
 /// Returns true if daemon is responsive, false if binary exists but daemon is down,
 /// None if the binary itself is not available.
 fn check_runtime_daemon(runtime: &str) -> Option<bool> {
-    if !check_runtime_available(runtime) {
-        return None;
-    }
-    // `podman info` / `docker info` verifies the daemon is responsive.
+    // `podman info` / `docker info` verifies both binary and daemon.
+    // If spawn fails (binary not found), return None.
     // Use spawn + try_wait with a timeout to avoid hanging on unresponsive sockets.
     let mut child = match Command::new(runtime)
         .arg("info")
@@ -419,7 +417,7 @@ fn check_runtime_daemon(runtime: &str) -> Option<bool> {
         .spawn()
     {
         Ok(child) => child,
-        Err(_) => return Some(false),
+        Err(_) => return None,
     };
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -884,19 +882,16 @@ enable_test = false
 
     #[test]
     fn test_check_runtime_daemon_true_binary() {
-        // `true` exists on macOS and Linux, exits 0 for any args.
-        // `true --version` → success → available.
-        // `true info` → success → daemon "up".
+        // `true` exits 0 for any args, so `true info` → success → daemon "up".
         let result = check_runtime_daemon("true");
         assert_eq!(result, Some(true));
     }
 
     #[test]
-    fn test_check_runtime_daemon_git_no_info() {
-        // `git --version` succeeds, but `git info` fails (no such subcommand).
-        // This exercises the Some(false) daemon-not-responding path.
-        // Uses `git` instead of `bash` for portability (bash not on Alpine).
-        let result = check_runtime_daemon("git");
+    fn test_check_runtime_daemon_sh_no_info() {
+        // `sh --version` succeeds, but `sh info` fails.
+        // Uses `sh` for universal portability (POSIX shell on every Unix).
+        let result = check_runtime_daemon("sh");
         assert_eq!(result, Some(false));
     }
 
