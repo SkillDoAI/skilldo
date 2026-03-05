@@ -969,6 +969,41 @@ rule custom_not_prose_only {
     }
 
     #[test]
+    fn prose_only_integer_metadata_not_treated_as_true() {
+        // prose_only = 1 (integer) should NOT be treated as prose_only
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("prose_int.yara"),
+            r#"
+rule custom_prose_int_test {
+    meta:
+        id = "CUSTOM-004"
+        description = "Test prose_only as integer"
+        severity = "high"
+        category = "code-execution"
+        prose_only = 1
+    strings:
+        $t = "INT_PROSE_TRIGGER"
+    condition:
+        $t
+}
+"#,
+        )
+        .unwrap();
+
+        let s = YaraScanner::with_rules_dir(dir.path()).unwrap();
+
+        // In code block → should still fire (integer prose_only is not recognized)
+        let in_code = "# Title\n\n```python\nINT_PROSE_TRIGGER\n```\n";
+        let findings = s.scan(in_code);
+        assert!(
+            findings.iter().any(|f| f.rule_id == "CUSTOM-004"),
+            "prose_only=1 (integer) should NOT activate code-block filtering, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn prose_only_string_metadata_also_works() {
         // prose_only = "true" (string) should also be recognised
         let dir = tempfile::tempdir().unwrap();
