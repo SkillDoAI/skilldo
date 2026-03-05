@@ -1586,6 +1586,71 @@ mod tests {
     }
 
     #[test]
+    fn get_version_from_orphan_tag_list() {
+        // Strategy 2: describe fails (orphan tag) but list_tags_sorted finds it
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "init", "--no-gpg-sign"]);
+
+        // Tag this commit
+        git(&["tag", "v3.1.0"]);
+
+        // Create a new orphan branch so HEAD has no reachable tags
+        git(&["checkout", "--orphan", "orphan"]);
+        fs::write(root.join("orphan.go"), "package main\n").unwrap();
+        git(&["add", "orphan.go"]);
+        git(&["commit", "-m", "orphan", "--no-gpg-sign"]);
+
+        let handler = GoHandler::new(root);
+        let version = handler.get_version().unwrap();
+        // Strategy 1 (describe) should fail on orphan branch,
+        // but Strategy 2 (list_tags_sorted) should find v3.1.0
+        assert_eq!(version, "3.1.0");
+    }
+
+    #[test]
+    fn get_version_no_tags_no_source() {
+        // No tags, no source constants → version_from_git_tags returns None,
+        // exercises the None path through all 3 strategies
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "init", "--no-gpg-sign"]);
+
+        let handler = GoHandler::new(root);
+        let version = handler.get_version().unwrap();
+        // No tags, no version.go → falls through to "latest"
+        assert_eq!(version, "latest");
+    }
+
+    #[test]
     fn get_version_prefers_git_tags_over_source() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

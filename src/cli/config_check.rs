@@ -864,12 +864,118 @@ enable_test = false
     }
 
     #[test]
-    fn test_check_runtime_daemon_echo_has_no_info() {
-        // "echo" exists as a binary but "echo info" isn't a daemon check
-        // This tests the branch where binary exists but "info" subcommand fails
-        let result = check_runtime_daemon("false"); // `false` always returns non-zero
-                                                    // false --version fails, so we get None (binary not "available")
-        assert_eq!(result, None);
+    fn test_check_runtime_daemon_binary_exists_but_no_daemon() {
+        // Test Some(false) branch: binary exists (--version succeeds) but
+        // daemon not responding (info fails). We create a temp script that
+        // exits 0 for --version but exits 1 for info.
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let script_path = dir.path().join("fake-runtime");
+        let mut f = std::fs::File::create(&script_path).unwrap();
+        writeln!(
+            f,
+            "#!/bin/sh\ncase \"$1\" in --version) echo 'v1.0'; exit 0;; info) exit 1;; *) exit 1;; esac"
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let result = check_runtime_daemon(script_path.to_str().unwrap());
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
+    fn test_daemon_match_some_false_with_test_enabled() {
+        // Exercises the Some(false) + enable_test=true branch of the match in run()
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let script_path = dir.path().join("fake-runtime-daemon");
+        let mut f = std::fs::File::create(&script_path).unwrap();
+        writeln!(
+            f,
+            "#!/bin/sh\ncase \"$1\" in --version) echo 'v1.0'; exit 0;; info) exit 1;; *) exit 1;; esac"
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut r = CheckResult::new();
+        let runtime = script_path.to_str().unwrap();
+        match check_runtime_daemon(runtime) {
+            Some(true) => {
+                r.pass(format!(
+                    "Container runtime: {} (available, daemon running)",
+                    runtime
+                ));
+            }
+            Some(false) => {
+                r.error(format!(
+                    "Container runtime '{}' found but daemon not responding",
+                    runtime
+                ));
+            }
+            None => {
+                r.error(format!("Container runtime '{}' not found", runtime));
+            }
+        }
+        assert_eq!(r.errors.len(), 1);
+        assert!(r.errors[0].contains("daemon not responding"));
+    }
+
+    #[test]
+    fn test_daemon_match_some_false_with_test_disabled() {
+        // Exercises the Some(false) + enable_test=false branch (warn instead of error)
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let script_path = dir.path().join("fake-runtime-daemon2");
+        let mut f = std::fs::File::create(&script_path).unwrap();
+        writeln!(
+            f,
+            "#!/bin/sh\ncase \"$1\" in --version) echo 'v1.0'; exit 0;; info) exit 1;; *) exit 1;; esac"
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut r = CheckResult::new();
+        let runtime = script_path.to_str().unwrap();
+        let enable_test = false;
+        match check_runtime_daemon(runtime) {
+            Some(true) => {
+                r.pass(format!(
+                    "Container runtime: {} (available, daemon running)",
+                    runtime
+                ));
+            }
+            Some(false) => {
+                if enable_test {
+                    r.error(format!(
+                        "Container runtime '{}' found but daemon not responding",
+                        runtime
+                    ));
+                } else {
+                    r.warn(format!(
+                        "Container runtime '{}' found but daemon not responding (test agent disabled)",
+                        runtime
+                    ));
+                }
+            }
+            None => {
+                r.error(format!("Container runtime '{}' not found", runtime));
+            }
+        }
+        assert_eq!(r.errors.len(), 0);
+        assert_eq!(r.warnings.len(), 1);
+        assert!(r.warnings[0].contains("daemon not responding"));
     }
 
     #[test]
@@ -976,17 +1082,29 @@ extra_body_json = '{{"top_p": 0.9}}'
     #[test]
     fn test_run_with_test_enabled_unavailable_runtime() {
         // runtime unavailable + test agent enabled → error
-        // We test the internal logic rather than calling run() to avoid process::exit.
+        // We test the internal logic (check_runtime_daemon match) to avoid process::exit.
         let mut r = CheckResult::new();
         let runtime = "nonexistent_runtime_xyz";
 
-        if check_runtime_available(runtime) {
-            r.pass(format!("Container runtime: {} (available)", runtime));
-        } else {
-            r.error(format!(
-                "Container runtime '{}' not found — test agent validation will fail",
-                runtime
-            ));
+        match check_runtime_daemon(runtime) {
+            Some(true) => {
+                r.pass(format!(
+                    "Container runtime: {} (available, daemon running)",
+                    runtime
+                ));
+            }
+            Some(false) => {
+                r.error(format!(
+                    "Container runtime '{}' found but daemon not responding — run '{} info' to diagnose",
+                    runtime, runtime
+                ));
+            }
+            None => {
+                r.error(format!(
+                    "Container runtime '{}' not found — test agent validation will fail",
+                    runtime
+                ));
+            }
         }
 
         // Verify check_stage_provider pass path is also exercised via valid providers
