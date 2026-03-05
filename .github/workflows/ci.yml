@@ -122,7 +122,8 @@ jobs:
     name: test-cov
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-24.04-arm
+    # x86 until we diagnose why cargo-llvm-cov hangs on ARM runners
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -131,12 +132,12 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-${{ runner.os }}
+          shared-key: ci-${{ runner.os }}-x64
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Run tests with coverage
         run: |
-          cargo llvm-cov --lib --no-report -- --test-threads=1
+          cargo llvm-cov --lib --no-report
           cargo llvm-cov report --fail-under-lines 95
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
