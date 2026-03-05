@@ -190,21 +190,26 @@ fn compare_semver_desc(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// Parse a tag like "v1.2.3" or "1.2.3" into (major, minor, patch, is_prerelease).
+/// Parse a tag like "v1.2.3", "1.2.3", or "v2.0" into (major, minor, patch, is_prerelease).
+/// 2-component tags like "v2.0" are treated as patch 0.
 /// Pre-release tags (e.g. "v1.0.0-rc1") sort after stable at the same version.
 fn parse_semver(tag: &str) -> Option<(u32, u32, u32, bool)> {
     let s = tag.strip_prefix('v').unwrap_or(tag);
     let mut parts = s.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
-    let patch_str = parts.next()?;
-    let has_prerelease = patch_str.contains(|c: char| !c.is_ascii_digit());
-    let patch: u32 = patch_str
-        .split(|c: char| !c.is_ascii_digit())
-        .next()?
-        .parse()
-        .ok()?;
-    Some((major, minor, patch, has_prerelease))
+    match parts.next() {
+        Some(patch_str) => {
+            let has_prerelease = patch_str.contains(|c: char| !c.is_ascii_digit());
+            let patch: u32 = patch_str
+                .split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse()
+                .ok()?;
+            Some((major, minor, patch, has_prerelease))
+        }
+        None => Some((major, minor, 0, false)),
+    }
 }
 
 #[cfg(test)]
@@ -384,6 +389,8 @@ mod tests {
         assert_eq!(parse_semver("1.2.3"), Some((1, 2, 3, false)));
         assert_eq!(parse_semver("v0.10.0"), Some((0, 10, 0, false)));
         assert_eq!(parse_semver("v1.0.0-rc1"), Some((1, 0, 0, true)));
+        assert_eq!(parse_semver("v2.0"), Some((2, 0, 0, false)));
+        assert_eq!(parse_semver("1.5"), Some((1, 5, 0, false)));
         assert_eq!(parse_semver("not-a-version"), None);
         assert_eq!(parse_semver(""), None);
     }
@@ -415,6 +422,15 @@ mod tests {
         assert_eq!(
             compare_semver_desc("v1.0.0-rc1", "v1.0.0"),
             std::cmp::Ordering::Greater
+        );
+        // 2-component tags treated as patch 0
+        assert_eq!(
+            compare_semver_desc("v2.0", "v1.9.9"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_semver_desc("v2.0", "v2.0.0"),
+            std::cmp::Ordering::Equal
         );
     }
 
