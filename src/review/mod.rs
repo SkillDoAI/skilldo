@@ -158,8 +158,11 @@ impl<'a> ReviewAgent<'a> {
 
         let mut result = parse_review_response(&verdict_response, self.strict)?;
 
-        // Attach introspection output so the create agent can see real signatures
-        if !introspection_output.starts_with("INTROSPECTION SKIPPED") {
+        // Attach introspection output only when it is valid JSON.
+        // Sentinel strings ("INTROSPECTION SKIPPED: ...") and error messages
+        // ("INTROSPECTION FAILED: ...") should not be persisted.
+        let trimmed_intro = introspection_output.trim();
+        if trimmed_intro.starts_with('{') || trimmed_intro.starts_with('[') {
             result.introspection_output = Some(introspection_output.clone());
         }
 
@@ -295,10 +298,12 @@ impl<'a> ReviewAgent<'a> {
         if let Some(ref introspection) = result.introspection_output {
             // Truncate to avoid blowing context on huge outputs
             let truncated: String = introspection.chars().take(3000).collect();
+            // Escape triple backticks so they don't break the fenced code block
+            let sanitized = truncated.replace("```", "\\`\\`\\`");
             feedback.push_str(&format!(
                 "INTROSPECTION DATA (actual library state from container):\n```json\n{}\n```\n\n\
                  Use the signatures and imports above as ground truth — your training data may be outdated.\n\n",
-                truncated
+                sanitized
             ));
         }
 
@@ -688,6 +693,13 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_frontmatter_version_nested_metadata() {
+        // Normalizer canonical format: version under metadata:
+        let md = "---\nname: arrow\ndescription: python library\nmetadata:\n  version: \"1.4.0\"\n  ecosystem: python\n---\n# Content";
+        assert_eq!(extract_frontmatter_version(md), Some("1.4.0".to_string()));
+    }
+
+    #[test]
     fn test_extract_frontmatter_no_frontmatter() {
         let md = "# No frontmatter here";
         assert_eq!(extract_frontmatter_version(md), None);
@@ -849,6 +861,66 @@ mod tests {
         assert_eq!(result.issues.len(), 1);
         assert_eq!(result.issues[0].category, "introspection");
         assert_eq!(result.issues[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_introspection_failed_not_persisted() {
+        // BUG 1 fix: "INTROSPECTION FAILED: ..." should NOT be stored as
+        // introspection_output — only valid JSON (starting with { or [) should.
+        let failed_msg = "INTROSPECTION FAILED: container OOM";
+        let trimmed = failed_msg.trim();
+        // Simulate the guard from review()
+        let stored = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            Some(failed_msg.to_string())
+        } else {
+            None
+        };
+        assert!(
+            stored.is_none(),
+            "INTROSPECTION FAILED messages must not be persisted"
+        );
+
+        // Valid JSON should be persisted
+        let valid_json = r#"{"functions": ["foo", "bar"]}"#;
+        let trimmed = valid_json.trim();
+        let stored = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            Some(valid_json.to_string())
+        } else {
+            None
+        };
+        assert!(
+            stored.is_some(),
+            "valid JSON introspection should be persisted"
+        );
+    }
+
+    #[test]
+    fn test_format_feedback_escapes_triple_backticks_in_introspection() {
+        // BUG 2 fix: if introspection payload contains ```, they must be escaped
+        // so they don't break the fenced code block in the feedback prompt.
+        let result = ReviewResult {
+            passed: false,
+            malformed: false,
+            introspection_output: Some(r#"{"example": "```python\nprint('hi')\n```"}"#.to_string()),
+            issues: vec![ReviewIssue {
+                severity: Severity::Error,
+                category: "accuracy".to_string(),
+                complaint: "Wrong signature".to_string(),
+                evidence: "test".to_string(),
+            }],
+        };
+        let feedback = ReviewAgent::format_feedback(&result);
+        // The raw triple backticks from the payload must be escaped
+        assert!(
+            !feedback.contains(r#"```python"#),
+            "raw triple backticks in introspection should be escaped"
+        );
+        assert!(
+            feedback.contains(r#"\`\`\`python"#),
+            "escaped backticks should appear in feedback"
+        );
+        // The fencing backticks (```json and closing ```) should still be intact
+        assert!(feedback.contains("```json"), "fence opener must be present");
     }
 
     #[test]

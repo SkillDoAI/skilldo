@@ -295,19 +295,28 @@ mod tests {
     }
 
     #[test]
-    fn test_append_run_default_path_creates_in_home() {
-        // Test the default path branch (None) — creates ~/.skilldo/runs.csv
+    fn test_default_path_creates_dir_and_file() {
+        // Use a tempdir to avoid polluting the real ~/.skilldo/runs.csv
+        let dir = tempfile::tempdir().unwrap();
+        let skilldo_dir = dir.path().join(".skilldo");
+        let csv_path = skilldo_dir.join("runs.csv");
+
+        // Pre-create the parent directory (the None branch does create_dir_all,
+        // but with Some we must create it ourselves to mirror that behavior)
+        fs::create_dir_all(&skilldo_dir).unwrap();
+
         let record = sample_record();
-        let result = append_run(&record, None);
-        // Should succeed (creates ~/.skilldo/ if needed)
+        let result = append_run(&record, Some(csv_path.clone()));
         assert!(
             result.is_ok(),
-            "append_run with default path should succeed"
+            "append_run should succeed: {:?}",
+            result.err()
         );
+        assert!(csv_path.exists(), "runs.csv should exist");
 
-        // Verify the file exists
-        let home = dirs::home_dir().unwrap();
-        let csv_path = home.join(".skilldo").join("runs.csv");
-        assert!(csv_path.exists(), "~/.skilldo/runs.csv should exist");
+        let content = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2); // header + 1 row
+        assert!(lines[0].starts_with("language,"));
     }
 }

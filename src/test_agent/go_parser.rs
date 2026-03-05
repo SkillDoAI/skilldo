@@ -200,8 +200,8 @@ impl LanguageParser for GoParser {
             }
         }
 
-        // Go grouped import block: import ( ... )
-        if let Some(group_cap) = GROUP_IMPORT_RE.captures(imports_content) {
+        // Go grouped import block: import ( ... ) — may appear multiple times
+        for group_cap in GROUP_IMPORT_RE.captures_iter(imports_content) {
             let block = &group_cap[1];
             for cap in IMPORT_LINE_RE.captures_iter(block) {
                 let pkg = cap[1].to_string();
@@ -524,6 +524,46 @@ go get github.com/foo/bar
         );
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("no code blocks extracted"));
+    }
+
+    #[test]
+    fn extract_dependencies_multiple_grouped_imports() {
+        let parser = GoParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```go
+import (
+    "fmt"
+    "github.com/foo/bar"
+)
+```
+
+Some text between blocks.
+
+```go
+import (
+    "os"
+    "github.com/baz/qux"
+)
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"github.com/foo/bar".to_string()),
+            "should find dep from first import block"
+        );
+        assert!(
+            deps.contains(&"github.com/baz/qux".to_string()),
+            "should find dep from second import block"
+        );
+        assert!(
+            !deps.iter().any(|d| d == "fmt" || d == "os"),
+            "stdlib should be filtered"
+        );
     }
 
     #[test]

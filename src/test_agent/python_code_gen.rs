@@ -125,7 +125,15 @@ impl<'a> LanguageCodeGenerator for PythonCodeGenerator<'a> {
             pattern.name
         );
 
-        let prompt = build_retry_prompt(pattern, &PYTHON_ENV, previous_code, error_output);
+        let local_pkg = self.local_package.lock().unwrap().clone();
+        let prompt = build_retry_prompt(
+            pattern,
+            &PYTHON_ENV,
+            previous_code,
+            error_output,
+            local_pkg.as_deref(),
+            self.custom_instructions.as_deref(),
+        );
         let response = self.llm_client.complete(&prompt).await?;
         let code = Self::extract_code_from_response(&response)?;
 

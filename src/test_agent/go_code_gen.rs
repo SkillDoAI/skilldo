@@ -51,40 +51,45 @@ impl<'a> GoCodeGenerator<'a> {
         build_test_prompt(pattern, &GO_ENV, local_package, custom_instructions)
     }
 
-    /// Extract Go code from markdown code blocks
+    /// Extract Go code from markdown code blocks (supports both ``` and ~~~ fences).
     fn extract_code_from_response(response: &str) -> Result<String> {
         let trimmed = response.trim();
 
-        // Try to extract from ```go code block
-        if let Some(start) = trimmed.find("```go") {
-            let code_start = start + "```go".len();
-            // Skip optional "lang" suffix (e.g., ```golang)
-            let after = &trimmed[code_start..];
-            let newline_pos = after.find('\n').unwrap_or(0);
-            let actual_start = code_start + newline_pos;
-            if let Some(end) = trimmed[actual_start..].find("```") {
-                let code = trimmed[actual_start..actual_start + end].trim();
-                return Ok(code.to_string());
+        // Try language-tagged fence first (```go or ~~~go), then generic fence
+        for fence in &["```", "~~~"] {
+            let go_fence = format!("{fence}go");
+            if let Some(start) = trimmed.find(&go_fence) {
+                let code_start = start + go_fence.len();
+                // Skip optional "lang" suffix (e.g., ```golang)
+                let after = &trimmed[code_start..];
+                let newline_pos = after.find('\n').unwrap_or(0);
+                let actual_start = code_start + newline_pos;
+                if let Some(end) = trimmed[actual_start..].find(*fence) {
+                    let code = trimmed[actual_start..actual_start + end].trim();
+                    return Ok(code.to_string());
+                }
             }
         }
 
-        // Try generic ``` code block
-        if let Some(start) = trimmed.find("```") {
-            let code_start = start + "```".len();
-            if let Some(end) = trimmed[code_start..].find("```") {
-                let mut code = trimmed[code_start..code_start + end].trim();
-                // Strip known language tags
-                if let Some((first_line, rest)) = code.split_once('\n') {
-                    let tag = first_line.trim().to_ascii_lowercase();
-                    const KNOWN_TAGS: &[&str] = &[
-                        "go", "golang", "bash", "sh", "shell", "text", "txt", "json", "yaml",
-                        "yml", "toml",
-                    ];
-                    if KNOWN_TAGS.contains(&tag.as_str()) {
-                        code = rest.trim();
+        // Try generic ``` or ~~~ code block
+        for fence in &["```", "~~~"] {
+            if let Some(start) = trimmed.find(*fence) {
+                let code_start = start + fence.len();
+                if let Some(end) = trimmed[code_start..].find(*fence) {
+                    let mut code = trimmed[code_start..code_start + end].trim();
+                    // Strip known language tags
+                    if let Some((first_line, rest)) = code.split_once('\n') {
+                        let tag = first_line.trim().to_ascii_lowercase();
+                        const KNOWN_TAGS: &[&str] = &[
+                            "go", "golang", "bash", "sh", "shell", "text", "txt", "json", "yaml",
+                            "yml", "toml",
+                        ];
+                        if KNOWN_TAGS.contains(&tag.as_str()) {
+                            code = rest.trim();
+                        }
                     }
+                    return Ok(code.to_string());
                 }
-                return Ok(code.to_string());
             }
         }
 
@@ -128,7 +133,15 @@ impl<'a> LanguageCodeGenerator for GoCodeGenerator<'a> {
             pattern.name
         );
 
-        let prompt = build_retry_prompt(pattern, &GO_ENV, previous_code, error_output);
+        let local_pkg = self.local_package.lock().unwrap().clone();
+        let prompt = build_retry_prompt(
+            pattern,
+            &GO_ENV,
+            previous_code,
+            error_output,
+            local_pkg.as_deref(),
+            self.custom_instructions.as_deref(),
+        );
         let response = self.llm_client.complete(&prompt).await?;
         let code = Self::extract_code_from_response(&response)?;
 
@@ -350,5 +363,43 @@ func main() {}
         let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
         assert!(code.contains("package main"));
         assert!(!code.contains("```"));
+    }
+
+    #[test]
+    fn test_extract_code_from_tilde_go_block() {
+        let response = r#"
+Here's the test:
+
+~~~go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("✓ Test passed: Tilde")
+}
+~~~
+"#;
+        let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("package main"));
+        assert!(code.contains("fmt.Println"));
+        assert!(!code.contains("~~~"));
+    }
+
+    #[test]
+    fn test_extract_code_from_tilde_golang_block() {
+        let response = "~~~golang\npackage main\n\nfunc main() {}\n~~~\n";
+        let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("package main"));
+        assert!(!code.contains("~~~"));
+    }
+
+    #[test]
+    fn test_extract_code_from_generic_tilde_block() {
+        let response =
+            "~~~\npackage main\n\nimport \"os\"\n\nfunc main() {\n    os.Exit(0)\n}\n~~~\n";
+        let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("package main"));
+        assert!(!code.contains("~~~"));
     }
 }

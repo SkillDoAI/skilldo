@@ -441,15 +441,8 @@ impl SkillLinter {
         let mut issues = Vec::new();
         let lines: Vec<&str> = content.lines().collect();
 
-        // Track code block boundaries
-        let mut in_code_block = false;
-        let mut code_block_lines: Vec<bool> = Vec::with_capacity(lines.len());
-        for line in &lines {
-            if crate::util::is_fence_line(line) {
-                in_code_block = !in_code_block;
-            }
-            code_block_lines.push(in_code_block);
-        }
+        // Track code block boundaries (CommonMark-aware: same fence char must close)
+        let code_block_lines = crate::util::compute_code_block_lines(&lines);
 
         // Check 1: Repeated line prefix (catches multi-line degeneration)
         // If 10+ consecutive non-code lines share a prefix of >= 20 chars, flag it.
@@ -554,13 +547,9 @@ impl SkillLinter {
             "Add 2 more pitfalls if found",
             "minimum 3, maximum 5 total",
         ];
-        let mut in_code = false;
-        for line in &lines {
-            if crate::util::is_fence_line(line) {
-                in_code = !in_code;
-                continue;
-            }
-            if in_code {
+        let code_lines = crate::util::compute_code_block_lines(&lines);
+        for (idx, line) in lines.iter().enumerate() {
+            if code_lines[idx] {
                 continue;
             }
             for phrase in &prompt_leaks {
@@ -662,18 +651,13 @@ impl SkillLinter {
         }
 
         // Check 4: Unclosed code blocks (truncated output)
-        let fence_count = lines
-            .iter()
-            .filter(|l| crate::util::is_fence_line(l))
-            .count();
-        if fence_count % 2 != 0 {
+        // Use the pre-computed code_block_lines: if the last line is still
+        // inside a code block, the block was never closed.
+        if code_block_lines.last().copied().unwrap_or(false) {
             issues.push(LintIssue {
                 severity: Severity::Error,
                 category: "degeneration".to_string(),
-                message: format!(
-                    "Unclosed code block ({} fences, expected even number)",
-                    fence_count
-                ),
+                message: "Unclosed code block (fence opened but never closed)".to_string(),
                 suggestion: Some(
                     "Output was likely truncated by token limit. Regenerate with higher max_tokens."
                         .to_string(),
@@ -718,14 +702,8 @@ impl SkillLinter {
         let lines: Vec<&str> = content.lines().collect();
 
         // Track code block boundaries — security checks only apply to prose
-        let mut in_code_block = false;
-        let mut code_block_lines: Vec<bool> = Vec::with_capacity(lines.len());
-        for line in &lines {
-            if crate::util::is_fence_line(line) {
-                in_code_block = !in_code_block;
-            }
-            code_block_lines.push(in_code_block);
-        }
+        // Track code block boundaries (CommonMark-aware: same fence char must close)
+        let code_block_lines = crate::util::compute_code_block_lines(&lines);
 
         // Check inside HTML comments — single-line and multi-line
         let mut in_html_comment = false;
@@ -2266,6 +2244,104 @@ test.do_something()
             }),
             "Expected system file issue for crontab, got: {:?}",
             issues
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Mixed fence tracking (CommonMark: closing fence must match opener)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mixed_fence_backtick_block_ignores_tilde_close() {
+        // A ~~~ line inside a ```-opened block is content, not a closer.
+        // Security threat inside the block should NOT fire (it's code, not prose).
+        let linter = SkillLinter::new();
+        let body = "\
+```bash
+~~~
+rm -rf / --no-preserve-root
+~~~
+```
+";
+        let content = make_skill(valid_frontmatter(), body);
+        let issues = linter.lint(&content).unwrap();
+        // The destructive command is inside a code block, should not be flagged
+        assert!(
+            !issues.iter().any(|i| {
+                i.category == "security"
+                    && i.message.to_lowercase().contains("destructive")
+            }),
+            "Destructive command inside backtick block with tilde content should not fire, got: {:?}",
+            issues.iter().filter(|i| i.category == "security").collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn mixed_fence_tilde_block_ignores_backtick_close() {
+        // A ``` line inside a ~~~-opened block is content, not a closer.
+        let linter = SkillLinter::new();
+        let body = "\
+~~~bash
+```
+rm -rf / --no-preserve-root
+```
+~~~
+";
+        let content = make_skill(valid_frontmatter(), body);
+        let issues = linter.lint(&content).unwrap();
+        assert!(
+            !issues.iter().any(|i| {
+                i.category == "security"
+                    && i.message.to_lowercase().contains("destructive")
+            }),
+            "Destructive command inside tilde block with backtick content should not fire, got: {:?}",
+            issues.iter().filter(|i| i.category == "security").collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn normal_backtick_fence_still_works() {
+        // Standard backtick fencing should still suppress security findings
+        let linter = SkillLinter::new();
+        let body = "\
+```bash
+rm -rf / --no-preserve-root
+```
+";
+        let content = make_skill(valid_frontmatter(), body);
+        let issues = linter.lint(&content).unwrap();
+        assert!(
+            !issues.iter().any(|i| {
+                i.category == "security" && i.message.to_lowercase().contains("destructive")
+            }),
+            "Destructive command inside backtick block should not fire, got: {:?}",
+            issues
+                .iter()
+                .filter(|i| i.category == "security")
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn normal_tilde_fence_still_works() {
+        // Standard tilde fencing should still suppress security findings
+        let linter = SkillLinter::new();
+        let body = "\
+~~~bash
+rm -rf / --no-preserve-root
+~~~
+";
+        let content = make_skill(valid_frontmatter(), body);
+        let issues = linter.lint(&content).unwrap();
+        assert!(
+            !issues.iter().any(|i| {
+                i.category == "security" && i.message.to_lowercase().contains("destructive")
+            }),
+            "Destructive command inside tilde block should not fire, got: {:?}",
+            issues
+                .iter()
+                .filter(|i| i.category == "security")
+                .collect::<Vec<_>>()
         );
     }
 }

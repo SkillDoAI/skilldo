@@ -317,6 +317,7 @@ fn parse_category(s: &str) -> Category {
 fn code_block_byte_ranges(content: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut fence_char: Option<char> = None; // which char opened the block
+    let mut fence_len: usize = 0; // length of the opening fence
     let mut block_start = 0;
     let mut pos = 0;
 
@@ -331,15 +332,19 @@ fn code_block_byte_ranges(content: &str) -> Vec<(usize, usize)> {
         };
 
         if let Some(ch) = detected {
+            let run_len = trimmed.chars().take_while(|&c| c == ch).count();
             if let Some(open_ch) = fence_char {
                 // Inside a block — only close if same fence character
-                if ch == open_ch {
+                // and closing fence is at least as long as opening fence
+                if ch == open_ch && run_len >= fence_len {
                     ranges.push((block_start, pos));
                     fence_char = None;
+                    fence_len = 0;
                 }
             } else {
                 block_start = (pos + line.len() + 1).min(content.len());
                 fence_char = Some(ch);
+                fence_len = run_len;
             }
         }
         pos += line.len() + 1;
@@ -829,6 +834,37 @@ rule meta_type_test {
     fn in_code_block_empty_ranges() {
         assert!(!in_code_block(0, &[]));
         assert!(!in_code_block(100, &[]));
+    }
+
+    #[test]
+    fn code_block_ranges_longer_fence_not_closed_by_shorter() {
+        // A ```` (4-backtick) fence should NOT be closed by ``` (3-backtick)
+        let content = "prose\n````python\ncode\n```\nstill code\n````\nback to prose\n";
+        let ranges = code_block_byte_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let (start, end) = ranges[0];
+        // The block opened by ```` should include the ``` line and close at ````
+        assert_eq!(&content[start..end], "code\n```\nstill code\n");
+    }
+
+    #[test]
+    fn code_block_ranges_longer_tilde_fence_not_closed_by_shorter() {
+        // A ~~~~ (4-tilde) fence should NOT be closed by ~~~ (3-tilde)
+        let content = "prose\n~~~~python\ncode\n~~~\nstill code\n~~~~\nback to prose\n";
+        let ranges = code_block_byte_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let (start, end) = ranges[0];
+        assert_eq!(&content[start..end], "code\n~~~\nstill code\n");
+    }
+
+    #[test]
+    fn code_block_ranges_longer_closing_fence_ok() {
+        // A ``` (3-backtick) fence CAN be closed by ```` (4-backtick)
+        let content = "prose\n```python\ncode\n````\nback to prose\n";
+        let ranges = code_block_byte_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let (start, end) = ranges[0];
+        assert_eq!(&content[start..end], "code\n");
     }
 
     #[test]

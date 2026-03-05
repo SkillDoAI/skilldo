@@ -139,6 +139,7 @@ pub struct Generator {
     enable_test: bool,
     test_mode: ValidationMode,
     enable_review: bool,
+    skip_introspection: bool,
     enable_security_scan: bool,
     review_max_retries: usize,
     container_config: ContainerConfig,
@@ -162,6 +163,7 @@ impl Generator {
             enable_test: true,                   // Default to enabled
             test_mode: ValidationMode::Thorough, // Default to thorough mode
             enable_review: true,                 // Default to enabled
+            skip_introspection: false,           // Default to enabled
             enable_security_scan: true,          // Default to enabled
             review_max_retries: 5,               // Default to 5 retries
             container_config: ContainerConfig::default(),
@@ -233,6 +235,12 @@ impl Generator {
 
     pub fn with_review(mut self, enabled: bool) -> Self {
         self.enable_review = enabled;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_skip_introspection(mut self, skip: bool) -> Self {
+        self.skip_introspection = skip;
         self
     }
 
@@ -638,7 +646,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 self.get_client("review"),
                 self.container_config.clone(),
                 self.prompts_config.review_custom.clone(),
-            );
+            )
+            .with_skip_introspection(self.skip_introspection);
 
             let mut last_review_attempt = 0;
             for review_attempt in 0..=self.review_max_retries {
@@ -1123,7 +1132,9 @@ mod tests {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_review(false);
         assert!(!gen.enable_review);
 
-        let gen2 = Generator::new(Box::new(MockLlmClient::new()), 3).with_review(true);
+        let gen2 = Generator::new(Box::new(MockLlmClient::new()), 3)
+            .with_review(true)
+            .with_skip_introspection(true);
         assert!(gen2.enable_review);
     }
 
@@ -1522,6 +1533,7 @@ mod tests {
             .with_test(true)
             .with_test_mode(ValidationMode::Adaptive)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_container_config(ContainerConfig::default())
             .with_parallel_extraction(false)
@@ -1851,6 +1863,7 @@ print(json.dumps(result))
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -1872,27 +1885,18 @@ print(json.dumps(result))
         // Review client always returns failures (need "error" severity to trigger retries,
         // since `passed` is recomputed from issues — warnings-only would pass)
         let fail_verdict = r#"{"passed": false, "issues": [{"severity": "error", "category": "accuracy", "complaint": "Wrong version number", "evidence": "pip says 2.0"}, {"severity": "warning", "category": "accuracy", "complaint": "Stale version number", "evidence": "pip says 2.0"}]}"#;
-        let introspect_script = r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#;
 
         // 2 retries = 3 review attempts (0, 1, 2)
-        // Each attempt: introspect + verdict = 2 calls
+        // With skip_introspection, only verdict calls happen (no introspect script)
         let mut review_responses = Vec::new();
         for _ in 0..3 {
-            review_responses.push(introspect_script.to_string());
             review_responses.push(fail_verdict.to_string());
         }
 
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(2)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -1964,6 +1968,7 @@ print(json.dumps(result))
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(0);
 
         let mut data = make_test_data();
@@ -2060,6 +2065,7 @@ print(json.dumps(result))
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(0)
             .with_existing_skill("# Old SKILL.md content".to_string());
 
@@ -2514,22 +2520,13 @@ print(json.dumps(result))
             {"severity": "error", "category": "accuracy", "complaint": "Wrong version", "evidence": "expected 2.0"},
             {"severity": "warning", "category": "safety", "complaint": "Suspicious code pattern", "evidence": "line 10"}
         ]}"#;
-        let introspect_script = r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#;
-
-        // 0 retries = 1 attempt
-        let review_responses = vec![introspect_script.to_string(), fail_verdict.to_string()];
+        // 0 retries = 1 attempt; introspection skipped so only verdict calls happen
+        let review_responses = vec![fail_verdict.to_string()];
 
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(0)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -2550,22 +2547,15 @@ print(json.dumps(result))
 
     #[tokio::test]
     async fn test_generate_review_passes_first_attempt() {
-        let introspect_script = r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#;
         let pass_verdict = r#"{"passed": true, "issues": []}"#;
 
-        let review_responses = vec![introspect_script.to_string(), pass_verdict.to_string()];
+        // Introspection skipped — only verdict calls happen
+        let review_responses = vec![pass_verdict.to_string()];
 
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 

@@ -490,6 +490,8 @@ pub(crate) fn parse_module_path(content: &str) -> Option<String> {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("module") {
             let path = rest.trim();
+            // Strip trailing inline comments (e.g. "// indirect")
+            let path = path.split("//").next().unwrap_or(path).trim();
             if !path.is_empty() {
                 return Some(path.to_string());
             }
@@ -522,11 +524,11 @@ fn extract_version_constant(content: &str) -> Option<String> {
     use regex::Regex;
 
     static VERSION_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"(?i)(?:Version|VERSION)\s*=\s*"(\d+\.\d+[^"]*)"#).unwrap());
+        Lazy::new(|| Regex::new(r#"(?i)(?:Version|VERSION)\s*=\s*"(v?\d+\.\d+[^"]*)"#).unwrap());
 
     // Try simple string constant first
     if let Some(cap) = VERSION_RE.captures(content) {
-        let v = cap[1].to_string();
+        let v = cap[1].strip_prefix('v').unwrap_or(&cap[1]).to_string();
         if !is_dev_placeholder(&v) {
             return Some(v);
         }
@@ -961,6 +963,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_module_path_strips_trailing_comment() {
+        assert_eq!(
+            parse_module_path("module github.com/foo/bar // indirect\n\ngo 1.21\n"),
+            Some("github.com/foo/bar".into())
+        );
+    }
+
+    #[test]
+    fn parse_module_path_no_comment() {
+        assert_eq!(
+            parse_module_path("module github.com/foo/bar\n\ngo 1.21\n"),
+            Some("github.com/foo/bar".into())
+        );
+    }
+
+    #[test]
     fn parse_module_path_empty() {
         assert_eq!(parse_module_path("go 1.21\n"), None);
     }
@@ -978,6 +996,15 @@ mod tests {
         assert_eq!(
             extract_version_constant("var VERSION = \"0.9.0-beta\"\n"),
             Some("0.9.0-beta".into())
+        );
+    }
+
+    #[test]
+    fn extract_version_constant_v_prefix() {
+        assert_eq!(
+            extract_version_constant("const Version = \"v1.2.3\"\n"),
+            Some("1.2.3".into()),
+            "should strip leading v prefix"
         );
     }
 

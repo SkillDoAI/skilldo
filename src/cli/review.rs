@@ -345,6 +345,25 @@ mod tests {
         assert_eq!(lang.unwrap(), "rust");
     }
 
+    // --- Coverage: metadata-nested frontmatter (normalizer canonical format) ---
+    #[test]
+    fn test_extract_frontmatter_meta_nested_metadata() {
+        // This is the exact format create_frontmatter() in normalizer.rs produces
+        let md = "---\nname: arrow\ndescription: python library\nlicense: MIT\nmetadata:\n  version: \"1.4.0\"\n  ecosystem: python\n  generated-by: skilldo/claude-sonnet-4-6\n---\n\n# Content";
+        let (name, lang) = extract_frontmatter_meta(md);
+        assert_eq!(name.unwrap(), "arrow");
+        assert_eq!(lang.unwrap(), "python");
+    }
+
+    // --- Coverage: metadata-nested with Go ecosystem ---
+    #[test]
+    fn test_extract_frontmatter_meta_nested_metadata_go() {
+        let md = "---\nname: gin\ndescription: go library\nlicense: MIT\nmetadata:\n  version: \"1.10.0\"\n  ecosystem: go\n---\n\n# Content";
+        let (name, lang) = extract_frontmatter_meta(md);
+        assert_eq!(name.unwrap(), "gin");
+        assert_eq!(lang.unwrap(), "go");
+    }
+
     // --- Coverage: quoted values in frontmatter ---
     #[test]
     fn test_extract_frontmatter_meta_quoted_values() {
@@ -633,6 +652,37 @@ base_url = "http://localhost:11434/v1"
         )
         .await;
         assert!(result.is_ok());
+    }
+
+    // --- Coverage: dry run with metadata-nested frontmatter (normalizer canonical format) ---
+    #[tokio::test]
+    async fn test_run_dry_run_metadata_nested_frontmatter() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        // Exact format produced by normalizer.rs create_frontmatter()
+        std::fs::write(
+            &skill_path,
+            "---\nname: arrow\ndescription: python library\nlicense: MIT\nmetadata:\n  version: \"1.4.0\"\n  ecosystem: python\n  generated-by: skilldo/claude-sonnet-4-6\n---\n\n# Content\n",
+        )
+        .unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true, // no_container
+            true, // dry_run
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "metadata-nested frontmatter failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]

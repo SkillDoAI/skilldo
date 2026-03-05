@@ -87,6 +87,8 @@ pub fn build_retry_prompt(
     env: &TestEnv,
     previous_code: &str,
     error_output: &str,
+    local_package: Option<&str>,
+    custom_instructions: Option<&str>,
 ) -> String {
     // Truncate error to avoid blowing context (respect UTF-8 boundaries)
     let truncated_error = if error_output.len() > 1500 {
@@ -99,7 +101,7 @@ pub fn build_retry_prompt(
         error_output
     };
 
-    format!(
+    let mut prompt = format!(
         r#"Your test code for the pattern "{name}" failed. Fix it.
 
 Your previous code:
@@ -113,14 +115,116 @@ Error:
 ```
 
 Write the complete fixed program. Same rules as before: keep it simple,
-let it crash on failure, print "✓ Test passed: {name}" on success.
-
-```{lang}
-[your complete, fixed program]
-```"#,
+let it crash on failure, print "✓ Test passed: {name}" on success."#,
         name = pattern.name,
         lang = env.lang_tag,
         previous_code = previous_code,
         error = truncated_error,
-    )
+    );
+
+    if let Some(pkg) = local_package {
+        prompt.push_str(&format!(
+            "\n\nNote: The library \"{}\" is available locally, not from a package registry.\n",
+            pkg
+        ));
+    }
+
+    if let Some(custom) = custom_instructions {
+        prompt.push_str(&format!("\n\n{}\n", custom));
+    }
+
+    prompt.push_str(&format!(
+        "\n\n```{}\n[your complete, fixed program]\n```",
+        env.lang_tag
+    ));
+
+    prompt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_agent::PatternCategory;
+
+    const TEST_ENV: TestEnv = TestEnv {
+        lang_tag: "python",
+        runner: "`uv run test.py`",
+        env_notes: "- Use PEP 723",
+    };
+
+    fn sample_pattern() -> CodePattern {
+        CodePattern {
+            name: "Basic Usage".to_string(),
+            description: "A simple example".to_string(),
+            code: "import foo\nfoo.bar()".to_string(),
+            category: PatternCategory::BasicUsage,
+        }
+    }
+
+    #[test]
+    fn retry_prompt_includes_custom_instructions() {
+        let prompt = build_retry_prompt(
+            &sample_pattern(),
+            &TEST_ENV,
+            "old code",
+            "ImportError: no module",
+            None,
+            Some("Always test edge cases"),
+        );
+        assert!(
+            prompt.contains("Always test edge cases"),
+            "retry prompt should include custom_instructions"
+        );
+    }
+
+    #[test]
+    fn retry_prompt_includes_local_package() {
+        let prompt = build_retry_prompt(
+            &sample_pattern(),
+            &TEST_ENV,
+            "old code",
+            "ImportError: no module",
+            Some("mylib"),
+            None,
+        );
+        assert!(
+            prompt.contains("locally"),
+            "retry prompt should mention local availability"
+        );
+        assert!(
+            prompt.contains("mylib"),
+            "retry prompt should include the local package name"
+        );
+    }
+
+    #[test]
+    fn retry_prompt_includes_both_options() {
+        let prompt = build_retry_prompt(
+            &sample_pattern(),
+            &TEST_ENV,
+            "old code",
+            "error output",
+            Some("mylib"),
+            Some("Use pytest"),
+        );
+        assert!(prompt.contains("locally"));
+        assert!(prompt.contains("mylib"));
+        assert!(prompt.contains("Use pytest"));
+    }
+
+    #[test]
+    fn retry_prompt_without_extras() {
+        let prompt = build_retry_prompt(
+            &sample_pattern(),
+            &TEST_ENV,
+            "old code",
+            "error output",
+            None,
+            None,
+        );
+        assert!(!prompt.contains("locally"));
+        assert!(prompt.contains("Basic Usage"));
+        assert!(prompt.contains("old code"));
+        assert!(prompt.contains("error output"));
+    }
 }
