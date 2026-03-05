@@ -382,42 +382,40 @@ impl GoHandler {
     }
 
     fn version_from_git_tags(&self) -> Option<String> {
+        let repo = crate::git::Git2Repo::open(&self.repo_path).ok()?;
+
         // Strategy 1: git describe (fast, works for full clones with reachable tags)
-        if let Some(v) = self.git_describe_version() {
+        if let Some(v) = repo
+            .describe_tags()
+            .ok()
+            .and_then(|tag| parse_version_tag(&tag))
+        {
             return Some(v);
         }
 
-        // Strategy 2: git tag -l sorted by version (works when tags exist but
+        // Strategy 2: tag list sorted by semver (works when tags exist but
         // aren't reachable from HEAD, e.g. shallow clones after tag fetch)
-        if let Some(v) = self.latest_version_tag() {
+        if let Some(v) = repo
+            .list_tags_sorted()
+            .ok()
+            .and_then(|tags| tags.iter().find_map(|tag| parse_version_tag(tag)))
+        {
             return Some(v);
         }
 
         // Strategy 3: fetch tags then retry (shallow clones start with no tags).
         debug!("No local tags found, fetching tags from remote");
-        if let Ok(repo) = crate::git::Git2Repo::open(&self.repo_path) {
-            if repo.fetch_tags(std::time::Duration::from_secs(30)).is_ok() {
-                if let Some(v) = self.latest_version_tag() {
-                    return Some(v);
-                }
+        if repo.fetch_tags(std::time::Duration::from_secs(30)).is_ok() {
+            if let Some(v) = repo
+                .list_tags_sorted()
+                .ok()
+                .and_then(|tags| tags.iter().find_map(|tag| parse_version_tag(tag)))
+            {
+                return Some(v);
             }
         }
 
         None
-    }
-
-    /// Try `git describe --tags --abbrev=0` for the tag reachable from HEAD.
-    fn git_describe_version(&self) -> Option<String> {
-        let repo = crate::git::Git2Repo::open(&self.repo_path).ok()?;
-        let tag = repo.describe_tags().ok()?;
-        parse_version_tag(&tag)
-    }
-
-    /// Get the latest semver tag sorted by semver descending.
-    fn latest_version_tag(&self) -> Option<String> {
-        let repo = crate::git::Git2Repo::open(&self.repo_path).ok()?;
-        let tags = repo.list_tags_sorted().ok()?;
-        tags.iter().find_map(|tag| parse_version_tag(tag))
     }
 
     fn version_from_source(&self) -> Option<String> {

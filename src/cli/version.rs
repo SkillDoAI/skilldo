@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 use crate::config::VersionStrategy;
@@ -34,9 +34,7 @@ pub fn extract_version(
 /// Extract version from Git tag (e.g., "v1.2.3" -> "1.2.3")
 fn extract_from_git_tag(repo_path: &Path) -> Result<String> {
     let repo = Git2Repo::open(repo_path)?;
-    let tag = repo
-        .describe_tags()
-        .map_err(|_| anyhow::anyhow!("No git tags found"))?;
+    let tag = repo.describe_tags().context("No git tags found")?;
 
     // Strip 'v' prefix if present
     Ok(tag.strip_prefix('v').unwrap_or(&tag).to_string())
@@ -325,9 +323,7 @@ fn extract_version_pattern(text: &str) -> Option<String> {
 /// "feature/awesome-stuff" -> "branch-feature-awesome-stuff"
 fn extract_from_branch(repo_path: &Path) -> Result<String> {
     let repo = Git2Repo::open(repo_path)?;
-    let branch = repo
-        .branch_name()
-        .map_err(|_| anyhow::anyhow!("Not a git repository"))?;
+    let branch = repo.branch_name().context("Not a git repository")?;
 
     // Sanitize branch name: replace / with - and remove special chars
     let sanitized = branch.replace(['/', '_'], "-");
@@ -339,9 +335,7 @@ fn extract_from_branch(repo_path: &Path) -> Result<String> {
 /// Returns "dev-<short-sha>" (7 characters)
 fn extract_from_commit(repo_path: &Path) -> Result<String> {
     let repo = Git2Repo::open(repo_path)?;
-    let sha = repo
-        .short_sha()
-        .map_err(|_| anyhow::anyhow!("Not a git repository"))?;
+    let sha = repo.short_sha().context("Not a git repository")?;
 
     Ok(format!("dev-{}", sha))
 }
