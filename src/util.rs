@@ -237,7 +237,7 @@ pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::
     let pid = child.id();
     let (sender, receiver) = mpsc::channel();
 
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let result = child.wait_with_output();
         let _ = sender.send(result);
     });
@@ -246,6 +246,10 @@ pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::
         Ok(result) => result.context("Failed to execute command"),
         Err(_) => {
             kill_process_group(pid);
+            // Join the waiter thread so no orphaned threads remain at exit.
+            // Under LLVM coverage instrumentation, orphaned threads can
+            // deadlock the profdata writer during process shutdown.
+            let _ = handle.join();
             bail!("Command timed out after {:?}", timeout)
         }
     }
