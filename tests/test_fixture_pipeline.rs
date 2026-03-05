@@ -238,6 +238,7 @@ async fn test_fixture_pipeline_with_review_pass() {
     let generator = Generator::new(Box::new(client), 3)
         .with_test(false)
         .with_review(true)
+        .with_skip_introspection(true)
         .with_review_max_retries(2);
 
     let data = fastapi_collected_data();
@@ -257,6 +258,7 @@ async fn test_fixture_pipeline_review_fail_then_pass() {
     let generator = Generator::new(Box::new(client), 3)
         .with_test(false)
         .with_review(true)
+        .with_skip_introspection(true)
         .with_review_max_retries(3);
 
     let data = fastapi_collected_data();
@@ -278,6 +280,7 @@ async fn test_fixture_pipeline_review_exhausted() {
     let generator = Generator::new(Box::new(client), 3)
         .with_test(false)
         .with_review(true)
+        .with_skip_introspection(true)
         .with_review_max_retries(1);
 
     let data = fastapi_collected_data();

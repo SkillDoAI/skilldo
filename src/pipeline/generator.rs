@@ -238,7 +238,8 @@ impl Generator {
         self
     }
 
-    #[cfg(test)]
+    /// Skip container-based introspection in review (useful for testing without a runtime).
+    #[allow(dead_code)]
     pub fn with_skip_introspection(mut self, skip: bool) -> Self {
         self.skip_introspection = skip;
         self
