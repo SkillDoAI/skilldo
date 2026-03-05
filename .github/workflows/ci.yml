@@ -111,11 +111,12 @@ jobs:
         run: |
           docker pull python:3.11-alpine &
           docker pull ghcr.io/astral-sh/uv:python3.11-bookworm-slim &
+          docker pull golang:1.25-alpine &
           wait
       - name: Run container executor unit tests
         run: cargo test container_executor
       - name: Run integration tests
-        run: cargo test -- --ignored --test-threads=1
+        run: cargo test -- --ignored --test-threads=1 --skip test_go_e2e_real_llm
 
   test-cov:
     name: test-cov
