@@ -136,7 +136,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Run tests with coverage
         run: |
-          cargo llvm-cov --lib --no-report -- --test-threads=1 -Zunstable-options --report-time
+          cargo llvm-cov --lib --no-report -- --test-threads=1
           cargo llvm-cov report --fail-under-lines 95
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
