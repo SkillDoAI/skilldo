@@ -394,16 +394,12 @@ impl GoHandler {
         }
 
         // Strategy 3: fetch tags then retry (shallow clones start with no tags).
-        // Use run_cmd_with_timeout to avoid hanging on unreachable remotes.
         debug!("No local tags found, fetching tags from remote");
-        let mut fetch_cmd = std::process::Command::new("git");
-        fetch_cmd
-            .args(["fetch", "--tags", "--quiet"])
-            .current_dir(&self.repo_path);
-        if crate::util::run_cmd_with_timeout(fetch_cmd, std::time::Duration::from_secs(30)).is_ok()
-        {
-            if let Some(v) = self.latest_version_tag() {
-                return Some(v);
+        if let Ok(repo) = crate::git::Git2Repo::open(&self.repo_path) {
+            if repo.fetch_tags(std::time::Duration::from_secs(30)).is_ok() {
+                if let Some(v) = self.latest_version_tag() {
+                    return Some(v);
+                }
             }
         }
 
@@ -412,35 +408,16 @@ impl GoHandler {
 
     /// Try `git describe --tags --abbrev=0` for the tag reachable from HEAD.
     fn git_describe_version(&self) -> Option<String> {
-        let output = std::process::Command::new("git")
-            .args(["describe", "--tags", "--abbrev=0"])
-            .current_dir(&self.repo_path)
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let repo = crate::git::Git2Repo::open(&self.repo_path).ok()?;
+        let tag = repo.describe_tags().ok()?;
         parse_version_tag(&tag)
     }
 
-    /// Get the latest semver tag via `git tag -l --sort=-v:refname`.
+    /// Get the latest semver tag sorted by semver descending.
     fn latest_version_tag(&self) -> Option<String> {
-        let output = std::process::Command::new("git")
-            .args(["tag", "-l", "--sort=-v:refname"])
-            .current_dir(&self.repo_path)
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .find_map(|tag| parse_version_tag(tag.trim()))
+        let repo = crate::git::Git2Repo::open(&self.repo_path).ok()?;
+        let tags = repo.list_tags_sorted().ok()?;
+        tags.iter().find_map(|tag| parse_version_tag(tag))
     }
 
     fn version_from_source(&self) -> Option<String> {

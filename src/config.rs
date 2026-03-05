@@ -610,13 +610,9 @@ impl Config {
         }
 
         // Try git repo root (handles running from subdirectories)
-        if let Ok(output) = std::process::Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .output()
-        {
-            if output.status.success() {
-                let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let repo_config = std::path::PathBuf::from(&root).join("skilldo.toml");
+        if let Ok(repo) = crate::git::Git2Repo::open_cwd() {
+            if let Ok(root) = repo.repo_root() {
+                let repo_config = root.join("skilldo.toml");
                 match Self::try_load_from_path(&repo_config) {
                     Ok(Some(config)) => {
                         debug!("Loaded config from {}", repo_config.display());

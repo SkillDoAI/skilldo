@@ -92,17 +92,13 @@ const SKILLDO_RULES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Rules that should only match in prose (outside fenced code blocks).
-/// These patterns match normal library APIs that legitimately appear in
-/// SKILL.md code examples (subprocess, eval, requests.post, etc.).
-const PROSE_ONLY_RULES: &[&str] = &[
-    "SD-201", // Dynamic code execution — eval/subprocess in docs is normal
-    "SD-202", // Credential file access — .ssh/ in docs is normal
-    "SD-204", // Persistence — crontab in docs is normal
-    "SD-205", // Privilege escalation — sudo in docs is normal
-    "SD-209", // Network exfiltration — requests.post() in docs is normal
-    "SD-210", // Resource abuse — while True: in docs is normal
-];
+/// Check if a rule has `prose_only = true` in its YARA metadata.
+fn is_prose_only(scanner: &boreal::Scanner, metadatas: &[Metadata]) -> bool {
+    metadatas.iter().any(|m| {
+        let name = scanner.get_string_symbol(m.name);
+        name == "prose_only" && matches!(m.value, MetadataValue::Boolean(true))
+    })
+}
 
 /// A compiled YARA scanner ready to scan content.
 pub struct YaraScanner {
@@ -217,9 +213,11 @@ impl YaraScanner {
                 .collect();
             let first_offset = offsets.iter().copied().min().unwrap_or(0);
 
+            let prose_only = is_prose_only(&self.scanner, rule.metadatas);
+
             // For prose-only rules, skip only if ALL matches are inside code blocks.
             // If any match is in prose, the finding is valid.
-            if PROSE_ONLY_RULES.contains(&rule_id.as_str())
+            if prose_only
                 && !offsets.is_empty()
                 && offsets.iter().all(|&off| in_code_block(off, &code_ranges))
             {
@@ -227,7 +225,7 @@ impl YaraScanner {
             }
 
             // Report at the first prose match for prose-only rules, or first overall
-            let report_offset = if PROSE_ONLY_RULES.contains(&rule_id.as_str()) {
+            let report_offset = if prose_only {
                 offsets
                     .iter()
                     .copied()
@@ -877,6 +875,84 @@ rule meta_type_test {
         assert!(
             findings.iter().any(|f| f.rule_id == "SD-201"),
             "SD-201 should fire when match is in prose, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn prose_only_metadata_read_from_custom_rule() {
+        // Verify that prose_only=true in YARA metadata causes code-block filtering
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("prose_meta.yara"),
+            r#"
+rule custom_prose_only_test {
+    meta:
+        id = "CUSTOM-001"
+        description = "Test prose_only metadata"
+        severity = "high"
+        category = "code-execution"
+        prose_only = true
+    strings:
+        $t = "CUSTOM_PROSE_TRIGGER"
+    condition:
+        $t
+}
+"#,
+        )
+        .unwrap();
+
+        let s = YaraScanner::with_rules_dir(dir.path()).unwrap();
+
+        // In code block → should be skipped
+        let in_code = "# Title\n\n```python\nCUSTOM_PROSE_TRIGGER\n```\n";
+        let findings = s.scan(in_code);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "CUSTOM-001"),
+            "prose_only=true rule should skip code-block matches, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+
+        // In prose → should fire
+        let in_prose = "Danger: CUSTOM_PROSE_TRIGGER is bad\n";
+        let findings = s.scan(in_prose);
+        assert!(
+            findings.iter().any(|f| f.rule_id == "CUSTOM-001"),
+            "prose_only=true rule should fire in prose, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn non_prose_only_rule_fires_in_code_block() {
+        // Rules WITHOUT prose_only=true should fire even in code blocks
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("not_prose.yara"),
+            r#"
+rule custom_not_prose_only {
+    meta:
+        id = "CUSTOM-002"
+        description = "Test without prose_only"
+        severity = "high"
+        category = "code-execution"
+    strings:
+        $t = "NOT_PROSE_ONLY_TRIGGER"
+    condition:
+        $t
+}
+"#,
+        )
+        .unwrap();
+
+        let s = YaraScanner::with_rules_dir(dir.path()).unwrap();
+
+        // In code block → should still fire (no prose_only flag)
+        let in_code = "# Title\n\n```python\nNOT_PROSE_ONLY_TRIGGER\n```\n";
+        let findings = s.scan(in_code);
+        assert!(
+            findings.iter().any(|f| f.rule_id == "CUSTOM-002"),
+            "Rule without prose_only should fire in code blocks, got: {:?}",
             findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
         );
     }

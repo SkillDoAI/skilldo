@@ -1,9 +1,9 @@
 use anyhow::{bail, Result};
 use std::path::Path;
-use std::process::Command;
 
 use crate::config::VersionStrategy;
 use crate::ecosystems::python::pyproject_version;
+use crate::git::Git2Repo;
 
 /// Extract version from various sources
 /// Priority: explicit > version_from strategy > package metadata
@@ -33,16 +33,10 @@ pub fn extract_version(
 
 /// Extract version from Git tag (e.g., "v1.2.3" -> "1.2.3")
 fn extract_from_git_tag(repo_path: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(["describe", "--tags", "--abbrev=0"])
-        .current_dir(repo_path)
-        .output()?;
-
-    if !output.status.success() {
-        bail!("No git tags found");
-    }
-
-    let tag = String::from_utf8(output.stdout)?.trim().to_string();
+    let repo = Git2Repo::open(repo_path)?;
+    let tag = repo
+        .describe_tags()
+        .map_err(|_| anyhow::anyhow!("No git tags found"))?;
 
     // Strip 'v' prefix if present
     Ok(tag.strip_prefix('v').unwrap_or(&tag).to_string())
@@ -330,16 +324,10 @@ fn extract_version_pattern(text: &str) -> Option<String> {
 /// Extract version from current Git branch name
 /// "feature/awesome-stuff" -> "branch-feature-awesome-stuff"
 fn extract_from_branch(repo_path: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(repo_path)
-        .output()?;
-
-    if !output.status.success() {
-        bail!("Not a git repository");
-    }
-
-    let branch = String::from_utf8(output.stdout)?.trim().to_string();
+    let repo = Git2Repo::open(repo_path)?;
+    let branch = repo
+        .branch_name()
+        .map_err(|_| anyhow::anyhow!("Not a git repository"))?;
 
     // Sanitize branch name: replace / with - and remove special chars
     let sanitized = branch.replace(['/', '_'], "-");
@@ -350,16 +338,10 @@ fn extract_from_branch(repo_path: &Path) -> Result<String> {
 /// Extract version from current Git commit SHA
 /// Returns "dev-<short-sha>" (7 characters)
 fn extract_from_commit(repo_path: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--short=7", "HEAD"])
-        .current_dir(repo_path)
-        .output()?;
-
-    if !output.status.success() {
-        bail!("Not a git repository");
-    }
-
-    let sha = String::from_utf8(output.stdout)?.trim().to_string();
+    let repo = Git2Repo::open(repo_path)?;
+    let sha = repo
+        .short_sha()
+        .map_err(|_| anyhow::anyhow!("Not a git repository"))?;
 
     Ok(format!("dev-{}", sha))
 }

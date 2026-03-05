@@ -19,6 +19,7 @@ rule SD_201_dynamic_code_execution
         category = "code-execution"
         description = "Dynamic code execution via eval, exec, or deserialization"
         reference = "MITRE ATT&CK T1059"
+        prose_only = true
 
     strings:
         $eval = /\beval\s*\(/
@@ -44,6 +45,7 @@ rule SD_202_credential_file_access
         category = "credential-access"
         description = "Access to credential stores, key files, or sensitive config"
         reference = "MITRE ATT&CK T1552"
+        prose_only = true
 
     strings:
         $ssh = ".ssh/"
@@ -90,6 +92,7 @@ rule SD_204_persistence
         category = "persistence"
         description = "System persistence mechanisms — cron, systemd, shell rc files"
         reference = "MITRE ATT&CK T1053, T1546"
+        prose_only = true
 
     strings:
         $crontab = /\bcrontab\b/
@@ -114,6 +117,7 @@ rule SD_205_privilege_escalation
         category = "privilege-escalation"
         description = "Privilege escalation — sudo, setuid, NOPASSWD"
         reference = "MITRE ATT&CK T1548"
+        prose_only = true
 
     strings:
         $sudo = /\bsudo\b/
@@ -197,6 +201,7 @@ rule SD_209_network_exfiltration
         severity = "high"
         category = "data-exfiltration"
         description = "Network exfiltration code — HTTP POST, socket, fetch to external URLs"
+        prose_only = true
 
     strings:
         $req_post = /requests\.post\s*\(/i
@@ -218,6 +223,7 @@ rule SD_210_resource_abuse
         severity = "high"
         category = "resource-abuse"
         description = "Resource abuse / denial-of-service — infinite loops, fork bombs, large allocs"
+        prose_only = true
 
     strings:
         $while_true_py = /while\s+(True|true|1)\s*:/

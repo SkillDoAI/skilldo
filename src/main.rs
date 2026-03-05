@@ -6,6 +6,7 @@ mod cli;
 mod config;
 mod detector;
 mod ecosystems;
+mod git;
 mod lint;
 mod llm;
 mod pipeline;
