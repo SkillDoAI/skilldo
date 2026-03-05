@@ -391,13 +391,15 @@ impl GoHandler {
             return Some(v);
         }
 
-        // Strategy 3: fetch tags then retry (shallow clones start with no tags)
+        // Strategy 3: fetch tags then retry (shallow clones start with no tags).
+        // Use run_cmd_with_timeout to avoid hanging on unreachable remotes.
         debug!("No local tags found, fetching tags from remote");
-        let fetch = std::process::Command::new("git")
+        let mut fetch_cmd = std::process::Command::new("git");
+        fetch_cmd
             .args(["fetch", "--tags", "--quiet"])
-            .current_dir(&self.repo_path)
-            .output();
-        if fetch.is_ok_and(|o| o.status.success()) {
+            .current_dir(&self.repo_path);
+        if crate::util::run_cmd_with_timeout(fetch_cmd, std::time::Duration::from_secs(30)).is_ok()
+        {
             if let Some(v) = self.latest_version_tag() {
                 return Some(v);
             }

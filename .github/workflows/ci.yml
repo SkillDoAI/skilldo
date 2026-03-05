@@ -13,7 +13,7 @@ env:
 jobs:
   changes:
     name: detect changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       pull-requests: read
@@ -35,7 +35,7 @@ jobs:
   commit-lint:
     name: commit lint
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     env:
       BASE_REF: ${{ github.base_ref }}
     steps:
@@ -72,7 +72,7 @@ jobs:
     name: cargo fmt
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -84,7 +84,7 @@ jobs:
     name: cargo clippy
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -99,7 +99,7 @@ jobs:
     name: integration tests
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -149,7 +149,7 @@ jobs:
 
   audit:
     name: security audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -162,7 +162,7 @@ jobs:
     # Secrets aren't available on fork PRs anyway.
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
     needs: [changes, fmt, clippy, test-cov, integration, audit]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
