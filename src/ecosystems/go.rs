@@ -135,9 +135,23 @@ impl GoHandler {
         Ok(name.to_string())
     }
 
-    /// Extract version. Tries git tags first, then falls back to "latest".
+    /// Extract version from local repo state. Strategies in order:
+    ///
+    /// 1. **Git tags** — `git describe --tags`, then `git tag -l --sort=-v:refname`,
+    ///    then fetch + retry. Covers the ~38% of Go projects that version only via tags.
+    /// 2. **Root version.go** — `Version = "1.2.3"` string constant at repo root.
+    /// 3. **VERSION files** — Plain-text `VERSION` or `VERSION.txt` at repo root
+    ///    (prometheus, rclone, tailscale style).
+    /// 4. **Version subdirs** — `version/`, `internal/version/`, `pkg/version/`,
+    ///    `version/rawversion/`. Also parses Major/Minor/Patch integer constants
+    ///    (geth, hugo style). Dev placeholders are filtered out.
+    ///
+    /// **Not detectable:** ldflags injection (`-X main.Version=...` at build time),
+    /// used by ~20% of top Go projects (kubernetes, docker, ollama, caddy, istio, helm).
+    /// For these projects, `git describe --tags` still works if they tag releases (most do).
+    /// Library owners can specify version via custom instructions for unusual patterns.
     pub fn get_version(&self) -> Result<String> {
-        // Strategy 1: git describe for latest tag
+        // Strategy 1: git tags (primary — Go modules version via tags)
         if let Some(v) = self.version_from_git_tags() {
             return Ok(v);
         }
@@ -221,8 +235,9 @@ impl GoHandler {
 
         for entry in entries {
             let path = entry.path();
+            let ft = entry.file_type()?;
 
-            if path.is_file() {
+            if ft.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if !name.ends_with(".go") {
                         continue;
@@ -232,7 +247,7 @@ impl GoHandler {
                         files.push(path);
                     }
                 }
-            } else if path.is_dir() {
+            } else if ft.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if Self::should_skip_dir(name) {
                         continue;
@@ -258,13 +273,14 @@ impl GoHandler {
 
         for entry in fs::read_dir(dir)?.flatten() {
             let path = entry.path();
-            if path.is_file() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.ends_with(".go") {
                         files.push(path);
                     }
                 }
-            } else if path.is_dir() {
+            } else if ft.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if !Self::should_skip_dir(name) {
                         self.collect_all_go_in_dir(&path, files, depth + 1)?;
@@ -288,13 +304,14 @@ impl GoHandler {
 
         for entry in fs::read_dir(dir)?.flatten() {
             let path = entry.path();
-            if path.is_file() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.starts_with("example_") && name.ends_with("_test.go") {
                         files.push(path);
                     }
                 }
-            } else if path.is_dir() {
+            } else if ft.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if !Self::should_skip_dir(name) {
                         self.collect_example_test_files(&path, files, depth + 1)?;
@@ -311,7 +328,7 @@ impl GoHandler {
         docs: &mut Vec<PathBuf>,
         depth: usize,
     ) -> Result<()> {
-        if depth > 10 {
+        if depth > Self::MAX_DEPTH {
             return Ok(());
         }
 
@@ -328,13 +345,14 @@ impl GoHandler {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() {
+                let Ok(ft) = entry.file_type() else { continue };
+                if ft.is_file() {
                     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                         if ext == "md" || ext == "rst" {
                             docs.push(path);
                         }
                     }
-                } else if path.is_dir() {
+                } else if ft.is_dir() {
                     self.collect_docs_recursive(&path, docs, depth + 1)?;
                 }
             }
@@ -422,16 +440,44 @@ impl GoHandler {
     }
 
     fn version_from_source(&self) -> Option<String> {
-        // Look for version.go or a Version constant
-        for name in &["version.go", "VERSION"] {
+        // 1. Root-level Go source files
+        let path = self.repo_path.join("version.go");
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Some(v) = extract_version_constant(&content) {
+                debug!("Version from version.go: {v}");
+                return Some(v);
+            }
+        }
+
+        // 2. Plain-text VERSION / VERSION.txt files (just a version string, not Go source)
+        for name in &["VERSION", "VERSION.txt"] {
             let path = self.repo_path.join(name);
             if let Ok(content) = fs::read_to_string(&path) {
+                if let Some(first_line) = content.lines().next() {
+                    if let Some(v) = parse_version_tag(first_line.trim()) {
+                        debug!("Version from {name}: {v}");
+                        return Some(v);
+                    }
+                }
+            }
+        }
+
+        // 3. Common version subdirectories
+        for subpath in &[
+            "version/version.go",
+            "internal/version/version.go",
+            "pkg/version/version.go",
+            "version/rawversion/version.go",
+        ] {
+            let path = self.repo_path.join(subpath);
+            if let Ok(content) = fs::read_to_string(&path) {
                 if let Some(v) = extract_version_constant(&content) {
-                    debug!("Version from {name}: {v}");
+                    debug!("Version from {subpath}: {v}");
                     return Some(v);
                 }
             }
         }
+
         None
     }
 }
@@ -466,7 +512,11 @@ fn parse_version_tag(tag: &str) -> Option<String> {
     }
 }
 
-/// Extract a version string from Go source (e.g., `Version = "1.2.3"`).
+/// Extract a version string from Go source. Tries three patterns in order:
+/// 1. `Version = "1.2.3"` (simple string constant)
+/// 2. `Major = 1; Minor = 17; Patch = 2` (integer constants, geth/hugo style)
+///
+/// Returns `None` for dev placeholders like "dev", "(untracked)", "library-import".
 fn extract_version_constant(content: &str) -> Option<String> {
     use once_cell::sync::Lazy;
     use regex::Regex;
@@ -474,7 +524,59 @@ fn extract_version_constant(content: &str) -> Option<String> {
     static VERSION_RE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"(?i)(?:Version|VERSION)\s*=\s*"(\d+\.\d+[^"]*)"#).unwrap());
 
-    VERSION_RE.captures(content).map(|cap| cap[1].to_string())
+    // Try simple string constant first
+    if let Some(cap) = VERSION_RE.captures(content) {
+        let v = cap[1].to_string();
+        if !is_dev_placeholder(&v) {
+            return Some(v);
+        }
+    }
+
+    // Fallback: Major/Minor/Patch integer constants
+    extract_version_parts(content)
+}
+
+/// Check if a version string is a dev/build placeholder that shouldn't be used.
+fn is_dev_placeholder(version: &str) -> bool {
+    let normalized = version.trim().to_lowercase();
+    let normalized = normalized.strip_prefix('v').unwrap_or(&normalized);
+    matches!(
+        normalized,
+        "dev"
+            | "development"
+            | "unversioned"
+            | "unknown"
+            | "unknown-dev"
+            | "unknown-version"
+            | "(untracked)"
+            | "library-import"
+            | "0.0.0-unset"
+            | "0.0.0"
+    )
+}
+
+/// Extract version from separate Major/Minor/Patch integer constants.
+/// Handles both `const` assignment (`Major = 1`) and struct init (`Major: 1`).
+/// Also matches `PatchLevel` as an alias for Patch (used by hugo).
+fn extract_version_parts(content: &str) -> Option<String> {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+
+    static MAJOR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bMajor\s*[=:]\s*(\d+)").unwrap());
+    static MINOR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bMinor\s*[=:]\s*(\d+)").unwrap());
+    static PATCH_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\b(?:Patch|PatchLevel)\s*[=:]\s*(\d+)").unwrap());
+
+    let major: u32 = MAJOR_RE.captures(content)?.get(1)?.as_str().parse().ok()?;
+    let minor: u32 = MINOR_RE.captures(content)?.get(1)?.as_str().parse().ok()?;
+    let patch: u32 = PATCH_RE
+        .captures(content)
+        .and_then(|c| c.get(1)?.as_str().parse().ok())
+        .unwrap_or(0);
+
+    let version = format!("{major}.{minor}.{patch}");
+    debug!("Version from Major/Minor/Patch constants: {version}");
+    Some(version)
 }
 
 /// Check if a path segment is a Go major-version suffix (v2, v3, ...).
@@ -487,8 +589,13 @@ fn is_major_version_suffix(segment: &str) -> bool {
 
 /// Classify a license file by its content (first few hundred chars).
 fn classify_license(content: &str) -> Option<String> {
-    let lower = content.to_lowercase();
-    let prefix: String = lower.chars().take(500).collect();
+    // Only lowercase the prefix we actually inspect (avoid full-file allocation)
+    let byte_end = content.len().min(600);
+    let mut end = byte_end;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    let prefix = content[..end].to_lowercase();
 
     if prefix.contains("mit license")
         || prefix.contains("permission is hereby granted, free of charge")
@@ -879,11 +986,257 @@ mod tests {
         assert_eq!(extract_version_constant("package main\n"), None);
     }
 
+    // ── Dev placeholder filtering ────────────────────────────────────
+
     #[test]
-    fn classify_license_bsd() {
+    fn extract_version_constant_rejects_dev_placeholder() {
+        assert_eq!(
+            extract_version_constant("var Version = \"dev\"\n"),
+            None,
+            "should reject 'dev' placeholder"
+        );
+    }
+
+    #[test]
+    fn extract_version_constant_rejects_untracked() {
+        assert_eq!(
+            extract_version_constant("const Version = \"(untracked)\"\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_version_constant_rejects_library_import() {
+        assert_eq!(
+            extract_version_constant("var Version = \"library-import\"\n"),
+            None,
+        );
+    }
+
+    #[test]
+    fn extract_version_constant_rejects_v0_0_0_unset() {
+        assert_eq!(
+            extract_version_constant("const Version = \"v0.0.0-unset\"\n"),
+            None,
+        );
+    }
+
+    #[test]
+    fn is_dev_placeholder_rejects_known_values() {
+        assert!(is_dev_placeholder("dev"));
+        assert!(is_dev_placeholder("development"));
+        assert!(is_dev_placeholder("unknown-dev"));
+        assert!(is_dev_placeholder("(untracked)"));
+        assert!(is_dev_placeholder("library-import"));
+        assert!(is_dev_placeholder("v0.0.0-unset"));
+        assert!(is_dev_placeholder("0.0.0"));
+    }
+
+    #[test]
+    fn is_dev_placeholder_accepts_real_versions() {
+        assert!(!is_dev_placeholder("1.2.3"));
+        assert!(!is_dev_placeholder("0.9.0-beta"));
+        assert!(!is_dev_placeholder("3.7.0-alpha.0"));
+        assert!(!is_dev_placeholder("v1.12.0"));
+    }
+
+    // ── Major/Minor/Patch integer constants ──────────────────────────
+
+    #[test]
+    fn extract_version_parts_basic() {
+        let content = "const (\n\tMajor = 1\n\tMinor = 17\n\tPatch = 2\n)\n";
+        assert_eq!(extract_version_parts(content), Some("1.17.2".into()));
+    }
+
+    #[test]
+    fn extract_version_parts_missing_patch() {
+        let content = "const Major = 3\nconst Minor = 5\n";
+        assert_eq!(extract_version_parts(content), Some("3.5.0".into()));
+    }
+
+    #[test]
+    fn extract_version_parts_hugo_style_struct() {
+        // Hugo uses struct init with colons and PatchLevel
+        let content = "var CurrentVersion = Version{\n\tMajor:      0,\n\tMinor:      158,\n\tPatchLevel: 0,\n}\n";
+        assert_eq!(extract_version_parts(content), Some("0.158.0".into()));
+    }
+
+    #[test]
+    fn extract_version_parts_geth_style() {
+        let content =
+            "const (\n\tMajor = 1\n\tMinor = 17\n\tPatch = 2\n\tMeta  = \"unstable\"\n)\n";
+        assert_eq!(extract_version_parts(content), Some("1.17.2".into()));
+    }
+
+    #[test]
+    fn extract_version_parts_no_match() {
+        assert_eq!(extract_version_parts("package main\n"), None);
+    }
+
+    #[test]
+    fn extract_version_constant_falls_back_to_parts() {
+        // No string Version constant, but has Major/Minor/Patch
+        let content = "package version\n\nconst (\n\tMajor = 2\n\tMinor = 8\n\tPatch = 1\n)\n";
+        assert_eq!(extract_version_constant(content), Some("2.8.1".into()));
+    }
+
+    // ── VERSION file handling ────────────────────────────────────────
+
+    #[test]
+    fn get_version_from_version_file_plain_text() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(dir.path().join("VERSION"), "3.10.0\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "3.10.0");
+    }
+
+    #[test]
+    fn get_version_from_version_txt_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(dir.path().join("VERSION.txt"), "1.95.0\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "1.95.0");
+    }
+
+    #[test]
+    fn get_version_from_version_file_with_v_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(dir.path().join("VERSION"), "v2.16.0\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "2.16.0");
+    }
+
+    // ── Version subdirectory search ──────────────────────────────────
+
+    #[test]
+    fn get_version_from_version_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir(dir.path().join("version")).unwrap();
+        fs::write(
+            dir.path().join("version").join("version.go"),
+            "package version\n\nvar Version = \"3.7.0-alpha.0\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "3.7.0-alpha.0");
+    }
+
+    #[test]
+    fn get_version_from_internal_version_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir_all(dir.path().join("internal").join("version")).unwrap();
+        fs::write(
+            dir.path()
+                .join("internal")
+                .join("version")
+                .join("version.go"),
+            "package version\n\nconst Version = \"0.26.2\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "0.26.2");
+    }
+
+    #[test]
+    fn get_version_subdir_dev_placeholder_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir(dir.path().join("version")).unwrap();
+        fs::write(
+            dir.path().join("version").join("version.go"),
+            "package version\n\nvar Version = \"dev\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        // "dev" is a placeholder — should fall through to "latest" (no git tags in temp dir)
+        assert_eq!(handler.get_version().unwrap(), "latest");
+    }
+
+    // ── License classifier tests ────────────────────────────────────
+
+    #[test]
+    fn classify_license_bsd_3_clause() {
         assert_eq!(
             classify_license("BSD 3-Clause License\n\nCopyright..."),
             Some("BSD-3-Clause".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_bsd_3_clause_via_redistribution() {
+        assert_eq!(
+            classify_license("Redistribution and use in source and binary forms..."),
+            Some("BSD-3-Clause".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_bsd_2_clause() {
+        assert_eq!(
+            classify_license("BSD 2-Clause License\n\nCopyright (c) 2024"),
+            Some("BSD-2-Clause".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_mpl() {
+        assert_eq!(
+            classify_license("Mozilla Public License Version 2.0\n\n1. Definitions"),
+            Some("MPL-2.0".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_gpl3() {
+        assert_eq!(
+            classify_license("GNU General Public License\nVersion 3, 29 June 2007"),
+            Some("GPL-3.0".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_gpl2() {
+        assert_eq!(
+            classify_license("GNU General Public License\nVersion 2, June 1991"),
+            Some("GPL-2.0".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_gpl_no_version_defaults_to_gpl2() {
+        // GNU GPL without a specific version 3 marker → defaults to GPL-2.0
+        assert_eq!(
+            classify_license("GNU General Public License as published by the FSF"),
+            Some("GPL-2.0".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_unlicense() {
+        assert_eq!(
+            classify_license("This is free and unencumbered software released into the public domain.\n\nThe Unlicense"),
+            Some("Unlicense".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_unlicense_bare() {
+        assert_eq!(
+            classify_license("Unlicense\n\nAnyone is free to copy..."),
+            Some("Unlicense".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_isc() {
+        assert_eq!(
+            classify_license("ISC License\n\nCopyright (c) 2024 Test"),
+            Some("ISC".into())
         );
     }
 
@@ -975,5 +1328,479 @@ mod tests {
     fn parse_version_tag_prerelease() {
         // "0.9.0-beta" contains '.' and starts with digit — valid
         assert_eq!(parse_version_tag("v0.9.0-beta"), Some("0.9.0-beta".into()));
+    }
+
+    // ── License fallback (unclassified) ──────────────────────────────
+
+    #[test]
+    fn get_license_unclassified_returns_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("LICENSE"),
+            "Custom Proprietary License v1.0\n\nDo whatever you want.\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(
+            handler.get_license().unwrap(),
+            "Custom Proprietary License v1.0"
+        );
+    }
+
+    #[test]
+    fn get_license_unclassified_skips_blank_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("LICENSE"), "\n\n  \nActual License Text\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_license().unwrap(), "Actual License Text");
+    }
+
+    #[test]
+    fn get_license_from_licence_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("LICENCE"),
+            "MIT License\n\nPermission is hereby granted...\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_license().unwrap(), "MIT");
+    }
+
+    #[test]
+    fn get_license_from_copying_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("COPYING"),
+            "GNU General Public License\nVersion 3, 29 June 2007",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_license().unwrap(), "GPL-3.0");
+    }
+
+    // ── URL generation edge cases ────────────────────────────────────
+
+    #[test]
+    fn get_project_urls_gitlab_module() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("go.mod"),
+            "module gitlab.com/myorg/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(urls
+            .iter()
+            .any(|(k, v)| k == "Source" && v == "https://gitlab.com/myorg/mylib"));
+        assert!(urls
+            .iter()
+            .any(|(k, v)| k == "Documentation" && v.contains("pkg.go.dev/gitlab.com/myorg/mylib")));
+    }
+
+    #[test]
+    fn get_project_urls_bitbucket_module() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("go.mod"),
+            "module bitbucket.org/team/repo\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(urls
+            .iter()
+            .any(|(k, v)| k == "Source" && v == "https://bitbucket.org/team/repo"));
+    }
+
+    #[test]
+    fn get_project_urls_custom_domain_no_source_url() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("go.mod"),
+            "module go.uber.org/zap\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        // Should have Documentation but NOT Source (custom domain)
+        assert!(urls.iter().any(|(k, _)| k == "Documentation"));
+        assert!(!urls.iter().any(|(k, _)| k == "Source"));
+    }
+
+    #[test]
+    fn get_project_urls_no_go_mod_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert!(handler.get_project_urls().is_empty());
+    }
+
+    // ── Docs recursive depth limit ───────────────────────────────────
+
+    #[test]
+    fn find_docs_deeply_nested_stops_at_depth_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+
+        // Create docs/a/b/c/.../deep.md at depth > MAX_DEPTH (20)
+        let mut path = root.join("docs");
+        for i in 0..22 {
+            path = path.join(format!("level{i}"));
+        }
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("deep.md"), "# Deep doc\n").unwrap();
+
+        let handler = GoHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        // The deeply nested file should NOT be found (depth > MAX_DEPTH)
+        assert!(!docs
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n.to_str() == Some("deep.md"))));
+    }
+
+    #[test]
+    fn find_docs_skips_hidden_and_vendor_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+
+        // Hidden dir inside docs/
+        let hidden = root.join("docs").join(".hidden");
+        fs::create_dir_all(&hidden).unwrap();
+        fs::write(hidden.join("secret.md"), "# Secret\n").unwrap();
+
+        // vendor dir inside docs/
+        let vendor = root.join("docs").join("vendor");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::write(vendor.join("vendored.md"), "# Vendored\n").unwrap();
+
+        // _build dir inside docs/
+        let build = root.join("docs").join("_build");
+        fs::create_dir_all(&build).unwrap();
+        fs::write(build.join("built.md"), "# Built\n").unwrap();
+
+        // Normal doc should be found
+        fs::write(root.join("docs").join("guide.md"), "# Guide\n").unwrap();
+
+        let handler = GoHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        let names: Vec<&str> = docs
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"guide.md"), "should find normal docs");
+        assert!(!names.contains(&"secret.md"), "should skip .hidden/");
+        assert!(!names.contains(&"vendored.md"), "should skip vendor/");
+        assert!(!names.contains(&"built.md"), "should skip _build/");
+    }
+
+    // ── Version from git tags (using real git repos) ─────────────────
+
+    #[test]
+    fn get_version_from_git_describe() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        // Initialize a real git repo with a tag
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "init", "--no-gpg-sign"]);
+        git(&["tag", "v1.5.0"]);
+
+        let handler = GoHandler::new(root);
+        assert_eq!(handler.get_version().unwrap(), "1.5.0");
+    }
+
+    #[test]
+    fn get_version_from_git_tag_list() {
+        // Test the latest_version_tag fallback (tag not reachable from HEAD)
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "init", "--no-gpg-sign"]);
+        git(&["tag", "v2.0.0"]);
+        // Make another commit so HEAD is ahead of the tag
+        fs::write(root.join("extra.go"), "package main\n").unwrap();
+        git(&["add", "extra.go"]);
+        git(&["commit", "-m", "extra", "--no-gpg-sign"]);
+
+        let handler = GoHandler::new(root);
+        let version = handler.get_version().unwrap();
+        // git describe may return "2.0.0" directly since the tag is still reachable,
+        // but either way the version should be parseable
+        assert!(
+            version == "2.0.0" || version.starts_with("2.0.0"),
+            "expected version from tag, got: {version}"
+        );
+    }
+
+    #[test]
+    fn get_version_prefers_git_tags_over_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            root.join("version.go"),
+            "package mylib\n\nconst Version = \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        // Git tag should win over source constant
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "init", "--no-gpg-sign"]);
+        git(&["tag", "v2.5.0"]);
+
+        let handler = GoHandler::new(root);
+        assert_eq!(
+            handler.get_version().unwrap(),
+            "2.5.0",
+            "git tag should take priority over source constant"
+        );
+    }
+
+    // ── Version source priority tests ────────────────────────────────
+
+    #[test]
+    fn get_version_version_go_over_version_file() {
+        // version.go should be checked before VERSION file
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("version.go"),
+            "package mylib\n\nconst Version = \"3.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("VERSION"), "4.0.0\n").unwrap();
+
+        let handler = GoHandler::new(dir.path());
+        // No git repo → falls through to source → version.go first
+        assert_eq!(handler.get_version().unwrap(), "3.0.0");
+    }
+
+    #[test]
+    fn get_version_version_file_over_subdirs() {
+        // VERSION file should be checked before version subdirectories
+        // Note: macOS is case-insensitive, so VERSION file and version/ dir conflict.
+        // Use VERSION.txt instead to test priority over subdirs.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(dir.path().join("VERSION.txt"), "5.0.0\n").unwrap();
+        fs::create_dir_all(dir.path().join("version")).unwrap();
+        fs::write(
+            dir.path().join("version").join("version.go"),
+            "package version\n\nconst Version = \"6.0.0\"\n",
+        )
+        .unwrap();
+
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "5.0.0");
+    }
+
+    #[test]
+    fn get_version_from_pkg_version_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir_all(dir.path().join("pkg").join("version")).unwrap();
+        fs::write(
+            dir.path().join("pkg").join("version").join("version.go"),
+            "package version\n\nvar Version = \"1.8.3\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "1.8.3");
+    }
+
+    #[test]
+    fn get_version_from_rawversion_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir_all(dir.path().join("version").join("rawversion")).unwrap();
+        fs::write(
+            dir.path()
+                .join("version")
+                .join("rawversion")
+                .join("version.go"),
+            "package rawversion\n\nconst Version = \"4.2.1\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "4.2.1");
+    }
+
+    // ── Example collection with nested subdirectories ─────────────────
+
+    #[test]
+    fn find_examples_recurses_into_example_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        // examples/advanced/demo.go — should be found via collect_all_go_in_dir recursion
+        fs::create_dir_all(root.join("examples").join("advanced")).unwrap();
+        fs::write(
+            root.join("examples").join("advanced").join("demo.go"),
+            "package main\n",
+        )
+        .unwrap();
+        // Non-Go file in examples — should be skipped
+        fs::write(root.join("examples").join("README.md"), "# Examples\n").unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(
+            names.contains(&"demo.go"),
+            "should find nested example .go file"
+        );
+        assert!(!names.contains(&"README.md"), "should skip non-.go files");
+    }
+
+    #[test]
+    fn find_examples_finds_nested_example_test_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        // example_*_test.go in a subdirectory
+        fs::create_dir(root.join("pkg")).unwrap();
+        fs::write(
+            root.join("pkg").join("example_usage_test.go"),
+            "package pkg\n",
+        )
+        .unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(
+            names.contains(&"example_usage_test.go"),
+            "should find example_*_test.go in subdirs"
+        );
+    }
+
+    #[test]
+    fn find_examples_skips_vendor_in_example_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        // examples/vendor/dep.go — should be skipped
+        fs::create_dir_all(root.join("examples").join("vendor")).unwrap();
+        fs::write(
+            root.join("examples").join("vendor").join("dep.go"),
+            "package dep\n",
+        )
+        .unwrap();
+        // examples/real.go — should be found
+        fs::write(root.join("examples").join("real.go"), "package main\n").unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"real.go"));
+        assert!(
+            !names.contains(&"dep.go"),
+            "should skip vendor/ in examples"
+        );
+    }
+
+    // ── read_module_path error case ──────────────────────────────────
+
+    #[test]
+    fn read_module_path_no_module_directive_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "go 1.21\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert!(handler.read_module_path().is_err());
+    }
+
+    // ── Recursive file collection edge cases ─────────────────────────
+
+    #[test]
+    fn collect_go_files_skips_non_go_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+        fs::write(root.join("notes.txt"), "not a go file\n").unwrap();
+        fs::write(root.join("config.json"), "{}").unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(files
+            .iter()
+            .all(|p| p.extension().is_some_and(|e| e == "go")));
+    }
+
+    #[test]
+    fn collect_go_files_recurses_into_nested_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+        fs::create_dir_all(root.join("pkg").join("deep")).unwrap();
+        fs::write(
+            root.join("pkg").join("deep").join("util.go"),
+            "package deep\n",
+        )
+        .unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(files
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "util.go")));
     }
 }

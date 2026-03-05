@@ -295,10 +295,14 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         .with_max_source_chars(config.generation.max_source_tokens);
     let mut collected_data = collector.collect().await?;
 
-    // Override version if CLI args provided (CLI > config > auto-detect)
+    // Override version only when the user explicitly requests it (CLI flag or config).
+    // Otherwise, keep the language-specific version from the collector (GoHandler, etc.).
     let version_strategy = version_from.or(config.generation.version_from);
-    let final_version = version::extract_version(repo_path, version_override, version_strategy)?;
-    collected_data.version = final_version;
+    if version_override.is_some() || version_strategy.is_some() {
+        let final_version =
+            version::extract_version(repo_path, version_override, version_strategy)?;
+        collected_data.version = final_version;
+    }
 
     info!(
         "Collected data for package: {} v{}",
@@ -515,6 +519,25 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             tracing::warn!("Failed to write telemetry: {}", e);
         }
     }
+
+    // Log run-complete summary for structured log consumers
+    let duration = start.elapsed();
+    let lint_issues = issues.len();
+    let status = if output_result.has_unresolved_errors {
+        "errors"
+    } else {
+        "ok"
+    };
+    info!(
+        library = %collected_data.package_name,
+        version = %collected_data.version,
+        status,
+        lint_issues,
+        retries = output_result.retries_used,
+        review_retries = output_result.review_retries_used,
+        duration_secs = format!("{:.1}", duration.as_secs_f64()),
+        "Run complete"
+    );
 
     // Exit non-zero when unresolved errors remain (unless --best-effort)
     if output_result.has_unresolved_errors && !best_effort {

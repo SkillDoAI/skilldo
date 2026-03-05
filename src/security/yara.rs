@@ -312,27 +312,41 @@ fn parse_category(s: &str) -> Category {
 /// Compute byte ranges of fenced code blocks in markdown content.
 /// Returns (start, end) pairs where start is the first byte after the
 /// opening fence line and end is the byte offset of the closing fence.
+/// Supports both backtick (```) and tilde (~~~) fences per CommonMark spec.
+/// A closing fence must use the same character as the opening fence.
 fn code_block_byte_ranges(content: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
-    let mut in_block = false;
+    let mut fence_char: Option<char> = None; // which char opened the block
     let mut block_start = 0;
     let mut pos = 0;
 
     for line in content.split('\n') {
-        if line.trim_start().starts_with("```") {
-            if in_block {
-                ranges.push((block_start, pos));
-                in_block = false;
+        let trimmed = line.trim_start();
+        let detected = if trimmed.starts_with("```") {
+            Some('`')
+        } else if trimmed.starts_with("~~~") {
+            Some('~')
+        } else {
+            None
+        };
+
+        if let Some(ch) = detected {
+            if let Some(open_ch) = fence_char {
+                // Inside a block — only close if same fence character
+                if ch == open_ch {
+                    ranges.push((block_start, pos));
+                    fence_char = None;
+                }
             } else {
                 block_start = (pos + line.len() + 1).min(content.len());
-                in_block = true;
+                fence_char = Some(ch);
             }
         }
         pos += line.len() + 1;
     }
 
     // Unterminated code block — treat as code until EOF
-    if in_block {
+    if fence_char.is_some() {
         ranges.push((block_start, content.len()));
     }
 
@@ -580,6 +594,254 @@ rule custom_test_rule {
                 .iter()
                 .any(|f| f.message.contains("Test custom rule loading")),
             "custom rule should not fire on clean content"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage-targeted tests (lines 164, 173, 290-292, 306-308)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_severity_all_variants() {
+        assert_eq!(parse_severity("critical"), Severity::Critical);
+        assert_eq!(parse_severity("high"), Severity::High);
+        assert_eq!(parse_severity("medium"), Severity::Medium);
+        assert_eq!(parse_severity("low"), Severity::Low);
+        assert_eq!(parse_severity("info"), Severity::Info);
+        // Fallback for unknown strings
+        assert_eq!(parse_severity("unknown"), Severity::Info);
+        assert_eq!(parse_severity(""), Severity::Info);
+    }
+
+    #[test]
+    fn parse_category_all_variants() {
+        assert_eq!(parse_category("unicode-attack"), Category::UnicodeAttack);
+        assert_eq!(
+            parse_category("unicode-steganography"),
+            Category::UnicodeAttack
+        );
+        assert_eq!(
+            parse_category("prompt-injection"),
+            Category::PromptInjection
+        );
+        assert_eq!(
+            parse_category("injection-attack"),
+            Category::PromptInjection
+        );
+        assert_eq!(parse_category("code-execution"), Category::CodeExecution);
+        assert_eq!(
+            parse_category("credential-access"),
+            Category::CredentialAccess
+        );
+        assert_eq!(
+            parse_category("credential-harvesting"),
+            Category::CredentialAccess
+        );
+        assert_eq!(
+            parse_category("data-exfiltration"),
+            Category::DataExfiltration
+        );
+        assert_eq!(parse_category("obfuscation"), Category::Obfuscation);
+        assert_eq!(parse_category("persistence"), Category::Persistence);
+        assert_eq!(
+            parse_category("privilege-escalation"),
+            Category::PrivilegeEscalation
+        );
+        assert_eq!(
+            parse_category("autonomy-abuse"),
+            Category::PrivilegeEscalation
+        );
+        assert_eq!(
+            parse_category("filesystem-write"),
+            Category::FilesystemWrite
+        );
+        assert_eq!(
+            parse_category("system-manipulation"),
+            Category::FilesystemWrite
+        );
+        assert_eq!(parse_category("resource-abuse"), Category::ResourceAbuse);
+        assert_eq!(
+            parse_category("tool-chaining-abuse"),
+            Category::ResourceAbuse
+        );
+        // Fallback for unknown strings
+        assert_eq!(parse_category("unknown"), Category::CodeExecution);
+        assert_eq!(parse_category(""), Category::CodeExecution);
+    }
+
+    #[test]
+    fn with_rules_dir_multiple_yara_files_sorted() {
+        // Cover line 164: entries.sort_by_key when multiple .yara files exist
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write two valid YARA rules — filenames sorted alphabetically
+        std::fs::write(
+            dir.path().join("zzz_rule.yara"),
+            r#"
+rule zzz_test_rule {
+    meta:
+        description = "ZZZ rule"
+    strings:
+        $a = "ZZZ_UNIQUE_TRIGGER_A"
+    condition:
+        $a
+}
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join("aaa_rule.yar"),
+            r#"
+rule aaa_test_rule {
+    meta:
+        description = "AAA rule"
+    strings:
+        $b = "AAA_UNIQUE_TRIGGER_B"
+    condition:
+        $b
+}
+"#,
+        )
+        .unwrap();
+
+        let s = YaraScanner::with_rules_dir(dir.path()).unwrap();
+        // Both rules should load and fire
+        let f1 = s.scan("AAA_UNIQUE_TRIGGER_B");
+        assert!(
+            f1.iter().any(|f| f.message.contains("AAA rule")),
+            "AAA rule should fire, got: {:?}",
+            f1.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+        let f2 = s.scan("ZZZ_UNIQUE_TRIGGER_A");
+        assert!(
+            f2.iter().any(|f| f.message.contains("ZZZ rule")),
+            "ZZZ rule should fire, got: {:?}",
+            f2.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn with_rules_dir_invalid_yara_file_errors() {
+        // Cover line 173: compile error for invalid external YARA rule
+        let dir = tempfile::tempdir().unwrap();
+
+        std::fs::write(
+            dir.path().join("bad.yara"),
+            "this is not valid yara syntax at all {{{{",
+        )
+        .unwrap();
+
+        let result = YaraScanner::with_rules_dir(dir.path());
+        assert!(result.is_err(), "Should fail to compile invalid YARA rule");
+        let err = result.err().expect("already asserted is_err");
+        assert!(
+            err.contains("Failed to compile"),
+            "Error should mention compilation failure, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn with_rules_dir_custom_rule_with_integer_and_bool_metadata() {
+        // Cover lines 277-278: MetadataValue::Integer and MetadataValue::Boolean
+        // YARA rules can have integer and boolean metadata values.
+        // We write a rule that uses these and verify scanning works.
+        let dir = tempfile::tempdir().unwrap();
+
+        std::fs::write(
+            dir.path().join("meta_types.yara"),
+            r#"
+rule meta_type_test {
+    meta:
+        description = "Test integer and boolean metadata"
+        severity = "low"
+        risk_score = 42
+        is_dangerous = true
+    strings:
+        $t = "META_TYPE_TEST_TRIGGER_XYZ"
+    condition:
+        $t
+}
+"#,
+        )
+        .unwrap();
+
+        let s = YaraScanner::with_rules_dir(dir.path()).unwrap();
+        let findings = s.scan("META_TYPE_TEST_TRIGGER_XYZ");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("Test integer and boolean metadata")),
+            "Custom rule with integer/boolean metadata should fire, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn code_block_ranges_multiple_blocks() {
+        let content = "prose\n```python\nblock1\n```\nmiddle\n```bash\nblock2\n```\nend\n";
+        let ranges = code_block_byte_ranges(content);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&content[ranges[0].0..ranges[0].1], "block1\n");
+        assert_eq!(&content[ranges[1].0..ranges[1].1], "block2\n");
+    }
+
+    #[test]
+    fn code_block_ranges_tilde_fences() {
+        let content = "prose\n~~~python\ntilde code\n~~~\nmore prose\n";
+        let ranges = code_block_byte_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let (start, end) = ranges[0];
+        assert_eq!(&content[start..end], "tilde code\n");
+    }
+
+    #[test]
+    fn code_block_ranges_mixed_fences_no_cross_close() {
+        // A tilde fence should NOT be closed by backtick fence and vice versa
+        let content = "~~~python\ncode\n```\nstill code\n~~~\nback to prose\n";
+        let ranges = code_block_byte_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let (start, end) = ranges[0];
+        // The block opened by ~~~ should include the ``` line and close at ~~~
+        assert_eq!(&content[start..end], "code\n```\nstill code\n");
+    }
+
+    #[test]
+    fn prose_only_rules_skip_tilde_code_blocks() {
+        // SD-201 inside a tilde fence should be skipped just like backtick fences
+        let content = "# Example\n\n~~~python\nresult = eval(user_input)\n~~~\n";
+        let findings = scanner().scan(content);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SD-201"),
+            "SD-201 should not fire inside tilde code blocks, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn code_block_ranges_empty_content() {
+        let ranges = code_block_byte_ranges("");
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn in_code_block_empty_ranges() {
+        assert!(!in_code_block(0, &[]));
+        assert!(!in_code_block(100, &[]));
+    }
+
+    #[test]
+    fn prose_only_rule_fires_when_mixed_prose_and_code() {
+        // When a prose-only rule matches in BOTH prose and code,
+        // the finding should be reported at the prose offset.
+        let content = "Use eval(user_input) here.\n\n```python\nresult = eval(user_input)\n```\n";
+        let findings = scanner().scan(content);
+        // SD-201 should fire because there IS a prose match
+        assert!(
+            findings.iter().any(|f| f.rule_id == "SD-201"),
+            "SD-201 should fire when match is in prose, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
         );
     }
 }

@@ -153,7 +153,7 @@ fn strip_meta_text(content: &str) -> String {
     let mut content_start = None;
     for (i, line) in lines[fm_end + 1..].iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed.starts_with('#') || trimmed.starts_with("```") {
+        if trimmed.starts_with('#') || crate::util::is_fence_line(trimmed) {
             content_start = Some(fm_end + 1 + i);
             break;
         }
@@ -323,7 +323,7 @@ fn strip_body_markdown_fence(content: &str) -> String {
 fn fix_unclosed_code_blocks(content: &str) -> String {
     let fence_count = content
         .lines()
-        .filter(|l| l.trim_start().starts_with("```"))
+        .filter(|l| crate::util::is_fence_line(l))
         .count();
 
     if fence_count % 2 != 0 {
@@ -664,7 +664,7 @@ mod tests {
 
         let fence_count = result
             .lines()
-            .filter(|l| l.trim_start().starts_with("```"))
+            .filter(|l| crate::util::is_fence_line(l))
             .count();
         assert_eq!(fence_count % 2, 0, "Should have even number of fences");
     }
@@ -743,7 +743,7 @@ mod tests {
         // Fence count should be even
         let fence_count = result
             .lines()
-            .filter(|l| l.trim_start().starts_with("```"))
+            .filter(|l| crate::util::is_fence_line(l))
             .count();
         assert_eq!(
             fence_count % 2,
@@ -774,5 +774,154 @@ mod tests {
 
         // Should keep existing frontmatter unchanged
         assert_eq!(result, content);
+    }
+
+    // --- Coverage gap tests below ---
+
+    #[test]
+    fn test_inject_generated_by_into_existing_metadata_block() {
+        // Line 69: existing frontmatter with metadata block but no generated-by
+        let content = "---\nname: click\ndescription: CLI toolkit.\nlicense: BSD\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n---\n\n## Imports\n";
+        let result = ensure_frontmatter(
+            content,
+            "click",
+            "8.0.0",
+            "python",
+            Some("BSD"),
+            Some("gpt-5.2"),
+        );
+
+        assert!(
+            result.contains("  generated-by: skilldo/gpt-5.2"),
+            "Should inject generated-by into metadata block. Got: {}",
+            result
+        );
+        // Should still have exactly one frontmatter block
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(dash_count, 2);
+        assert!(result.contains("## Imports"));
+    }
+
+    #[test]
+    fn test_inject_generated_by_into_old_format_no_metadata() {
+        // Line 76: existing frontmatter with old format (no metadata block), inject generated-by
+        let content = "---\nname: torch\ndescription: Deep learning framework.\nversion: 2.0.0\necosystem: python\n---\n\n## Imports\n";
+        let result = ensure_frontmatter(content, "torch", "2.0.0", "python", None, Some("phi4"));
+
+        assert!(
+            result.contains("metadata:\n  generated-by: skilldo/phi4"),
+            "Should add metadata block with generated-by. Got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_meta_text_no_frontmatter() {
+        // Line 148: strip_meta_text with no frontmatter (no --- delimiters)
+        let content = "Some random content\n## Imports\nimport foo\n";
+        let result = strip_meta_text(content);
+        assert_eq!(result, content, "No frontmatter should mean no changes");
+    }
+
+    #[test]
+    fn test_strip_meta_text_no_heading_after_frontmatter() {
+        // Line 164: frontmatter exists but no heading or code fence follows
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\nJust some plain text with no headings.\nMore plain text.\n";
+        let result = strip_meta_text(content);
+        assert_eq!(
+            result, content,
+            "No heading after frontmatter should mean no changes"
+        );
+    }
+
+    #[test]
+    fn test_strip_meta_text_warns_for_each_preamble_line() {
+        // Line 179: ensure the preamble stripping path runs (multiple non-empty preamble lines)
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\nLine one of preamble.\nLine two of preamble.\n\n## Imports\nimport foo\n";
+        let result = strip_meta_text(content);
+
+        assert!(
+            !result.contains("Line one of preamble"),
+            "Should strip first preamble line"
+        );
+        assert!(
+            !result.contains("Line two of preamble"),
+            "Should strip second preamble line"
+        );
+        assert!(result.contains("## Imports"));
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_lines_without_colon() {
+        // Line 234: the `false` branch for lines in the candidate block that have no colon.
+        // Build a 4-dash structure where the inner block has lines without colons,
+        // but still has >=2 yaml-like lines so it triggers duplicate detection.
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n---\nname: test\ndescription: test.\nthis line has no colon\n---\n\n## Imports\n";
+        let result = strip_duplicate_frontmatter(content);
+
+        // The duplicate block has 2 yaml-like lines (name, description) + 1 without colon
+        // so it should still be detected and stripped
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(
+            dash_count, 2,
+            "Should strip duplicate frontmatter even with non-colon lines. Got: {}",
+            result
+        );
+        assert!(result.contains("## Imports"));
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_no_frontmatter() {
+        // Line 281: strip_body_markdown_fence when content has no frontmatter
+        let content = "```markdown\n## Imports\nimport foo\n```\n";
+        let result = strip_body_markdown_fence(content);
+        assert_eq!(
+            result, content,
+            "No frontmatter should mean no changes for body fence stripping"
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_empty_body_after_frontmatter() {
+        // Line 292: body is entirely empty/whitespace after frontmatter
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n\n";
+        let result = strip_body_markdown_fence(content);
+        assert_eq!(
+            result, content,
+            "Empty body after frontmatter should mean no changes"
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_last_line_not_closing_fence() {
+        // Line 305: body starts with ```markdown but last non-empty line is NOT ```
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n```markdown\n## Imports\nimport foo\nNo closing fence here\n";
+        let result = strip_body_markdown_fence(content);
+        assert_eq!(
+            result, content,
+            "Missing closing fence should mean no changes"
+        );
+    }
+
+    #[test]
+    fn test_fix_unclosed_code_blocks_no_trailing_newline() {
+        // Line 336: unclosed code block where content does NOT end with newline
+        let content = "## Imports\n```python\nimport click";
+        assert!(
+            !content.ends_with('\n'),
+            "Precondition: no trailing newline"
+        );
+
+        let result = fix_unclosed_code_blocks(content);
+
+        let fence_count = result
+            .lines()
+            .filter(|l| crate::util::is_fence_line(l))
+            .count();
+        assert_eq!(fence_count % 2, 0, "Should have even number of fences");
+        assert!(
+            result.ends_with("```\n"),
+            "Should end with closing fence and newline"
+        );
     }
 }

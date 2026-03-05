@@ -26,6 +26,9 @@ pub struct ReviewResult {
     /// True when the LLM returned an unparseable verdict (non-strict mode only).
     /// The pipeline should retry when this is true and retries remain.
     pub malformed: bool,
+    /// Raw introspection output (JSON from container). Passed to create agent
+    /// on review failure so it can see actual signatures, not just complaints.
+    pub introspection_output: Option<String>,
 }
 
 impl Default for ReviewResult {
@@ -34,6 +37,7 @@ impl Default for ReviewResult {
             passed: true,
             issues: Vec::new(),
             malformed: false,
+            introspection_output: None,
         }
     }
 }
@@ -154,6 +158,11 @@ impl<'a> ReviewAgent<'a> {
 
         let mut result = parse_review_response(&verdict_response, self.strict)?;
 
+        // Attach introspection output so the create agent can see real signatures
+        if !introspection_output.starts_with("INTROSPECTION SKIPPED") {
+            result.introspection_output = Some(introspection_output.clone());
+        }
+
         // In strict mode, degraded introspection fails the review so the user
         // knows the verdict was based on incomplete data.
         if self.strict && introspection_degraded {
@@ -237,6 +246,8 @@ impl<'a> ReviewAgent<'a> {
     }
 
     /// Format review issues as feedback for the create agent.
+    /// Includes introspection data (actual signatures) when available so create
+    /// can copy correct signatures instead of guessing from training data.
     pub fn format_feedback(result: &ReviewResult) -> String {
         if result.issues.is_empty() {
             return String::new();
@@ -278,6 +289,17 @@ impl<'a> ReviewAgent<'a> {
             feedback.push('\n');
         } else {
             feedback.push_str("SAFETY ISSUES: None\n\n");
+        }
+
+        // Include introspection data so create can see actual signatures
+        if let Some(ref introspection) = result.introspection_output {
+            // Truncate to avoid blowing context on huge outputs
+            let truncated: String = introspection.chars().take(3000).collect();
+            feedback.push_str(&format!(
+                "INTROSPECTION DATA (actual library state from container):\n```json\n{}\n```\n\n\
+                 Use the signatures and imports above as ground truth — your training data may be outdated.\n\n",
+                truncated
+            ));
         }
 
         feedback.push_str(
@@ -362,6 +384,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         passed,
         issues,
         malformed: false,
+        introspection_output: None,
     })
 }
 
@@ -553,6 +576,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            introspection_output: None,
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "accuracy".to_string(),
@@ -574,6 +598,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            introspection_output: None,
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "safety".to_string(),
@@ -685,6 +710,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            introspection_output: None,
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Error,

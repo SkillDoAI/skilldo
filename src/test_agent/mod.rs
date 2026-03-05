@@ -70,6 +70,19 @@ pub trait LanguageCodeGenerator: Send + Sync {
     /// Generate a complete, runnable test script for a pattern
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String>;
 
+    /// Retry test code generation with the previous code and error output.
+    /// The LLM sees what it wrote, what went wrong, and produces a fixed version.
+    /// Default: falls back to `generate_test_code` (ignores error context).
+    async fn retry_test_code(
+        &self,
+        pattern: &CodePattern,
+        previous_code: &str,
+        error_output: &str,
+    ) -> Result<String> {
+        let _ = (previous_code, error_output);
+        self.generate_test_code(pattern).await
+    }
+
     /// Set the local package name to exclude from dependency lists.
     /// Used for local-install/local-mount modes where the package is mounted, not from PyPI.
     /// Default implementation is a no-op for generators that don't support this.

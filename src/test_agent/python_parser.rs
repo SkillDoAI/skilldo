@@ -704,4 +704,60 @@ from utils import helpers
             "utils should be filtered as local"
         );
     }
+
+    #[test]
+    fn no_imports_section_returns_empty_deps() {
+        let skill_md = r#"
+# Test
+
+## Core Patterns
+
+### Basic Example
+
+```python
+import mylib
+mylib.run()
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(deps.is_empty(), "no Imports section should return empty");
+    }
+
+    #[test]
+    fn pip_install_adds_new_dependency() {
+        // pip install should add deps not already captured by import/from
+        let skill_md = r#"
+# Test
+
+## Imports
+
+Install the package:
+```bash
+pip install myspecialpkg
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            deps.contains(&"myspecialpkg".to_string()),
+            "pip install should add new dependency"
+        );
+    }
+
+    #[test]
+    fn dependency_with_leading_hyphen_dropped_by_sanitizer() {
+        let parser = PythonParser;
+        // Craft a pip install line that the regex captures with a leading-hyphen name
+        let skill_md = "# Test\n\n## Imports\n\n```bash\npip install -e\n```\n\n## Next\n";
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            !deps.contains(&"-e".to_string()),
+            "leading-hyphen dep should be dropped by sanitize_dep_name"
+        );
+    }
 }

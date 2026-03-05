@@ -7,6 +7,12 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// Check if a line starts a fenced code block (backtick or tilde, per CommonMark).
+pub fn is_fence_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
 /// A string wrapper that masks its contents in Debug/Display output.
 /// Prevents accidental logging of API keys and other secrets.
 #[derive(Clone)]
@@ -274,5 +280,37 @@ mod tests {
         // Spaces enable flag injection: `pkg --malicious`
         assert!(sanitize_dep_name("pkg --malicious").is_err());
         assert!(sanitize_dep_name("express rm").is_err());
+    }
+
+    #[test]
+    fn test_run_cmd_with_timeout_success() {
+        // Covers the setsid pre_exec path (lines 182-184) and normal completion
+        let cmd = Command::new("echo");
+        let output = run_cmd_with_timeout(cmd, Duration::from_secs(5)).unwrap();
+        assert!(output.status.success());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_run_cmd_with_timeout_expires() {
+        // Covers: kill_process_group (lines 141-157) and timeout bail (lines 206-207)
+        let mut cmd = Command::new("sleep");
+        cmd.arg("999");
+        let result = run_cmd_with_timeout(cmd, Duration::from_millis(100));
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("timed out"),
+            "Expected timeout error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_kill_process_group_nonexistent_pid() {
+        // Covers kill_process_group directly with a PID that doesn't exist.
+        // The process-group kill fails (line 152), so the fallback individual
+        // kill also runs (lines 153-158). Neither panics.
+        kill_process_group(999_999_999);
     }
 }

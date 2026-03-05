@@ -183,7 +183,9 @@ impl<'a> TestCodeValidator<'a> {
         Self::new(&Language::Python, llm_client, config, None)
     }
 
-    /// Create a new test agent validator for Python with custom instructions (append-only)
+    /// Create a new test agent validator for Python with custom instructions (append-only).
+    /// Convenience wrapper; integration tests may use this directly.
+    #[allow(dead_code)]
     pub fn new_python_with_custom(
         llm_client: &'a dyn LlmClient,
         config: ContainerConfig,
@@ -314,7 +316,7 @@ impl<'a> TestCodeValidator<'a> {
 
         let mut test_cases = Vec::new();
 
-        // 4. Generate and run tests for each pattern
+        // 4. Generate and run tests for each pattern (with one test-code retry)
         for pattern in selected_patterns {
             info!("  → Testing pattern: {}", pattern.name);
 
@@ -344,7 +346,37 @@ impl<'a> TestCodeValidator<'a> {
                 }
             };
 
-            match &result {
+            // If test failed, retry test code generation once with the error context.
+            // This fixes the test code (not the SKILL.md pattern) — the most common failure
+            // mode is the LLM writing code that doesn't compile, not a bad pattern.
+            let (final_result, final_code) = match &result {
+                ExecutionResult::Fail(error) => {
+                    info!("    ✗ Test failed, retrying test code with error context...");
+                    match self
+                        .code_generator
+                        .retry_test_code(pattern, &test_code, error)
+                        .await
+                    {
+                        Ok(retry_code) => {
+                            match self.executor.run_code(&env, &retry_code) {
+                                Ok(retry_result) => (retry_result, retry_code),
+                                Err(e) => {
+                                    warn!("    Retry execution error: {}", e);
+                                    // Fall through with original failure
+                                    (result, test_code)
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("    Retry code generation failed: {}", e);
+                            (result, test_code)
+                        }
+                    }
+                }
+                _ => (result, test_code),
+            };
+
+            match &final_result {
                 ExecutionResult::Pass(output) => {
                     info!("    ✓ Test passed");
                     debug!(
@@ -353,7 +385,7 @@ impl<'a> TestCodeValidator<'a> {
                     );
                 }
                 ExecutionResult::Fail(error) => {
-                    warn!("    ✗ Test failed");
+                    warn!("    ✗ Test failed (after retry)");
                     debug!(
                         "    Error: {}",
                         error.lines().next().unwrap_or("(no error message)")
@@ -366,8 +398,8 @@ impl<'a> TestCodeValidator<'a> {
 
             test_cases.push(TestCase {
                 pattern_name: pattern.name.clone(),
-                result,
-                generated_code: test_code,
+                result: final_result,
+                generated_code: final_code,
             });
         }
 

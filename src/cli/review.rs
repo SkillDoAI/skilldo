@@ -642,6 +642,7 @@ base_url = "http://localhost:11434/v1"
         let result = ReviewResult {
             passed: true,
             malformed: false,
+            introspection_output: None,
             issues: vec![ReviewIssue {
                 severity: Severity::Warning,
                 category: "consistency".to_string(),

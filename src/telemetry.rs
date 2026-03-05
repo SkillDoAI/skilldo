@@ -265,4 +265,49 @@ mod tests {
         assert_eq!(&ts[13..14], ":");
         assert_eq!(&ts[16..17], ":");
     }
+
+    #[test]
+    fn test_epoch_to_iso8601_leap_year() {
+        // 2024-02-29T12:00:00Z — 2024 is a leap year
+        // 2024-01-01 = epoch 1704067200
+        // Jan: 31 days, so Feb 1 = 1704067200 + 31*86400 = 1706745600
+        // Feb 29 = 1706745600 + 28*86400 = 1709164800
+        // + 12h = 1709164800 + 43200 = 1709208000
+        assert_eq!(epoch_to_iso8601(1709208000), "2024-02-29T12:00:00Z");
+    }
+
+    #[test]
+    fn test_csv_escape_with_quotes() {
+        let escaped = csv_escape("value with \"quotes\"");
+        assert_eq!(escaped, "\"value with \"\"quotes\"\"\"");
+    }
+
+    #[test]
+    fn test_csv_escape_with_newline() {
+        let escaped = csv_escape("line1\nline2");
+        assert_eq!(escaped, "\"line1\nline2\"");
+    }
+
+    #[test]
+    fn test_csv_escape_plain() {
+        let escaped = csv_escape("simple");
+        assert_eq!(escaped, "simple");
+    }
+
+    #[test]
+    fn test_append_run_default_path_creates_in_home() {
+        // Test the default path branch (None) — creates ~/.skilldo/runs.csv
+        let record = sample_record();
+        let result = append_run(&record, None);
+        // Should succeed (creates ~/.skilldo/ if needed)
+        assert!(
+            result.is_ok(),
+            "append_run with default path should succeed"
+        );
+
+        // Verify the file exists
+        let home = dirs::home_dir().unwrap();
+        let csv_path = home.join(".skilldo").join("runs.csv");
+        assert!(csv_path.exists(), "~/.skilldo/runs.csv should exist");
+    }
 }

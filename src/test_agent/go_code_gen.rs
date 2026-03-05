@@ -1,12 +1,23 @@
-//! Go test code generator — takes parsed code patterns from SKILL.md and
-//! asks an LLM to produce runnable Go test scripts that verify each pattern.
+//! Go test code generator — uses the shared prompt builder with minimal
+//! Go-specific environment notes. The prompt intentionally avoids coaching
+//! the LLM on how to write Go — the SKILL.md should be sufficient.
 
 use anyhow::Result;
 use std::sync::Mutex;
 use tracing::debug;
 
+use super::code_generator::{build_retry_prompt, build_test_prompt, TestEnv};
 use super::{CodePattern, LanguageCodeGenerator};
 use crate::llm::client::LlmClient;
+
+/// Go environment: runner command + 1–2 line notes the LLM can't infer.
+pub const GO_ENV: TestEnv = TestEnv {
+    lang_tag: "go",
+    runner: "`go run main.go`",
+    env_notes: "\
+- Write a `package main` program with `func main()` — no testing.T is available
+- Use `log.Fatal()` or `log.Fatalf()` for assertion failures",
+};
 
 /// Go code generator using LLM
 pub struct GoCodeGenerator<'a> {
@@ -30,70 +41,14 @@ impl<'a> GoCodeGenerator<'a> {
         self
     }
 
-    /// Generate the prompt for creating test code from a pattern
+    /// Generate the prompt for creating test code from a pattern.
+    /// Public for tests — delegates to the shared builder.
     pub fn create_test_prompt(
         pattern: &CodePattern,
         custom_instructions: Option<&str>,
         local_package: Option<&str>,
     ) -> String {
-        let mut prompt = format!(
-            r#"You are validating a SKILL.md file by writing test code.
-
-Your task: Write a COMPLETE, RUNNABLE Go program that thoroughly tests this pattern.
-
-Pattern: {}
-Description: {}
-
-Example from SKILL.md:
-```go
-{}
-```
-
-ENVIRONMENT: This runs via `go run main.go` in an isolated container with internet access but NO TTY.
-The container has `go mod init test` already done.
-
-CRITICAL RULES:
-1. Write a complete `package main` program with a `func main()` entry point
-2. Include ALL imports your code needs (both stdlib and third-party)
-3. Use `log.Fatal()` or `log.Fatalf()` for assertion failures — no testing.T available
-4. For comparisons: `if got != want {{ log.Fatalf("got %v, want %v", got, want) }}`
-5. Always handle errors: `if err != nil {{ log.Fatal(err) }}`
-6. Print "✓ Test passed: {}" on success (at the end of main)
-7. Keep it under 50 lines, COMPLETE and RUNNABLE with no placeholders
-8. Test real functionality with real assertions — not just "does it import"
-9. For HTTP libraries: create a test server with `httptest.NewServer()` instead of making external requests
-10. Third-party packages will be installed via `go get` before your code runs
-
-ASSERTION RULES (critical for reliability):
-- NEVER assert exact floating point values. Use ranges or epsilon comparisons
-- NEVER hardcode expected string content from network responses that may change
-- DO assert on types, lengths, presence of keys, value ranges, and that operations don't error
-- Call the API EXACTLY as shown in the example code — do not invent parameters or change signatures
-- For HTTP handlers: use httptest.NewServer and make real requests to verify behavior
-
-Output format:
-```go
-[your code here - MUST be a complete package main program]
-```
-
-Write the complete test program now:"#,
-            pattern.name, pattern.description, pattern.code, pattern.name
-        );
-
-        if let Some(pkg) = local_package {
-            prompt.push_str(&format!(
-                "\n\nIMPORTANT: The library \"{}\" is mounted locally at /src.\n\
-                 It will be available via a `replace` directive in go.mod.\n\
-                 Do NOT expect it to be fetched from the internet.\n",
-                pkg
-            ));
-        }
-
-        if let Some(custom) = custom_instructions {
-            prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
-        }
-
-        prompt
+        build_test_prompt(pattern, &GO_ENV, local_package, custom_instructions)
     }
 
     /// Extract Go code from markdown code blocks
@@ -161,6 +116,25 @@ impl<'a> LanguageCodeGenerator for GoCodeGenerator<'a> {
         debug!("Generated Go test code:\n{}", code);
         Ok(code)
     }
+
+    async fn retry_test_code(
+        &self,
+        pattern: &CodePattern,
+        previous_code: &str,
+        error_output: &str,
+    ) -> Result<String> {
+        debug!(
+            "Retrying Go test code for pattern: {} (fixing error)",
+            pattern.name
+        );
+
+        let prompt = build_retry_prompt(pattern, &GO_ENV, previous_code, error_output);
+        let response = self.llm_client.complete(&prompt).await?;
+        let code = Self::extract_code_from_response(&response)?;
+
+        debug!("Retry generated {} bytes of Go test code", code.len());
+        Ok(code)
+    }
 }
 
 #[cfg(test)]
@@ -190,18 +164,37 @@ r.Get("/", func(w http.ResponseWriter, r *http.Request) {
         assert!(prompt.contains("Basic Router Setup"));
         assert!(prompt.contains("Create a chi router"));
         assert!(prompt.contains("chi.NewRouter()"));
-        assert!(prompt.contains("✓ Test passed: Basic Router Setup"));
+        assert!(prompt.contains("Test passed: Basic Router Setup"));
     }
 
     #[test]
-    fn test_create_test_prompt_go_specific_rules() {
+    fn test_create_test_prompt_go_env_notes() {
         let pattern = sample_pattern();
         let prompt = GoCodeGenerator::create_test_prompt(&pattern, None, None);
 
         assert!(prompt.contains("package main"));
-        assert!(prompt.contains("func main()"));
         assert!(prompt.contains("log.Fatal"));
         assert!(prompt.contains("go run main.go"));
+    }
+
+    #[test]
+    fn test_create_test_prompt_is_minimal() {
+        let pattern = sample_pattern();
+        let prompt = GoCodeGenerator::create_test_prompt(&pattern, None, None);
+
+        // Should NOT contain coaching — the SKILL.md is the test
+        assert!(
+            !prompt.contains("httptest"),
+            "prompt should not coach on httptest"
+        );
+        assert!(
+            !prompt.contains("ASSERTION RULES"),
+            "prompt should not dictate assertion style"
+        );
+        assert!(
+            !prompt.contains("COMPILATION RULES"),
+            "prompt should not teach Go compilation"
+        );
     }
 
     #[test]
@@ -210,9 +203,8 @@ r.Get("/", func(w http.ResponseWriter, r *http.Request) {
         let prompt =
             GoCodeGenerator::create_test_prompt(&pattern, None, Some("github.com/go-chi/chi/v5"));
 
-        assert!(prompt.contains("mounted locally"));
+        assert!(prompt.contains("locally"));
         assert!(prompt.contains("github.com/go-chi/chi/v5"));
-        assert!(prompt.contains("replace"));
     }
 
     #[test]
@@ -220,7 +212,7 @@ r.Get("/", func(w http.ResponseWriter, r *http.Request) {
         let pattern = sample_pattern();
         let prompt = GoCodeGenerator::create_test_prompt(&pattern, None, None);
 
-        assert!(!prompt.contains("mounted locally"));
+        assert!(!prompt.contains("locally"));
     }
 
     #[test]
@@ -232,7 +224,6 @@ r.Get("/", func(w http.ResponseWriter, r *http.Request) {
             None,
         );
 
-        assert!(prompt.contains("Additional Instructions"));
         assert!(prompt.contains("Always test error paths"));
     }
 
@@ -245,8 +236,7 @@ r.Get("/", func(w http.ResponseWriter, r *http.Request) {
             Some("github.com/go-chi/chi/v5"),
         );
 
-        assert!(prompt.contains("mounted locally"));
-        assert!(prompt.contains("Additional Instructions"));
+        assert!(prompt.contains("locally"));
         assert!(prompt.contains("Use subtests"));
     }
 

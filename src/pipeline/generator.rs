@@ -7,7 +7,6 @@ use tracing::{info, warn};
 use super::collector::CollectedData;
 use super::normalizer;
 use crate::config::{ContainerConfig, PromptsConfig};
-use crate::detector::Language;
 use crate::lint::{Severity, SkillLinter};
 use crate::llm::client::LlmClient;
 use crate::llm::prompts_v2;
@@ -429,16 +428,25 @@ impl Generator {
         // max_retries=0 means one attempt with no retries on failure.
         // max_retries=3 means one initial attempt + up to 3 retries (4 total).
 
-        // Construct test validator once before the loop (avoids re-allocation on retries)
-        let test_validator = if self.enable_test && data.language == Language::Python {
-            Some(
-                TestCodeValidator::new_python_with_custom(
-                    self.get_client("test"),
-                    self.container_config.clone(),
-                    self.prompts_config.test_custom.clone(),
-                )?
-                .with_mode(self.test_mode),
-            )
+        // Construct test validator once before the loop (avoids re-allocation on retries).
+        // Uses the language-generic constructor which supports Python + Go.
+        let test_validator = if self.enable_test {
+            match TestCodeValidator::new(
+                &data.language,
+                self.get_client("test"),
+                self.container_config.clone(),
+                self.prompts_config.test_custom.clone(),
+            ) {
+                Ok(v) => Some(v.with_mode(self.test_mode)),
+                Err(e) => {
+                    info!(
+                        "Test agent not available for {}: {}",
+                        data.language.as_str(),
+                        e
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
@@ -484,7 +492,47 @@ impl Generator {
 
                 // Patch with format fix instructions (non-security errors only)
                 let fix_prompt = format!(
-                    "Here is the current SKILL.md:\n\n{}\n\nFORMAT VALIDATION FAILED:\n{}\n\nPlease fix these format issues. Keep all content intact.",
+                    r#"Here is the current SKILL.md:
+
+{}
+
+FORMAT VALIDATION FAILED:
+{}
+
+Fix these format issues. The document MUST follow this exact structure:
+
+```
+---
+name: <package-name>
+description: <one sentence>
+license: <SPDX identifier>
+metadata:
+  version: "<semver>"
+  ecosystem: <python|go|rust|javascript>
+---
+
+## Imports
+...
+
+## Core Patterns
+### Pattern Name
+...
+
+## Configuration
+...
+
+## Pitfalls
+### Wrong: <description>
+...
+### Right: <description>
+...
+
+## References
+...
+```
+
+Section headings must be EXACTLY `## Imports`, `## Core Patterns`, and `## Pitfalls` (case-sensitive).
+Keep all content intact — only fix the structural issues. Output ONLY the fixed SKILL.md starting with `---`."#,
                     skill_md,
                     error_msgs.join("\n")
                 );
@@ -2404,7 +2452,7 @@ print(json.dumps(result))
     }
 
     #[tokio::test]
-    async fn test_generate_test_enabled_go_skips_test_agent() {
+    async fn test_generate_test_enabled_go_runs_test_agent() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(true)
             .with_review(false);

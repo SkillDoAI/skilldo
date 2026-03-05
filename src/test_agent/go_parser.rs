@@ -3,12 +3,25 @@
 //! to understand what to validate.
 
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use tracing::{debug, warn};
 
 use super::parser::{extract_section, CodePattern, PatternCategory};
 use super::LanguageParser;
 use crate::util::sanitize_dep_name;
+
+// Cached regexes for pattern/dependency extraction
+static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
+static CODE_BLOCK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)```(?:go(?:lang)?)?\n([\s\S]*?)```").unwrap());
+static SINGLE_IMPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?m)import\s+"([^"]+)""#).unwrap());
+static GROUP_IMPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?s)import\s*\(\s*(.*?)\s*\)"#).unwrap());
+static IMPORT_LINE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#""([^"]+)""#).unwrap());
+static GO_GET_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"go\s+get\s+([a-zA-Z0-9._/\-@]+)").unwrap());
 
 /// Go-specific parser for SKILL.md files
 pub struct GoParser;
@@ -119,11 +132,7 @@ impl LanguageParser for GoParser {
                 }
             };
 
-        let pattern_re = Regex::new(r"(?m)^###\s+(.+?)$")?;
-        // Accept ```go, ```golang, or plain ``` fences
-        let code_block_re = Regex::new(r"(?i)```(?:go(?:lang)?)?\n([\s\S]*?)```")?;
-
-        let pattern_starts: Vec<(usize, String)> = pattern_re
+        let pattern_starts: Vec<(usize, String)> = PATTERN_RE
             .captures_iter(core_patterns_content)
             .map(|cap| (cap.get(0).unwrap().start(), cap[1].to_string()))
             .collect();
@@ -139,7 +148,7 @@ impl LanguageParser for GoParser {
             let pattern_section = &core_patterns_content[*pattern_start..pattern_end];
 
             let description_start = pattern_section.find('\n').unwrap_or(0) + 1;
-            let code_block_start = code_block_re
+            let code_block_start = CODE_BLOCK_RE
                 .find(pattern_section)
                 .map(|m| m.start())
                 .unwrap_or(pattern_section.len());
@@ -148,7 +157,7 @@ impl LanguageParser for GoParser {
                 .trim()
                 .to_string();
 
-            if let Some(code_cap) = code_block_re.captures(pattern_section) {
+            if let Some(code_cap) = CODE_BLOCK_RE.captures(pattern_section) {
                 let code = code_cap[1].trim().to_string();
                 let category = Self::categorize_pattern(pattern_name, &description);
 
@@ -184,8 +193,7 @@ impl LanguageParser for GoParser {
         };
 
         // Go single import: import "github.com/foo/bar"
-        let single_import_re = Regex::new(r#"(?m)import\s+"([^"]+)""#)?;
-        for cap in single_import_re.captures_iter(imports_content) {
+        for cap in SINGLE_IMPORT_RE.captures_iter(imports_content) {
             let pkg = cap[1].to_string();
             if !Self::is_stdlib_package(&pkg) && !dependencies.contains(&pkg) {
                 dependencies.push(pkg);
@@ -193,11 +201,9 @@ impl LanguageParser for GoParser {
         }
 
         // Go grouped import block: import ( ... )
-        let group_re = Regex::new(r#"(?s)import\s*\(\s*(.*?)\s*\)"#)?;
-        if let Some(group_cap) = group_re.captures(imports_content) {
+        if let Some(group_cap) = GROUP_IMPORT_RE.captures(imports_content) {
             let block = &group_cap[1];
-            let line_re = Regex::new(r#""([^"]+)""#)?;
-            for cap in line_re.captures_iter(block) {
+            for cap in IMPORT_LINE_RE.captures_iter(block) {
                 let pkg = cap[1].to_string();
                 if !Self::is_stdlib_package(&pkg) && !dependencies.contains(&pkg) {
                     dependencies.push(pkg);
@@ -206,8 +212,7 @@ impl LanguageParser for GoParser {
         }
 
         // go get instructions: go get github.com/foo/bar
-        let go_get_re = Regex::new(r"go\s+get\s+([a-zA-Z0-9._/\-@]+)")?;
-        for cap in go_get_re.captures_iter(imports_content) {
+        for cap in GO_GET_RE.captures_iter(imports_content) {
             let pkg = cap[1].to_string();
             if !dependencies.contains(&pkg) {
                 dependencies.push(pkg);
@@ -498,5 +503,38 @@ go get github.com/foo/bar
         let skill = "---\nname: test\n---\n\n## Core Patterns\n\n### Basic\n\nA simple example.\n\n```\nfmt.Println(\"hello\")\n```\n";
         let patterns = parser.extract_patterns(skill).unwrap();
         assert_eq!(patterns.len(), 1);
+    }
+
+    #[test]
+    fn categorize_configuration_pattern() {
+        assert_eq!(
+            GoParser::categorize_pattern("Database Config", "Set up the connection"),
+            PatternCategory::Configuration
+        );
+    }
+
+    #[test]
+    fn core_patterns_section_no_code_blocks_errors() {
+        let parser = GoParser;
+        let skill = "---\nname: test\n---\n\n## Core Patterns\n\n### Pattern Without Code\n\nThis has no code fence.\n\n## Next\n";
+        let result = parser.extract_patterns(skill);
+        assert!(
+            result.is_err(),
+            "Core Patterns section with headings but no code blocks should error"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("no code blocks extracted"));
+    }
+
+    #[test]
+    fn dependency_with_leading_hyphen_dropped_by_sanitizer() {
+        let parser = GoParser;
+        // `go get -e` — the regex captures `-e`; sanitize_dep_name rejects leading '-'
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\ngo get -e\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            !deps.contains(&"-e".to_string()),
+            "leading-hyphen dep should be dropped by sanitize_dep_name"
+        );
     }
 }

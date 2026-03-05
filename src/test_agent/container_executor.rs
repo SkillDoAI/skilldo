@@ -69,7 +69,8 @@ impl ContainerExecutor {
     /// Generate dependency installation script for Go.
     /// Initializes a Go module and runs `go get` for each dependency.
     fn generate_go_install_script(&self, deps: &[String]) -> Result<String> {
-        let mut lines = vec!["go mod init test".to_string()];
+        // go.mod may already exist from a previous pattern run in the same workspace
+        let mut lines = vec!["go mod init test 2>/dev/null || true".to_string()];
         for dep in deps {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             lines.push(format!("go get '{}'", dep));
@@ -250,6 +251,16 @@ impl LanguageExecutor for ContainerExecutor {
             && self.config.install_source != InstallSource::LocalInstall
         {
             cmd.arg("-e").arg("UV_CACHE_DIR=/tmp/uv-cache");
+        }
+
+        // Go needs a writable build cache and module cache when running as nobody
+        if matches!(self.language, Language::Go)
+            && self.config.install_source != InstallSource::LocalInstall
+        {
+            cmd.arg("-e")
+                .arg("GOCACHE=/tmp/go-cache")
+                .arg("-e")
+                .arg("GOPATH=/tmp/gopath");
         }
 
         // Pass extra environment variables (private registries, proxies, etc.)
@@ -660,7 +671,7 @@ mod tests {
         );
         assert_eq!(executor.config.javascript_image, "node:20-slim");
         assert_eq!(executor.config.rust_image, "rust:1.75-slim");
-        assert_eq!(executor.config.go_image, "golang:1.22-alpine");
+        assert_eq!(executor.config.go_image, "golang:1.25-alpine");
         assert_eq!(executor.config.timeout, 60);
         assert!(executor.config.cleanup);
         assert_eq!(executor.config.install_source, InstallSource::Registry);
@@ -863,7 +874,7 @@ mod tests {
     #[test]
     fn test_get_image_with_default_config_go() {
         let executor = ContainerExecutor::new(ContainerConfig::default(), Language::Go);
-        assert_eq!(executor.get_image(), "golang:1.22-alpine");
+        assert_eq!(executor.get_image(), "golang:1.25-alpine");
     }
 
     // --- setup_environment: runtime not found ---

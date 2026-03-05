@@ -199,4 +199,15 @@ mod tests {
             .to_string()
             .contains("Could not detect language"));
     }
+
+    #[test]
+    fn test_supported_list() {
+        let list = Language::supported_list();
+        assert!(list.contains("python"));
+        assert!(list.contains("javascript"));
+        assert!(list.contains("rust"));
+        assert!(list.contains("go"));
+        // Should be comma-separated
+        assert_eq!(list, "python, javascript, rust, go");
+    }
 }
