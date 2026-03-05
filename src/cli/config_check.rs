@@ -883,6 +883,23 @@ enable_test = false
     }
 
     #[test]
+    fn test_check_runtime_daemon_true_binary() {
+        // `true` exists on macOS and Linux, exits 0 for any args.
+        // `true --version` → success → available.
+        // `true info` → success → daemon "up".
+        let result = check_runtime_daemon("true");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn test_check_runtime_daemon_bash_no_info() {
+        // `bash --version` succeeds, but `bash info` fails (no such subcommand).
+        // This exercises the Some(false) daemon-not-responding path.
+        let result = check_runtime_daemon("bash");
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
     fn test_check_stage_provider_valid() {
         let mut r = CheckResult::new();
         check_stage_provider("extract", &Provider::OpenAI, "gpt-5", &mut r);
@@ -999,6 +1016,173 @@ extra_body_json = '{{"top_p": 0.9}}'
         assert!(r.errors[0].contains("not found"));
         assert!(r.errors[0].contains("test agent validation will fail"));
         assert_eq!(r.passed.len(), 1);
+    }
+
+    #[test]
+    fn test_run_with_container_runtime_true_daemon_up() {
+        // runtime = "true" → check_runtime_daemon returns Some(true)
+        // Exercises the Some(true) match arm in run()
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+
+[generation.container]
+execution_mode = "container"
+runtime = "true"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_daemon_down_test_enabled() {
+        // runtime = "bash" → available but "bash info" fails → Some(false)
+        // + enable_test = true → error about daemon not responding
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+
+[generation.container]
+execution_mode = "container"
+runtime = "bash"
+"#
+        )
+        .unwrap();
+
+        // Non-strict: returns Ok even with errors
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
+
+        // Strict: returns Err because daemon is down + test enabled
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_with_daemon_down_test_disabled() {
+        // runtime = "bash" → daemon down + test disabled → warning only, no error
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = false
+
+[generation.container]
+execution_mode = "container"
+runtime = "bash"
+"#
+        )
+        .unwrap();
+
+        // Even strict should pass — daemon down is only a warning when test is disabled
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_unavailable_runtime_test_enabled_strict() {
+        // runtime unavailable + test enabled + strict → Err
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+
+[generation.container]
+execution_mode = "container"
+runtime = "nonexistent_runtime_xyz_strict"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_with_bare_metal_mode() {
+        // Exercises the BareMetal execution_mode path
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = false
+
+[generation.container]
+execution_mode = "bare-metal"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
     }
 
     #[test]
