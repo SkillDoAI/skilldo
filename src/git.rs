@@ -42,16 +42,23 @@ impl Git2Repo {
 
         // Strip the "-N-gHASH" suffix to match `git describe --tags --abbrev=0`.
         // libgit2's abbreviated_size(0) means "default 7", not "no suffix".
+        // Guard: only strip if the candidate base is a real tag — prevents
+        // corrupting tag names that happen to end with "-N-g<hex>" (e.g. "v1.0-0-gcafe").
         let tag = if let Some(g_pos) = tag.rfind("-g") {
-            // Verify the part after "-g" looks like a hex hash
             let after_g = &tag[g_pos + 2..];
             if after_g.chars().all(|c| c.is_ascii_hexdigit()) && !after_g.is_empty() {
-                // Also strip the "-N" distance count before "-gHASH"
                 let before_g = &tag[..g_pos];
                 if let Some(dash_pos) = before_g.rfind('-') {
                     let distance = &before_g[dash_pos + 1..];
                     if distance.chars().all(|c| c.is_ascii_digit()) {
-                        before_g[..dash_pos].to_string()
+                        let candidate = &before_g[..dash_pos];
+                        // Only accept the stripped result if it exists as a tag
+                        let tag_ref = format!("refs/tags/{candidate}");
+                        if self.repo.find_reference(&tag_ref).is_ok() {
+                            candidate.to_string()
+                        } else {
+                            tag
+                        }
                     } else {
                         tag
                     }
@@ -456,6 +463,49 @@ mod tests {
         let tags = repo.list_tags_sorted().unwrap();
         // Stable v1.0.0 should come first, then pre-releases
         assert_eq!(tags[0], "v1.0.0");
+    }
+
+    #[test]
+    fn test_describe_tags_ambiguous_tag_name() {
+        // Tag name that looks like a git-describe suffix: "v1.0-0-gcafe"
+        // HEAD on this tag should return the full name, not strip it to "v1.0"
+        let dir = init_test_repo();
+        Command::new("git")
+            .args(["tag", "v1.0-0-gcafe"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        assert_eq!(tag, "v1.0-0-gcafe");
+    }
+
+    #[test]
+    fn test_describe_tags_ambiguous_tag_past_head() {
+        // When HEAD is past a tag with an ambiguous name, stripping should
+        // still work because the real base tag exists.
+        let dir = init_test_repo();
+        Command::new("git")
+            .args(["tag", "v1.0-0-gcafe"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        // Make another commit past the tag
+        std::fs::write(dir.path().join("extra.txt"), "extra").unwrap();
+        Command::new("git")
+            .args(["add", "extra.txt"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "extra", "--no-gpg-sign"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        // Should return the full tag name since it's the only tag
+        assert_eq!(tag, "v1.0-0-gcafe");
     }
 
     #[test]
