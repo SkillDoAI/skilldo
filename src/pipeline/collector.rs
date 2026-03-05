@@ -1418,6 +1418,192 @@ setup(
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Rust"));
     }
+
+    // -- Go collection tests --
+
+    /// Helper: create a minimal Go project structure in a temp dir.
+    fn create_go_project(dir: &Path) {
+        fs::write(
+            dir.join("go.mod"),
+            "module github.com/example/testlib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("main.go"),
+            "package testlib\n\nfunc Hello() string { return \"hello\" }\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("main_test.go"),
+            "package testlib\n\nimport \"testing\"\n\nfunc TestHello(t *testing.T) {}\n",
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_collect_go_minimal_project() {
+        let dir = TempDir::new().unwrap();
+        create_go_project(dir.path());
+
+        let c = Collector::new(dir.path(), Language::Go);
+        let data = c.collect().await.unwrap();
+
+        assert_eq!(data.language, Language::Go);
+        assert_eq!(data.package_name, "testlib");
+        assert_eq!(data.version, "latest"); // no git tags, no version.go
+        assert!(!data.source_content.is_empty());
+        assert!(data.source_file_count >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_collect_go_with_version_and_license() {
+        let dir = TempDir::new().unwrap();
+        create_go_project(dir.path());
+        fs::write(
+            dir.path().join("version.go"),
+            "package testlib\n\nconst Version = \"2.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("LICENSE"),
+            "MIT License\n\nCopyright (c) 2024\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::Go);
+        let data = c.collect().await.unwrap();
+
+        assert_eq!(data.version, "2.1.0");
+        assert_eq!(data.license, Some("MIT".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_collect_go_with_changelog() {
+        let dir = TempDir::new().unwrap();
+        create_go_project(dir.path());
+        fs::write(
+            dir.path().join("CHANGELOG.md"),
+            "# Changelog\n\n## v1.0.0\n- Initial release\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::Go);
+        let data = c.collect().await.unwrap();
+
+        assert!(
+            data.changelog_content.contains("Changelog"),
+            "Expected changelog content, got: '{}'",
+            data.changelog_content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_collect_go_with_examples_tests_docs() {
+        let dir = TempDir::new().unwrap();
+        create_go_project(dir.path());
+
+        // Example file
+        fs::create_dir(dir.path().join("example")).unwrap();
+        fs::write(
+            dir.path().join("example").join("main.go"),
+            "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"example\") }\n",
+        )
+        .unwrap();
+
+        // Doc file
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        fs::write(
+            dir.path().join("docs").join("guide.md"),
+            "# Guide\n\nUsage instructions.\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::Go);
+        let data = c.collect().await.unwrap();
+
+        assert!(!data.examples_content.is_empty());
+        assert!(!data.test_content.is_empty());
+        assert!(!data.docs_content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_collect_go_respects_budget() {
+        let dir = TempDir::new().unwrap();
+        create_go_project(dir.path());
+        // Add large source file to test truncation
+        fs::write(
+            dir.path().join("big.go"),
+            format!("package testlib\n\n{}", "// padding\n".repeat(500)),
+        )
+        .unwrap();
+
+        let small = Collector::new(dir.path(), Language::Go).with_max_source_chars(200);
+        let large = Collector::new(dir.path(), Language::Go).with_max_source_chars(50_000);
+
+        let small_data = small.collect().await.unwrap();
+        let large_data = large.collect().await.unwrap();
+
+        // Smaller budget should yield less content
+        assert!(
+            small_data.source_content.len() < large_data.source_content.len(),
+            "budget should constrain source: small={} large={}",
+            small_data.source_content.len(),
+            large_data.source_content.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_collect_go_project_urls() {
+        let dir = TempDir::new().unwrap();
+        create_go_project(dir.path());
+
+        let c = Collector::new(dir.path(), Language::Go);
+        let data = c.collect().await.unwrap();
+
+        // Go handler derives project URL from go.mod module path
+        assert!(
+            data.project_urls
+                .iter()
+                .any(|(_, url)| url.contains("github.com/example/testlib")),
+            "expected project URL from go.mod, got: {:?}",
+            data.project_urls
+        );
+    }
+
+    // -- Python changelog collection test --
+
+    #[tokio::test]
+    async fn test_collect_python_with_changelog() {
+        let dir = TempDir::new().unwrap();
+        // Minimal Python project
+        fs::create_dir(dir.path().join("mylib")).unwrap();
+        fs::write(dir.path().join("mylib").join("__init__.py"), "").unwrap();
+        fs::write(
+            dir.path().join("setup.py"),
+            "from setuptools import setup\nsetup(name='mylib')\n",
+        )
+        .unwrap();
+        // Tests are required
+        fs::create_dir(dir.path().join("tests")).unwrap();
+        fs::write(
+            dir.path().join("tests").join("test_basic.py"),
+            "def test_hello():\n    assert True\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("CHANGELOG.md"),
+            "# Changelog\n\n## 1.0.0\n- First release\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::Python);
+        let data = c.collect().await.unwrap();
+
+        assert!(
+            data.changelog_content.contains("Changelog"),
+            "Expected changelog content"
+        );
+    }
 }
 
 /// All data collected from a library project, ready for the pipeline agents.
