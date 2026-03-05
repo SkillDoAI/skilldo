@@ -36,12 +36,34 @@ impl Git2Repo {
             .describe(&opts)
             .context("No tags found reachable from HEAD")?;
 
-        let mut format_opts = git2::DescribeFormatOptions::new();
-        format_opts.abbreviated_size(0);
-
         let tag = describe
-            .format(Some(&format_opts))
+            .format(None)
             .context("Failed to format tag description")?;
+
+        // Strip the "-N-gHASH" suffix to match `git describe --tags --abbrev=0`.
+        // libgit2's abbreviated_size(0) means "default 7", not "no suffix".
+        let tag = if let Some(pos) = tag.rfind("-g") {
+            // Verify the part after "-g" looks like a hex hash
+            let after = &tag[pos + 2..];
+            if after.chars().all(|c| c.is_ascii_hexdigit()) && !after.is_empty() {
+                // Also strip the "-N" distance count before "-g"
+                let before_g = &tag[..pos];
+                if let Some(dash) = before_g.rfind('-') {
+                    let distance = &before_g[dash + 1..pos];
+                    if distance.chars().all(|c| c.is_ascii_digit()) {
+                        before_g[..dash].to_string()
+                    } else {
+                        tag
+                    }
+                } else {
+                    tag
+                }
+            } else {
+                tag
+            }
+        } else {
+            tag
+        };
 
         Ok(tag)
     }
@@ -56,12 +78,17 @@ impl Git2Repo {
     }
 
     /// Get the current branch name, equivalent to `git rev-parse --abbrev-ref HEAD`.
+    /// Returns "HEAD" in detached HEAD state (matching git CLI behavior).
     pub fn branch_name(&self) -> Result<String> {
         let head = self.repo.head().context("HEAD not found")?;
-        let name = head
-            .shorthand()
-            .ok_or_else(|| anyhow::anyhow!("HEAD is not a symbolic ref"))?;
-        Ok(name.to_string())
+        if head.is_branch() {
+            let name = head
+                .shorthand()
+                .ok_or_else(|| anyhow::anyhow!("HEAD is not a symbolic ref"))?;
+            Ok(name.to_string())
+        } else {
+            Ok("HEAD".to_string())
+        }
     }
 
     /// Get the short SHA (7 chars) of HEAD, equivalent to `git rev-parse --short=7 HEAD`.
@@ -103,8 +130,9 @@ impl Git2Repo {
                     .context("Failed to reopen repository for fetch")?;
 
                 let auth = auth_git2::GitAuthenticator::default();
-                let git_config = git2::Config::open_default()
-                    .context("Failed to open git config for credentials")?;
+                let git_config = repo
+                    .config()
+                    .context("Failed to open repository git config for credentials")?;
 
                 let mut fetch_options = git2::FetchOptions::new();
                 let mut remote_callbacks = git2::RemoteCallbacks::new();
@@ -116,7 +144,11 @@ impl Git2Repo {
                     .context("No 'origin' remote found")?;
 
                 remote
-                    .fetch(&["refs/tags/*:refs/tags/*"], Some(&mut fetch_options), None)
+                    .fetch(
+                        &["+refs/tags/*:refs/tags/*"],
+                        Some(&mut fetch_options),
+                        None,
+                    )
                     .context("Failed to fetch tags from origin")?;
 
                 Ok(())
@@ -126,7 +158,12 @@ impl Git2Repo {
 
         match receiver.recv_timeout(timeout) {
             Ok(result) => result,
-            Err(_) => bail!("Fetch tags timed out after {:?}", timeout),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                bail!("Fetch tags timed out after {:?}", timeout)
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("Fetch thread terminated unexpectedly (possible panic)")
+            }
         }
     }
 }
@@ -190,7 +227,7 @@ mod tests {
             .output()
             .unwrap();
         Command::new("git")
-            .args(["commit", "-m", "init"])
+            .args(["commit", "-m", "init", "--no-gpg-sign"])
             .current_dir(p)
             .output()
             .unwrap();
@@ -259,6 +296,51 @@ mod tests {
         let repo = Git2Repo::open(dir.path()).unwrap();
         let tag = repo.describe_tags().unwrap();
         assert_eq!(tag, "v1.0.0");
+    }
+
+    #[test]
+    fn test_describe_tags_head_past_tag() {
+        let dir = init_test_repo();
+        Command::new("git")
+            .args(["tag", "v1.0.0"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        // Make another commit so HEAD is past the tag
+        std::fs::write(dir.path().join("extra.txt"), "extra").unwrap();
+        Command::new("git")
+            .args(["add", "extra.txt"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "extra", "--no-gpg-sign"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        // Should return just the tag, not "v1.0.0-1-gabcdef"
+        assert_eq!(tag, "v1.0.0");
+    }
+
+    #[test]
+    fn test_branch_name_detached_head() {
+        let dir = init_test_repo();
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let sha = repo.short_sha().unwrap();
+        // Detach HEAD
+        Command::new("git")
+            .args(["checkout", "--detach"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let branch = repo.branch_name().unwrap();
+        assert_eq!(branch, "HEAD");
+        // Verify short_sha still works in detached state
+        let sha2 = repo.short_sha().unwrap();
+        assert_eq!(sha, sha2);
     }
 
     #[test]
