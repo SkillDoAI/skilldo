@@ -14,14 +14,14 @@ use crate::util::sanitize_dep_name;
 // Cached regexes for pattern/dependency extraction
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
 static CODE_BLOCK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)```(?:go(?:lang)?)?\n([\s\S]*?)```").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:go(?:lang)?)?\n([\s\S]*?)(?:```|~~~)").unwrap());
 static SINGLE_IMPORT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?m)import\s+"([^"]+)""#).unwrap());
 static GROUP_IMPORT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?s)import\s*\(\s*(.*?)\s*\)"#).unwrap());
 static IMPORT_LINE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#""([^"]+)""#).unwrap());
 static GO_GET_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"go\s+get\s+([a-zA-Z0-9._/\-@]+)").unwrap());
+    Lazy::new(|| Regex::new(r"go\s+get\s+(?:-\S+\s+)*([a-zA-Z0-9._/\-@]+)").unwrap());
 
 /// Go-specific parser for SKILL.md files
 pub struct GoParser;
@@ -575,6 +575,38 @@ import (
         assert!(
             !deps.contains(&"-e".to_string()),
             "leading-hyphen dep should be dropped by sanitize_dep_name"
+        );
+    }
+
+    #[test]
+    fn go_get_with_flags_extracts_module() {
+        let parser = GoParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```bash\ngo get -u github.com/spf13/cobra\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"github.com/spf13/cobra".to_string()),
+            "expected module after -u flag, got: {:?}",
+            deps
+        );
+        assert!(
+            !deps.iter().any(|d| d.starts_with('-')),
+            "flags should not be captured as deps"
+        );
+    }
+
+    #[test]
+    fn tilde_fenced_code_block_extracted() {
+        let parser = GoParser;
+        let skill = "---\nname: test\n---\n\n## Core Patterns\n\n### Hello\n\n~~~go\nfmt.Println(\"hello\")\n~~~\n";
+        let patterns = parser.extract_patterns(skill).unwrap();
+        assert!(
+            !patterns.is_empty(),
+            "should extract pattern from ~~~go fence"
+        );
+        assert!(
+            patterns[0].code.contains("Println"),
+            "code should contain Println"
         );
     }
 }

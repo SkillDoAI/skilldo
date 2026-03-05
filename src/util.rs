@@ -29,19 +29,22 @@ pub fn detect_fence_char(line: &str) -> Option<char> {
 
 /// Build a per-line boolean vec indicating whether each line is inside a
 /// fenced code block. Follows CommonMark: a closing fence must use the
-/// same character (backtick or tilde) that opened the block.
+/// same character (backtick or tilde) that opened the block, and be at
+/// least as long as the opening fence.
 pub fn compute_code_block_lines(lines: &[&str]) -> Vec<bool> {
     let mut result = Vec::with_capacity(lines.len());
-    let mut open_fence: Option<char> = None;
+    let mut open_fence: Option<(char, usize)> = None; // (char, length)
     for line in lines {
         if let Some(ch) = detect_fence_char(line) {
-            if let Some(open_ch) = open_fence {
+            let run_len = line.trim_start().chars().take_while(|&c| c == ch).count();
+            if let Some((open_ch, open_len)) = open_fence {
                 // Inside a block -- only close if same fence character
-                if ch == open_ch {
+                // and closing fence is at least as long as the opening fence
+                if ch == open_ch && run_len >= open_len {
                     open_fence = None;
                 }
             } else {
-                open_fence = Some(ch);
+                open_fence = Some((ch, run_len));
             }
         }
         result.push(open_fence.is_some());
@@ -309,6 +312,30 @@ mod tests {
         let lines = vec!["~~~python", "```", "still code", "~~~", "prose"];
         let result = compute_code_block_lines(&lines);
         assert_eq!(result, vec![true, true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_short_fence_inside_long_fence() {
+        // ```` opens with 4 backticks; ``` inside is NOT a closer (too short)
+        let lines = vec!["````python", "```", "still code", "````", "prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![true, true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_long_fence_closes_long_fence() {
+        // ````` opens with 5; ````` closes (same length)
+        let lines = vec!["`````", "code", "`````", "prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_longer_fence_closes() {
+        // ``` opens with 3; ```` closes (longer is OK per CommonMark)
+        let lines = vec!["```python", "code", "````", "prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![true, true, false, false]);
     }
 
     #[test]

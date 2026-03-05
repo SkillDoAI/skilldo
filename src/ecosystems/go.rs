@@ -194,12 +194,14 @@ impl GoHandler {
                 format!("https://pkg.go.dev/{module_path}"),
             ));
 
-            // If it's a GitHub/GitLab/Bitbucket module, add source URL
+            // If it's a GitHub/GitLab/Bitbucket module, add source URL.
+            // Strip Go semantic-import /vN suffix (e.g. github.com/org/repo/v5 → github.com/org/repo)
             if module_path.starts_with("github.com/")
                 || module_path.starts_with("gitlab.com/")
                 || module_path.starts_with("bitbucket.org/")
             {
-                urls.push(("Source".into(), format!("https://{module_path}")));
+                let url_path = strip_go_major_suffix(&module_path);
+                urls.push(("Source".into(), format!("https://{url_path}")));
             }
         }
 
@@ -485,6 +487,24 @@ impl GoHandler {
 }
 
 // ── Free functions ──────────────────────────────────────────────────────
+
+/// Strip Go semantic-import `/vN` major version suffix from a module path.
+/// e.g. `github.com/org/repo/v5` → `github.com/org/repo`
+fn strip_go_major_suffix(module_path: &str) -> &str {
+    if let Some(idx) = module_path.rfind('/') {
+        let suffix = &module_path[idx + 1..];
+        if suffix.starts_with('v')
+            && suffix.len() > 1
+            && suffix[1..].chars().all(|c| c.is_ascii_digit())
+        {
+            let version: u32 = suffix[1..].parse().unwrap_or(0);
+            if version >= 2 {
+                return &module_path[..idx];
+            }
+        }
+    }
+    module_path
+}
 
 /// Parse module path from go.mod content.
 pub(crate) fn parse_module_path(content: &str) -> Option<String> {
@@ -1831,5 +1851,47 @@ mod tests {
         assert!(files
             .iter()
             .any(|p| p.file_name().is_some_and(|n| n == "util.go")));
+    }
+
+    #[test]
+    fn strip_major_suffix_v2() {
+        assert_eq!(
+            strip_go_major_suffix("github.com/org/repo/v5"),
+            "github.com/org/repo"
+        );
+    }
+
+    #[test]
+    fn strip_major_suffix_v1_kept() {
+        // v1 is not a semantic-import suffix
+        assert_eq!(
+            strip_go_major_suffix("github.com/org/repo/v1"),
+            "github.com/org/repo/v1"
+        );
+    }
+
+    #[test]
+    fn strip_major_suffix_no_suffix() {
+        assert_eq!(
+            strip_go_major_suffix("github.com/org/repo"),
+            "github.com/org/repo"
+        );
+    }
+
+    #[test]
+    fn strip_major_suffix_non_version_path() {
+        assert_eq!(
+            strip_go_major_suffix("github.com/org/repo/vendor"),
+            "github.com/org/repo/vendor"
+        );
+    }
+
+    #[test]
+    fn parse_module_path_strips_inline_comment() {
+        let content = "module github.com/acme/lib // note\n\ngo 1.21\n";
+        assert_eq!(
+            parse_module_path(content),
+            Some("github.com/acme/lib".to_string())
+        );
     }
 }
