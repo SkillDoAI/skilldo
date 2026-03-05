@@ -1826,37 +1826,11 @@ testpkg.run()
 
     #[tokio::test]
     async fn test_generate_review_fail_then_pass() {
-        // Review client: first verdict fails, second passes
-        // Call sequence for review client:
-        //   1. introspect prompt -> script
-        //   2. verdict prompt -> fail with issues
-        //   3. introspect prompt -> script (retry)
-        //   4. verdict prompt -> pass
+        // Review client: first verdict fails, second passes.
+        // With skip_introspection, only verdict LLM calls happen (no introspect scripts).
         let review_responses = vec![
-            // First review cycle: introspect script
-            r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#
-                .to_string(),
             // First review cycle: verdict - FAIL
             r#"{"passed": false, "issues": [{"severity": "error", "category": "accuracy", "complaint": "Wrong version in frontmatter", "evidence": "expected 1.0.0, got unknown"}]}"#.to_string(),
-            // Second review cycle: introspect script
-            r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#
-                .to_string(),
             // Second review cycle: verdict - PASS
             r#"{"passed": true, "issues": []}"#.to_string(),
         ];

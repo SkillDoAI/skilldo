@@ -1049,9 +1049,9 @@ async fn test_review_disabled_skips_review() {
 #[tokio::test]
 async fn test_review_non_python_skips_introspection() {
     let client = ReviewMockClient::always_pass();
+    // No skip_introspection — language-based logic should skip for non-Python
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
-        .with_skip_introspection(true)
         .with_review_max_retries(0);
 
     let mut data = create_test_data();
