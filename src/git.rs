@@ -42,16 +42,16 @@ impl Git2Repo {
 
         // Strip the "-N-gHASH" suffix to match `git describe --tags --abbrev=0`.
         // libgit2's abbreviated_size(0) means "default 7", not "no suffix".
-        let tag = if let Some(pos) = tag.rfind("-g") {
+        let tag = if let Some(g_pos) = tag.rfind("-g") {
             // Verify the part after "-g" looks like a hex hash
-            let after = &tag[pos + 2..];
-            if after.chars().all(|c| c.is_ascii_hexdigit()) && !after.is_empty() {
-                // Also strip the "-N" distance count before "-g"
-                let before_g = &tag[..pos];
-                if let Some(dash) = before_g.rfind('-') {
-                    let distance = &before_g[dash + 1..pos];
+            let after_g = &tag[g_pos + 2..];
+            if after_g.chars().all(|c| c.is_ascii_hexdigit()) && !after_g.is_empty() {
+                // Also strip the "-N" distance count before "-gHASH"
+                let before_g = &tag[..g_pos];
+                if let Some(dash_pos) = before_g.rfind('-') {
+                    let distance = &before_g[dash_pos + 1..];
                     if distance.chars().all(|c| c.is_ascii_digit()) {
-                        before_g[..dash].to_string()
+                        before_g[..dash_pos].to_string()
                     } else {
                         tag
                     }
@@ -159,6 +159,10 @@ impl Git2Repo {
         match receiver.recv_timeout(timeout) {
             Ok(result) => result,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                tracing::warn!(
+                    "fetch_tags: timed out after {:?}, background thread may still be running",
+                    timeout
+                );
                 bail!("Fetch tags timed out after {:?}", timeout)
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -170,29 +174,37 @@ impl Git2Repo {
 
 /// Compare two tag strings in semver-descending order.
 /// Tags that parse as semver sort numerically; non-semver tags sort lexicographically after.
+/// Stable releases sort above pre-releases at the same version (e.g. v1.0.0 > v1.0.0-rc1).
 fn compare_semver_desc(a: &str, b: &str) -> std::cmp::Ordering {
     match (parse_semver(a), parse_semver(b)) {
-        (Some(va), Some(vb)) => vb.cmp(&va), // descending
+        (Some((a_maj, a_min, a_pat, a_pre)), Some((b_maj, b_min, b_pat, b_pre))) => {
+            // Descending by version, then stable before pre-release
+            match (b_maj, b_min, b_pat).cmp(&(a_maj, a_min, a_pat)) {
+                std::cmp::Ordering::Equal => a_pre.cmp(&b_pre), // false < true, so stable first
+                other => other,
+            }
+        }
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => b.cmp(a),
     }
 }
 
-/// Parse a tag like "v1.2.3" or "1.2.3" into (major, minor, patch).
-fn parse_semver(tag: &str) -> Option<(u32, u32, u32)> {
+/// Parse a tag like "v1.2.3" or "1.2.3" into (major, minor, patch, is_prerelease).
+/// Pre-release tags (e.g. "v1.0.0-rc1") sort after stable at the same version.
+fn parse_semver(tag: &str) -> Option<(u32, u32, u32, bool)> {
     let s = tag.strip_prefix('v').unwrap_or(tag);
     let mut parts = s.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
-    // Patch may have pre-release suffix like "3-rc1"
     let patch_str = parts.next()?;
+    let has_prerelease = patch_str.contains(|c: char| !c.is_ascii_digit());
     let patch: u32 = patch_str
         .split(|c: char| !c.is_ascii_digit())
         .next()?
         .parse()
         .ok()?;
-    Some((major, minor, patch))
+    Some((major, minor, patch, has_prerelease))
 }
 
 #[cfg(test)]
@@ -368,10 +380,10 @@ mod tests {
 
     #[test]
     fn test_parse_semver() {
-        assert_eq!(parse_semver("v1.2.3"), Some((1, 2, 3)));
-        assert_eq!(parse_semver("1.2.3"), Some((1, 2, 3)));
-        assert_eq!(parse_semver("v0.10.0"), Some((0, 10, 0)));
-        assert_eq!(parse_semver("v1.0.0-rc1"), Some((1, 0, 0)));
+        assert_eq!(parse_semver("v1.2.3"), Some((1, 2, 3, false)));
+        assert_eq!(parse_semver("1.2.3"), Some((1, 2, 3, false)));
+        assert_eq!(parse_semver("v0.10.0"), Some((0, 10, 0, false)));
+        assert_eq!(parse_semver("v1.0.0-rc1"), Some((1, 0, 0, true)));
         assert_eq!(parse_semver("not-a-version"), None);
         assert_eq!(parse_semver(""), None);
     }
@@ -395,6 +407,31 @@ mod tests {
             compare_semver_desc("v1.0.0", "latest"),
             std::cmp::Ordering::Less
         );
+        // stable sorts before pre-release at same version
+        assert_eq!(
+            compare_semver_desc("v1.0.0", "v1.0.0-rc1"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_semver_desc("v1.0.0-rc1", "v1.0.0"),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn test_list_tags_stable_before_prerelease() {
+        let dir = init_test_repo();
+        for tag in &["v1.0.0-rc1", "v1.0.0", "v1.0.0-beta"] {
+            Command::new("git")
+                .args(["tag", tag])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+        }
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tags = repo.list_tags_sorted().unwrap();
+        // Stable v1.0.0 should come first, then pre-releases
+        assert_eq!(tags[0], "v1.0.0");
     }
 
     #[test]

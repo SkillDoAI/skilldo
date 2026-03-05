@@ -93,10 +93,21 @@ const SKILLDO_RULES: &[(&str, &str)] = &[
 ];
 
 /// Check if a rule has `prose_only = true` in its YARA metadata.
+/// Accepts both boolean `true` and string `"true"` for robustness.
 fn is_prose_only(scanner: &boreal::Scanner, metadatas: &[Metadata]) -> bool {
     metadatas.iter().any(|m| {
         let name = scanner.get_string_symbol(m.name);
-        name == "prose_only" && matches!(m.value, MetadataValue::Boolean(true))
+        if name != "prose_only" {
+            return false;
+        }
+        match &m.value {
+            MetadataValue::Boolean(true) => true,
+            MetadataValue::Bytes(s) => {
+                let val = scanner.get_bytes_symbol(*s);
+                val.eq_ignore_ascii_case(b"true")
+            }
+            _ => false,
+        }
     })
 }
 
@@ -953,6 +964,41 @@ rule custom_not_prose_only {
         assert!(
             findings.iter().any(|f| f.rule_id == "CUSTOM-002"),
             "Rule without prose_only should fire in code blocks, got: {:?}",
+            findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn prose_only_string_metadata_also_works() {
+        // prose_only = "true" (string) should also be recognised
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("prose_str.yara"),
+            r#"
+rule custom_prose_str_test {
+    meta:
+        id = "CUSTOM-003"
+        description = "Test prose_only as string"
+        severity = "high"
+        category = "code-execution"
+        prose_only = "true"
+    strings:
+        $t = "STRING_PROSE_TRIGGER"
+    condition:
+        $t
+}
+"#,
+        )
+        .unwrap();
+
+        let s = YaraScanner::with_rules_dir(dir.path()).unwrap();
+
+        // In code block → should be skipped (prose_only = "true" treated as true)
+        let in_code = "# Title\n\n```python\nSTRING_PROSE_TRIGGER\n```\n";
+        let findings = s.scan(in_code);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "CUSTOM-003"),
+            "prose_only=\"true\" rule should skip code-block matches, got: {:?}",
             findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
         );
     }
