@@ -1049,7 +1049,7 @@ runtime = "true"
 
     #[test]
     fn test_run_with_daemon_down_test_enabled() {
-        // runtime = "bash" → available but "bash info" fails → Some(false)
+        // runtime = "sh" → available but "sh info" fails → Some(false)
         // + enable_test = true → error about daemon not responding
         use std::io::Write;
         let dir = tempfile::TempDir::new().unwrap();
@@ -1071,7 +1071,7 @@ enable_test = true
 
 [generation.container]
 execution_mode = "container"
-runtime = "bash"
+runtime = "sh"
 "#
         )
         .unwrap();
@@ -1087,7 +1087,7 @@ runtime = "bash"
 
     #[test]
     fn test_run_with_daemon_down_test_disabled() {
-        // runtime = "bash" → daemon down + test disabled → warning only, no error
+        // runtime = "sh" → daemon down + test disabled → warning only, no error
         use std::io::Write;
         let dir = tempfile::TempDir::new().unwrap();
         let config_path = dir.path().join("test.toml");
@@ -1108,7 +1108,7 @@ enable_test = false
 
 [generation.container]
 execution_mode = "container"
-runtime = "bash"
+runtime = "sh"
 "#
         )
         .unwrap();

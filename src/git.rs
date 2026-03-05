@@ -219,6 +219,10 @@ fn parse_semver(tag: &str) -> Option<(u32, u32, u32, bool)> {
                 .next()?
                 .parse()
                 .ok()?;
+            // Reject 4+ component versions (e.g. "1.2.3.4") — not semver
+            if !has_prerelease && parts.next().is_some() {
+                return None;
+            }
             Some((major, minor, patch, has_prerelease))
         }
         None => Some((major, minor, 0, has_minor_pre)),
@@ -378,6 +382,9 @@ mod tests {
         assert_eq!(parse_semver("v1.5-rc1"), Some((1, 5, 0, true)));
         assert_eq!(parse_semver("not-a-version"), None);
         assert_eq!(parse_semver(""), None);
+        // 4+ component versions are not semver
+        assert_eq!(parse_semver("v1.2.3.4"), None);
+        assert_eq!(parse_semver("1.2.3.4.5"), None);
     }
 
     #[test]
