@@ -469,4 +469,15 @@ mod tests {
             .to_string()
             .contains("No 'origin' remote"));
     }
+
+    #[test]
+    fn test_fetch_tags_real_repo() {
+        // Use the actual skilldo repo — it has an origin remote and tags.
+        let repo = Git2Repo::open_cwd().unwrap();
+        let result = repo.fetch_tags(Duration::from_secs(30));
+        assert!(result.is_ok(), "fetch_tags failed: {:?}", result);
+        // After fetch, tags should be present
+        let tags = repo.list_tags_sorted().unwrap();
+        assert!(!tags.is_empty(), "Expected tags after fetch");
+    }
 }
