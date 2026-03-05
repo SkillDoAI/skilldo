@@ -7,6 +7,51 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// Check if a line starts a fenced code block (backtick or tilde, per CommonMark).
+pub fn is_fence_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
+/// Detect which fence character opens/closes a code block on this line.
+/// Returns `Some('`')` for backtick fences, `Some('~')` for tilde fences,
+/// or `None` if the line is not a fence line.
+pub fn detect_fence_char(line: &str) -> Option<char> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("```") {
+        Some('`')
+    } else if trimmed.starts_with("~~~") {
+        Some('~')
+    } else {
+        None
+    }
+}
+
+/// Build a per-line boolean vec indicating whether each line is inside a
+/// fenced code block. Follows CommonMark: a closing fence must use the
+/// same character (backtick or tilde) that opened the block, and be at
+/// least as long as the opening fence.
+pub fn compute_code_block_lines(lines: &[&str]) -> Vec<bool> {
+    let mut result = Vec::with_capacity(lines.len());
+    let mut open_fence: Option<(char, usize)> = None; // (char, length)
+    for line in lines {
+        if let Some(ch) = detect_fence_char(line) {
+            let run_len = line.trim_start().chars().take_while(|&c| c == ch).count();
+            if let Some((open_ch, open_len)) = open_fence {
+                // Inside a block -- only close if same fence character
+                // and closing fence is at least as long as the opening fence
+                if ch == open_ch && run_len >= open_len {
+                    open_fence = None;
+                }
+            } else {
+                open_fence = Some((ch, run_len));
+            }
+        }
+        result.push(open_fence.is_some());
+    }
+    result
+}
+
 /// A string wrapper that masks its contents in Debug/Display output.
 /// Prevents accidental logging of API keys and other secrets.
 #[derive(Clone)]
@@ -195,7 +240,7 @@ pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::
     let pid = child.id();
     let (sender, receiver) = mpsc::channel();
 
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let result = child.wait_with_output();
         let _ = sender.send(result);
     });
@@ -204,6 +249,10 @@ pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::
         Ok(result) => result.context("Failed to execute command"),
         Err(_) => {
             kill_process_group(pid);
+            // Join the waiter thread so no orphaned threads remain at exit.
+            // Under LLVM coverage instrumentation, orphaned threads can
+            // deadlock the profdata writer during process shutdown.
+            let _ = handle.join();
             bail!("Command timed out after {:?}", timeout)
         }
     }
@@ -212,6 +261,95 @@ pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detect_fence_char_backtick() {
+        assert_eq!(detect_fence_char("```python"), Some('`'));
+        assert_eq!(detect_fence_char("```"), Some('`'));
+        assert_eq!(detect_fence_char("  ```"), Some('`'));
+    }
+
+    #[test]
+    fn detect_fence_char_tilde() {
+        assert_eq!(detect_fence_char("~~~python"), Some('~'));
+        assert_eq!(detect_fence_char("~~~"), Some('~'));
+        assert_eq!(detect_fence_char("  ~~~"), Some('~'));
+    }
+
+    #[test]
+    fn detect_fence_char_none() {
+        assert_eq!(detect_fence_char("normal text"), None);
+        assert_eq!(detect_fence_char("``not enough"), None);
+        assert_eq!(detect_fence_char("~~not enough"), None);
+    }
+
+    #[test]
+    fn code_block_lines_backtick_open_close() {
+        let lines = vec!["prose", "```python", "code", "```", "more prose"];
+        let result = compute_code_block_lines(&lines);
+        // prose=false, ```=true(opening), code=true, ```=false(closing), more=false
+        assert_eq!(result, vec![false, true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_tilde_open_close() {
+        let lines = vec!["prose", "~~~python", "code", "~~~", "more prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![false, true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_backtick_fence_containing_tilde() {
+        // Tilde line inside backtick block is content, not a closer
+        let lines = vec!["```python", "~~~", "still code", "```", "prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![true, true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_tilde_fence_containing_backtick() {
+        // Backtick line inside tilde block is content, not a closer
+        let lines = vec!["~~~python", "```", "still code", "~~~", "prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![true, true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_short_fence_inside_long_fence() {
+        // ```` opens with 4 backticks; ``` inside is NOT a closer (too short)
+        let lines = vec!["````python", "```", "still code", "````", "prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![true, true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_long_fence_closes_long_fence() {
+        // ````` opens with 5; ````` closes (same length)
+        let lines = vec!["`````", "code", "`````", "prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_longer_fence_closes() {
+        // ``` opens with 3; ```` closes (longer is OK per CommonMark)
+        let lines = vec!["```python", "code", "````", "prose"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![true, true, false, false]);
+    }
+
+    #[test]
+    fn code_block_lines_unterminated() {
+        let lines = vec!["prose", "```python", "code without close"];
+        let result = compute_code_block_lines(&lines);
+        assert_eq!(result, vec![false, true, true]);
+    }
+
+    #[test]
+    fn code_block_lines_empty() {
+        let result = compute_code_block_lines(&[]);
+        assert!(result.is_empty());
+    }
 
     #[test]
     fn test_secret_string_hides_in_debug() {
@@ -274,5 +412,37 @@ mod tests {
         // Spaces enable flag injection: `pkg --malicious`
         assert!(sanitize_dep_name("pkg --malicious").is_err());
         assert!(sanitize_dep_name("express rm").is_err());
+    }
+
+    #[test]
+    fn test_run_cmd_with_timeout_success() {
+        // Covers the setsid pre_exec path (lines 182-184) and normal completion
+        let cmd = Command::new("echo");
+        let output = run_cmd_with_timeout(cmd, Duration::from_secs(5)).unwrap();
+        assert!(output.status.success());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_run_cmd_with_timeout_expires() {
+        // Covers: kill_process_group (lines 141-157) and timeout bail (lines 206-207)
+        let mut cmd = Command::new("sleep");
+        cmd.arg("999");
+        let result = run_cmd_with_timeout(cmd, Duration::from_millis(100));
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("timed out"),
+            "Expected timeout error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_kill_process_group_nonexistent_pid() {
+        // Covers kill_process_group directly with a PID that doesn't exist.
+        // The process-group kill fails (line 152), so the fallback individual
+        // kill also runs (lines 153-158). Neither panics.
+        kill_process_group(999_999_999);
     }
 }

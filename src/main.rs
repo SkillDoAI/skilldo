@@ -17,7 +17,10 @@ mod util;
 
 #[derive(Parser)]
 #[command(name = "skilldo", version)]
-#[command(about = "Generate agent rules files for open source libraries", long_about = None)]
+#[command(
+    about = concat!("Skilldo — Generate agent rules files for your libraries — v", env!("CARGO_PKG_VERSION")),
+    long_about = None,
+)]
 struct Cli {
     /// Suppress informational output (only show warnings and errors)
     #[arg(short, long, global = true)]
@@ -52,9 +55,9 @@ enum Commands {
         #[arg(short = 'o', long)]
         output: Option<String>,
 
-        /// Explicit version override (e.g., "2.1.0")
-        #[arg(long)]
-        version: Option<String>,
+        /// Explicit library version override (e.g., "2.1.0")
+        #[arg(long = "skill-version")]
+        skill_version: Option<String>,
 
         /// Version extraction strategy: git-tag, package, branch, commit
         #[arg(long)]
@@ -194,6 +197,17 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+
+    /// Show the prompts that will be sent to the LLM
+    ShowPrompts {
+        /// Language/ecosystem: python, go
+        #[arg(long, default_value = "python")]
+        language: String,
+
+        /// Show only a specific stage: extract, map, learn, create, review, test
+        #[arg(long)]
+        stage: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -214,16 +228,22 @@ enum ConfigAction {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging based on flags
-    let log_level = if cli.quiet {
-        tracing::Level::WARN
-    } else if cli.verbose {
-        tracing::Level::DEBUG
+    // Initialize logging: RUST_LOG env var takes priority (for power users),
+    // otherwise fall back to --quiet / --verbose CLI flags.
+    if std::env::var_os("RUST_LOG").is_some() {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
     } else {
-        tracing::Level::INFO
-    };
-
-    tracing_subscriber::fmt().with_max_level(log_level).init();
+        let log_level = if cli.quiet {
+            tracing::Level::WARN
+        } else if cli.verbose {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        };
+        tracing_subscriber::fmt().with_max_level(log_level).init();
+    }
 
     match cli.command {
         Commands::Generate {
@@ -231,7 +251,7 @@ async fn main() -> Result<()> {
             language,
             input,
             output,
-            version,
+            skill_version,
             version_from,
             config,
             model,
@@ -260,7 +280,7 @@ async fn main() -> Result<()> {
                 language,
                 input,
                 output,
-                version_override: version,
+                version_override: skill_version,
                 version_from: version_from
                     .map(|s| s.parse::<crate::config::VersionStrategy>())
                     .transpose()?,
@@ -320,6 +340,9 @@ async fn main() -> Result<()> {
                 cli::config_check::run(config, strict)?;
             }
         },
+        Commands::ShowPrompts { language, stage } => {
+            cli::show_prompts::run(&language, stage.as_deref())?;
+        }
     }
 
     Ok(())
@@ -395,7 +418,7 @@ mod tests {
             "gpt-5.2",
             "--max-retries",
             "5",
-            "--version",
+            "--skill-version",
             "2.0.0",
             "--dry-run",
         ])
@@ -405,14 +428,14 @@ mod tests {
                                output,
                                model,
                                max_retries,
-                               version,
+                               skill_version,
                                dry_run| {
             assert_eq!(path, "/tmp/repo");
             assert_eq!(language.unwrap(), "python");
             assert_eq!(output.unwrap(), "out.md");
             assert_eq!(model.unwrap(), "gpt-5.2");
             assert_eq!(max_retries.unwrap(), 5);
-            assert_eq!(version.unwrap(), "2.0.0");
+            assert_eq!(skill_version.unwrap(), "2.0.0");
             assert!(dry_run);
         });
     }
@@ -666,7 +689,7 @@ mod tests {
                                language,
                                input,
                                output,
-                               version,
+                               skill_version,
                                version_from,
                                config,
                                model,
@@ -692,7 +715,7 @@ mod tests {
             assert_eq!(language.unwrap(), "python");
             assert!(input.is_none());
             assert!(output.is_none());
-            assert!(version.is_none());
+            assert!(skill_version.is_none());
             assert!(version_from.is_none());
             assert!(config.is_none());
             assert_eq!(model.unwrap(), "gpt-5.2");
@@ -1016,7 +1039,7 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "generate"]).unwrap();
         assert_generate!(cli, |language,
                                input,
-                               version,
+                               skill_version,
                                version_from,
                                config,
                                model,
@@ -1034,7 +1057,7 @@ mod tests {
                                source_path| {
             assert!(language.is_none());
             assert!(input.is_none());
-            assert!(version.is_none());
+            assert!(skill_version.is_none());
             assert!(version_from.is_none());
             assert!(config.is_none());
             assert!(model.is_none());

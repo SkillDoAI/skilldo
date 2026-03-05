@@ -265,4 +265,58 @@ mod tests {
         assert_eq!(&ts[13..14], ":");
         assert_eq!(&ts[16..17], ":");
     }
+
+    #[test]
+    fn test_epoch_to_iso8601_leap_year() {
+        // 2024-02-29T12:00:00Z — 2024 is a leap year
+        // 2024-01-01 = epoch 1704067200
+        // Jan: 31 days, so Feb 1 = 1704067200 + 31*86400 = 1706745600
+        // Feb 29 = 1706745600 + 28*86400 = 1709164800
+        // + 12h = 1709164800 + 43200 = 1709208000
+        assert_eq!(epoch_to_iso8601(1709208000), "2024-02-29T12:00:00Z");
+    }
+
+    #[test]
+    fn test_csv_escape_with_quotes() {
+        let escaped = csv_escape("value with \"quotes\"");
+        assert_eq!(escaped, "\"value with \"\"quotes\"\"\"");
+    }
+
+    #[test]
+    fn test_csv_escape_with_newline() {
+        let escaped = csv_escape("line1\nline2");
+        assert_eq!(escaped, "\"line1\nline2\"");
+    }
+
+    #[test]
+    fn test_csv_escape_plain() {
+        let escaped = csv_escape("simple");
+        assert_eq!(escaped, "simple");
+    }
+
+    #[test]
+    fn test_default_path_creates_dir_and_file() {
+        // Use a tempdir to avoid polluting the real ~/.skilldo/runs.csv
+        let dir = tempfile::tempdir().unwrap();
+        let skilldo_dir = dir.path().join(".skilldo");
+        let csv_path = skilldo_dir.join("runs.csv");
+
+        // Pre-create the parent directory (the None branch does create_dir_all,
+        // but with Some we must create it ourselves to mirror that behavior)
+        fs::create_dir_all(&skilldo_dir).unwrap();
+
+        let record = sample_record();
+        let result = append_run(&record, Some(csv_path.clone()));
+        assert!(
+            result.is_ok(),
+            "append_run should succeed: {:?}",
+            result.err()
+        );
+        assert!(csv_path.exists(), "runs.csv should exist");
+
+        let content = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2); // header + 1 row
+        assert!(lines[0].starts_with("language,"));
+    }
 }

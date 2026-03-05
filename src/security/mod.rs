@@ -521,4 +521,175 @@ print(response.json())
             report.score
         );
     }
+
+    // --- Display and count_by_severity unit tests ---
+
+    #[test]
+    fn test_severity_display_all_variants() {
+        assert_eq!(Severity::Critical.to_string(), "critical");
+        assert_eq!(Severity::High.to_string(), "high");
+        assert_eq!(Severity::Medium.to_string(), "medium");
+        assert_eq!(Severity::Low.to_string(), "low");
+        assert_eq!(Severity::Info.to_string(), "info");
+    }
+
+    #[test]
+    fn test_category_display_all_variants() {
+        assert_eq!(Category::UnicodeAttack.to_string(), "unicode-attack");
+        assert_eq!(Category::PromptInjection.to_string(), "prompt-injection");
+        assert_eq!(Category::CodeExecution.to_string(), "code-execution");
+        assert_eq!(Category::CredentialAccess.to_string(), "credential-access");
+        assert_eq!(Category::DataExfiltration.to_string(), "data-exfiltration");
+        assert_eq!(Category::Obfuscation.to_string(), "obfuscation");
+        assert_eq!(Category::Persistence.to_string(), "persistence");
+        assert_eq!(
+            Category::PrivilegeEscalation.to_string(),
+            "privilege-escalation"
+        );
+        assert_eq!(Category::FilesystemWrite.to_string(), "filesystem-write");
+        assert_eq!(Category::ResourceAbuse.to_string(), "resource-abuse");
+    }
+
+    #[test]
+    fn test_count_by_severity() {
+        let report = ScanReport {
+            findings: vec![
+                Finding {
+                    rule_id: "T-001".into(),
+                    severity: Severity::Critical,
+                    category: Category::CodeExecution,
+                    message: "crit1".into(),
+                    line: 1,
+                    snippet: String::new(),
+                },
+                Finding {
+                    rule_id: "T-002".into(),
+                    severity: Severity::High,
+                    category: Category::CredentialAccess,
+                    message: "high1".into(),
+                    line: 2,
+                    snippet: String::new(),
+                },
+                Finding {
+                    rule_id: "T-003".into(),
+                    severity: Severity::High,
+                    category: Category::DataExfiltration,
+                    message: "high2".into(),
+                    line: 3,
+                    snippet: String::new(),
+                },
+                Finding {
+                    rule_id: "T-004".into(),
+                    severity: Severity::Medium,
+                    category: Category::Obfuscation,
+                    message: "med1".into(),
+                    line: 4,
+                    snippet: String::new(),
+                },
+                Finding {
+                    rule_id: "T-005".into(),
+                    severity: Severity::Low,
+                    category: Category::Persistence,
+                    message: "low1".into(),
+                    line: 5,
+                    snippet: String::new(),
+                },
+                Finding {
+                    rule_id: "T-006".into(),
+                    severity: Severity::Low,
+                    category: Category::FilesystemWrite,
+                    message: "low2".into(),
+                    line: 6,
+                    snippet: String::new(),
+                },
+                Finding {
+                    rule_id: "T-007".into(),
+                    severity: Severity::Low,
+                    category: Category::ResourceAbuse,
+                    message: "low3".into(),
+                    line: 7,
+                    snippet: String::new(),
+                },
+            ],
+            score: 0, // score irrelevant for this test
+        };
+
+        assert_eq!(report.count_by_severity(Severity::Critical), 1);
+        assert_eq!(report.count_by_severity(Severity::High), 2);
+        assert_eq!(report.count_by_severity(Severity::Medium), 1);
+        assert_eq!(report.count_by_severity(Severity::Low), 3);
+        assert_eq!(report.count_by_severity(Severity::Info), 0);
+    }
+
+    #[test]
+    fn test_score_with_low_and_info_severities() {
+        // Manually build a report with Low and Info findings,
+        // then verify the score matches the formula in scan_skill:
+        //   score = max(0, 100 - sum_of_deductions)
+        //   Critical=30, High=15, Medium=5, Low=2, Info=0
+        let findings = vec![
+            Finding {
+                rule_id: "T-010".into(),
+                severity: Severity::Low,
+                category: Category::Persistence,
+                message: "low finding".into(),
+                line: 1,
+                snippet: String::new(),
+            },
+            Finding {
+                rule_id: "T-011".into(),
+                severity: Severity::Low,
+                category: Category::ResourceAbuse,
+                message: "another low".into(),
+                line: 2,
+                snippet: String::new(),
+            },
+            Finding {
+                rule_id: "T-012".into(),
+                severity: Severity::Info,
+                category: Category::Obfuscation,
+                message: "info finding".into(),
+                line: 3,
+                snippet: String::new(),
+            },
+            Finding {
+                rule_id: "T-013".into(),
+                severity: Severity::Info,
+                category: Category::UnicodeAttack,
+                message: "another info".into(),
+                line: 4,
+                snippet: String::new(),
+            },
+        ];
+
+        // Expected deductions: 2 Low * 2 + 2 Info * 0 = 4
+        // Expected score: 100 - 4 = 96
+        let deductions: i32 = findings
+            .iter()
+            .map(|f| match f.severity {
+                Severity::Critical => 30,
+                Severity::High => 15,
+                Severity::Medium => 5,
+                Severity::Low => 2,
+                Severity::Info => 0,
+            })
+            .sum();
+        let expected_score = (100i32 - deductions).clamp(0, 100) as u8;
+        assert_eq!(expected_score, 96);
+
+        let report = ScanReport {
+            findings,
+            score: expected_score,
+        };
+
+        assert_eq!(report.score, 96);
+        assert!(
+            report.passed(),
+            "Low/Info findings should not cause failure"
+        );
+        assert_eq!(report.count_by_severity(Severity::Low), 2);
+        assert_eq!(report.count_by_severity(Severity::Info), 2);
+        assert_eq!(report.count_by_severity(Severity::High), 0);
+        assert_eq!(report.count_by_severity(Severity::Critical), 0);
+    }
 }

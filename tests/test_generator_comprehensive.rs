@@ -990,6 +990,7 @@ async fn test_review_enabled_passes_first_try() {
     let client = ReviewMockClient::always_pass();
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
+        .with_skip_introspection(true)
         .with_review_max_retries(2);
 
     let data = create_test_data();
@@ -1003,6 +1004,7 @@ async fn test_review_enabled_fails_then_passes() {
     let client = ReviewMockClient::pass_on_review(1); // fail first, pass second
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
+        .with_skip_introspection(true)
         .with_review_max_retries(2);
 
     let data = create_test_data();
@@ -1016,6 +1018,7 @@ async fn test_review_max_retries_returns_unresolved_warnings() {
     let client = ReviewMockClient::always_fail();
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
+        .with_skip_introspection(true)
         .with_review_max_retries(1);
 
     let data = create_test_data();
@@ -1046,6 +1049,7 @@ async fn test_review_disabled_skips_review() {
 #[tokio::test]
 async fn test_review_non_python_skips_introspection() {
     let client = ReviewMockClient::always_pass();
+    // No skip_introspection — language-based logic should skip for non-Python
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
         .with_review_max_retries(0);

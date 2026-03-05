@@ -378,4 +378,73 @@ mod tests {
 
         assert_eq!(analysis.significance, ChangeSignificance::Skip);
     }
+
+    /// Covers line 108 (behavior_changes branch) and line 134 (behavior change reason string).
+    #[test]
+    fn test_behavior_change_regenerate() {
+        let changelog = r#"
+## 2.2.0
+
+- The function now returns a list instead of a tuple
+- Internal cleanup
+"#;
+
+        let analyzer = ChangelogAnalyzer::new(changelog.to_string());
+        let analysis = analyzer.analyze_between_versions("2.1.0", "2.2.0").unwrap();
+
+        assert_eq!(analysis.significance, ChangeSignificance::Regenerate);
+        assert!(analysis.reason.contains("behavior change"));
+    }
+
+    /// Covers line 147 (bug_fixes.len() in Skip branch) by having recognized bug fix entries
+    /// that do NOT match any higher-priority classification.
+    #[test]
+    fn test_bug_fix_count_in_skip_reason() {
+        let changelog = r#"
+## 2.1.1
+
+- Fixed crash on empty input
+- Corrected off-by-one bug in parser
+"#;
+
+        let analyzer = ChangelogAnalyzer::new(changelog.to_string());
+        let analysis = analyzer.analyze_between_versions("2.1.0", "2.1.1").unwrap();
+
+        assert_eq!(analysis.significance, ChangeSignificance::Skip);
+        assert!(analysis.reason.contains("2 non-API changes"));
+    }
+
+    /// Covers lines 237-239 (is_new_feature: "method", "class", "module" branches).
+    #[test]
+    fn test_new_feature_method_class_module() {
+        let changelog_method = r#"
+## 2.2.0
+
+- Added new .fit() method for streamlined training
+"#;
+        let analyzer = ChangelogAnalyzer::new(changelog_method.to_string());
+        let analysis = analyzer.analyze_between_versions("2.1.0", "2.2.0").unwrap();
+        assert_eq!(analysis.significance, ChangeSignificance::Regenerate);
+        assert!(analysis.reason.contains("new feature"));
+
+        let changelog_class = r#"
+## 2.2.0
+
+- Introduced DataFrameWriter class for batch output
+"#;
+        let analyzer = ChangelogAnalyzer::new(changelog_class.to_string());
+        let analysis = analyzer.analyze_between_versions("2.1.0", "2.2.0").unwrap();
+        assert_eq!(analysis.significance, ChangeSignificance::Regenerate);
+        assert!(analysis.reason.contains("new feature"));
+
+        let changelog_module = r#"
+## 2.2.0
+
+- Added new utilities module for helper functions
+"#;
+        let analyzer = ChangelogAnalyzer::new(changelog_module.to_string());
+        let analysis = analyzer.analyze_between_versions("2.1.0", "2.2.0").unwrap();
+        assert_eq!(analysis.significance, ChangeSignificance::Regenerate);
+        assert!(analysis.reason.contains("new feature"));
+    }
 }

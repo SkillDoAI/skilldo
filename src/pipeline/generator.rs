@@ -7,7 +7,6 @@ use tracing::{info, warn};
 use super::collector::CollectedData;
 use super::normalizer;
 use crate::config::{ContainerConfig, PromptsConfig};
-use crate::detector::Language;
 use crate::lint::{Severity, SkillLinter};
 use crate::llm::client::LlmClient;
 use crate::llm::prompts_v2;
@@ -140,6 +139,7 @@ pub struct Generator {
     enable_test: bool,
     test_mode: ValidationMode,
     enable_review: bool,
+    skip_introspection: bool,
     enable_security_scan: bool,
     review_max_retries: usize,
     container_config: ContainerConfig,
@@ -163,6 +163,7 @@ impl Generator {
             enable_test: true,                   // Default to enabled
             test_mode: ValidationMode::Thorough, // Default to thorough mode
             enable_review: true,                 // Default to enabled
+            skip_introspection: false,           // Default to enabled
             enable_security_scan: true,          // Default to enabled
             review_max_retries: 5,               // Default to 5 retries
             container_config: ContainerConfig::default(),
@@ -234,6 +235,13 @@ impl Generator {
 
     pub fn with_review(mut self, enabled: bool) -> Self {
         self.enable_review = enabled;
+        self
+    }
+
+    /// Skip container-based introspection in review (useful for testing without a runtime).
+    #[allow(dead_code)]
+    pub fn with_skip_introspection(mut self, skip: bool) -> Self {
+        self.skip_introspection = skip;
         self
     }
 
@@ -429,16 +437,25 @@ impl Generator {
         // max_retries=0 means one attempt with no retries on failure.
         // max_retries=3 means one initial attempt + up to 3 retries (4 total).
 
-        // Construct test validator once before the loop (avoids re-allocation on retries)
-        let test_validator = if self.enable_test && data.language == Language::Python {
-            Some(
-                TestCodeValidator::new_python_with_custom(
-                    self.get_client("test"),
-                    self.container_config.clone(),
-                    self.prompts_config.test_custom.clone(),
-                )?
-                .with_mode(self.test_mode),
-            )
+        // Construct test validator once before the loop (avoids re-allocation on retries).
+        // Uses the language-generic constructor which supports Python + Go.
+        let test_validator = if self.enable_test {
+            match TestCodeValidator::new(
+                &data.language,
+                self.get_client("test"),
+                self.container_config.clone(),
+                self.prompts_config.test_custom.clone(),
+            ) {
+                Ok(v) => Some(v.with_mode(self.test_mode)),
+                Err(e) => {
+                    info!(
+                        "Test agent not available for {}: {}",
+                        data.language.as_str(),
+                        e
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
@@ -484,7 +501,47 @@ impl Generator {
 
                 // Patch with format fix instructions (non-security errors only)
                 let fix_prompt = format!(
-                    "Here is the current SKILL.md:\n\n{}\n\nFORMAT VALIDATION FAILED:\n{}\n\nPlease fix these format issues. Keep all content intact.",
+                    r#"Here is the current SKILL.md:
+
+{}
+
+FORMAT VALIDATION FAILED:
+{}
+
+Fix these format issues. The document MUST follow this exact structure:
+
+```
+---
+name: <package-name>
+description: <one sentence>
+license: <SPDX identifier>
+metadata:
+  version: "<semver>"
+  ecosystem: <python|go|rust|javascript>
+---
+
+## Imports
+...
+
+## Core Patterns
+### Pattern Name
+...
+
+## Configuration
+...
+
+## Pitfalls
+### Wrong: <description>
+...
+### Right: <description>
+...
+
+## References
+...
+```
+
+Section headings must be EXACTLY `## Imports`, `## Core Patterns`, and `## Pitfalls` (case-sensitive).
+Keep all content intact — only fix the structural issues. Output ONLY the fixed SKILL.md starting with `---`."#,
                     skill_md,
                     error_msgs.join("\n")
                 );
@@ -590,7 +647,8 @@ impl Generator {
                 self.get_client("review"),
                 self.container_config.clone(),
                 self.prompts_config.review_custom.clone(),
-            );
+            )
+            .with_skip_introspection(self.skip_introspection);
 
             let mut last_review_attempt = 0;
             for review_attempt in 0..=self.review_max_retries {
@@ -1075,7 +1133,9 @@ mod tests {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_review(false);
         assert!(!gen.enable_review);
 
-        let gen2 = Generator::new(Box::new(MockLlmClient::new()), 3).with_review(true);
+        let gen2 = Generator::new(Box::new(MockLlmClient::new()), 3)
+            .with_review(true)
+            .with_skip_introspection(true);
         assert!(gen2.enable_review);
     }
 
@@ -1474,6 +1534,7 @@ mod tests {
             .with_test(true)
             .with_test_mode(ValidationMode::Adaptive)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_container_config(ContainerConfig::default())
             .with_parallel_extraction(false)
@@ -1765,37 +1826,11 @@ testpkg.run()
 
     #[tokio::test]
     async fn test_generate_review_fail_then_pass() {
-        // Review client: first verdict fails, second passes
-        // Call sequence for review client:
-        //   1. introspect prompt -> script
-        //   2. verdict prompt -> fail with issues
-        //   3. introspect prompt -> script (retry)
-        //   4. verdict prompt -> pass
+        // Review client: first verdict fails, second passes.
+        // With skip_introspection, only verdict LLM calls happen (no introspect scripts).
         let review_responses = vec![
-            // First review cycle: introspect script
-            r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#
-                .to_string(),
             // First review cycle: verdict - FAIL
             r#"{"passed": false, "issues": [{"severity": "error", "category": "accuracy", "complaint": "Wrong version in frontmatter", "evidence": "expected 1.0.0, got unknown"}]}"#.to_string(),
-            // Second review cycle: introspect script
-            r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#
-                .to_string(),
             // Second review cycle: verdict - PASS
             r#"{"passed": true, "issues": []}"#.to_string(),
         ];
@@ -1803,6 +1838,7 @@ print(json.dumps(result))
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -1824,27 +1860,18 @@ print(json.dumps(result))
         // Review client always returns failures (need "error" severity to trigger retries,
         // since `passed` is recomputed from issues — warnings-only would pass)
         let fail_verdict = r#"{"passed": false, "issues": [{"severity": "error", "category": "accuracy", "complaint": "Wrong version number", "evidence": "pip says 2.0"}, {"severity": "warning", "category": "accuracy", "complaint": "Stale version number", "evidence": "pip says 2.0"}]}"#;
-        let introspect_script = r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#;
 
         // 2 retries = 3 review attempts (0, 1, 2)
-        // Each attempt: introspect + verdict = 2 calls
+        // With skip_introspection, only verdict calls happen (no introspect script)
         let mut review_responses = Vec::new();
         for _ in 0..3 {
-            review_responses.push(introspect_script.to_string());
             review_responses.push(fail_verdict.to_string());
         }
 
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(2)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -1916,6 +1943,7 @@ print(json.dumps(result))
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(0);
 
         let mut data = make_test_data();
@@ -2012,6 +2040,7 @@ print(json.dumps(result))
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(0)
             .with_existing_skill("# Old SKILL.md content".to_string());
 
@@ -2404,7 +2433,7 @@ print(json.dumps(result))
     }
 
     #[tokio::test]
-    async fn test_generate_test_enabled_go_skips_test_agent() {
+    async fn test_generate_test_enabled_go_runs_test_agent() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(true)
             .with_review(false);
@@ -2466,22 +2495,13 @@ print(json.dumps(result))
             {"severity": "error", "category": "accuracy", "complaint": "Wrong version", "evidence": "expected 2.0"},
             {"severity": "warning", "category": "safety", "complaint": "Suspicious code pattern", "evidence": "line 10"}
         ]}"#;
-        let introspect_script = r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#;
-
-        // 0 retries = 1 attempt
-        let review_responses = vec![introspect_script.to_string(), fail_verdict.to_string()];
+        // 0 retries = 1 attempt; introspection skipped so only verdict calls happen
+        let review_responses = vec![fail_verdict.to_string()];
 
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(0)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -2502,22 +2522,15 @@ print(json.dumps(result))
 
     #[tokio::test]
     async fn test_generate_review_passes_first_attempt() {
-        let introspect_script = r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#;
         let pass_verdict = r#"{"passed": true, "issues": []}"#;
 
-        let review_responses = vec![introspect_script.to_string(), pass_verdict.to_string()];
+        // Introspection skipped — only verdict calls happen
+        let review_responses = vec![pass_verdict.to_string()];
 
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
+            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 

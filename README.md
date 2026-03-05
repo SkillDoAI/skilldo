@@ -100,8 +100,22 @@ skilldo generate [PATH] [OPTIONS]
 | `--timeout <SECONDS>` | Container execution timeout |
 | `--no-parallel` | Run extract/map/learn sequentially instead of in parallel (useful for local models) |
 | `-q, --quiet` | Suppress info messages, show warnings and errors only |
-| `-v, --verbose` | Show debug output |
+| `-v, --verbose` | Show debug output (generated code, container commands, LLM calls) |
 | `--dry-run` | Use a mock LLM client (no API key needed, for testing) |
+
+### Debugging
+
+```bash
+# Show what's happening during a run
+skilldo -v generate /path/to/repo
+
+# Inspect the exact prompts sent to the LLM
+skilldo show-prompts --language go
+skilldo show-prompts --language python --stage test
+
+# For granular module-level tracing (power users)
+RUST_LOG=skilldo::test_agent=trace skilldo generate /path/to/repo
+```
 
 ### Examples
 
@@ -279,7 +293,7 @@ cleanup = true
 # python_image = "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
 # javascript_image = "node:20-slim"
 # rust_image = "rust:1.75-slim"
-# go_image = "golang:1.21-alpine"
+# go_image = "golang:1.25-alpine"
 
 # ── Custom Prompts (Advanced) ────────────────────────────────
 # Override or extend the built-in stage prompts.

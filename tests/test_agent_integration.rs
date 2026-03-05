@@ -684,3 +684,227 @@ async fn test_test_result_generate_feedback_returns_none_on_success() {
         "Should return None when all tests pass"
     );
 }
+
+// ============================================================
+// Go integration tests
+// ============================================================
+
+#[tokio::test]
+async fn test_go_parser_extracts_patterns_from_fmt_skill() -> Result<()> {
+    use skilldo::test_agent::go_parser::GoParser;
+    use skilldo::test_agent::LanguageParser;
+
+    let skill_md = fs::read_to_string("tests/fixtures/go-fmt-SKILL.md")?;
+    let parser = GoParser;
+
+    let patterns = parser.extract_patterns(&skill_md)?;
+    assert_eq!(
+        patterns.len(),
+        3,
+        "Should extract 3 patterns from Go fmt SKILL.md"
+    );
+    assert_eq!(patterns[0].name, "Basic Printing");
+    assert_eq!(patterns[1].name, "String Formatting");
+    assert_eq!(patterns[2].name, "Error Formatting");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_go_parser_extracts_no_deps_for_stdlib() -> Result<()> {
+    use skilldo::test_agent::go_parser::GoParser;
+    use skilldo::test_agent::LanguageParser;
+
+    let skill_md = fs::read_to_string("tests/fixtures/go-fmt-SKILL.md")?;
+    let parser = GoParser;
+
+    let deps = parser.extract_dependencies(&skill_md)?;
+    assert!(
+        deps.is_empty(),
+        "fmt is stdlib — no external deps: {:?}",
+        deps
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_go_code_generator_creates_test_prompt() -> Result<()> {
+    use skilldo::test_agent::go_code_gen::GoCodeGenerator;
+    use skilldo::test_agent::LanguageCodeGenerator;
+
+    let mock_client = MockLlmClient::new(vec![r#"
+```go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello, World!")
+    fmt.Printf("Name: %s, Age: %d\n", "Alice", 30)
+    fmt.Println("✓ Test passed: Basic Printing")
+}
+```
+"#
+    .to_string()]);
+
+    let generator = GoCodeGenerator::new(&mock_client);
+
+    let pattern = CodePattern {
+        name: "Basic Printing".to_string(),
+        description: "Print formatted output to stdout".to_string(),
+        code: "fmt.Println(\"Hello, World!\")\nfmt.Printf(\"Name: %s, Age: %d\\n\", \"Alice\", 30)"
+            .to_string(),
+        category: PatternCategory::BasicUsage,
+    };
+
+    let test_code = generator.generate_test_code(&pattern).await?;
+    assert!(
+        test_code.contains("package main"),
+        "Should have package main"
+    );
+    assert!(test_code.contains("fmt.Println"), "Should use fmt.Println");
+    assert!(!test_code.contains("```"), "Should strip markdown fences");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // Requires container runtime (podman/docker)
+async fn test_go_validator_with_mock_fmt_skill() -> Result<()> {
+    use skilldo::test_agent::TestCodeValidator;
+
+    // Mock LLM returns valid Go programs for each pattern
+    let mock_client = MockLlmClient::new(vec![
+        // Pattern 1: Basic Printing
+        r#"```go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello, World!")
+    fmt.Printf("Name: %s, Age: %d\n", "Alice", 30)
+    fmt.Println("✓ Test passed: Basic Printing")
+}
+```"#
+            .to_string(),
+        // Pattern 2: String Formatting
+        r#"```go
+package main
+
+import (
+    "fmt"
+    "log"
+)
+
+func main() {
+    s := fmt.Sprintf("Hello, %s! You are %d years old.", "Bob", 25)
+    if s == "" {
+        log.Fatal("expected non-empty string")
+    }
+    fmt.Println(s)
+    fmt.Println("✓ Test passed: String Formatting")
+}
+```"#
+            .to_string(),
+        // Pattern 3: Error Formatting
+        r#"```go
+package main
+
+import (
+    "fmt"
+    "log"
+)
+
+func main() {
+    inner := fmt.Errorf("not found")
+    err := fmt.Errorf("failed to open file %q: %w", "data.txt", inner)
+    if err == nil {
+        log.Fatal("expected non-nil error")
+    }
+    fmt.Println(err)
+    fmt.Println("✓ Test passed: Error Formatting")
+}
+```"#
+            .to_string(),
+    ]);
+
+    let config = skilldo::config::ContainerConfig {
+        execution_mode: skilldo::config::ExecutionMode::Container,
+        runtime: "podman".to_string(),
+        ..Default::default()
+    };
+    let validator =
+        TestCodeValidator::new(&skilldo::detector::Language::Go, &mock_client, config, None)?;
+
+    let skill_md = fs::read_to_string("tests/fixtures/go-fmt-SKILL.md")?;
+    let result = validator.validate(&skill_md).await?;
+
+    // With mock client, code runs in container — all 3 patterns should pass
+    // (fmt is stdlib, no deps to install)
+    println!(
+        "Go e2e result: passed={}, failed={}",
+        result.passed, result.failed
+    );
+    for tc in &result.test_cases {
+        println!("  {} — {:?}", tc.pattern_name, tc.result);
+    }
+
+    assert!(
+        result.all_passed(),
+        "All Go fmt tests should pass in container: passed={}, failed={}",
+        result.passed,
+        result.failed
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // Requires real LLM API key + container runtime
+async fn test_go_e2e_real_llm_fmt() -> Result<()> {
+    use skilldo::llm::factory;
+    use skilldo::test_agent::TestCodeValidator;
+
+    // Use real LLM client from environment
+    let config = skilldo::config::Config::default();
+    let client = factory::create_client(&config, false)?;
+
+    let container_config = skilldo::config::ContainerConfig {
+        execution_mode: skilldo::config::ExecutionMode::Container,
+        runtime: "podman".to_string(),
+        ..Default::default()
+    };
+
+    let validator = TestCodeValidator::new(
+        &skilldo::detector::Language::Go,
+        client.as_ref(),
+        container_config,
+        None,
+    )?;
+
+    let skill_md = fs::read_to_string("tests/fixtures/go-fmt-SKILL.md")?;
+    let result = validator.validate(&skill_md).await?;
+
+    println!(
+        "Go REAL LLM e2e: passed={}, failed={}",
+        result.passed, result.failed
+    );
+    for tc in &result.test_cases {
+        println!("  {} — {:?}", tc.pattern_name, tc.result);
+        if !tc.result.is_pass() {
+            println!("    Generated code:\n{}", tc.generated_code);
+        }
+    }
+
+    // At least 2 of 3 patterns should pass with a real LLM
+    assert!(
+        result.passed >= 2,
+        "At least 2/3 Go fmt patterns should pass with real LLM: passed={}, failed={}",
+        result.passed,
+        result.failed
+    );
+
+    Ok(())
+}

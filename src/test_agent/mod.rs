@@ -5,6 +5,8 @@
 pub mod code_generator;
 pub mod container_executor;
 pub mod executor;
+pub mod go_code_gen;
+pub mod go_parser;
 pub mod parser;
 pub mod python_code_gen;
 pub mod python_parser;
@@ -16,6 +18,9 @@ pub use parser::{CodePattern, PatternCategory};
 pub use validator::{TestCodeValidator, TestResult, ValidationMode};
 
 use anyhow::Result;
+use tracing::debug;
+
+use parser::frontmatter_field;
 
 /// Core trait for extracting patterns and dependencies from SKILL.md
 /// Language-agnostic interface that each language implements.
@@ -28,11 +33,34 @@ pub trait LanguageParser: Send + Sync {
 
     /// Extract version from frontmatter (e.g., "version: 3.0.0")
     /// Returns None if no version found or "unknown"
-    fn extract_version(&self, skill_md: &str) -> Result<Option<String>>;
+    fn extract_version(&self, skill_md: &str) -> Result<Option<String>> {
+        match frontmatter_field(skill_md, "version") {
+            Some(v) if v == "unknown" => {
+                debug!("Version field found but set to 'unknown'");
+                Ok(None)
+            }
+            Some(v) => {
+                debug!("Extracted version from SKILL.md: {}", v);
+                Ok(Some(v))
+            }
+            None => {
+                debug!("No version field found in SKILL.md frontmatter");
+                Ok(None)
+            }
+        }
+    }
 
     /// Extract package name from frontmatter (e.g., "name: scikit-learn")
     /// Used for `pip install <name>` / `npm install <name>` instead of import names
-    fn extract_name(&self, skill_md: &str) -> Result<Option<String>>;
+    fn extract_name(&self, skill_md: &str) -> Result<Option<String>> {
+        match frontmatter_field(skill_md, "name") {
+            Some(name) => {
+                debug!("Extracted package name from SKILL.md: {}", name);
+                Ok(Some(name))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 /// Core trait for generating test code from patterns
@@ -41,6 +69,19 @@ pub trait LanguageParser: Send + Sync {
 pub trait LanguageCodeGenerator: Send + Sync {
     /// Generate a complete, runnable test script for a pattern
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String>;
+
+    /// Retry test code generation with the previous code and error output.
+    /// The LLM sees what it wrote, what went wrong, and produces a fixed version.
+    /// Default: falls back to `generate_test_code` (ignores error context).
+    async fn retry_test_code(
+        &self,
+        pattern: &CodePattern,
+        previous_code: &str,
+        error_output: &str,
+    ) -> Result<String> {
+        let _ = (previous_code, error_output);
+        self.generate_test_code(pattern).await
+    }
 
     /// Set the local package name to exclude from dependency lists.
     /// Used for local-install/local-mount modes where the package is mounted, not from PyPI.

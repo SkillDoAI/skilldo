@@ -132,21 +132,40 @@ async fn test_collect_rust_not_yet_supported() {
 }
 
 #[tokio::test]
-async fn test_collect_go_not_yet_supported() {
-    let tmp = TempDir::new().unwrap();
-    fs::write(tmp.path().join("go.mod"), "module test").unwrap();
+async fn test_detect_then_collect_go_project() -> Result<()> {
+    let tmp = TempDir::new()?;
 
-    let language = detect_language(tmp.path()).unwrap();
+    // Create a minimal Go project
+    fs::write(
+        tmp.path().join("go.mod"),
+        "module github.com/test/mylib\n\ngo 1.21\n",
+    )?;
+    fs::write(
+        tmp.path().join("mylib.go"),
+        "package mylib\n\nfunc Hello() string { return \"world\" }\n",
+    )?;
+    fs::write(
+        tmp.path().join("mylib_test.go"),
+        "package mylib\n\nimport \"testing\"\n\nfunc TestHello(t *testing.T) {\n\tif Hello() != \"world\" {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+    )?;
+    fs::write(tmp.path().join("README.md"), "# mylib\nA test library.")?;
+
+    // Step 1: Detect language
+    let language = detect_language(tmp.path())?;
     assert_eq!(language, Language::Go);
 
+    // Step 2: Collect data
     let collector = Collector::new(tmp.path(), language);
-    let result = collector.collect().await;
+    let data = collector.collect().await?;
 
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("not yet implemented"));
+    // Verify collected data
+    assert_eq!(data.language, Language::Go);
+    assert!(data.source_file_count >= 1);
+    assert!(data.source_content.contains("func Hello"));
+    assert!(data.test_content.contains("TestHello"));
+    assert!(!data.docs_content.is_empty(), "Should have README content");
+
+    Ok(())
 }
 
 // ── Python edge cases ───────────────────────────────────────────────────

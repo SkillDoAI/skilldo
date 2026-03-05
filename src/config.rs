@@ -385,7 +385,7 @@ pub struct ContainerConfig {
     #[serde(default = "default_rust_image")]
     pub rust_image: String,
 
-    /// Container image for Go (default: "golang:1.21-alpine")
+    /// Container image for Go (default: "golang:1.25-alpine")
     #[serde(default = "default_go_image")]
     pub go_image: String,
 
@@ -465,7 +465,7 @@ fn default_rust_image() -> String {
 }
 
 fn default_go_image() -> String {
-    "golang:1.21-alpine".to_string()
+    "golang:1.25-alpine".to_string()
 }
 
 fn default_timeout() -> u64 {
@@ -1459,5 +1459,54 @@ model = "gemini-2.5-pro"
             result.is_err(),
             "malformed config in repo_path should error"
         );
+    }
+
+    #[test]
+    fn test_version_strategy_display() {
+        assert_eq!(format!("{}", VersionStrategy::GitTag), "git-tag");
+        assert_eq!(format!("{}", VersionStrategy::Package), "package");
+        assert_eq!(format!("{}", VersionStrategy::Branch), "branch");
+        assert_eq!(format!("{}", VersionStrategy::Commit), "commit");
+    }
+
+    #[test]
+    fn test_install_source_display() {
+        assert_eq!(format!("{}", InstallSource::Registry), "registry");
+        assert_eq!(format!("{}", InstallSource::LocalInstall), "local-install");
+        assert_eq!(format!("{}", InstallSource::LocalMount), "local-mount");
+    }
+
+    #[test]
+    fn test_provider_display_all_variants() {
+        assert_eq!(format!("{}", Provider::Anthropic), "anthropic");
+        assert_eq!(format!("{}", Provider::OpenAI), "openai");
+        assert_eq!(
+            format!("{}", Provider::OpenAICompatible),
+            "openai-compatible"
+        );
+        assert_eq!(format!("{}", Provider::Gemini), "gemini");
+    }
+
+    #[test]
+    fn test_install_source_from_str_invalid() {
+        assert!("bad-source".parse::<InstallSource>().is_err());
+    }
+
+    #[test]
+    fn test_provider_from_str_invalid() {
+        assert!("bad-provider".parse::<Provider>().is_err());
+    }
+
+    #[test]
+    fn test_get_api_key_infers_env_from_provider() {
+        let config = Config::default();
+        // Default config has provider: Anthropic and api_key_env: None
+        assert_eq!(config.llm.provider, Provider::Anthropic);
+        assert_eq!(config.llm.api_key_env, None);
+
+        env::set_var("ANTHROPIC_API_KEY", "sk-test-inferred-key-12345");
+        let key = config.get_api_key().unwrap();
+        assert_eq!(key, "sk-test-inferred-key-12345");
+        env::remove_var("ANTHROPIC_API_KEY");
     }
 }

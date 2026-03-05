@@ -7,6 +7,8 @@ use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
 use super::executor::{ExecutionResult, PythonUvExecutor};
+use super::go_code_gen::GoCodeGenerator;
+use super::go_parser::GoParser;
 use super::python_code_gen::PythonCodeGenerator;
 use super::python_parser::PythonParser;
 use super::{CodePattern, LanguageCodeGenerator, LanguageExecutor, LanguageParser};
@@ -151,6 +153,25 @@ impl<'a> TestCodeValidator<'a> {
                     install_source,
                 })
             }
+            Language::Go => {
+                // Go only supports container execution (no bare-metal executor yet)
+                if execution_mode == ExecutionMode::BareMetal {
+                    warn!("Go bare-metal executor not available; using container instead");
+                }
+                let executor: Box<dyn LanguageExecutor> =
+                    Box::new(ContainerExecutor::new(config, Language::Go));
+                Ok(Self {
+                    language: Language::Go,
+                    parser: Box::new(GoParser),
+                    code_generator: Box::new(
+                        GoCodeGenerator::new(llm_client)
+                            .with_custom_instructions(custom_instructions),
+                    ),
+                    executor,
+                    mode: ValidationMode::default(),
+                    install_source,
+                })
+            }
             _ => anyhow::bail!("Test agent not yet supported for {}", language.as_str()),
         }
     }
@@ -165,7 +186,9 @@ impl<'a> TestCodeValidator<'a> {
         Self::new(&Language::Python, llm_client, config, None)
     }
 
-    /// Create a new test agent validator for Python with custom instructions (append-only)
+    /// Create a new test agent validator for Python with custom instructions (append-only).
+    /// Convenience wrapper; integration tests may use this directly.
+    #[allow(dead_code)]
     pub fn new_python_with_custom(
         llm_client: &'a dyn LlmClient,
         config: ContainerConfig,
@@ -296,7 +319,7 @@ impl<'a> TestCodeValidator<'a> {
 
         let mut test_cases = Vec::new();
 
-        // 4. Generate and run tests for each pattern
+        // 4. Generate and run tests for each pattern (with one test-code retry)
         for pattern in selected_patterns {
             info!("  → Testing pattern: {}", pattern.name);
 
@@ -326,7 +349,37 @@ impl<'a> TestCodeValidator<'a> {
                 }
             };
 
-            match &result {
+            // If test failed, retry test code generation once with the error context.
+            // This fixes the test code (not the SKILL.md pattern) — the most common failure
+            // mode is the LLM writing code that doesn't compile, not a bad pattern.
+            let (final_result, final_code) = match &result {
+                ExecutionResult::Fail(error) => {
+                    info!("    ✗ Test failed, retrying test code with error context...");
+                    match self
+                        .code_generator
+                        .retry_test_code(pattern, &test_code, error)
+                        .await
+                    {
+                        Ok(retry_code) => {
+                            match self.executor.run_code(&env, &retry_code) {
+                                Ok(retry_result) => (retry_result, retry_code),
+                                Err(e) => {
+                                    warn!("    Retry execution error: {}", e);
+                                    // Fall through with original failure
+                                    (result, test_code)
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("    Retry code generation failed: {}", e);
+                            (result, test_code)
+                        }
+                    }
+                }
+                _ => (result, test_code),
+            };
+
+            match &final_result {
                 ExecutionResult::Pass(output) => {
                     info!("    ✓ Test passed");
                     debug!(
@@ -335,7 +388,7 @@ impl<'a> TestCodeValidator<'a> {
                     );
                 }
                 ExecutionResult::Fail(error) => {
-                    warn!("    ✗ Test failed");
+                    warn!("    ✗ Test failed (after retry)");
                     debug!(
                         "    Error: {}",
                         error.lines().next().unwrap_or("(no error message)")
@@ -348,8 +401,8 @@ impl<'a> TestCodeValidator<'a> {
 
             test_cases.push(TestCase {
                 pattern_name: pattern.name.clone(),
-                result,
-                generated_code: test_code,
+                result: final_result,
+                generated_code: final_code,
             });
         }
 
@@ -1218,5 +1271,89 @@ mod tests {
         assert_eq!(result.passed, 0);
         assert_eq!(result.failed, 3);
         assert_eq!(result.test_cases.len(), 3);
+    }
+
+    #[test]
+    fn test_new_go_validator_constructs() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Go validator should construct successfully"
+        );
+    }
+
+    #[test]
+    fn test_new_go_validator_with_custom_instructions() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new(
+            &Language::Go,
+            &client,
+            config,
+            Some("Use table-driven tests".to_string()),
+        );
+        assert!(validator.is_ok());
+    }
+
+    #[test]
+    fn test_new_go_baremetal_falls_back_to_container() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            ..Default::default()
+        };
+        // Go doesn't have a bare-metal executor; should still construct (with warning)
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Go should fall back to container even when bare-metal requested"
+        );
+    }
+
+    #[test]
+    fn test_new_unsupported_language_errors() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let result = TestCodeValidator::new(&Language::JavaScript, &client, config, None);
+        assert!(result.is_err());
+        let msg = format!("{}", result.err().unwrap());
+        assert!(msg.contains("not yet supported"));
+    }
+
+    #[test]
+    fn test_generate_feedback_go_language() {
+        let result = TestResult {
+            passed: 1,
+            failed: 1,
+            test_cases: vec![
+                TestCase {
+                    pattern_name: "Basic".to_string(),
+                    result: ExecutionResult::Pass("ok".to_string()),
+                    generated_code: "fmt.Println(\"ok\")".to_string(),
+                },
+                TestCase {
+                    pattern_name: "Config".to_string(),
+                    result: ExecutionResult::Fail("undefined: viper".to_string()),
+                    generated_code: "viper.Get(\"key\")".to_string(),
+                },
+            ],
+        };
+
+        let feedback = result.generate_feedback(&Language::Go).unwrap();
+        assert!(
+            feedback.contains("go"),
+            "Go feedback should reference go language"
+        );
+        assert!(feedback.contains("Config"));
     }
 }

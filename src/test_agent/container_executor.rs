@@ -66,11 +66,24 @@ impl ContainerExecutor {
         }
     }
 
+    /// Generate dependency installation script for Go.
+    /// Initializes a Go module and runs `go get` for each dependency.
+    fn generate_go_install_script(&self, deps: &[String]) -> Result<String> {
+        // go.mod may already exist from a previous pattern run; only init if missing
+        let mut lines = vec!["[ -f go.mod ] || go mod init test >/dev/null 2>&1".to_string()];
+        for dep in deps {
+            sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+            lines.push(format!("go get '{}'", dep));
+        }
+        Ok(lines.join("\n"))
+    }
+
     /// Generate run.sh for non-Python languages (JS, Rust, Go)
     /// Python uses `uv run test.py` directly — no run.sh needed
     fn generate_container_script(&self, deps: &[String]) -> Result<String> {
         let install_cmd = match self.language {
             Language::JavaScript => self.generate_node_install_script(deps)?,
+            Language::Go => self.generate_go_install_script(deps)?,
             _ => String::new(),
         };
 
@@ -238,6 +251,16 @@ impl LanguageExecutor for ContainerExecutor {
             && self.config.install_source != InstallSource::LocalInstall
         {
             cmd.arg("-e").arg("UV_CACHE_DIR=/tmp/uv-cache");
+        }
+
+        // Go needs a writable build cache and module cache when running as nobody
+        if matches!(self.language, Language::Go)
+            && self.config.install_source != InstallSource::LocalInstall
+        {
+            cmd.arg("-e")
+                .arg("GOCACHE=/tmp/go-cache")
+                .arg("-e")
+                .arg("GOPATH=/tmp/gopath");
         }
 
         // Pass extra environment variables (private registries, proxies, etc.)
@@ -512,6 +535,7 @@ mod tests {
     fn test_go_container_script() {
         let executor = ContainerExecutor::new(make_config(), Language::Go);
         let script = executor.generate_container_script(&[]).unwrap();
+        assert!(script.contains("go mod init test"));
         assert!(script.contains("go run main.go"));
     }
 
@@ -647,7 +671,7 @@ mod tests {
         );
         assert_eq!(executor.config.javascript_image, "node:20-slim");
         assert_eq!(executor.config.rust_image, "rust:1.75-slim");
-        assert_eq!(executor.config.go_image, "golang:1.21-alpine");
+        assert_eq!(executor.config.go_image, "golang:1.25-alpine");
         assert_eq!(executor.config.timeout, 60);
         assert!(executor.config.cleanup);
         assert_eq!(executor.config.install_source, InstallSource::Registry);
@@ -687,13 +711,13 @@ mod tests {
     }
 
     #[test]
-    fn test_go_container_script_with_deps_ignores_them() {
+    fn test_go_container_script_with_deps_installs_them() {
         let executor = ContainerExecutor::new(make_config(), Language::Go);
         let deps = vec!["github.com/gin-gonic/gin".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.contains("go mod init test"));
+        assert!(script.contains("go get 'github.com/gin-gonic/gin'"));
         assert!(script.contains("go run main.go"));
-        assert!(!script.contains("go get"));
-        assert!(!script.contains("gin"));
     }
 
     // --- Script content validation (shebang, set -e, cd /workspace) ---
@@ -850,7 +874,7 @@ mod tests {
     #[test]
     fn test_get_image_with_default_config_go() {
         let executor = ContainerExecutor::new(ContainerConfig::default(), Language::Go);
-        assert_eq!(executor.get_image(), "golang:1.21-alpine");
+        assert_eq!(executor.get_image(), "golang:1.25-alpine");
     }
 
     // --- setup_environment: runtime not found ---
@@ -1090,5 +1114,87 @@ mod tests {
         assert!(DANGEROUS_ENV_VARS.contains(&"LD_PRELOAD"));
         assert!(DANGEROUS_ENV_VARS.contains(&"PATH"));
         assert!(!DANGEROUS_ENV_VARS.contains(&"PYTHONPATH"));
+    }
+
+    // --- generate_go_install_script ---
+
+    #[test]
+    fn test_go_install_script_empty_deps() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let script = executor.generate_go_install_script(&[]).unwrap();
+        assert!(script.contains("go mod init"));
+        assert!(!script.contains("go get"));
+    }
+
+    #[test]
+    fn test_go_install_script_single_dep() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let deps = vec!["github.com/go-chi/chi/v5".to_string()];
+        let script = executor.generate_go_install_script(&deps).unwrap();
+        assert!(script.contains("go mod init"));
+        assert!(script.contains("go get 'github.com/go-chi/chi/v5'"));
+    }
+
+    #[test]
+    fn test_go_install_script_multiple_deps() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let deps = vec![
+            "github.com/go-chi/chi/v5".to_string(),
+            "github.com/rs/zerolog".to_string(),
+        ];
+        let script = executor.generate_go_install_script(&deps).unwrap();
+        assert!(script.contains("go get 'github.com/go-chi/chi/v5'"));
+        assert!(script.contains("go get 'github.com/rs/zerolog'"));
+    }
+
+    #[test]
+    fn test_go_install_script_skips_init_if_gomod_exists() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let script = executor.generate_go_install_script(&[]).unwrap();
+        assert!(
+            script.contains("[ -f go.mod ]"),
+            "should guard go mod init behind existence check"
+        );
+    }
+
+    #[test]
+    fn test_go_install_script_rejects_injection() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let deps = vec!["github.com/foo; rm -rf /".to_string()];
+        assert!(executor.generate_go_install_script(&deps).is_err());
+    }
+
+    // --- Go container script with run.sh generation ---
+
+    #[test]
+    fn test_go_run_code_generates_run_sh() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec!["github.com/gin-gonic/gin".to_string()],
+        };
+        let _ = executor.run_code(&env, "package main\n\nfunc main() {}");
+        let script_path = env.temp_dir.path().join("run.sh");
+        assert!(script_path.exists());
+        let script = fs::read_to_string(&script_path).unwrap();
+        assert!(script.contains("go mod init test"));
+        assert!(script.contains("go get 'github.com/gin-gonic/gin'"));
+        assert!(script.contains("go run main.go"));
+    }
+
+    #[test]
+    fn test_go_container_script_structure() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let deps = vec!["github.com/spf13/cobra".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(script.contains("set -e"));
+        assert!(script.contains("cd /workspace"));
+        assert!(script.contains("go mod init test"));
+        assert!(script.contains("go get 'github.com/spf13/cobra'"));
+        assert!(script.contains("go run main.go"));
     }
 }

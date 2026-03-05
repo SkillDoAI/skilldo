@@ -6,7 +6,7 @@ use anyhow::Result;
 use regex::Regex;
 use tracing::{debug, warn};
 
-use super::parser::{CodePattern, PatternCategory};
+use super::parser::{extract_section, CodePattern, PatternCategory};
 use super::LanguageParser;
 use crate::util::sanitize_dep_name;
 
@@ -271,67 +271,7 @@ impl PythonParser {
     }
 }
 
-/// Extract the content of a `## Section` from SKILL.md, bounded by the next `## ` heading.
-/// Returns `None` if the section header is not found.
-fn extract_section<'a>(skill_md: &'a str, header_pattern: &str) -> Result<Option<&'a str>> {
-    let header_re = Regex::new(header_pattern)?;
-    let start_pos = match header_re.find(skill_md) {
-        Some(m) => m.end(),
-        None => return Ok(None),
-    };
-    let after = &skill_md[start_pos..];
-    let next_section_re = Regex::new(r"(?m)^##\s+")?;
-    let end_pos = next_section_re
-        .find(after)
-        .map(|m| m.start())
-        .unwrap_or(after.len());
-    Ok(Some(&after[..end_pos]))
-}
-
-/// Extract a value from SKILL.md YAML frontmatter by key (e.g. "version", "name").
-/// Handles both top-level fields and fields nested under `metadata:`.
-fn frontmatter_field(skill_md: &str, key: &str) -> Option<String> {
-    let prefix = format!("{}:", key);
-    for line in skill_md.lines().take(15) {
-        let trimmed = line.trim();
-        if let Some(val) = trimmed.strip_prefix(&prefix) {
-            let val = val.trim().trim_matches('"').trim_matches('\'').to_string();
-            if !val.is_empty() {
-                return Some(val);
-            }
-        }
-    }
-    None
-}
-
 impl LanguageParser for PythonParser {
-    fn extract_version(&self, skill_md: &str) -> Result<Option<String>> {
-        match frontmatter_field(skill_md, "version") {
-            Some(v) if v == "unknown" => {
-                debug!("Version field found but set to 'unknown'");
-                Ok(None)
-            }
-            Some(v) => {
-                debug!("Extracted version from SKILL.md: {}", v);
-                Ok(Some(v))
-            }
-            None => {
-                debug!("No version field found in SKILL.md frontmatter");
-                Ok(None)
-            }
-        }
-    }
-
-    fn extract_name(&self, skill_md: &str) -> Result<Option<String>> {
-        match frontmatter_field(skill_md, "name") {
-            Some(name) => {
-                debug!("Extracted package name from SKILL.md: {}", name);
-                Ok(Some(name))
-            }
-            None => Ok(None),
-        }
-    }
-
     fn extract_patterns(&self, skill_md: &str) -> Result<Vec<CodePattern>> {
         let mut patterns = Vec::new();
 
@@ -762,6 +702,62 @@ from utils import helpers
         assert!(
             !deps.contains(&"utils".to_string()),
             "utils should be filtered as local"
+        );
+    }
+
+    #[test]
+    fn no_imports_section_returns_empty_deps() {
+        let skill_md = r#"
+# Test
+
+## Core Patterns
+
+### Basic Example
+
+```python
+import mylib
+mylib.run()
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(deps.is_empty(), "no Imports section should return empty");
+    }
+
+    #[test]
+    fn pip_install_adds_new_dependency() {
+        // pip install should add deps not already captured by import/from
+        let skill_md = r#"
+# Test
+
+## Imports
+
+Install the package:
+```bash
+pip install myspecialpkg
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            deps.contains(&"myspecialpkg".to_string()),
+            "pip install should add new dependency"
+        );
+    }
+
+    #[test]
+    fn dependency_with_leading_hyphen_dropped_by_sanitizer() {
+        let parser = PythonParser;
+        // Craft a pip install line that the regex captures with a leading-hyphen name
+        let skill_md = "# Test\n\n## Imports\n\n```bash\npip install -e\n```\n\n## Next\n";
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            !deps.contains(&"-e".to_string()),
+            "leading-hyphen dep should be dropped by sanitize_dep_name"
         );
     }
 }
