@@ -1269,4 +1269,71 @@ mod tests {
         assert_eq!(result.failed, 3);
         assert_eq!(result.test_cases.len(), 3);
     }
+
+    #[test]
+    fn test_new_go_validator_constructs() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Go validator should construct successfully"
+        );
+    }
+
+    #[test]
+    fn test_new_go_validator_with_custom_instructions() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new(
+            &Language::Go,
+            &client,
+            config,
+            Some("Use table-driven tests".to_string()),
+        );
+        assert!(validator.is_ok());
+    }
+
+    #[test]
+    fn test_new_unsupported_language_errors() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let result = TestCodeValidator::new(&Language::JavaScript, &client, config, None);
+        assert!(result.is_err());
+        let msg = format!("{}", result.err().unwrap());
+        assert!(msg.contains("not yet supported"));
+    }
+
+    #[test]
+    fn test_generate_feedback_go_language() {
+        let result = TestResult {
+            passed: 1,
+            failed: 1,
+            test_cases: vec![
+                TestCase {
+                    pattern_name: "Basic".to_string(),
+                    result: ExecutionResult::Pass("ok".to_string()),
+                    generated_code: "fmt.Println(\"ok\")".to_string(),
+                },
+                TestCase {
+                    pattern_name: "Config".to_string(),
+                    result: ExecutionResult::Fail("undefined: viper".to_string()),
+                    generated_code: "viper.Get(\"key\")".to_string(),
+                },
+            ],
+        };
+
+        let feedback = result.generate_feedback(&Language::Go).unwrap();
+        assert!(
+            feedback.contains("go"),
+            "Go feedback should reference go language"
+        );
+        assert!(feedback.contains("Config"));
+    }
 }

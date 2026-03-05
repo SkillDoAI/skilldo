@@ -1832,6 +1832,54 @@ mod tests {
     }
 
     #[test]
+    fn test_go_map_prompt_contains_go_hints() {
+        let prompt = map_prompt("cobra", "1.8.0", "// tests", None, false, &Language::Go);
+        assert!(
+            prompt.contains("GO-SPECIFIC"),
+            "Go map should have Go hints"
+        );
+    }
+
+    #[test]
+    fn test_go_learn_prompt_contains_go_hints() {
+        let prompt = learn_prompt("cobra", "1.8.0", "// docs", None, false, &Language::Go);
+        assert!(
+            prompt.contains("GO-SPECIFIC"),
+            "Go learn should have Go hints"
+        );
+    }
+
+    #[test]
+    fn test_go_create_prompt_with_license() {
+        let prompt = create_prompt(
+            "cobra",
+            "1.8.0",
+            Some("Apache-2.0"),
+            &[],
+            &Language::Go,
+            "api",
+            "patterns",
+            "context",
+            None,
+            false,
+        );
+        assert!(
+            prompt.contains("GO-SPECIFIC"),
+            "Go create should have Go hints"
+        );
+        assert!(prompt.contains("Apache-2.0"), "Should include license");
+    }
+
+    #[test]
+    fn test_go_hints_test_stage_mentions_go_run() {
+        let hints = go_hints("test");
+        assert!(
+            hints.contains("go run"),
+            "Go test hints should mention go run"
+        );
+    }
+
+    #[test]
     fn test_chrono_free_utc_timestamp_is_readable() {
         let ts = chrono_free_utc_timestamp();
         // Should contain a year and "UTC", not raw epoch seconds

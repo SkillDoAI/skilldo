@@ -123,3 +123,84 @@ pub fn run(language_str: &str, stage_filter: Option<&str>) -> anyhow::Result<()>
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_all_stages_python() {
+        run("python", None).unwrap();
+    }
+
+    #[test]
+    fn run_all_stages_go() {
+        run("go", None).unwrap();
+    }
+
+    #[test]
+    fn run_single_stage_extract() {
+        run("python", Some("extract")).unwrap();
+    }
+
+    #[test]
+    fn run_single_stage_map() {
+        run("python", Some("map")).unwrap();
+    }
+
+    #[test]
+    fn run_single_stage_learn() {
+        run("python", Some("learn")).unwrap();
+    }
+
+    #[test]
+    fn run_single_stage_create() {
+        run("python", Some("create")).unwrap();
+    }
+
+    #[test]
+    fn run_single_stage_review() {
+        run("python", Some("review")).unwrap();
+    }
+
+    #[test]
+    fn run_single_stage_test() {
+        run("python", Some("test")).unwrap();
+    }
+
+    #[test]
+    fn run_go_test_stage() {
+        run("go", Some("test")).unwrap();
+    }
+
+    #[test]
+    fn run_invalid_stage_errors() {
+        let err = run("python", Some("nonexistent")).unwrap_err();
+        assert!(err.to_string().contains("Unknown stage"));
+    }
+
+    #[test]
+    fn run_invalid_language_errors() {
+        let err = run("cobol", None).unwrap_err();
+        assert!(err.to_string().contains("cobol"));
+    }
+
+    #[test]
+    fn test_env_for_go_returns_go_env() {
+        let env = test_env_for(&Language::Go);
+        assert_eq!(env.lang_tag, "go");
+    }
+
+    #[test]
+    fn test_env_for_python_returns_python_env() {
+        let env = test_env_for(&Language::Python);
+        assert_eq!(env.lang_tag, "python");
+    }
+
+    #[test]
+    fn sample_pattern_has_basic_category() {
+        let pattern = sample_pattern();
+        assert_eq!(pattern.category, PatternCategory::BasicUsage);
+        assert!(!pattern.code.is_empty());
+    }
+}
