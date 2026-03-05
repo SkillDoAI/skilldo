@@ -197,10 +197,16 @@ fn parse_semver(tag: &str) -> Option<(u32, u32, u32, bool)> {
     let s = tag.strip_prefix('v').unwrap_or(tag);
     let mut parts = s.split('.');
     let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
+    let minor_str = parts.next()?;
+    let has_minor_pre = minor_str.contains(|c: char| !c.is_ascii_digit());
+    let minor: u32 = minor_str
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()?;
     match parts.next() {
         Some(patch_str) => {
-            let has_prerelease = patch_str.contains(|c: char| !c.is_ascii_digit());
+            let has_prerelease = has_minor_pre || patch_str.contains(|c: char| !c.is_ascii_digit());
             let patch: u32 = patch_str
                 .split(|c: char| !c.is_ascii_digit())
                 .next()?
@@ -208,7 +214,7 @@ fn parse_semver(tag: &str) -> Option<(u32, u32, u32, bool)> {
                 .ok()?;
             Some((major, minor, patch, has_prerelease))
         }
-        None => Some((major, minor, 0, false)),
+        None => Some((major, minor, 0, has_minor_pre)),
     }
 }
 
@@ -391,6 +397,8 @@ mod tests {
         assert_eq!(parse_semver("v1.0.0-rc1"), Some((1, 0, 0, true)));
         assert_eq!(parse_semver("v2.0"), Some((2, 0, 0, false)));
         assert_eq!(parse_semver("1.5"), Some((1, 5, 0, false)));
+        assert_eq!(parse_semver("v2.0-beta"), Some((2, 0, 0, true)));
+        assert_eq!(parse_semver("v1.5-rc1"), Some((1, 5, 0, true)));
         assert_eq!(parse_semver("not-a-version"), None);
         assert_eq!(parse_semver(""), None);
     }
