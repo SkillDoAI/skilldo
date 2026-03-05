@@ -410,14 +410,33 @@ fn check_runtime_daemon(runtime: &str) -> Option<bool> {
     if !check_runtime_available(runtime) {
         return None;
     }
-    // `podman info` / `docker info` verifies the daemon is responsive
-    let ok = Command::new(runtime)
+    // `podman info` / `docker info` verifies the daemon is responsive.
+    // Use spawn + try_wait with a timeout to avoid hanging on unresponsive sockets.
+    let mut child = match Command::new(runtime)
         .arg("info")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return Some(false),
+    };
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let ok = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+            Err(_) => break false,
+        }
+    };
     Some(ok)
 }
 
