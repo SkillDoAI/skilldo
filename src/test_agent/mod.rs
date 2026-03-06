@@ -91,13 +91,14 @@ pub trait LanguageCodeGenerator: Send + Sync {
 
 /// Core trait for executing code in isolated environments
 /// Handles environment setup, code execution, and cleanup.
+#[async_trait::async_trait]
 pub trait LanguageExecutor: Send + Sync {
     /// Setup isolated environment with dependencies
-    fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv>;
+    async fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv>;
 
     /// Run code in the environment
-    fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult>;
+    async fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult>;
 
     /// Cleanup environment
-    fn cleanup(&self, env: &ExecutionEnv) -> Result<()>;
+    async fn cleanup(&self, env: &ExecutionEnv) -> Result<()>;
 }

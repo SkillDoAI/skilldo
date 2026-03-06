@@ -25,9 +25,6 @@ git2 = "0.20"
 auth-git2 = "0.5"
 libgit2-sys = { version = "0.18", features = ["vendored"] }
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 [dev-dependencies]
 mockito = "1"
 

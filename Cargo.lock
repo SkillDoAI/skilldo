@@ -1719,7 +1719,6 @@ dependencies = [
  "clap",
  "dirs",
  "git2",
- "libc",
  "libgit2-sys",
  "mockito",
  "once_cell",
