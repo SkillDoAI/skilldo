@@ -950,6 +950,41 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // --- cleanup: nonexistent runtime logs warning but returns Ok ---
+
+    #[tokio::test]
+    async fn test_cleanup_with_nonexistent_runtime_logs_warning() {
+        let mut config = make_config();
+        config.runtime = "nonexistent-runtime-xyz".to_string();
+        let executor = ContainerExecutor::new(config, Language::Python);
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: Some("skilldo-test-fake123".to_string()),
+            dependencies: vec![],
+        };
+        // Runtime binary doesn't exist → rm -f spawns fails → warn! logged → Ok
+        let result = executor.cleanup(&env).await;
+        assert!(result.is_ok());
+    }
+
+    // --- run_with_timeout: nonexistent runtime logs kill warning ---
+
+    #[tokio::test]
+    async fn test_run_with_timeout_kill_error_logged() {
+        let mut config = make_config();
+        config.runtime = "nonexistent-runtime-xyz".to_string();
+        let executor = ContainerExecutor::new(config, Language::Python);
+        // Command that can't be spawned → run_cmd_with_timeout returns Err →
+        // kill fallback also fails (nonexistent runtime) → warn! logged
+        let cmd = tokio::process::Command::new("nonexistent-binary-xyz");
+        let result = executor
+            .run_with_timeout(cmd, Duration::from_secs(1), "fake-container")
+            .await;
+        assert!(result.is_err());
+    }
+
     // --- run_code: non-Python generates run.sh ---
 
     #[tokio::test]
