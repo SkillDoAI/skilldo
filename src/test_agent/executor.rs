@@ -214,7 +214,7 @@ dependencies = [
                 }
             }
             Err(e) => {
-                if e.to_string().contains("timed out") {
+                if crate::error::SkillDoError::is_timeout(&e) {
                     warn!(
                         "Code execution timed out after {} seconds",
                         self.timeout_secs

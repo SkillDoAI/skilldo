@@ -201,6 +201,7 @@ async fn test_pipeline_with_custom_config() {
     let custom_config = Config {
         llm: LlmConfig {
             provider: Provider::OpenAICompatible,
+            provider_name: None,
             model: "test-model".to_string(),
             api_key_env: None,
             base_url: None,

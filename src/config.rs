@@ -166,7 +166,13 @@ pub struct Config {
 /// LLM provider configuration — model, API key, base URL, retry settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
+    /// LLM provider type. Serializes as `provider_type`; `provider` accepted as legacy alias.
+    #[serde(rename = "provider_type", alias = "provider")]
     pub provider: Provider,
+    /// Human-readable name for this provider instance (e.g., "deepseek", "my-vllm").
+    /// Used as token storage key for OAuth. Defaults to provider type name if unset.
+    #[serde(default)]
+    pub provider_name: Option<String>,
     pub model: String,
     pub api_key_env: Option<String>,
     #[serde(default)]
@@ -225,6 +231,13 @@ fn default_request_timeout() -> u64 {
 }
 
 impl LlmConfig {
+    /// Returns the provider_name if set, otherwise falls back to the provider type name.
+    pub fn resolved_provider_name(&self) -> String {
+        self.provider_name
+            .clone()
+            .unwrap_or_else(|| self.provider.to_string())
+    }
+
     /// Get max_tokens value, using provider-specific default if not specified
     pub fn get_max_tokens(&self) -> u32 {
         if let Some(tokens) = self.max_tokens {
@@ -699,6 +712,7 @@ impl Default for Config {
         Self {
             llm: LlmConfig {
                 provider: Provider::Anthropic,
+                provider_name: None,
                 model: "claude-sonnet-4-20250514".to_string(),
                 api_key_env: None, // Inferred from provider in get_api_key()
                 base_url: None,
@@ -786,7 +800,7 @@ mod tests {
     fn test_config_serialization() {
         let config = Config::default();
         let toml_str = toml::to_string(&config).unwrap();
-        assert!(toml_str.contains("provider = \"anthropic\""));
+        assert!(toml_str.contains("provider_type = \"anthropic\""));
         // api_key_env is None by default, so it won't appear in serialized TOML
         assert!(!toml_str.contains("AI_API_KEY"));
     }
@@ -839,6 +853,7 @@ mod tests {
     fn test_max_tokens_provider_defaults() {
         let mut llm = LlmConfig {
             provider: Provider::Anthropic,
+            provider_name: None,
             model: "claude-3".to_string(),
             api_key_env: None,
             base_url: None,
@@ -1504,5 +1519,52 @@ model = "gemini-2.5-pro"
         let key = config.get_api_key().unwrap();
         assert_eq!(key, "sk-test-inferred-key-12345");
         env::remove_var("ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn test_provider_type_alias_deserializes() {
+        let toml_str = r#"
+[llm]
+provider_type = "openai"
+model = "gpt-5.3"
+api_key_env = "none"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.llm.provider, Provider::OpenAI);
+    }
+
+    #[test]
+    fn test_provider_name_deserializes() {
+        let toml_str = r#"
+[llm]
+provider = "gemini"
+provider_name = "google-workspace"
+model = "gemini-2.5-pro"
+api_key_env = "none"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.llm.provider_name,
+            Some("google-workspace".to_string())
+        );
+    }
+
+    #[test]
+    fn test_provider_name_defaults_to_none() {
+        let config = Config::default();
+        assert_eq!(config.llm.provider_name, None);
+    }
+
+    #[test]
+    fn test_resolved_provider_name_with_explicit() {
+        let mut config = Config::default();
+        config.llm.provider_name = Some("my-custom-provider".to_string());
+        assert_eq!(config.llm.resolved_provider_name(), "my-custom-provider");
+    }
+
+    #[test]
+    fn test_resolved_provider_name_falls_back_to_provider_type() {
+        let config = Config::default();
+        assert_eq!(config.llm.resolved_provider_name(), "anthropic");
     }
 }

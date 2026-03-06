@@ -279,10 +279,94 @@ jobs:
         if: steps.check-secret.outputs.skip != 'true'
         run: ./target/release/skilldo lint /tmp/click-SKILL.md
 
-      - name: Upload generated skill
+      - name: Clone Go test library (chi)
+        if: steps.check-secret.outputs.skip != 'true'
+        run: git clone --branch v5.2.1 --depth 1 https://github.com/go-chi/chi.git /tmp/chi
+
+      - name: Generate Go SKILL.md
+        if: steps.check-secret.outputs.skip != 'true'
+        run: |
+          ./target/release/skilldo generate /tmp/chi \
+            --provider anthropic \
+            --model claude-sonnet-4-6 \
+            --language go \
+            --max-retries 5 \
+            --no-test \
+            -o /tmp/chi-SKILL.md
+
+      - name: Validate Go output
+        if: steps.check-secret.outputs.skip != 'true'
+        run: |
+          FILE="/tmp/chi-SKILL.md"
+          ERRORS=0
+
+          if [ ! -s "$FILE" ]; then
+            echo "::error::Go SKILL.md is empty or missing"
+            exit 1
+          fi
+          echo "Go: File exists ($(wc -c < "$FILE") bytes)"
+
+          if ! head -1 "$FILE" | grep -q '^---'; then
+            echo "::error::Go: Missing YAML frontmatter"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "Go: Has YAML frontmatter"
+          fi
+
+          for field in "name:" "version:" "ecosystem:"; do
+            if ! head -20 "$FILE" | grep -q "$field"; then
+              echo "::error::Go: Missing frontmatter field: $field"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "Go: Frontmatter has $field"
+            fi
+          done
+
+          for section in "## Imports" "## Core Patterns" "## Pitfalls"; do
+            if ! grep -q "$section" "$FILE"; then
+              echo "::error::Go: Missing required section: $section"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "Go: Has section: $section"
+            fi
+          done
+
+          # No security lint keywords in prose (basic sanity check)
+          if grep -Pn '(?<!`)rm -rf /(?!tmp)' "$FILE"; then
+            echo "::error::Go: destructive command found in output"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "Go: No destructive commands in prose"
+          fi
+
+          SIZE=$(wc -c < "$FILE")
+          if [ "$SIZE" -lt 500 ]; then
+            echo "::error::Go SKILL.md suspiciously small ($SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          elif [ "$SIZE" -gt 512000 ]; then
+            echo "::error::Go SKILL.md suspiciously large ($SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "Go: Reasonable size ($SIZE bytes)"
+          fi
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::Go E2E validation failed with $ERRORS error(s)"
+            exit 1
+          fi
+          echo ""
+          echo "=== Go E2E structural validation passed ==="
+
+      - name: Lint Go generated skill
+        if: steps.check-secret.outputs.skip != 'true'
+        run: ./target/release/skilldo lint /tmp/chi-SKILL.md
+
+      - name: Upload generated skills
         if: steps.check-secret.outputs.skip != 'true' && always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-click-SKILL.md
-          path: /tmp/click-SKILL.md
+          name: e2e-skills
+          path: |
+            /tmp/click-SKILL.md
+            /tmp/chi-SKILL.md
           if-no-files-found: ignore

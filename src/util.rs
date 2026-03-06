@@ -1,6 +1,6 @@
 //! Shared utilities for the skilldo codebase
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::fmt;
 use std::path::Path;
 use std::process::Stdio;
@@ -204,7 +204,7 @@ pub async fn run_cmd_with_timeout(
         Err(_) => {
             // Timeout expired. `child` was moved into `wait_with_output(self)`,
             // so tokio drops it when cancelling the inner future → SIGKILL.
-            bail!("Command timed out after {:?}", timeout)
+            Err(crate::error::SkillDoError::Timeout(timeout).into())
         }
     }
 }
