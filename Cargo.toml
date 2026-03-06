@@ -1,6 +1,6 @@
 [package]
 name = "skilldo"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -21,6 +21,9 @@ regex = "1"
 once_cell = "1"
 base64 = "0.22"
 boreal = "1.1.0"
+git2 = "0.20"
+auth-git2 = "0.5"
+libgit2-sys = { version = "0.18", features = ["vendored"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

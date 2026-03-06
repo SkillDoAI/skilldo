@@ -155,18 +155,41 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
     match config.generation.container.execution_mode {
         ExecutionMode::Container => {
             let runtime = &config.generation.container.runtime;
-            if check_runtime_available(runtime) {
-                results.pass(format!("Container runtime: {} (available)", runtime));
-            } else if config.generation.enable_test {
-                results.error(format!(
-                    "Container runtime '{}' not found — test agent validation will fail",
-                    runtime
-                ));
-            } else {
-                results.warn(format!(
-                    "Container runtime '{}' not found (test agent disabled, so this is OK)",
-                    runtime
-                ));
+            match check_runtime_daemon(runtime) {
+                Some(true) => {
+                    results.pass(format!(
+                        "Container runtime: {} (available, daemon running)",
+                        runtime
+                    ));
+                }
+                Some(false) => {
+                    // Binary exists but daemon not responding
+                    if config.generation.enable_test {
+                        results.error(format!(
+                            "Container runtime '{}' found but daemon not responding — run '{} info' to diagnose",
+                            runtime, runtime
+                        ));
+                    } else {
+                        results.warn(format!(
+                            "Container runtime '{}' found but daemon not responding (test agent disabled, so this is OK)",
+                            runtime
+                        ));
+                    }
+                }
+                None => {
+                    // Binary not found
+                    if config.generation.enable_test {
+                        results.error(format!(
+                            "Container runtime '{}' not found — test agent validation will fail",
+                            runtime
+                        ));
+                    } else {
+                        results.warn(format!(
+                            "Container runtime '{}' not found (test agent disabled, so this is OK)",
+                            runtime
+                        ));
+                    }
+                }
             }
         }
         ExecutionMode::BareMetal => {
@@ -378,6 +401,41 @@ fn check_runtime_available(runtime: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Verify the container daemon/socket is actually running, not just that the binary exists.
+/// Returns true if daemon is responsive, false if binary exists but daemon is down,
+/// None if the binary itself is not available.
+fn check_runtime_daemon(runtime: &str) -> Option<bool> {
+    // `podman info` / `docker info` verifies both binary and daemon.
+    // If spawn fails (binary not found), return None.
+    // Use spawn + try_wait with a timeout to avoid hanging on unresponsive sockets.
+    let mut child = match Command::new(runtime)
+        .arg("info")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return None,
+    };
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let ok = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+            Err(_) => break false,
+        }
+    };
+    Some(ok)
 }
 
 fn print_results(results: &CheckResult) {
@@ -816,6 +874,28 @@ enable_test = false
     }
 
     #[test]
+    fn test_check_runtime_daemon_unavailable_binary() {
+        // Binary doesn't exist → None
+        let result = check_runtime_daemon("nonexistent_runtime_xyz");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_check_runtime_daemon_true_binary() {
+        // `true` exits 0 for any args, so `true info` → success → daemon "up".
+        let result = check_runtime_daemon("true");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn test_check_runtime_daemon_sh_no_info() {
+        // `sh --version` succeeds, but `sh info` fails.
+        // Uses `sh` for universal portability (POSIX shell on every Unix).
+        let result = check_runtime_daemon("sh");
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
     fn test_check_stage_provider_valid() {
         let mut r = CheckResult::new();
         check_stage_provider("extract", &Provider::OpenAI, "gpt-5", &mut r);
@@ -918,27 +998,187 @@ extra_body_json = '{{"top_p": 0.9}}'
 
     #[test]
     fn test_run_with_test_enabled_unavailable_runtime() {
-        // runtime unavailable + test agent enabled → error
-        // We test the internal logic rather than calling run() to avoid process::exit.
+        // runtime unavailable → check_runtime_daemon returns None
         let mut r = CheckResult::new();
         let runtime = "nonexistent_runtime_xyz";
-
-        if check_runtime_available(runtime) {
-            r.pass(format!("Container runtime: {} (available)", runtime));
-        } else {
-            r.error(format!(
-                "Container runtime '{}' not found — test agent validation will fail",
-                runtime
-            ));
-        }
-
-        // Verify check_stage_provider pass path is also exercised via valid providers
+        assert_eq!(check_runtime_daemon(runtime), None);
+        r.error(format!(
+            "Container runtime '{}' not found — test agent validation will fail",
+            runtime
+        ));
         check_stage_provider("test", &Provider::Anthropic, "claude-3", &mut r);
 
         assert_eq!(r.errors.len(), 1);
         assert!(r.errors[0].contains("not found"));
         assert!(r.errors[0].contains("test agent validation will fail"));
         assert_eq!(r.passed.len(), 1);
+    }
+
+    #[test]
+    fn test_run_with_container_runtime_true_daemon_up() {
+        // runtime = "true" → check_runtime_daemon returns Some(true)
+        // Exercises the Some(true) match arm in run()
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+
+[generation.container]
+execution_mode = "container"
+runtime = "true"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_daemon_down_test_enabled() {
+        // runtime = "sh" → available but "sh info" fails → Some(false)
+        // + enable_test = true → error about daemon not responding
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+
+[generation.container]
+execution_mode = "container"
+runtime = "sh"
+"#
+        )
+        .unwrap();
+
+        // Non-strict: returns Ok even with errors
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
+
+        // Strict: returns Err because daemon is down + test enabled
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_with_daemon_down_test_disabled() {
+        // runtime = "sh" → daemon down + test disabled → warning only, no error
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = false
+
+[generation.container]
+execution_mode = "container"
+runtime = "sh"
+"#
+        )
+        .unwrap();
+
+        // Even strict should pass — daemon down is only a warning when test is disabled
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_unavailable_runtime_test_enabled_strict() {
+        // runtime unavailable + test enabled + strict → Err
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+
+[generation.container]
+execution_mode = "container"
+runtime = "nonexistent_runtime_xyz_strict"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_with_bare_metal_mode() {
+        // Exercises the BareMetal execution_mode path
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = false
+
+[generation.container]
+execution_mode = "bare-metal"
+"#
+        )
+        .unwrap();
+
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
     }
 
     #[test]

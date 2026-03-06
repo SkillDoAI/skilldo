@@ -382,65 +382,40 @@ impl GoHandler {
     }
 
     fn version_from_git_tags(&self) -> Option<String> {
+        let repo = crate::git::Git2Repo::open(&self.repo_path).ok()?;
+
         // Strategy 1: git describe (fast, works for full clones with reachable tags)
-        if let Some(v) = self.git_describe_version() {
+        if let Some(v) = repo
+            .describe_tags()
+            .ok()
+            .and_then(|tag| parse_version_tag(&tag))
+        {
             return Some(v);
         }
 
-        // Strategy 2: git tag -l sorted by version (works when tags exist but
+        // Strategy 2: tag list sorted by semver (works when tags exist but
         // aren't reachable from HEAD, e.g. shallow clones after tag fetch)
-        if let Some(v) = self.latest_version_tag() {
+        if let Some(v) = repo
+            .list_tags_sorted()
+            .ok()
+            .and_then(|tags| tags.iter().find_map(|tag| parse_version_tag(tag)))
+        {
             return Some(v);
         }
 
         // Strategy 3: fetch tags then retry (shallow clones start with no tags).
-        // Use run_cmd_with_timeout to avoid hanging on unreachable remotes.
         debug!("No local tags found, fetching tags from remote");
-        let mut fetch_cmd = std::process::Command::new("git");
-        fetch_cmd
-            .args(["fetch", "--tags", "--quiet"])
-            .current_dir(&self.repo_path);
-        if crate::util::run_cmd_with_timeout(fetch_cmd, std::time::Duration::from_secs(30)).is_ok()
-        {
-            if let Some(v) = self.latest_version_tag() {
+        if repo.fetch_tags(std::time::Duration::from_secs(30)).is_ok() {
+            if let Some(v) = repo
+                .list_tags_sorted()
+                .ok()
+                .and_then(|tags| tags.iter().find_map(|tag| parse_version_tag(tag)))
+            {
                 return Some(v);
             }
         }
 
         None
-    }
-
-    /// Try `git describe --tags --abbrev=0` for the tag reachable from HEAD.
-    fn git_describe_version(&self) -> Option<String> {
-        let output = std::process::Command::new("git")
-            .args(["describe", "--tags", "--abbrev=0"])
-            .current_dir(&self.repo_path)
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        parse_version_tag(&tag)
-    }
-
-    /// Get the latest semver tag via `git tag -l --sort=-v:refname`.
-    fn latest_version_tag(&self) -> Option<String> {
-        let output = std::process::Command::new("git")
-            .args(["tag", "-l", "--sort=-v:refname"])
-            .current_dir(&self.repo_path)
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .find_map(|tag| parse_version_tag(tag.trim()))
     }
 
     fn version_from_source(&self) -> Option<String> {
@@ -1608,6 +1583,71 @@ mod tests {
             version == "2.0.0" || version.starts_with("2.0.0"),
             "expected version from tag, got: {version}"
         );
+    }
+
+    #[test]
+    fn get_version_from_orphan_tag_list() {
+        // Strategy 2: describe fails (orphan tag) but list_tags_sorted finds it
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "init", "--no-gpg-sign"]);
+
+        // Tag this commit
+        git(&["tag", "v3.1.0"]);
+
+        // Create a new orphan branch so HEAD has no reachable tags
+        git(&["checkout", "--orphan", "orphan"]);
+        fs::write(root.join("orphan.go"), "package main\n").unwrap();
+        git(&["add", "orphan.go"]);
+        git(&["commit", "-m", "orphan", "--no-gpg-sign"]);
+
+        let handler = GoHandler::new(root);
+        let version = handler.get_version().unwrap();
+        // Strategy 1 (describe) should fail on orphan branch,
+        // but Strategy 2 (list_tags_sorted) should find v3.1.0
+        assert_eq!(version, "3.1.0");
+    }
+
+    #[test]
+    fn get_version_no_tags_no_source() {
+        // No tags, no source constants → version_from_git_tags returns None,
+        // exercises the None path through all 3 strategies
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "init", "--no-gpg-sign"]);
+
+        let handler = GoHandler::new(root);
+        let version = handler.get_version().unwrap();
+        // No tags, no version.go → falls through to "latest"
+        assert_eq!(version, "latest");
     }
 
     #[test]

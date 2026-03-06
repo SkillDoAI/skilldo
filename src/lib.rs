@@ -10,6 +10,7 @@ pub mod cli;
 pub mod config;
 pub mod detector;
 pub mod ecosystems;
+pub mod git;
 pub mod lint;
 pub mod llm;
 pub mod pipeline;
