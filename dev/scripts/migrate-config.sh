@@ -72,7 +72,7 @@ done
 
 # v0.2.3: rename bare "provider = " → "provider_type = "
 for pattern in "${PROVIDER_RENAMES[@]}"; do
-    if grep -qE '^provider[= ]' "$FILE" && ! grep -q 'provider_type' "$FILE"; then
+    if grep -qE '^provider[[:space:]]*=' "$FILE" && ! grep -qE '^provider_type[[:space:]]*=' "$FILE"; then
         count=$((count + 1))
         if $DRY_RUN; then
             echo "  would rename: provider -> provider_type"
@@ -89,14 +89,15 @@ done
 # In dry-run mode, provider→provider_type rename hasn't happened yet, so also check
 # for bare "provider" to give an accurate preview.
 EFFECTIVE_HAS_PTYPE=false
-grep -q 'provider_type' "$FILE" && EFFECTIVE_HAS_PTYPE=true
-$DRY_RUN && grep -qE '^provider[= ]' "$FILE" && EFFECTIVE_HAS_PTYPE=true
+grep -qE '^provider_type[[:space:]]*=' "$FILE" && EFFECTIVE_HAS_PTYPE=true
+$DRY_RUN && grep -qE '^provider[[:space:]]*=' "$FILE" && EFFECTIVE_HAS_PTYPE=true
 
-PTYPE_COUNT=$(grep -c 'provider_type' "$FILE" || true)
+# Count only key-value lines (not comments) to detect multi-section configs
+PTYPE_COUNT=$(grep -cE '^provider_type[[:space:]]*=' "$FILE" || true)
 # In dry-run, count bare "provider" lines too (they would become provider_type)
-$DRY_RUN && PTYPE_COUNT=$((PTYPE_COUNT + $(grep -cE '^provider[= ]' "$FILE" || true)))
+$DRY_RUN && PTYPE_COUNT=$((PTYPE_COUNT + $(grep -cE '^provider[[:space:]]*=' "$FILE" || true)))
 
-if $EFFECTIVE_HAS_PTYPE && [ "$PTYPE_COUNT" -le 1 ] && ! grep -q 'provider_name' "$FILE"; then
+if $EFFECTIVE_HAS_PTYPE && [ "$PTYPE_COUNT" -le 1 ] && ! grep -qE '^provider_name[[:space:]]*=' "$FILE"; then
     PTYPE=$(grep -m1 'provider_type' "$FILE" | sed 's/.*= *"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d ' ')
     # In dry-run, provider_type line may not exist yet — fall back to provider line
     if [ -z "$PTYPE" ]; then
