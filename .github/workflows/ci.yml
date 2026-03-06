@@ -122,8 +122,8 @@ jobs:
     name: test-cov
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    # x86: cargo-llvm-cov hangs on ARM runners (profdata deadlock under coverage instrumentation)
-    runs-on: ubuntu-latest
+    # tokio::process + kill_on_drop eliminates the profdata deadlock — ARM is safe now
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
