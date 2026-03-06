@@ -183,6 +183,11 @@ pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
 /// Run a command with a timeout, killing the child on expiry.
 /// Uses `tokio::process` with `kill_on_drop(true)` — no orphaned threads,
 /// no setsid/process-group gymnastics, no LLVM-profdata deadlocks.
+///
+/// **Note:** `kill_on_drop` sends SIGKILL only to the direct child process,
+/// not to any grandchildren it may have spawned. For container workloads this
+/// is mitigated by explicit `runtime kill <container>` in the caller's error
+/// path. For non-container workloads, grandchild processes may be orphaned.
 pub async fn run_cmd_with_timeout(
     mut cmd: Command,
     timeout: Duration,

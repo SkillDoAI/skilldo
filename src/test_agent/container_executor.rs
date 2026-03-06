@@ -369,13 +369,16 @@ impl ContainerExecutor {
             Ok(output) => Ok(output),
             Err(e) => {
                 // Also kill the container on any error (timeout or otherwise)
-                let _ = Command::new(&self.config.runtime)
+                if let Err(kill_err) = Command::new(&self.config.runtime)
                     .arg("kill")
                     .arg(container_name)
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
-                    .await;
+                    .await
+                {
+                    warn!("Failed to kill container {}: {}", container_name, kill_err);
+                }
                 Err(e)
             }
         }
