@@ -93,6 +93,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
       - run: cargo clippy --all-targets -- -D warnings
 
   integration:
@@ -106,6 +107,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
       - uses: astral-sh/setup-uv@v7
       - name: Pull container images
         run: |
@@ -133,6 +135,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Run tests with coverage
@@ -174,6 +177,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
       - uses: astral-sh/setup-uv@v7
 
       - name: Check API access
