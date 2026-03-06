@@ -202,8 +202,8 @@ pub async fn run_cmd_with_timeout(
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(result) => result.context("Failed to execute command"),
         Err(_) => {
-            // Timeout expired. `kill_on_drop` will send SIGKILL when `child`
-            // is dropped (which happens here at scope exit).
+            // Timeout expired. `child` was moved into `wait_with_output(self)`,
+            // so tokio drops it when cancelling the inner future → SIGKILL.
             bail!("Command timed out after {:?}", timeout)
         }
     }
