@@ -14,6 +14,14 @@ pub enum SkillDoError {
     Timeout(Duration),
 }
 
+impl SkillDoError {
+    /// Check whether an `anyhow::Error` wraps a `SkillDoError::Timeout`.
+    pub fn is_timeout(err: &anyhow::Error) -> bool {
+        err.downcast_ref::<SkillDoError>()
+            .is_some_and(|e| matches!(e, SkillDoError::Timeout(_)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -38,5 +46,17 @@ mod tests {
     fn plain_anyhow_error_does_not_downcast_to_timeout() {
         let anyhow_err = anyhow::anyhow!("some other error");
         assert!(anyhow_err.downcast_ref::<SkillDoError>().is_none());
+    }
+
+    #[test]
+    fn is_timeout_helper_returns_true_for_timeout() {
+        let err: anyhow::Error = SkillDoError::Timeout(Duration::from_secs(30)).into();
+        assert!(SkillDoError::is_timeout(&err));
+    }
+
+    #[test]
+    fn is_timeout_helper_returns_false_for_other_errors() {
+        let err = anyhow::anyhow!("some other error");
+        assert!(!SkillDoError::is_timeout(&err));
     }
 }

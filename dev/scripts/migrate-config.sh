@@ -83,9 +83,25 @@ for pattern in "${PROVIDER_RENAMES[@]}"; do
     fi
 done
 
-# v0.2.3: if provider_type exists but provider_name doesn't, add provider_name
-if grep -q 'provider_type' "$FILE" && ! grep -q 'provider_name' "$FILE"; then
+# v0.2.3: if provider_type exists but provider_name doesn't, add provider_name.
+# Only backfill when exactly one provider_type line exists — multi-section configs
+# (e.g., [llm] + [extract_llm]) would get the wrong value otherwise.
+# In dry-run mode, provider→provider_type rename hasn't happened yet, so also check
+# for bare "provider" to give an accurate preview.
+EFFECTIVE_HAS_PTYPE=false
+grep -q 'provider_type' "$FILE" && EFFECTIVE_HAS_PTYPE=true
+$DRY_RUN && grep -qE '^provider[= ]' "$FILE" && EFFECTIVE_HAS_PTYPE=true
+
+PTYPE_COUNT=$(grep -c 'provider_type' "$FILE" || true)
+# In dry-run, count bare "provider" lines too (they would become provider_type)
+$DRY_RUN && PTYPE_COUNT=$((PTYPE_COUNT + $(grep -cE '^provider[= ]' "$FILE" || true)))
+
+if $EFFECTIVE_HAS_PTYPE && [ "$PTYPE_COUNT" -le 1 ] && ! grep -q 'provider_name' "$FILE"; then
     PTYPE=$(grep -m1 'provider_type' "$FILE" | sed 's/.*= *"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d ' ')
+    # In dry-run, provider_type line may not exist yet — fall back to provider line
+    if [ -z "$PTYPE" ]; then
+        PTYPE=$(grep -m1 -E '^provider[= ]' "$FILE" | sed 's/.*= *"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d ' ')
+    fi
     if [ -n "$PTYPE" ]; then
         count=$((count + 1))
         if $DRY_RUN; then
