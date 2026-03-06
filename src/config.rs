@@ -166,8 +166,8 @@ pub struct Config {
 /// LLM provider configuration — model, API key, base URL, retry settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// LLM provider type. Accepts `provider_type` as an alias (preferred for new configs).
-    #[serde(alias = "provider_type")]
+    /// LLM provider type. Serializes as `provider_type`; `provider` accepted as legacy alias.
+    #[serde(rename = "provider_type", alias = "provider")]
     pub provider: Provider,
     /// Human-readable name for this provider instance (e.g., "deepseek", "my-vllm").
     /// Used as token storage key for OAuth. Defaults to provider type name if unset.
@@ -800,7 +800,7 @@ mod tests {
     fn test_config_serialization() {
         let config = Config::default();
         let toml_str = toml::to_string(&config).unwrap();
-        assert!(toml_str.contains("provider = \"anthropic\""));
+        assert!(toml_str.contains("provider_type = \"anthropic\""));
         // api_key_env is None by default, so it won't appear in serialized TOML
         assert!(!toml_str.contains("AI_API_KEY"));
     }

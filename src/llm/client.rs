@@ -40,6 +40,10 @@ impl LlmClient for RetryClient {
             match self.inner.complete(prompt).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
+                    // Typed check: catches SkillDoError::Timeout from run_cmd_with_timeout.
+                    // Currently only fires for shell-execution timeouts, not LLM HTTP
+                    // timeouts (which come through as reqwest string errors). Kept for
+                    // future-proofing if LLM timeouts get mapped to SkillDoError::Timeout.
                     let is_timeout = crate::error::SkillDoError::is_timeout(&e);
                     let err_str = e.to_string();
                     let is_transient = err_str.contains("connection closed")

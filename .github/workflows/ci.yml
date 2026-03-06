@@ -331,6 +331,14 @@ jobs:
             fi
           done
 
+          # No security lint keywords in prose (basic sanity check)
+          if grep -Pn '(?<!`)rm -rf /(?!tmp)' "$FILE"; then
+            echo "::error::Go: destructive command found in output"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "Go: No destructive commands in prose"
+          fi
+
           SIZE=$(wc -c < "$FILE")
           if [ "$SIZE" -lt 500 ]; then
             echo "::error::Go SKILL.md suspiciously small ($SIZE bytes)"
