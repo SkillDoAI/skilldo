@@ -343,14 +343,17 @@ impl LanguageExecutor for ContainerExecutor {
             .ok_or_else(|| anyhow::anyhow!("Container name not set in execution environment"))?;
 
         // Force remove container if it's still running
-        let _ = Command::new(&self.config.runtime)
+        if let Err(e) = Command::new(&self.config.runtime)
             .arg("rm")
             .arg("-f")
             .arg(container_name)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .await;
+            .await
+        {
+            warn!("Failed to remove container {}: {}", container_name, e);
+        }
 
         debug!("Container {} cleaned up", container_name);
         Ok(())
