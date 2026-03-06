@@ -214,7 +214,9 @@ dependencies = [
                 }
             }
             Err(e) => {
-                if e.to_string().contains("timed out") {
+                if e.downcast_ref::<crate::error::SkillDoError>()
+                    .is_some_and(|e| matches!(e, crate::error::SkillDoError::Timeout(_)))
+                {
                     warn!(
                         "Code execution timed out after {} seconds",
                         self.timeout_secs

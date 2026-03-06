@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::env;
+use tracing::debug;
 
 use super::client::MockLlmClient;
 use super::client::{LlmClient, RetryClient};
@@ -31,6 +32,12 @@ pub fn create_client_from_llm_config(
             anyhow::anyhow!("API key not found in environment variable: {}", env_var)
         })?
     };
+
+    debug!(
+        "Creating LLM client: {} ({})",
+        llm_config.resolved_provider_name(),
+        llm_config.model
+    );
 
     let max_tokens = llm_config.get_max_tokens();
     let extra_body = llm_config.resolve_extra_body()?;
@@ -166,6 +173,7 @@ mod tests {
     ) -> LlmConfig {
         LlmConfig {
             provider,
+            provider_name: None,
             model: "test-model".to_string(),
             api_key_env: api_key_env.map(|s| s.to_string()),
             base_url: base_url.map(|s| s.to_string()),

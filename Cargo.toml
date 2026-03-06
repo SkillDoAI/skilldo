@@ -1,6 +1,6 @@
 [package]
 name = "skilldo"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -23,6 +23,7 @@ base64 = "0.22"
 boreal = "1.1.0"
 git2 = "0.20"
 auth-git2 = "0.5"
+thiserror = "2"
 libgit2-sys = { version = "0.18", features = ["vendored"] }
 
 [dev-dependencies]

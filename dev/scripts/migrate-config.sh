@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Migrate old skilldo config files to v0.1.5+ naming.
+# Migrate old skilldo config files to current naming.
 # Serde aliases for old names will be removed in v0.3.0 — delete this script then.
 #
 # Old names still work (serde aliases), but this script
@@ -45,6 +45,15 @@ RENAMES=(
     "agent3_custom=learn_custom"
     "agent4_custom=create_custom"
     "agent5_custom=test_custom"
+    # v0.2.3: provider → provider_type (provider still works as serde alias)
+    # Only rename bare "provider" at key position, not inside section headers or values
+)
+
+# Special handling: rename "provider = " to "provider_type = " (word-boundary safe)
+# This avoids matching "provider" inside "provider_name" or other compound names.
+PROVIDER_RENAMES=(
+    's/^provider = /provider_type = /g'
+    's/^provider=/provider_type=/g'
 )
 
 count=0
@@ -60,6 +69,33 @@ for pair in "${RENAMES[@]}"; do
         fi
     fi
 done
+
+# v0.2.3: rename bare "provider = " → "provider_type = "
+for pattern in "${PROVIDER_RENAMES[@]}"; do
+    if grep -qE '^provider[= ]' "$FILE" && ! grep -q 'provider_type' "$FILE"; then
+        count=$((count + 1))
+        if $DRY_RUN; then
+            echo "  would rename: provider -> provider_type"
+        else
+            sed -i.bak "$pattern" "$FILE"
+        fi
+        break  # only apply once
+    fi
+done
+
+# v0.2.3: if provider_type exists but provider_name doesn't, add provider_name
+if grep -q 'provider_type' "$FILE" && ! grep -q 'provider_name' "$FILE"; then
+    PTYPE=$(grep -m1 'provider_type' "$FILE" | sed 's/.*= *"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d ' ')
+    if [ -n "$PTYPE" ]; then
+        count=$((count + 1))
+        if $DRY_RUN; then
+            echo "  would add: provider_name = \"$PTYPE\""
+        else
+            sed -i.bak "/provider_type/a\\
+provider_name = \"$PTYPE\"" "$FILE"
+        fi
+    fi
+fi
 
 # Clean up sed backup file
 if ! $DRY_RUN && [ -f "${FILE}.bak" ]; then

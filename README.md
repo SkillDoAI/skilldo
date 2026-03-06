@@ -1,8 +1,20 @@
 # Skilldo
 
+[![CI](https://github.com/SkillDoAI/skilldo/actions/workflows/ci.yml/badge.svg)](https://github.com/SkillDoAI/skilldo/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/SkillDoAI/skilldo/graph/badge.svg)](https://codecov.io/gh/SkillDoAI/skilldo)
+
 *Pronounced "skill-do"* — The artificial skill generator.
 
-Skilldo is a Rust CLI that automatically generates `SKILL.md` files for open-source libraries. It reads your source code, tests, docs, and changelogs, then uses a multi-agent LLM pipeline to produce structured agent rules that help AI coding assistants (Claude, Cursor, Copilot, etc.) use your library correctly.
+Skilldo automatically generates `SKILL.md` agent rules files for open-source libraries. Point it at any repo and get structured rules that help AI coding assistants (Claude, Cursor, Copilot, Codex, etc.) use the library correctly — with validated, tested code examples.
+
+- **6-agent pipeline** — Extract, Map, Learn, Create, Review, and Test stages with automatic retry loops on failure
+- **Container-validated code** — Generated patterns are compiled and executed in Docker/Podman containers to catch hallucinated APIs before they ship
+- **3-layer security scanning** — Regex patterns + prompt injection detection + 41 YARA rules (including [Cisco AI Defense](https://github.com/cisco-ai-defense/skill-scanner)) catch malicious content
+- **Multi-provider** — Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, vLLM, etc.)
+- **Per-stage model mixing** — Use a cheap local model for extraction and a frontier cloud model for review. One config, multiple providers.
+- **Python + Go ecosystems** — Full pipeline support with language-specific parsers, code generators, and container images
+- **Free with local models** — Run the entire pipeline on Ollama with zero API cost
+- **28+ pre-generated skills** — Browse [`examples/skills/`](examples/skills/) for ready-to-use rules for popular Python libraries
 
 The goal: make agent rules a standard part of every open-source package — like README.md or .gitignore.
 
@@ -89,7 +101,7 @@ skilldo generate [PATH] [OPTIONS]
 | `--version-from <STRATEGY>` | Version extraction strategy: `git-tag`, `package`, `branch`, `commit` |
 | `--config <PATH>` | Path to config file |
 | `--provider <PROVIDER>` | LLM provider: `anthropic`, `openai`, `gemini`, `openai-compatible` |
-| `--model <MODEL>` | Override LLM model (e.g., `gpt-4.1`, `claude-sonnet-4-5-20250929`) |
+| `--model <MODEL>` | Override LLM model (e.g., `gpt-5.2`, `claude-sonnet-4-6`) |
 | `--base-url <URL>` | Base URL for openai-compatible providers |
 | `--max-retries <N>` | Override max generation retries |
 | `--no-test` | Disable test stage container validation |
@@ -121,10 +133,10 @@ RUST_LOG=skilldo::test_agent=trace skilldo generate /path/to/repo
 
 ```bash
 # Quick start — no config file needed (uses env vars for API key)
-skilldo generate /path/to/repo --provider openai --model gpt-4.1
+skilldo generate /path/to/repo --provider openai --model gpt-5.2
 
 # With Anthropic
-skilldo generate /path/to/repo --provider anthropic --model claude-sonnet-4-5-20250929
+skilldo generate /path/to/repo --provider anthropic --model claude-sonnet-4-6
 
 # With local Ollama model
 skilldo generate /path/to/repo --provider openai-compatible --model codestral:latest \
@@ -217,11 +229,17 @@ This uses GPT-5.2 for all stages, with test validation enabled by default using 
 # Configures the model used for all stages (unless overridden
 # per-stage via extract_llm, create_llm, test_llm, etc.).
 [llm]
-# Provider: "anthropic", "openai", "gemini", or "openai-compatible"
-provider = "anthropic"
+# Provider type: "anthropic", "openai", "gemini", or "openai-compatible"
+# "provider" also works (legacy alias).
+provider_type = "anthropic"
+
+# Human-readable name for this provider instance.
+# Used as a label in logs and as a token storage key for OAuth.
+# Defaults to the provider_type value if not set.
+# provider_name = "anthropic-main"
 
 # Model name (provider-specific)
-model = "claude-sonnet-4-5-20250929"
+model = "claude-sonnet-4-6"
 
 # Environment variable containing the API key.
 # Set to "none" for local models (Ollama) that don't need a key.
@@ -310,8 +328,8 @@ cleanup = true
 
 ### Supported Providers
 
-| Provider | Config `provider` | Needs API Key | Notes |
-|----------|-------------------|---------------|-------|
+| Provider | Config `provider_type` | Needs API Key | Notes |
+|----------|------------------------|---------------|-------|
 | **Anthropic** | `"anthropic"` | Yes (`ANTHROPIC_API_KEY`) | Claude models |
 | **OpenAI** | `"openai"` | Yes (`OPENAI_API_KEY`) | GPT models. Handles `max_completion_tokens` for GPT-5+. |
 | **Google Gemini** | `"gemini"` | Yes (`GEMINI_API_KEY`) | Gemini models |
@@ -374,12 +392,12 @@ Generation gets you 90-95% of the way to a good SKILL.md — a validated, well-s
 
 | Language | Status | Notes |
 |----------|--------|-------|
-| Python | Full support | PyPI, setup.py, pyproject.toml, uv environments |
-| JavaScript/TypeScript | Detected, no ecosystem handler | package.json detection works, generation pipeline not yet specialized |
-| Rust | Detected, no ecosystem handler | Cargo.toml detection works |
-| Go | Detected, no ecosystem handler | go.mod detection works |
+| Python | Full support | PyPI, setup.py, pyproject.toml, uv environments, container validation |
+| Go | Full support | go.mod, Go modules, `golang:1.25-alpine` container validation |
+| JavaScript/TypeScript | Detection only | package.json detected, ecosystem handler planned |
+| Rust | Detection only | Cargo.toml detected, ecosystem handler planned |
 
-Full ecosystem handlers for JS/TS, Rust, and Go are planned.
+Full ecosystem handlers for JS/TS and Rust are planned.
 
 ## Building from Source
 

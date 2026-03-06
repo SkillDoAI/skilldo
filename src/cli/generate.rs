@@ -815,10 +815,15 @@ setup(name="testpkg", version="1.0.0")
         let output = repo.path().join("SKILL.md");
         let result = run(GenerateOptions {
             install_source_override: Some("local-mount".to_string()),
+            best_effort: true, // mock output may trigger lint — we're testing the override threads through
             ..test_opts(&repo, &output)
         })
         .await;
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "install_source_override failed: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]

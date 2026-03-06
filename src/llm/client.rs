@@ -40,8 +40,12 @@ impl LlmClient for RetryClient {
             match self.inner.complete(prompt).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
+                    let is_timeout = e
+                        .downcast_ref::<crate::error::SkillDoError>()
+                        .is_some_and(|e| matches!(e, crate::error::SkillDoError::Timeout(_)));
                     let err_str = e.to_string();
                     let is_transient = err_str.contains("connection closed")
+                        || is_timeout
                         || err_str.contains("timed out")
                         || err_str.contains("reset by peer")
                         || err_str.contains("broken pipe")
