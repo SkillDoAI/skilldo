@@ -985,6 +985,20 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[tokio::test]
+    async fn test_run_with_timeout_kill_succeeds_but_cmd_fails() {
+        let mut config = make_config();
+        // Use /bin/true as runtime — `true kill fake` spawns OK (exits 0)
+        config.runtime = "true".to_string();
+        let executor = ContainerExecutor::new(config, Language::Python);
+        // Inner command fails to spawn → error path → kill with `true` succeeds
+        let cmd = tokio::process::Command::new("nonexistent-binary-xyz");
+        let result = executor
+            .run_with_timeout(cmd, Duration::from_secs(1), "fake-container")
+            .await;
+        assert!(result.is_err());
+    }
+
     // --- run_code: non-Python generates run.sh ---
 
     #[tokio::test]
