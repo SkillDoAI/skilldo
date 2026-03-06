@@ -12,7 +12,7 @@ async fn test_executor_setup_fails_when_uv_not_installed() {
     let executor = PythonUvExecutor::new();
 
     // Try to setup environment - either succeeds or fails gracefully
-    let result = executor.setup_environment(&[]);
+    let result = executor.setup_environment(&[]).await;
 
     // Should either work (if uv installed) or return error (if not)
     match result {
@@ -34,7 +34,9 @@ async fn test_executor_setup_with_invalid_dependency() -> Result<()> {
 
     // Try to install a non-existent package
     // uv may fail or timeout
-    let result = executor.setup_environment(&["nonexistent-package-xyzabc-12345".to_string()]);
+    let result = executor
+        .setup_environment(&["nonexistent-package-xyzabc-12345".to_string()])
+        .await;
 
     // Either succeeds (uv is very permissive) or fails
     match result {
@@ -51,7 +53,7 @@ async fn test_executor_setup_with_invalid_dependency() -> Result<()> {
 #[tokio::test]
 async fn test_executor_run_code_with_syntax_error() -> Result<()> {
     let executor = PythonUvExecutor::new();
-    let env = executor.setup_environment(&[])?;
+    let env = executor.setup_environment(&[]).await?;
 
     // Code with syntax error
     let code = r#"
@@ -59,7 +61,7 @@ def broken syntax here
     print("this won't work")
 "#;
 
-    let result = executor.run_code(&env, code)?;
+    let result = executor.run_code(&env, code).await?;
 
     // Should return Fail with syntax error
     assert!(result.is_fail(), "Code with syntax error should fail");
@@ -75,7 +77,7 @@ def broken syntax here
         error
     );
 
-    executor.cleanup(&env)?;
+    executor.cleanup(&env).await?;
 
     Ok(())
 }
@@ -83,10 +85,10 @@ def broken syntax here
 #[tokio::test]
 async fn test_executor_cleanup_succeeds() -> Result<()> {
     let executor = PythonUvExecutor::new();
-    let env = executor.setup_environment(&[])?;
+    let env = executor.setup_environment(&[]).await?;
 
     // Cleanup should succeed
-    let result = executor.cleanup(&env);
+    let result = executor.cleanup(&env).await;
     assert!(result.is_ok(), "Cleanup should succeed");
 
     Ok(())
@@ -95,7 +97,7 @@ async fn test_executor_cleanup_succeeds() -> Result<()> {
 #[tokio::test]
 async fn test_executor_handles_code_with_import_error() -> Result<()> {
     let executor = PythonUvExecutor::new();
-    let env = executor.setup_environment(&[])?;
+    let env = executor.setup_environment(&[]).await?;
 
     // Code that tries to import non-existent module
     let code = r#"
@@ -103,7 +105,7 @@ import nonexistent_module_xyz
 print("Should not reach here")
 "#;
 
-    let result = executor.run_code(&env, code)?;
+    let result = executor.run_code(&env, code).await?;
 
     // Should fail with ImportError
     assert!(result.is_fail(), "Import error should cause failure");
@@ -119,7 +121,7 @@ print("Should not reach here")
         error
     );
 
-    executor.cleanup(&env)?;
+    executor.cleanup(&env).await?;
 
     Ok(())
 }
@@ -129,7 +131,7 @@ print("Should not reach here")
 async fn test_executor_with_very_short_timeout() -> Result<()> {
     // Create executor with 1 second timeout
     let executor = PythonUvExecutor::new().with_timeout(1);
-    let env = executor.setup_environment(&[])?;
+    let env = executor.setup_environment(&[]).await?;
 
     // Code that sleeps for longer than timeout
     let code = r#"
@@ -138,7 +140,7 @@ time.sleep(5)
 print("Should not reach here")
 "#;
 
-    let result = executor.run_code(&env, code)?;
+    let result = executor.run_code(&env, code).await?;
 
     // Should timeout (or fail if OS kills it immediately)
     match result {
@@ -147,7 +149,7 @@ print("Should not reach here")
         skilldo::test_agent::executor::ExecutionResult::Pass(_) => {} // possible if timeout is generous
     }
 
-    executor.cleanup(&env)?;
+    executor.cleanup(&env).await?;
 
     Ok(())
 }

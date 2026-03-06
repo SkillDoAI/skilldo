@@ -217,10 +217,10 @@ impl<'a> ReviewAgent<'a> {
 
         // Run in container
         let executor = ContainerExecutor::new(self.container_config.clone(), Language::Python);
-        let env = executor.setup_environment(&[])?;
+        let env = executor.setup_environment(&[]).await?;
 
-        let result = executor.run_code(&env, &script);
-        let _ = executor.cleanup(&env);
+        let result = executor.run_code(&env, &script).await;
+        let _ = executor.cleanup(&env).await;
 
         match result {
             Ok(ExecutionResult::Pass(stdout)) => {

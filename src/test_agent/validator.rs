@@ -315,7 +315,7 @@ impl<'a> TestCodeValidator<'a> {
 
         // 3. Setup environment once (reuse for all tests)
         info!("  → Setting up {} environment...", self.language.as_str());
-        let env = self.executor.setup_environment(&deps)?;
+        let env = self.executor.setup_environment(&deps).await?;
 
         let mut test_cases = Vec::new();
 
@@ -340,11 +340,11 @@ impl<'a> TestCodeValidator<'a> {
             debug!("    Generated {} bytes of test code", test_code.len());
 
             // Execute the generated code
-            let result = match self.executor.run_code(&env, &test_code) {
+            let result = match self.executor.run_code(&env, &test_code).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!("    Execution error: {}", e);
-                    self.executor.cleanup(&env).ok();
+                    self.executor.cleanup(&env).await.ok();
                     return Err(e);
                 }
             };
@@ -361,7 +361,7 @@ impl<'a> TestCodeValidator<'a> {
                         .await
                     {
                         Ok(retry_code) => {
-                            match self.executor.run_code(&env, &retry_code) {
+                            match self.executor.run_code(&env, &retry_code).await {
                                 Ok(retry_result) => (retry_result, retry_code),
                                 Err(e) => {
                                     warn!("    Retry execution error: {}", e);
@@ -407,7 +407,7 @@ impl<'a> TestCodeValidator<'a> {
         }
 
         // 5. Cleanup
-        self.executor.cleanup(&env)?;
+        self.executor.cleanup(&env).await?;
 
         // 6. Analyze results
         let passed = test_cases.iter().filter(|tc| tc.result.is_pass()).count();
@@ -691,8 +691,9 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl LanguageExecutor for MockExecutor {
-        fn setup_environment(&self, _deps: &[String]) -> Result<ExecutionEnv> {
+        async fn setup_environment(&self, _deps: &[String]) -> Result<ExecutionEnv> {
             let temp_dir = tempfile::TempDir::new()?;
             Ok(ExecutionEnv {
                 temp_dir,
@@ -702,7 +703,7 @@ mod tests {
             })
         }
 
-        fn run_code(&self, _env: &ExecutionEnv, _code: &str) -> Result<ExecutionResult> {
+        async fn run_code(&self, _env: &ExecutionEnv, _code: &str) -> Result<ExecutionResult> {
             let guard = self.run_result.lock().unwrap();
             match &*guard {
                 Ok(r) => Ok(r.clone()),
@@ -710,7 +711,7 @@ mod tests {
             }
         }
 
-        fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
+        async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
             Ok(())
         }
     }

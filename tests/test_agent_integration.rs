@@ -198,14 +198,14 @@ async fn test_executor_runs_simple_python_code() -> Result<()> {
     let executor = PythonUvExecutor::new();
 
     // Setup environment with no dependencies
-    let env = executor.setup_environment(&[])?;
+    let env = executor.setup_environment(&[]).await?;
 
     // Run simple code
     let code = r#"
 print("✓ Test passed")
 "#;
 
-    let result = executor.run_code(&env, code)?;
+    let result = executor.run_code(&env, code).await?;
 
     assert!(result.is_pass(), "Simple code should pass");
 
@@ -216,7 +216,7 @@ print("✓ Test passed")
 
     assert!(output.contains("✓ Test passed"));
 
-    executor.cleanup(&env)?;
+    executor.cleanup(&env).await?;
 
     Ok(())
 }
@@ -228,13 +228,13 @@ async fn test_executor_handles_failing_code() -> Result<()> {
     use skilldo::test_agent::LanguageExecutor;
 
     let executor = PythonUvExecutor::new();
-    let env = executor.setup_environment(&[])?;
+    let env = executor.setup_environment(&[]).await?;
 
     let code = r#"
 raise ValueError("Test error")
 "#;
 
-    let result = executor.run_code(&env, code)?;
+    let result = executor.run_code(&env, code).await?;
 
     assert!(result.is_fail(), "Failing code should fail");
 
@@ -246,7 +246,7 @@ raise ValueError("Test error")
     assert!(error.contains("ValueError"));
     assert!(error.contains("Test error"));
 
-    executor.cleanup(&env)?;
+    executor.cleanup(&env).await?;
 
     Ok(())
 }
@@ -260,18 +260,18 @@ async fn test_executor_installs_dependencies() -> Result<()> {
     let executor = PythonUvExecutor::new();
 
     // Setup with click dependency
-    let env = executor.setup_environment(&["click".to_string()])?;
+    let env = executor.setup_environment(&["click".to_string()]).await?;
 
     let code = r#"
 import click
 print(f"✓ Click version: {click.__version__}")
 "#;
 
-    let result = executor.run_code(&env, code)?;
+    let result = executor.run_code(&env, code).await?;
 
     assert!(result.is_pass(), "Code with dependencies should pass");
 
-    executor.cleanup(&env)?;
+    executor.cleanup(&env).await?;
 
     Ok(())
 }

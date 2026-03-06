@@ -3,9 +3,9 @@
 use anyhow::{bail, Context, Result};
 use std::fmt;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::process::Stdio;
 use std::time::Duration;
+use tokio::process::Command;
 
 /// Check if a line starts a fenced code block (backtick or tilde, per CommonMark).
 pub fn is_fence_line(line: &str) -> bool {
@@ -180,79 +180,30 @@ pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
     50
 }
 
-/// Kill a process group by PID. Uses SIGKILL on the entire process group
-/// to prevent orphaned grandchildren (e.g., from `uv`, container runtimes).
-#[cfg(unix)]
-fn kill_process_group(pid: u32) {
-    // Try killing the process group first (negative PID = process group).
-    // If the child was spawned with setsid, this kills the entire tree.
-    let pgid_kill = Command::new("kill")
-        .arg("-9")
-        .arg(format!("-{}", pid)) // negative PID = process group
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    // Fallback: if process group kill failed, kill the individual process
-    if pgid_kill.map(|s| !s.success()).unwrap_or(true) {
-        let _ = Command::new("kill")
-            .arg("-9")
-            .arg(pid.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-}
-
-#[cfg(not(unix))]
-fn kill_process_group(pid: u32) {
-    // On Windows, taskkill /T kills the process tree
-    let _ = Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
-/// Run a command with a timeout, killing the child process tree on expiry.
-/// On Unix, spawns the child in a new session (setsid) so the entire
-/// process tree can be killed on timeout, preventing orphaned grandchildren.
-pub fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
-    // On Unix, create a new session so we can kill the entire process group
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: setsid is async-signal-safe and has no preconditions
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
-    }
-
+/// Run a command with a timeout, killing the child on expiry.
+/// Uses `tokio::process` with `kill_on_drop(true)` — no orphaned threads,
+/// no setsid/process-group gymnastics, no LLVM-profdata deadlocks.
+///
+/// **Note:** `kill_on_drop` sends SIGKILL only to the direct child process,
+/// not to any grandchildren it may have spawned. For container workloads this
+/// is mitigated by explicit `runtime kill <container>` in the caller's error
+/// path. For non-container workloads, grandchild processes may be orphaned.
+pub async fn run_cmd_with_timeout(
+    mut cmd: Command,
+    timeout: Duration,
+) -> Result<std::process::Output> {
     let child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .context("Failed to spawn command")?;
 
-    let pid = child.id();
-    let (sender, receiver) = mpsc::channel();
-
-    let handle = std::thread::spawn(move || {
-        let result = child.wait_with_output();
-        let _ = sender.send(result);
-    });
-
-    match receiver.recv_timeout(timeout) {
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(result) => result.context("Failed to execute command"),
         Err(_) => {
-            kill_process_group(pid);
-            // Join the waiter thread so no orphaned threads remain at exit.
-            // Under LLVM coverage instrumentation, orphaned threads can
-            // deadlock the profdata writer during process shutdown.
-            let _ = handle.join();
+            // Timeout expired. `child` was moved into `wait_with_output(self)`,
+            // so tokio drops it when cancelling the inner future → SIGKILL.
             bail!("Command timed out after {:?}", timeout)
         }
     }
@@ -414,21 +365,21 @@ mod tests {
         assert!(sanitize_dep_name("express rm").is_err());
     }
 
-    #[test]
-    fn test_run_cmd_with_timeout_success() {
-        // Covers the setsid pre_exec path (lines 182-184) and normal completion
+    #[tokio::test]
+    async fn test_run_cmd_with_timeout_success() {
         let cmd = Command::new("echo");
-        let output = run_cmd_with_timeout(cmd, Duration::from_secs(5)).unwrap();
+        let output = run_cmd_with_timeout(cmd, Duration::from_secs(5))
+            .await
+            .unwrap();
         assert!(output.status.success());
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg(unix)]
-    fn test_run_cmd_with_timeout_expires() {
-        // Covers: kill_process_group (lines 141-157) and timeout bail (lines 206-207)
+    async fn test_run_cmd_with_timeout_expires() {
         let mut cmd = Command::new("sleep");
         cmd.arg("999");
-        let result = run_cmd_with_timeout(cmd, Duration::from_millis(100));
+        let result = run_cmd_with_timeout(cmd, Duration::from_millis(100)).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -436,13 +387,5 @@ mod tests {
             "Expected timeout error, got: {}",
             err_msg
         );
-    }
-
-    #[test]
-    fn test_kill_process_group_nonexistent_pid() {
-        // Covers kill_process_group directly with a PID that doesn't exist.
-        // The process-group kill fails (line 152), so the fallback individual
-        // kill also runs (lines 153-158). Neither panics.
-        kill_process_group(999_999_999);
     }
 }

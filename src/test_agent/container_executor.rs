@@ -4,9 +4,10 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use super::executor::{ExecutionEnv, ExecutionResult};
@@ -36,12 +37,13 @@ impl ContainerExecutor {
     }
 
     /// Check if container runtime is available
-    fn check_runtime_available(&self) -> bool {
+    async fn check_runtime_available(&self) -> bool {
         Command::new(&self.config.runtime)
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
+            .await
             .map(|s| s.success())
             .unwrap_or(false)
     }
@@ -108,15 +110,16 @@ cd /workspace
     }
 }
 
+#[async_trait::async_trait]
 impl LanguageExecutor for ContainerExecutor {
-    fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
+    async fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
         info!(
             "Setting up {} environment with {} dependencies",
             self.language.as_str(),
             deps.len()
         );
         // Check if runtime is available
-        if !self.check_runtime_available() {
+        if !self.check_runtime_available().await {
             bail!(
                 "{} runtime not found. Please install {} first.",
                 self.config.runtime,
@@ -146,7 +149,7 @@ impl LanguageExecutor for ContainerExecutor {
         })
     }
 
-    fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
+    async fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
         debug!(
             "Running {} code ({} bytes)",
             self.language.as_str(),
@@ -198,7 +201,8 @@ impl LanguageExecutor for ContainerExecutor {
             .arg(container_name)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+            .await;
 
         // Make temp dir world-writable so --user nobody can write to /workspace.
         // Only needed when running as unprivileged user (skip for local-install).
@@ -302,11 +306,13 @@ impl LanguageExecutor for ContainerExecutor {
         }
 
         // Run with timeout
-        let output = self.run_with_timeout(
-            cmd,
-            Duration::from_secs(self.config.timeout),
-            container_name,
-        )?;
+        let output = self
+            .run_with_timeout(
+                cmd,
+                Duration::from_secs(self.config.timeout),
+                container_name,
+            )
+            .await?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -325,7 +331,7 @@ impl LanguageExecutor for ContainerExecutor {
         }
     }
 
-    fn cleanup(&self, env: &ExecutionEnv) -> Result<()> {
+    async fn cleanup(&self, env: &ExecutionEnv) -> Result<()> {
         if !self.config.cleanup {
             debug!("Cleanup disabled, skipping");
             return Ok(());
@@ -337,13 +343,17 @@ impl LanguageExecutor for ContainerExecutor {
             .ok_or_else(|| anyhow::anyhow!("Container name not set in execution environment"))?;
 
         // Force remove container if it's still running
-        let _ = Command::new(&self.config.runtime)
+        if let Err(e) = Command::new(&self.config.runtime)
             .arg("rm")
             .arg("-f")
             .arg(container_name)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+            .await
+        {
+            warn!("Failed to remove container {}: {}", container_name, e);
+        }
 
         debug!("Container {} cleaned up", container_name);
         Ok(())
@@ -352,22 +362,26 @@ impl LanguageExecutor for ContainerExecutor {
 
 impl ContainerExecutor {
     /// Run a command with a timeout, also killing the container on failure/timeout
-    fn run_with_timeout(
+    async fn run_with_timeout(
         &self,
         cmd: Command,
         timeout: Duration,
         container_name: &str,
     ) -> Result<std::process::Output> {
-        match run_cmd_with_timeout(cmd, timeout) {
+        match run_cmd_with_timeout(cmd, timeout).await {
             Ok(output) => Ok(output),
             Err(e) => {
                 // Also kill the container on any error (timeout or otherwise)
-                let _ = Command::new(&self.config.runtime)
+                if let Err(kill_err) = Command::new(&self.config.runtime)
                     .arg("kill")
                     .arg(container_name)
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
-                    .status();
+                    .status()
+                    .await
+                {
+                    warn!("Failed to kill container {}: {}", container_name, kill_err);
+                }
                 Err(e)
             }
         }
@@ -495,8 +509,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_code_file_per_language() {
+    #[tokio::test]
+    async fn test_code_file_per_language() {
         for (lang, _, expected_file, sample_code) in language_expectations() {
             let executor = ContainerExecutor::new(make_config(), lang.clone());
             let temp_dir = TempDir::new().unwrap();
@@ -506,7 +520,7 @@ mod tests {
                 container_name: None,
                 dependencies: vec![],
             };
-            let _ = executor.run_code(&env, sample_code);
+            let _ = executor.run_code(&env, sample_code).await;
             let code_path = env.temp_dir.path().join(expected_file);
             assert!(
                 code_path.exists(),
@@ -555,8 +569,8 @@ mod tests {
         assert!(script.contains("node test.js"));
     }
 
-    #[test]
-    fn test_cleanup_no_container_name() {
+    #[tokio::test]
+    async fn test_cleanup_no_container_name() {
         let executor = ContainerExecutor::new(make_config(), Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
@@ -565,7 +579,7 @@ mod tests {
             container_name: None,
             dependencies: vec![],
         };
-        let result = executor.cleanup(&env);
+        let result = executor.cleanup(&env).await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -573,8 +587,8 @@ mod tests {
             .contains("Container name not set"));
     }
 
-    #[test]
-    fn test_cleanup_disabled() {
+    #[tokio::test]
+    async fn test_cleanup_disabled() {
         let mut config = make_config();
         config.cleanup = false;
         let executor = ContainerExecutor::new(config, Language::Python);
@@ -586,11 +600,11 @@ mod tests {
             dependencies: vec![],
         };
         // Should return Ok without trying to rm anything
-        assert!(executor.cleanup(&env).is_ok());
+        assert!(executor.cleanup(&env).await.is_ok());
     }
 
-    #[test]
-    fn test_run_code_no_container_name() {
+    #[tokio::test]
+    async fn test_run_code_no_container_name() {
         let executor = ContainerExecutor::new(make_config(), Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
@@ -599,7 +613,7 @@ mod tests {
             container_name: None,
             dependencies: vec![],
         };
-        let result = executor.run_code(&env, "print('hello')");
+        let result = executor.run_code(&env, "print('hello')").await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -623,8 +637,8 @@ mod tests {
         assert_eq!(executor.config.install_source, InstallSource::LocalInstall);
     }
 
-    #[test]
-    fn test_run_code_local_install_missing_source_path() {
+    #[tokio::test]
+    async fn test_run_code_local_install_missing_source_path() {
         let mut config = make_config();
         config.install_source = InstallSource::LocalInstall;
         config.source_path = None;
@@ -636,7 +650,7 @@ mod tests {
             container_name: Some("test-container".to_string()),
             dependencies: vec![],
         };
-        let result = executor.run_code(&env, "print('hello')");
+        let result = executor.run_code(&env, "print('hello')").await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -879,12 +893,12 @@ mod tests {
 
     // --- setup_environment: runtime not found ---
 
-    #[test]
-    fn test_setup_environment_missing_runtime() {
+    #[tokio::test]
+    async fn test_setup_environment_missing_runtime() {
         let mut config = make_config();
         config.runtime = "nonexistent-runtime-xyz".to_string();
         let executor = ContainerExecutor::new(config, Language::Python);
-        let result = executor.setup_environment(&[]);
+        let result = executor.setup_environment(&[]).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -896,13 +910,13 @@ mod tests {
 
     // --- setup_environment: dependencies stored ---
 
-    #[test]
-    fn test_setup_environment_stores_dependencies() {
+    #[tokio::test]
+    async fn test_setup_environment_stores_dependencies() {
         // This requires a real runtime, but we can test with the actual podman/docker
         // if available. If not, this test validates the error path.
         let executor = ContainerExecutor::new(make_config(), Language::Python);
         let deps = vec!["requests".to_string(), "flask".to_string()];
-        match executor.setup_environment(&deps) {
+        match executor.setup_environment(&deps).await {
             Ok(env) => {
                 assert_eq!(env.dependencies, deps);
                 assert!(env.container_name.is_some());
@@ -920,8 +934,8 @@ mod tests {
 
     // --- cleanup: happy path with real container name (no actual container) ---
 
-    #[test]
-    fn test_cleanup_with_container_name_and_cleanup_enabled() {
+    #[tokio::test]
+    async fn test_cleanup_with_container_name_and_cleanup_enabled() {
         let executor = ContainerExecutor::new(make_config(), Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
@@ -932,14 +946,63 @@ mod tests {
         };
         // cleanup calls `podman rm -f <name>` — the container doesn't exist, but
         // the command failure is silently ignored (let _ = ...). Should return Ok.
-        let result = executor.cleanup(&env);
+        let result = executor.cleanup(&env).await;
         assert!(result.is_ok());
+    }
+
+    // --- cleanup: nonexistent runtime logs warning but returns Ok ---
+
+    #[tokio::test]
+    async fn test_cleanup_with_nonexistent_runtime_logs_warning() {
+        let mut config = make_config();
+        config.runtime = "nonexistent-runtime-xyz".to_string();
+        let executor = ContainerExecutor::new(config, Language::Python);
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: Some("skilldo-test-fake123".to_string()),
+            dependencies: vec![],
+        };
+        // Runtime binary doesn't exist → rm -f spawns fails → warn! logged → Ok
+        let result = executor.cleanup(&env).await;
+        assert!(result.is_ok());
+    }
+
+    // --- run_with_timeout: nonexistent runtime logs kill warning ---
+
+    #[tokio::test]
+    async fn test_run_with_timeout_kill_error_logged() {
+        let mut config = make_config();
+        config.runtime = "nonexistent-runtime-xyz".to_string();
+        let executor = ContainerExecutor::new(config, Language::Python);
+        // Command that can't be spawned → run_cmd_with_timeout returns Err →
+        // kill fallback also fails (nonexistent runtime) → warn! logged
+        let cmd = tokio::process::Command::new("nonexistent-binary-xyz");
+        let result = executor
+            .run_with_timeout(cmd, Duration::from_secs(1), "fake-container")
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_timeout_kill_succeeds_but_cmd_fails() {
+        let mut config = make_config();
+        // Use /bin/true as runtime — `true kill fake` spawns OK (exits 0)
+        config.runtime = "true".to_string();
+        let executor = ContainerExecutor::new(config, Language::Python);
+        // Inner command fails to spawn → error path → kill with `true` succeeds
+        let cmd = tokio::process::Command::new("nonexistent-binary-xyz");
+        let result = executor
+            .run_with_timeout(cmd, Duration::from_secs(1), "fake-container")
+            .await;
+        assert!(result.is_err());
     }
 
     // --- run_code: non-Python generates run.sh ---
 
-    #[test]
-    fn test_run_code_js_generates_run_sh() {
+    #[tokio::test]
+    async fn test_run_code_js_generates_run_sh() {
         let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
@@ -948,7 +1011,7 @@ mod tests {
             container_name: None,
             dependencies: vec!["express".to_string()],
         };
-        let _ = executor.run_code(&env, "console.log('hi')");
+        let _ = executor.run_code(&env, "console.log('hi')").await;
         let script_path = env.temp_dir.path().join("run.sh");
         assert!(script_path.exists());
         let script = fs::read_to_string(&script_path).unwrap();
@@ -957,8 +1020,8 @@ mod tests {
         assert!(script.contains("node test.js"));
     }
 
-    #[test]
-    fn test_run_code_python_does_not_generate_run_sh() {
+    #[tokio::test]
+    async fn test_run_code_python_does_not_generate_run_sh() {
         let executor = ContainerExecutor::new(make_config(), Language::Python);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
@@ -967,7 +1030,7 @@ mod tests {
             container_name: None,
             dependencies: vec![],
         };
-        let _ = executor.run_code(&env, "print('hello')");
+        let _ = executor.run_code(&env, "print('hello')").await;
         let script_path = env.temp_dir.path().join("run.sh");
         // Python uses `uv run test.py` directly, no run.sh
         assert!(!script_path.exists());
@@ -1052,8 +1115,8 @@ mod tests {
     // --- run_code for rust generates run.sh with correct permissions ---
 
     #[cfg(unix)]
-    #[test]
-    fn test_run_code_rust_run_sh_is_executable() {
+    #[tokio::test]
+    async fn test_run_code_rust_run_sh_is_executable() {
         use std::os::unix::fs::PermissionsExt;
         let executor = ContainerExecutor::new(make_config(), Language::Rust);
         let temp_dir = TempDir::new().unwrap();
@@ -1063,7 +1126,7 @@ mod tests {
             container_name: None,
             dependencies: vec![],
         };
-        let _ = executor.run_code(&env, "fn main() {}");
+        let _ = executor.run_code(&env, "fn main() {}").await;
         let script_path = env.temp_dir.path().join("run.sh");
         assert!(script_path.exists());
         let perms = fs::metadata(&script_path).unwrap().permissions();
@@ -1073,8 +1136,8 @@ mod tests {
 
     // --- local-mount missing source_path ---
 
-    #[test]
-    fn test_run_code_local_mount_missing_source_path() {
+    #[tokio::test]
+    async fn test_run_code_local_mount_missing_source_path() {
         let mut config = make_config();
         config.install_source = InstallSource::LocalMount;
         config.source_path = None;
@@ -1086,7 +1149,7 @@ mod tests {
             container_name: Some("test-container".to_string()),
             dependencies: vec![],
         };
-        let result = executor.run_code(&env, "print('hello')");
+        let result = executor.run_code(&env, "print('hello')").await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -1166,8 +1229,8 @@ mod tests {
 
     // --- Go container script with run.sh generation ---
 
-    #[test]
-    fn test_go_run_code_generates_run_sh() {
+    #[tokio::test]
+    async fn test_go_run_code_generates_run_sh() {
         let executor = ContainerExecutor::new(make_config(), Language::Go);
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
@@ -1176,7 +1239,9 @@ mod tests {
             container_name: None,
             dependencies: vec!["github.com/gin-gonic/gin".to_string()],
         };
-        let _ = executor.run_code(&env, "package main\n\nfunc main() {}");
+        let _ = executor
+            .run_code(&env, "package main\n\nfunc main() {}")
+            .await;
         let script_path = env.temp_dir.path().join("run.sh");
         assert!(script_path.exists());
         let script = fs::read_to_string(&script_path).unwrap();

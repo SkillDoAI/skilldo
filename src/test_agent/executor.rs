@@ -5,9 +5,10 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use super::LanguageExecutor;
@@ -66,12 +67,13 @@ impl PythonUvExecutor {
     }
 
     /// Check if uv is available in PATH
-    fn check_uv_available() -> bool {
+    async fn check_uv_available() -> bool {
         Command::new("uv")
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
+            .await
             .map(|s| s.success())
             .unwrap_or(false)
     }
@@ -83,15 +85,16 @@ impl Default for PythonUvExecutor {
     }
 }
 
+#[async_trait::async_trait]
 impl LanguageExecutor for PythonUvExecutor {
-    fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
+    async fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
         info!(
             "Setting up Python environment with {} dependencies",
             deps.len()
         );
 
         // Check if uv is available
-        if !Self::check_uv_available() {
+        if !Self::check_uv_available().await {
             bail!("uv is not installed or not in PATH (install: https://docs.astral.sh/uv/)");
         }
 
@@ -142,7 +145,8 @@ dependencies = [
         let sync_output = run_cmd_with_timeout(
             sync_cmd,
             Duration::from_secs(120), // 2 minutes for dependency installation
-        )?;
+        )
+        .await?;
 
         if !sync_output.status.success() {
             let stderr = String::from_utf8_lossy(&sync_output.stderr);
@@ -177,7 +181,7 @@ dependencies = [
         })
     }
 
-    fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
+    async fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
         debug!("Running Python code ({} bytes)", code.len());
 
         // Write code to test.py
@@ -195,7 +199,7 @@ dependencies = [
             .arg(&script_path)
             .current_dir(env.temp_dir.path());
 
-        let result = run_cmd_with_timeout(python_cmd, timeout);
+        let result = run_cmd_with_timeout(python_cmd, timeout).await;
 
         match result {
             Ok(output) => {
@@ -223,7 +227,7 @@ dependencies = [
         }
     }
 
-    fn cleanup(&self, env: &ExecutionEnv) -> Result<()> {
+    async fn cleanup(&self, env: &ExecutionEnv) -> Result<()> {
         debug!(
             "Cleaning up environment at {}",
             env.temp_dir.path().display()
@@ -237,10 +241,10 @@ dependencies = [
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_check_uv_available() {
+    #[tokio::test]
+    async fn test_check_uv_available() {
         // Just check it doesn't panic - availability depends on system
-        let _ = PythonUvExecutor::check_uv_available();
+        let _ = PythonUvExecutor::check_uv_available().await;
     }
 
     #[test]
@@ -292,26 +296,26 @@ mod tests {
         assert_eq!(executor.timeout_secs, 30);
     }
 
-    #[test]
-    fn test_setup_environment_no_deps() {
+    #[tokio::test]
+    async fn test_setup_environment_no_deps() {
         let executor = PythonUvExecutor::new();
-        let env = executor.setup_environment(&[]).unwrap();
+        let env = executor.setup_environment(&[]).await.unwrap();
 
         assert!(env.interpreter_path.is_some());
         assert!(env.interpreter_path.as_ref().unwrap().exists());
         assert!(env.temp_dir.path().exists());
     }
 
-    #[test]
-    fn test_run_simple_code() {
+    #[tokio::test]
+    async fn test_run_simple_code() {
         let executor = PythonUvExecutor::new();
-        let env = executor.setup_environment(&[]).unwrap();
+        let env = executor.setup_environment(&[]).await.unwrap();
 
         let code = r#"
 print("Hello from test")
 "#;
 
-        let result = executor.run_code(&env, code).unwrap();
+        let result = executor.run_code(&env, code).await.unwrap();
         assert!(result.is_pass());
 
         if let ExecutionResult::Pass(output) = result {
@@ -319,16 +323,16 @@ print("Hello from test")
         }
     }
 
-    #[test]
-    fn test_run_failing_code() {
+    #[tokio::test]
+    async fn test_run_failing_code() {
         let executor = PythonUvExecutor::new();
-        let env = executor.setup_environment(&[]).unwrap();
+        let env = executor.setup_environment(&[]).await.unwrap();
 
         let code = r#"
 raise ValueError("Test error")
 "#;
 
-        let result = executor.run_code(&env, code).unwrap();
+        let result = executor.run_code(&env, code).await.unwrap();
         assert!(result.is_fail());
 
         if let ExecutionResult::Fail(error) = result {
@@ -336,8 +340,8 @@ raise ValueError("Test error")
         }
     }
 
-    #[test]
-    fn test_cleanup_is_noop() {
+    #[tokio::test]
+    async fn test_cleanup_is_noop() {
         // cleanup() just returns Ok — TempDir handles actual cleanup
         let executor = PythonUvExecutor::new();
         let temp_dir = TempDir::new().unwrap();
@@ -347,11 +351,11 @@ raise ValueError("Test error")
             container_name: None,
             dependencies: vec![],
         };
-        assert!(executor.cleanup(&env).is_ok());
+        assert!(executor.cleanup(&env).await.is_ok());
     }
 
-    #[test]
-    fn test_run_code_missing_interpreter_path() {
+    #[tokio::test]
+    async fn test_run_code_missing_interpreter_path() {
         let executor = PythonUvExecutor::new();
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
@@ -360,7 +364,7 @@ raise ValueError("Test error")
             container_name: None,
             dependencies: vec![],
         };
-        let result = executor.run_code(&env, "print('hello')");
+        let result = executor.run_code(&env, "print('hello')").await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -368,8 +372,8 @@ raise ValueError("Test error")
             .contains("interpreter_path not set"));
     }
 
-    #[test]
-    fn test_run_code_nonexistent_python() {
+    #[tokio::test]
+    async fn test_run_code_nonexistent_python() {
         let executor = PythonUvExecutor::new();
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
@@ -379,31 +383,33 @@ raise ValueError("Test error")
             dependencies: vec![],
         };
         // Should fail because the python binary doesn't exist
-        let result = executor.run_code(&env, "print('hello')");
+        let result = executor.run_code(&env, "print('hello')").await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_setup_environment_rejects_bad_deps() {
+    #[tokio::test]
+    async fn test_setup_environment_rejects_bad_deps() {
         let executor = PythonUvExecutor::new();
         // If uv isn't available, setup_environment will bail before dep validation.
         // If uv IS available, it should still reject the bad dep name.
-        let result = executor.setup_environment(&["valid-pkg; rm -rf /".to_string()]);
+        let result = executor
+            .setup_environment(&["valid-pkg; rm -rf /".to_string()])
+            .await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_setup_with_dependencies() {
+    #[tokio::test]
+    async fn test_setup_with_dependencies() {
         let executor = PythonUvExecutor::new();
         let deps = vec!["click".to_string()];
-        let env = executor.setup_environment(&deps).unwrap();
+        let env = executor.setup_environment(&deps).await.unwrap();
 
         let code = r#"
 import click
 print(f"Click version: {click.__version__}")
 "#;
 
-        let result = executor.run_code(&env, code).unwrap();
+        let result = executor.run_code(&env, code).await.unwrap();
         assert!(result.is_pass());
     }
 
