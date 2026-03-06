@@ -132,7 +132,7 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-${{ runner.os }}-x64
+          shared-key: ci-${{ runner.os }}
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
       - name: Run tests with coverage
