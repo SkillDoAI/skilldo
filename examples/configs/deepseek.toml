@@ -1,6 +1,6 @@
 # DeepSeek — OpenAI-compatible cloud provider
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "deepseek-chat"
 api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com/v1"

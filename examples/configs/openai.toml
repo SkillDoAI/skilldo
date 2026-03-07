@@ -1,6 +1,6 @@
 # OpenAI (GPT) — cloud provider
 [llm]
-provider = "openai"
+provider_type = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 

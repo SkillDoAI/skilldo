@@ -100,13 +100,16 @@ impl std::fmt::Display for InstallSource {
 }
 
 /// Supported LLM providers. `OpenAICompatible` covers Ollama and any
-/// endpoint that speaks the OpenAI chat completions API.
+/// endpoint that speaks the OpenAI chat completions API. `ChatGPT` is
+/// an alias for `OpenAI` intended for OAuth-based ChatGPT subscription use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provider {
     #[serde(rename = "anthropic")]
     Anthropic,
     #[serde(rename = "openai")]
     OpenAI,
+    #[serde(rename = "chatgpt")]
+    ChatGPT,
     #[serde(rename = "openai-compatible")]
     OpenAICompatible,
     #[serde(rename = "gemini")]
@@ -117,7 +120,7 @@ impl Provider {
     /// Canonical env var name for each provider's API key.
     pub fn default_api_key_env(self) -> &'static str {
         match self {
-            Provider::OpenAI => "OPENAI_API_KEY",
+            Provider::OpenAI | Provider::ChatGPT => "OPENAI_API_KEY",
             Provider::Anthropic => "ANTHROPIC_API_KEY",
             Provider::Gemini => "GEMINI_API_KEY",
             Provider::OpenAICompatible => "OPENAI_API_KEY",
@@ -130,6 +133,7 @@ impl std::fmt::Display for Provider {
         match self {
             Provider::Anthropic => write!(f, "anthropic"),
             Provider::OpenAI => write!(f, "openai"),
+            Provider::ChatGPT => write!(f, "chatgpt"),
             Provider::OpenAICompatible => write!(f, "openai-compatible"),
             Provider::Gemini => write!(f, "gemini"),
         }
@@ -142,10 +146,11 @@ impl std::str::FromStr for Provider {
         match s {
             "anthropic" => Ok(Provider::Anthropic),
             "openai" => Ok(Provider::OpenAI),
+            "chatgpt" => Ok(Provider::ChatGPT),
             "openai-compatible" => Ok(Provider::OpenAICompatible),
             "gemini" => Ok(Provider::Gemini),
             unknown => Err(anyhow::anyhow!(
-                "Unknown provider: {}. Valid: anthropic, openai, openai-compatible, gemini",
+                "Unknown provider: {}. Valid: anthropic, openai, chatgpt, openai-compatible, gemini",
                 unknown
             )),
         }
@@ -166,7 +171,8 @@ pub struct Config {
 /// LLM provider configuration — model, API key, base URL, retry settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// LLM provider type. Serializes as `provider_type`; `provider` accepted as legacy alias.
+    /// LLM provider type. Use `provider_type` in config; `provider` accepted as legacy alias
+    /// (to be removed in 0.5.0).
     #[serde(rename = "provider_type", alias = "provider")]
     pub provider: Provider,
     /// Human-readable name for this provider instance (e.g., "deepseek", "my-vllm").
@@ -216,6 +222,37 @@ pub struct LlmConfig {
     /// Timed-out requests are automatically retried by the RetryClient.
     #[serde(default = "default_request_timeout")]
     pub request_timeout_secs: u64,
+
+    // ── OAuth 2.0 fields (all optional) ───────────────────────
+    /// OAuth authorization URL (e.g., "https://accounts.google.com/o/oauth2/v2/auth")
+    #[serde(default)]
+    pub oauth_auth_url: Option<String>,
+    /// OAuth token exchange URL (e.g., "https://oauth2.googleapis.com/token")
+    #[serde(default)]
+    pub oauth_token_url: Option<String>,
+    /// OAuth scopes (space-separated)
+    #[serde(default)]
+    pub oauth_scopes: Option<String>,
+    /// Env var name holding the OAuth client ID
+    #[serde(default)]
+    pub oauth_client_id_env: Option<String>,
+    /// Env var name holding the OAuth client secret (optional, some providers need it)
+    #[serde(default)]
+    pub oauth_client_secret_env: Option<String>,
+    /// Env var name holding base64-encoded OAuth credentials JSON.
+    /// Supports the Google client_secret JSON format (`{"installed": {...}}` or
+    /// `{"web": {...}}`), but any provider can use this format.
+    /// Extracts auth_uri, token_uri, client_id, client_secret from the JSON.
+    /// Individual oauth_* fields override values from this JSON if both are set.
+    #[serde(default)]
+    pub oauth_credentials_env: Option<String>,
+
+    // ── Extra HTTP headers ───────────────────────────────────────
+    /// Additional HTTP headers to include in LLM API requests.
+    /// Format: `["Header-Name: value", "Another: value"]`
+    /// Use for provider-specific headers not covered by standard fields.
+    #[serde(default)]
+    pub extra_headers: Vec<String>,
 }
 
 fn default_network_retries() -> usize {
@@ -247,7 +284,7 @@ impl LlmConfig {
         // Provider-specific defaults
         match self.provider {
             Provider::Anthropic => 8192,
-            Provider::OpenAI => 8192,
+            Provider::OpenAI | Provider::ChatGPT => 8192,
             Provider::OpenAICompatible => 16384, // ollama and similar
             Provider::Gemini => 8192,
         }
@@ -282,6 +319,147 @@ impl LlmConfig {
 
         Ok(merged)
     }
+
+    /// Parse extra_headers from `"Key: Value"` format into (name, value) pairs.
+    pub fn resolve_extra_headers(&self) -> anyhow::Result<Vec<(String, String)>> {
+        self.extra_headers
+            .iter()
+            .filter_map(|h| {
+                let (key, value) = match h.split_once(':') {
+                    Some(kv) => kv,
+                    None => {
+                        return Some(Err(anyhow::anyhow!(
+                            "Invalid extra_headers entry (expected 'Name: value'): {}",
+                            h
+                        )))
+                    }
+                };
+                let key = key.trim();
+                if key.is_empty() {
+                    tracing::warn!("Skipping extra_headers entry with empty name: {}", h);
+                    return None;
+                }
+                Some(Ok((key.to_string(), value.trim().to_string())))
+            })
+            .collect()
+    }
+
+    /// Whether any OAuth fields are configured on this LlmConfig.
+    pub fn has_oauth(&self) -> bool {
+        self.oauth_auth_url.is_some()
+            || self.oauth_token_url.is_some()
+            || self.oauth_client_id_env.is_some()
+            || self.oauth_credentials_env.is_some()
+    }
+
+    /// Resolve OAuth endpoint from config fields + env vars.
+    /// Returns None if no OAuth fields are configured.
+    pub fn resolve_oauth_endpoint(&self) -> anyhow::Result<Option<crate::auth::OAuthEndpoint>> {
+        if !self.has_oauth() {
+            return Ok(None);
+        }
+
+        let creds = self.load_credentials_json()?;
+
+        let auth_url = self
+            .oauth_auth_url
+            .clone()
+            .or_else(|| creds.as_ref().and_then(|c| c.auth_uri.clone()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OAuth auth URL required (set oauth_auth_url or oauth_credentials_env)"
+                )
+            })?;
+
+        let token_url = self
+            .oauth_token_url
+            .clone()
+            .or_else(|| creds.as_ref().and_then(|c| c.token_uri.clone()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OAuth token URL required (set oauth_token_url or oauth_credentials_env)"
+                )
+            })?;
+
+        let client_id = self
+            .resolve_env_var(&self.oauth_client_id_env)?
+            .or_else(|| {
+                creds
+                    .as_ref()
+                    .map(|c| c.client_id.clone())
+                    .filter(|id| !id.is_empty())
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OAuth client ID required (set oauth_client_id_env or oauth_credentials_env)"
+                )
+            })?;
+
+        let client_secret = self
+            .resolve_env_var(&self.oauth_client_secret_env)?
+            .or_else(|| creds.as_ref().and_then(|c| c.client_secret.clone()));
+
+        let scopes = self.oauth_scopes.clone().unwrap_or_default();
+
+        Ok(Some(crate::auth::OAuthEndpoint {
+            auth_url,
+            token_url,
+            scopes,
+            client_id,
+            client_secret,
+            provider_name: self.resolved_provider_name(),
+        }))
+    }
+
+    /// Load and parse base64-encoded OAuth credentials JSON from env var.
+    fn load_credentials_json(&self) -> anyhow::Result<Option<CredentialsJson>> {
+        let env_name = match &self.oauth_credentials_env {
+            Some(name) => name,
+            None => return Ok(None),
+        };
+        let b64 = match std::env::var(env_name) {
+            Ok(v) if !v.is_empty() => v,
+            _ => return Ok(None),
+        };
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)
+            .map_err(|e| anyhow::anyhow!("Failed to decode {env_name} as base64: {e}"))?;
+        let json_str = String::from_utf8(bytes)
+            .map_err(|e| anyhow::anyhow!("Credentials JSON is not valid UTF-8: {e}"))?;
+        let value: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| anyhow::anyhow!("Failed to parse credentials JSON: {e}"))?;
+
+        // Support both "installed" and "web" top-level keys (Google format)
+        let inner = value
+            .get("installed")
+            .or_else(|| value.get("web"))
+            .unwrap_or(&value);
+
+        Ok(Some(CredentialsJson {
+            client_id: inner["client_id"].as_str().unwrap_or_default().to_string(),
+            client_secret: inner["client_secret"].as_str().map(|s| s.to_string()),
+            auth_uri: inner["auth_uri"].as_str().map(|s| s.to_string()),
+            token_uri: inner["token_uri"].as_str().map(|s| s.to_string()),
+        }))
+    }
+
+    /// Resolve an env var by name. Returns Ok(None) if env_name is None.
+    fn resolve_env_var(&self, env_name: &Option<String>) -> anyhow::Result<Option<String>> {
+        match env_name {
+            Some(name) => match std::env::var(name) {
+                Ok(v) if !v.is_empty() => Ok(Some(v)),
+                _ => Ok(None),
+            },
+            None => Ok(None),
+        }
+    }
+}
+
+/// Parsed Google OAuth credentials JSON (internal).
+struct CredentialsJson {
+    client_id: String,
+    client_secret: Option<String>,
+    auth_uri: Option<String>,
+    token_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,13 +489,11 @@ pub struct GenerationConfig {
     pub parallel_extraction: bool,
 
     /// Enable test agent code generation validation (default: true)
-    /// Alias: enable_agent5 (deprecated, will be removed in v0.2.0)
-    #[serde(default = "default_true", alias = "enable_agent5")]
+    #[serde(default = "default_true")]
     pub enable_test: bool,
 
     /// Test agent validation mode: "thorough", "adaptive", or "minimal" (default: "thorough")
-    /// Alias: agent5_mode (deprecated, will be removed in v0.2.0)
-    #[serde(default = "default_test_mode", alias = "agent5_mode")]
+    #[serde(default = "default_test_mode")]
     pub test_mode: String,
 
     /// Enable review agent accuracy/safety validation (default: true)
@@ -333,23 +509,19 @@ pub struct GenerationConfig {
     pub review_max_retries: usize,
 
     /// Optional: Override LLM for extract agent (API extraction)
-    /// Alias: agent1_llm (deprecated, will be removed in v0.2.0)
-    #[serde(default, alias = "agent1_llm")]
+    #[serde(default)]
     pub extract_llm: Option<LlmConfig>,
 
     /// Optional: Override LLM for map agent (pattern extraction)
-    /// Alias: agent2_llm (deprecated, will be removed in v0.2.0)
-    #[serde(default, alias = "agent2_llm")]
+    #[serde(default)]
     pub map_llm: Option<LlmConfig>,
 
     /// Optional: Override LLM for learn agent (context extraction)
-    /// Alias: agent3_llm (deprecated, will be removed in v0.2.0)
-    #[serde(default, alias = "agent3_llm")]
+    #[serde(default)]
     pub learn_llm: Option<LlmConfig>,
 
     /// Optional: Override LLM for create agent (synthesis)
-    /// Alias: agent4_llm (deprecated, will be removed in v0.2.0)
-    #[serde(default, alias = "agent4_llm")]
+    #[serde(default)]
     pub create_llm: Option<LlmConfig>,
 
     /// Optional: Override LLM for review agent (accuracy/safety validation)
@@ -357,8 +529,7 @@ pub struct GenerationConfig {
     pub review_llm: Option<LlmConfig>,
 
     /// Optional: Override LLM for test agent (code execution validation)
-    /// Alias: agent5_llm (deprecated, will be removed in v0.2.0)
-    #[serde(default, alias = "agent5_llm")]
+    #[serde(default)]
     pub test_llm: Option<LlmConfig>,
 
     /// Default version extraction strategy.
@@ -526,29 +697,27 @@ pub struct PromptsConfig {
 
     /// Per-stage mode: "append" (default) or "overwrite"
     /// Test stage only supports "append" (overwrite is ignored)
-    /// Aliases: agent1_mode..agent4_mode (deprecated, will be removed in v0.2.0)
-    #[serde(default, alias = "agent1_mode")]
+    #[serde(default)]
     pub extract_mode: Option<String>,
-    #[serde(default, alias = "agent2_mode")]
+    #[serde(default)]
     pub map_mode: Option<String>,
-    #[serde(default, alias = "agent3_mode")]
+    #[serde(default)]
     pub learn_mode: Option<String>,
-    #[serde(default, alias = "agent4_mode")]
+    #[serde(default)]
     pub create_mode: Option<String>,
 
     /// Custom prompt additions or replacements
-    /// Aliases: agent1_custom..agent5_custom (deprecated, will be removed in v0.2.0)
-    #[serde(default, alias = "agent1_custom")]
+    #[serde(default)]
     pub extract_custom: Option<String>,
-    #[serde(default, alias = "agent2_custom")]
+    #[serde(default)]
     pub map_custom: Option<String>,
-    #[serde(default, alias = "agent3_custom")]
+    #[serde(default)]
     pub learn_custom: Option<String>,
-    #[serde(default, alias = "agent4_custom")]
+    #[serde(default)]
     pub create_custom: Option<String>,
     #[serde(default)]
     pub review_custom: Option<String>,
-    #[serde(default, alias = "agent5_custom")]
+    #[serde(default)]
     pub test_custom: Option<String>,
 }
 
@@ -722,6 +891,13 @@ impl Default for Config {
                 extra_body: std::collections::HashMap::new(),
                 extra_body_json: None,
                 request_timeout_secs: default_request_timeout(),
+                oauth_auth_url: None,
+                oauth_token_url: None,
+                oauth_scopes: None,
+                oauth_client_id_env: None,
+                oauth_client_secret_env: None,
+                oauth_credentials_env: None,
+                extra_headers: Vec::new(),
             },
             generation: GenerationConfig::default(),
             prompts: PromptsConfig::default(),
@@ -759,6 +935,7 @@ impl Default for GenerationConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_default_config() {
@@ -863,6 +1040,13 @@ mod tests {
             extra_body: std::collections::HashMap::new(),
             extra_body_json: None,
             request_timeout_secs: 120,
+            oauth_auth_url: None,
+            oauth_token_url: None,
+            oauth_scopes: None,
+            oauth_client_id_env: None,
+            oauth_client_secret_env: None,
+            oauth_credentials_env: None,
+            extra_headers: Vec::new(),
         };
         assert_eq!(llm.get_max_tokens(), 8192);
 
@@ -1060,14 +1244,14 @@ api_key_env = "ANTHROPIC_API_KEY"
 max_retries = 5
 max_source_tokens = 100000
 
-[generation.agent1_llm]
-provider = "openai-compatible"
+[generation.extract_llm]
+provider_type = "openai-compatible"
 model = "qwen3-coder:latest"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
-[generation.agent5_llm]
-provider = "openai"
+[generation.test_llm]
+provider_type = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 "#;
@@ -1096,31 +1280,31 @@ api_key_env = "ANTHROPIC_API_KEY"
 max_retries = 5
 max_source_tokens = 100000
 
-[generation.agent1_llm]
-provider = "openai-compatible"
+[generation.extract_llm]
+provider_type = "openai-compatible"
 model = "qwen3-coder"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
-[generation.agent2_llm]
-provider = "openai-compatible"
+[generation.map_llm]
+provider_type = "openai-compatible"
 model = "qwen3-coder"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
-[generation.agent3_llm]
-provider = "openai-compatible"
+[generation.learn_llm]
+provider_type = "openai-compatible"
 model = "qwen3-coder"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
-[generation.agent4_llm]
-provider = "openai"
+[generation.create_llm]
+provider_type = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 
-[generation.agent5_llm]
-provider = "openai"
+[generation.test_llm]
+provider_type = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 "#;
@@ -1175,13 +1359,13 @@ api_key_env = "ANTHROPIC_API_KEY"
 max_retries = 5
 max_source_tokens = 100000
 
-[generation.agent4_llm]
-provider = "openai-compatible"
+[generation.create_llm]
+provider_type = "openai-compatible"
 model = "openai/gpt-5.1-codex"
 api_key_env = "NVIDIA_API_KEY"
 base_url = "https://inference-api.nvidia.com/v1/responses"
 
-[generation.agent4_llm.extra_body.reasoning]
+[generation.create_llm.extra_body.reasoning]
 effort = "high"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
@@ -1268,46 +1452,39 @@ max_source_tokens = 100000
     }
 
     #[test]
-    fn test_old_config_names_still_work_via_aliases() {
-        // Old agent1_llm..agent5_llm names should deserialize into new field names
+    fn test_new_config_names_deserialize() {
         let toml = r#"
 [llm]
-provider = "openai"
+provider_type = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 
 [generation]
 max_retries = 5
 max_source_tokens = 100000
-enable_agent5 = false
-agent5_mode = "minimal"
+enable_test = false
+test_mode = "minimal"
 
-[generation.agent1_llm]
-provider = "openai-compatible"
+[generation.extract_llm]
+provider_type = "openai-compatible"
 model = "qwen3-coder:latest"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [prompts]
-agent1_mode = "overwrite"
-agent4_custom = "extra instructions"
-agent5_custom = "test instructions"
+extract_mode = "overwrite"
+create_custom = "extra instructions"
+test_custom = "test instructions"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        // Old enable_agent5 → new enable_test
         assert!(!config.generation.enable_test);
-        // Old agent5_mode → new test_mode
         assert_eq!(config.generation.test_mode, "minimal");
-        // Old agent1_llm → new extract_llm
         assert!(config.generation.extract_llm.is_some());
-        // Old agent1_mode → new extract_mode
         assert_eq!(config.prompts.extract_mode.as_deref(), Some("overwrite"));
-        // Old agent4_custom → new create_custom
         assert_eq!(
             config.prompts.create_custom.as_deref(),
             Some("extra instructions")
         );
-        // Old agent5_custom → new test_custom
         assert_eq!(
             config.prompts.test_custom.as_deref(),
             Some("test instructions")
@@ -1491,6 +1668,7 @@ model = "gemini-2.5-pro"
     fn test_provider_display_all_variants() {
         assert_eq!(format!("{}", Provider::Anthropic), "anthropic");
         assert_eq!(format!("{}", Provider::OpenAI), "openai");
+        assert_eq!(format!("{}", Provider::ChatGPT), "chatgpt");
         assert_eq!(
             format!("{}", Provider::OpenAICompatible),
             "openai-compatible"
@@ -1506,6 +1684,36 @@ model = "gemini-2.5-pro"
     #[test]
     fn test_provider_from_str_invalid() {
         assert!("bad-provider".parse::<Provider>().is_err());
+    }
+
+    #[test]
+    fn test_chatgpt_provider_from_str() {
+        let provider: Provider = "chatgpt".parse().unwrap();
+        assert_eq!(provider, Provider::ChatGPT);
+    }
+
+    #[test]
+    fn test_chatgpt_provider_default_api_key_env() {
+        assert_eq!(Provider::ChatGPT.default_api_key_env(), "OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn test_chatgpt_provider_max_tokens() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::ChatGPT;
+        assert_eq!(config.llm.get_max_tokens(), 8192);
+    }
+
+    #[test]
+    fn test_chatgpt_provider_deserialize() {
+        let toml_str = r#"
+[llm]
+provider_type = "chatgpt"
+model = "gpt-5.2"
+api_key_env = "none"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.llm.provider, Provider::ChatGPT);
     }
 
     #[test]
@@ -1566,5 +1774,305 @@ api_key_env = "none"
     fn test_resolved_provider_name_falls_back_to_provider_type() {
         let config = Config::default();
         assert_eq!(config.llm.resolved_provider_name(), "anthropic");
+    }
+
+    // --- OAuth tests ---
+
+    #[test]
+    fn test_has_oauth_false_by_default() {
+        let config = Config::default();
+        assert!(!config.llm.has_oauth());
+    }
+
+    #[test]
+    fn test_has_oauth_true_with_auth_url() {
+        let mut config = Config::default();
+        config.llm.oauth_auth_url = Some("https://auth.example.com".to_string());
+        assert!(config.llm.has_oauth());
+    }
+
+    #[test]
+    fn test_has_oauth_true_with_credentials_env() {
+        let mut config = Config::default();
+        config.llm.oauth_credentials_env = Some("MY_CREDS".to_string());
+        assert!(config.llm.has_oauth());
+    }
+
+    #[test]
+    fn test_resolve_oauth_endpoint_none_when_no_oauth() {
+        let config = Config::default();
+        let result = config.llm.resolve_oauth_endpoint().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_oauth_endpoint_with_explicit_fields() {
+        std::env::set_var("SKILLDO_TEST_OAUTH_CID", "my-client-id");
+        std::env::set_var("SKILLDO_TEST_OAUTH_CS", "my-secret");
+
+        let mut llm = Config::default().llm;
+        llm.oauth_auth_url = Some("https://auth.example.com/authorize".to_string());
+        llm.oauth_token_url = Some("https://auth.example.com/token".to_string());
+        llm.oauth_scopes = Some("openid email".to_string());
+        llm.oauth_client_id_env = Some("SKILLDO_TEST_OAUTH_CID".to_string());
+        llm.oauth_client_secret_env = Some("SKILLDO_TEST_OAUTH_CS".to_string());
+
+        let endpoint = llm.resolve_oauth_endpoint().unwrap().unwrap();
+        assert_eq!(endpoint.auth_url, "https://auth.example.com/authorize");
+        assert_eq!(endpoint.token_url, "https://auth.example.com/token");
+        assert_eq!(endpoint.scopes, "openid email");
+        assert_eq!(endpoint.client_id, "my-client-id");
+        assert_eq!(endpoint.client_secret, Some("my-secret".to_string()));
+        assert_eq!(endpoint.provider_name, "anthropic"); // default provider name
+
+        std::env::remove_var("SKILLDO_TEST_OAUTH_CID");
+        std::env::remove_var("SKILLDO_TEST_OAUTH_CS");
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_oauth_endpoint_missing_auth_url_errors() {
+        std::env::set_var("SKILLDO_TEST_OAUTH_CID2", "cid");
+        let mut llm = Config::default().llm;
+        llm.oauth_token_url = Some("https://token.example.com".to_string());
+        llm.oauth_client_id_env = Some("SKILLDO_TEST_OAUTH_CID2".to_string());
+
+        let result = llm.resolve_oauth_endpoint();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("auth URL required"));
+
+        std::env::remove_var("SKILLDO_TEST_OAUTH_CID2");
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_oauth_endpoint_missing_token_url_errors() {
+        std::env::set_var("SKILLDO_TEST_OAUTH_CID3", "cid");
+        let mut llm = Config::default().llm;
+        llm.oauth_auth_url = Some("https://auth.example.com".to_string());
+        llm.oauth_client_id_env = Some("SKILLDO_TEST_OAUTH_CID3".to_string());
+
+        let result = llm.resolve_oauth_endpoint();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("token URL required"));
+
+        std::env::remove_var("SKILLDO_TEST_OAUTH_CID3");
+    }
+
+    #[test]
+    fn test_resolve_oauth_endpoint_missing_client_id_errors() {
+        let mut llm = Config::default().llm;
+        llm.oauth_auth_url = Some("https://auth.example.com".to_string());
+        llm.oauth_token_url = Some("https://token.example.com".to_string());
+
+        let result = llm.resolve_oauth_endpoint();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("client ID required"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_credentials_json_installed_format() {
+        let json = r#"{"installed":{"client_id":"cid","client_secret":"cs","auth_uri":"https://auth","token_uri":"https://token"}}"#;
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json);
+        std::env::set_var("SKILLDO_TEST_CREDS_JSON", &b64);
+
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_JSON".to_string());
+        llm.oauth_auth_url = None;
+        llm.oauth_token_url = None;
+
+        let endpoint = llm.resolve_oauth_endpoint().unwrap().unwrap();
+        assert_eq!(endpoint.auth_url, "https://auth");
+        assert_eq!(endpoint.token_url, "https://token");
+        assert_eq!(endpoint.client_id, "cid");
+        assert_eq!(endpoint.client_secret, Some("cs".to_string()));
+
+        std::env::remove_var("SKILLDO_TEST_CREDS_JSON");
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_credentials_json_web_format() {
+        let json = r#"{"web":{"client_id":"web-cid","client_secret":"web-cs","auth_uri":"https://web-auth","token_uri":"https://web-token"}}"#;
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json);
+        std::env::set_var("SKILLDO_TEST_CREDS_WEB", &b64);
+
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_WEB".to_string());
+
+        let endpoint = llm.resolve_oauth_endpoint().unwrap().unwrap();
+        assert_eq!(endpoint.client_id, "web-cid");
+        assert_eq!(endpoint.client_secret, Some("web-cs".to_string()));
+
+        std::env::remove_var("SKILLDO_TEST_CREDS_WEB");
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_credentials_json_invalid_base64() {
+        std::env::set_var("SKILLDO_TEST_CREDS_BAD", "not-valid-base64!!!");
+
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_BAD".to_string());
+
+        let result = llm.resolve_oauth_endpoint();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("base64"));
+
+        std::env::remove_var("SKILLDO_TEST_CREDS_BAD");
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_credentials_json_empty_env_returns_none() {
+        std::env::set_var("SKILLDO_TEST_CREDS_EMPTY", "");
+
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_EMPTY".to_string());
+
+        // has_oauth is true but credentials are empty — will fail on missing auth_url
+        assert!(llm.has_oauth());
+
+        std::env::remove_var("SKILLDO_TEST_CREDS_EMPTY");
+    }
+
+    #[test]
+    #[serial]
+    fn test_explicit_fields_override_credentials_json() {
+        let json = r#"{"installed":{"client_id":"cred-cid","auth_uri":"https://cred-auth","token_uri":"https://cred-token"}}"#;
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json);
+        std::env::set_var("SKILLDO_TEST_CREDS_OVERRIDE", &b64);
+        std::env::set_var("SKILLDO_TEST_OVERRIDE_CID", "explicit-cid");
+
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_OVERRIDE".to_string());
+        llm.oauth_auth_url = Some("https://explicit-auth".to_string()); // override
+        llm.oauth_client_id_env = Some("SKILLDO_TEST_OVERRIDE_CID".to_string()); // override
+
+        let endpoint = llm.resolve_oauth_endpoint().unwrap().unwrap();
+        assert_eq!(endpoint.auth_url, "https://explicit-auth"); // explicit wins
+        assert_eq!(endpoint.token_url, "https://cred-token"); // from creds
+        assert_eq!(endpoint.client_id, "explicit-cid"); // explicit wins
+
+        std::env::remove_var("SKILLDO_TEST_CREDS_OVERRIDE");
+        std::env::remove_var("SKILLDO_TEST_OVERRIDE_CID");
+    }
+
+    #[test]
+    fn test_oauth_fields_deserialize_from_toml() {
+        let toml_str = r#"
+[llm]
+provider_type = "openai"
+model = "gpt-5.2"
+api_key_env = "none"
+oauth_auth_url = "https://auth.openai.com/oauth/authorize"
+oauth_token_url = "https://auth.openai.com/oauth/token"
+oauth_scopes = "openid email"
+oauth_client_id_env = "OPENAI_CLIENT_ID"
+
+[generation]
+max_retries = 3
+max_source_tokens = 50000
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.llm.oauth_auth_url,
+            Some("https://auth.openai.com/oauth/authorize".to_string())
+        );
+        assert_eq!(config.llm.oauth_scopes, Some("openid email".to_string()));
+        assert!(config.llm.has_oauth());
+    }
+
+    #[test]
+    fn test_resolved_provider_name_with_provider_name_set() {
+        let mut llm = Config::default().llm;
+        llm.provider_name = Some("my-deepseek".to_string());
+        assert_eq!(llm.resolved_provider_name(), "my-deepseek");
+    }
+
+    // ── extra_headers tests ──────────────────────────────────────
+
+    #[test]
+    fn test_resolve_extra_headers_valid() {
+        let mut llm = Config::default().llm;
+        llm.extra_headers = vec![
+            "X-Custom: value1".to_string(),
+            "ChatGPT-Account-ID: abc-123".to_string(),
+        ];
+        let headers = llm.resolve_extra_headers().unwrap();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0], ("X-Custom".to_string(), "value1".to_string()));
+        assert_eq!(
+            headers[1],
+            ("ChatGPT-Account-ID".to_string(), "abc-123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_extra_headers_empty() {
+        let llm = Config::default().llm;
+        let headers = llm.resolve_extra_headers().unwrap();
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_extra_headers_invalid_format() {
+        let mut llm = Config::default().llm;
+        llm.extra_headers = vec!["no-colon-here".to_string()];
+        let result = llm.resolve_extra_headers();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid extra_headers"));
+    }
+
+    #[test]
+    fn test_resolve_extra_headers_trims_whitespace() {
+        let mut llm = Config::default().llm;
+        llm.extra_headers = vec!["  X-Token  :  bearer abc123  ".to_string()];
+        let headers = llm.resolve_extra_headers().unwrap();
+        assert_eq!(
+            headers[0],
+            ("X-Token".to_string(), "bearer abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_extra_headers_value_with_colons() {
+        let mut llm = Config::default().llm;
+        llm.extra_headers = vec!["Authorization: Bearer eyJ0:abc:xyz".to_string()];
+        let headers = llm.resolve_extra_headers().unwrap();
+        assert_eq!(
+            headers[0],
+            (
+                "Authorization".to_string(),
+                "Bearer eyJ0:abc:xyz".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_extra_headers_toml_deserialization() {
+        let toml = r#"
+            [llm]
+            provider_type = "openai"
+            model = "gpt-5.2"
+            extra_headers = ["X-Custom: value", "X-Other: 42"]
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.llm.extra_headers.len(), 2);
+        assert_eq!(config.llm.extra_headers[0], "X-Custom: value");
     }
 }

@@ -774,7 +774,7 @@ timeout = 5
     }
 
     #[test]
-    fn test_run_with_agent5_disabled() {
+    fn test_run_with_test_agent_disabled() {
         use std::io::Write;
         let dir = tempfile::TempDir::new().unwrap();
         let config_path = dir.path().join("test.toml");

@@ -1,12 +1,12 @@
 [package]
 name = "skilldo"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "form"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -24,10 +24,14 @@ boreal = "1.1.0"
 git2 = "0.20"
 auth-git2 = "0.5"
 thiserror = "2"
+sha2 = "0.10"
+rand = "0.9"
+open = "5"
 libgit2-sys = { version = "0.18", features = ["vendored"] }
 
 [dev-dependencies]
 mockito = "1"
+serial_test = "3"
 
 [profile.release]
 overflow-checks = true

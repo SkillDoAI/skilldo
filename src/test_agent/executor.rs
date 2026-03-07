@@ -237,6 +237,131 @@ dependencies = [
     }
 }
 
+/// Go executor — runs `go run main.go` in a temp directory with `go mod init`
+pub struct GoExecutor {
+    timeout_secs: u64,
+}
+
+impl GoExecutor {
+    pub fn new() -> Self {
+        Self { timeout_secs: 60 }
+    }
+
+    pub fn with_timeout(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self
+    }
+
+    /// Check if go is available in PATH
+    async fn check_go_available() -> bool {
+        Command::new("go")
+            .arg("version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+impl Default for GoExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageExecutor for GoExecutor {
+    async fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
+        info!("Setting up Go environment with {} dependencies", deps.len());
+
+        if !Self::check_go_available().await {
+            bail!("go is not installed or not in PATH");
+        }
+
+        let temp_dir = TempDir::new().context("Failed to create temp directory")?;
+        debug!("Created temp directory: {}", temp_dir.path().display());
+
+        // go mod init
+        let mut init_cmd = Command::new("go");
+        init_cmd
+            .args(["mod", "init", "test"])
+            .current_dir(temp_dir.path());
+        let init_output = run_cmd_with_timeout(init_cmd, Duration::from_secs(30)).await?;
+        if !init_output.status.success() {
+            let stderr = String::from_utf8_lossy(&init_output.stderr);
+            bail!("go mod init failed: {}", stderr);
+        }
+
+        // go get for each dependency
+        for dep in deps {
+            sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+            info!("Installing Go dependency: {}", dep);
+            let mut get_cmd = Command::new("go");
+            get_cmd.args(["get", dep]).current_dir(temp_dir.path());
+            let get_output = run_cmd_with_timeout(get_cmd, Duration::from_secs(120)).await?;
+            if !get_output.status.success() {
+                let stderr = String::from_utf8_lossy(&get_output.stderr);
+                bail!("go get {} failed: {}", dep, stderr);
+            }
+        }
+
+        info!("Go environment setup complete");
+
+        Ok(ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: deps.to_vec(),
+        })
+    }
+
+    async fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
+        debug!("Running Go code ({} bytes)", code.len());
+
+        let script_path = env.temp_dir.path().join("main.go");
+        fs::write(&script_path, code).context("Failed to write main.go")?;
+
+        let timeout = Duration::from_secs(self.timeout_secs);
+        let mut go_cmd = Command::new("go");
+        go_cmd
+            .args(["run", "main.go"])
+            .current_dir(env.temp_dir.path());
+
+        let result = run_cmd_with_timeout(go_cmd, timeout).await;
+
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    debug!("Go code execution passed");
+                    Ok(ExecutionResult::Pass(stdout))
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    debug!("Go code execution failed");
+                    Ok(ExecutionResult::Fail(stderr))
+                }
+            }
+            Err(e) => {
+                if crate::error::SkillDoError::is_timeout(&e) {
+                    warn!(
+                        "Go code execution timed out after {} seconds",
+                        self.timeout_secs
+                    );
+                    Ok(ExecutionResult::Timeout)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,5 +702,118 @@ print(f"Click version: {click.__version__}")
         let result = ExecutionResult::Fail(String::new());
         assert!(result.is_fail());
         assert_eq!(result.error_message(), "");
+    }
+
+    // --- GoExecutor tests ---
+
+    #[tokio::test]
+    async fn test_check_go_available() {
+        // Just check it doesn't panic - availability depends on system
+        let _ = GoExecutor::check_go_available().await;
+    }
+
+    #[test]
+    fn test_go_executor_default() {
+        let executor = GoExecutor::default();
+        assert_eq!(executor.timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_go_executor_with_timeout() {
+        let executor = GoExecutor::new().with_timeout(30);
+        assert_eq!(executor.timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_go_executor_with_timeout_chained() {
+        let executor = GoExecutor::new().with_timeout(120);
+        assert_eq!(executor.timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_go_executor_with_timeout_zero() {
+        let executor = GoExecutor::new().with_timeout(0);
+        assert_eq!(executor.timeout_secs, 0);
+    }
+
+    #[tokio::test]
+    async fn test_go_setup_environment_no_deps() {
+        if !GoExecutor::check_go_available().await {
+            return; // Skip if go not installed
+        }
+        let executor = GoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        assert!(env.temp_dir.path().exists());
+        assert!(env.temp_dir.path().join("go.mod").exists());
+    }
+
+    #[tokio::test]
+    async fn test_go_run_simple_code() {
+        if !GoExecutor::check_go_available().await {
+            return;
+        }
+        let executor = GoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello from Go test")
+}
+"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_pass());
+        if let ExecutionResult::Pass(output) = result {
+            assert!(output.contains("Hello from Go test"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_go_run_failing_code() {
+        if !GoExecutor::check_go_available().await {
+            return;
+        }
+        let executor = GoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"package main
+
+import "log"
+
+func main() {
+    log.Fatal("Test failure")
+}
+"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
+    }
+
+    #[tokio::test]
+    async fn test_go_setup_environment_rejects_bad_deps() {
+        if !GoExecutor::check_go_available().await {
+            return;
+        }
+        let executor = GoExecutor::new();
+        let result = executor
+            .setup_environment(&["valid-pkg; rm -rf /".to_string()])
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_go_cleanup_is_noop() {
+        let executor = GoExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        assert!(executor.cleanup(&env).await.is_ok());
     }
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod auth;
 mod changelog;
 mod cli;
 mod config;
@@ -73,7 +74,7 @@ enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// LLM provider: anthropic, openai, gemini, openai-compatible
+        /// LLM provider: anthropic, openai, chatgpt, gemini, openai-compatible
         #[arg(long)]
         provider: Option<String>,
 
@@ -85,20 +86,20 @@ enum Commands {
         #[arg(long)]
         max_retries: Option<usize>,
 
-        /// Override test stage LLM model (alias: --agent5-model)
-        #[arg(long = "test-model", visible_alias = "agent5-model")]
+        /// Override test stage LLM model
+        #[arg(long = "test-model")]
         test_model: Option<String>,
 
-        /// Override test stage LLM provider (alias: --agent5-provider)
-        #[arg(long = "test-provider", visible_alias = "agent5-provider")]
+        /// Override test stage LLM provider
+        #[arg(long = "test-provider")]
         test_provider: Option<String>,
 
-        /// Disable test stage validation (alias: --no-agent5)
-        #[arg(long = "no-test", visible_alias = "no-agent5")]
+        /// Disable test stage validation
+        #[arg(long = "no-test")]
         no_test: bool,
 
-        /// Test stage validation mode: thorough, adaptive, minimal (alias: --agent5-mode)
-        #[arg(long = "test-mode", visible_alias = "agent5-mode")]
+        /// Test stage validation mode: thorough, adaptive, minimal
+        #[arg(long = "test-mode")]
         test_mode: Option<String>,
 
         /// Container runtime: docker or podman
@@ -169,7 +170,7 @@ enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// LLM provider: anthropic, openai, gemini, openai-compatible
+        /// LLM provider: anthropic, openai, chatgpt, gemini, openai-compatible
         #[arg(long)]
         provider: Option<String>,
 
@@ -210,6 +211,20 @@ enum Commands {
         #[arg(long)]
         stage: Option<String>,
     },
+
+    /// Manage OAuth authentication for LLM providers
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+
+    /// Quick LLM auth smoke test
+    #[command(hide = true)]
+    HelloWorld {
+        /// Path to config file
+        #[arg(long)]
+        config: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -223,6 +238,28 @@ enum ConfigAction {
         /// Exit with error code on validation failures (for CI)
         #[arg(long)]
         strict: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthAction {
+    /// Log in to configured OAuth providers (opens browser)
+    Login {
+        /// Path to config file
+        #[arg(long)]
+        config: Option<String>,
+    },
+    /// Show OAuth token status for configured providers
+    Status {
+        /// Path to config file
+        #[arg(long)]
+        config: Option<String>,
+    },
+    /// Remove stored OAuth tokens
+    Logout {
+        /// Path to config file
+        #[arg(long)]
+        config: Option<String>,
     },
 }
 
@@ -344,6 +381,32 @@ async fn main() -> Result<()> {
         },
         Commands::ShowPrompts { language, stage } => {
             cli::show_prompts::run(&language, stage.as_deref())?;
+        }
+        Commands::Auth { action } => match action {
+            AuthAction::Login { config } => {
+                cli::auth::login(config).await?;
+            }
+            AuthAction::Status { config } => {
+                cli::auth::status(config)?;
+            }
+            AuthAction::Logout { config } => {
+                cli::auth::logout(config)?;
+            }
+        },
+        Commands::HelloWorld { config } => {
+            let cfg = crate::config::Config::load_with_path(config)?;
+            let client = crate::llm::factory::create_client(&cfg, false).await?;
+            println!(
+                "\u{1F426} Asking {} ({})...\n",
+                cfg.llm.resolved_provider_name(),
+                cfg.llm.model
+            );
+            let response = client
+                .complete(
+                    "What is the airspeed velocity of an unladen swallow? Be brief and witty.",
+                )
+                .await?;
+            println!("{response}");
         }
     }
 
@@ -921,43 +984,6 @@ mod tests {
         });
     }
 
-    // --- Alias tests: --no-agent5, --agent5-model, --agent5-provider, --agent5-mode ---
-
-    #[test]
-    fn test_parse_generate_no_test_agent_alias() {
-        let cli = Cli::try_parse_from(["skilldo", "generate", "--no-agent5"]).unwrap();
-        assert_generate!(cli, |no_test| {
-            assert!(no_test);
-        });
-    }
-
-    #[test]
-    fn test_parse_generate_test_model_alias() {
-        let cli =
-            Cli::try_parse_from(["skilldo", "generate", "--agent5-model", "gpt-5.2"]).unwrap();
-        assert_generate!(cli, |test_model| {
-            assert_eq!(test_model.unwrap(), "gpt-5.2");
-        });
-    }
-
-    #[test]
-    fn test_parse_generate_test_provider_alias() {
-        let cli =
-            Cli::try_parse_from(["skilldo", "generate", "--agent5-provider", "anthropic"]).unwrap();
-        assert_generate!(cli, |test_provider| {
-            assert_eq!(test_provider.unwrap(), "anthropic");
-        });
-    }
-
-    #[test]
-    fn test_parse_generate_test_mode_alias() {
-        let cli =
-            Cli::try_parse_from(["skilldo", "generate", "--agent5-mode", "thorough"]).unwrap();
-        assert_generate!(cli, |test_mode| {
-            assert_eq!(test_mode.unwrap(), "thorough");
-        });
-    }
-
     // --- Global flags after subcommand ---
 
     #[test]
@@ -1257,19 +1283,19 @@ mod tests {
         });
     }
 
-    // --- Generate with all aliases combined ---
+    // --- Generate with all test flags combined ---
 
     #[test]
-    fn test_parse_generate_all_aliases() {
+    fn test_parse_generate_all_test_flags() {
         let cli = Cli::try_parse_from([
             "skilldo",
             "generate",
-            "--no-agent5",
-            "--agent5-model",
+            "--no-test",
+            "--test-model",
             "claude-3",
-            "--agent5-provider",
+            "--test-provider",
             "anthropic",
-            "--agent5-mode",
+            "--test-mode",
             "minimal",
         ])
         .unwrap();
@@ -1335,5 +1361,64 @@ mod tests {
     fn test_dispatch_config_variant() {
         let cli = Cli::try_parse_from(["skilldo", "config", "check"]).unwrap();
         assert!(matches!(cli.command, Commands::Config { .. }));
+    }
+
+    #[test]
+    fn test_dispatch_auth_login() {
+        let cli = Cli::try_parse_from(["skilldo", "auth", "login"]).unwrap();
+        let Commands::Auth { action } = cli.command else {
+            panic!("Expected Auth command");
+        };
+        assert!(matches!(action, AuthAction::Login { config: None }));
+    }
+
+    #[test]
+    fn test_dispatch_auth_status() {
+        let cli = Cli::try_parse_from(["skilldo", "auth", "status"]).unwrap();
+        assert!(matches!(cli.command, Commands::Auth { .. }));
+    }
+
+    #[test]
+    fn test_dispatch_auth_logout() {
+        let cli = Cli::try_parse_from(["skilldo", "auth", "logout"]).unwrap();
+        assert!(matches!(cli.command, Commands::Auth { .. }));
+    }
+
+    #[test]
+    fn test_dispatch_auth_login_with_config() {
+        let cli = Cli::try_parse_from(["skilldo", "auth", "login", "--config", "my.toml"]).unwrap();
+        let Commands::Auth { action } = cli.command else {
+            panic!("Expected Auth command");
+        };
+        let AuthAction::Login { config } = action else {
+            panic!("Expected Login action");
+        };
+        assert_eq!(config, Some("my.toml".to_string()));
+    }
+
+    #[test]
+    fn test_dispatch_hello_world() {
+        let cli = Cli::try_parse_from(["skilldo", "hello-world"]).unwrap();
+        assert!(matches!(cli.command, Commands::HelloWorld { config: None }));
+    }
+
+    #[test]
+    fn test_dispatch_hello_world_with_config() {
+        let cli = Cli::try_parse_from(["skilldo", "hello-world", "--config", "test.toml"]).unwrap();
+        let Commands::HelloWorld { config } = cli.command else {
+            panic!("Expected HelloWorld command");
+        };
+        assert_eq!(config, Some("test.toml".to_string()));
+    }
+
+    #[test]
+    fn test_hello_world_is_hidden() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let hello = cmd
+            .get_subcommands()
+            .find(|s| s.get_name() == "hello-world");
+        assert!(hello.is_some());
+        assert!(hello.unwrap().is_hide_set());
     }
 }

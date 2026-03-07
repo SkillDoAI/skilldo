@@ -59,7 +59,7 @@ pub async fn run(
         config.generation.container.timeout = timeout;
     }
 
-    let client = factory::create_client_from_llm_config(&llm_config, dry_run)?;
+    let client = factory::create_client_from_llm_config(&llm_config, dry_run).await?;
     if dry_run {
         info!("Using mock LLM client");
     } else {

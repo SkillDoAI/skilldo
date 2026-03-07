@@ -1,7 +1,7 @@
 # Anthropic (Claude) — cloud provider
 [llm]
-provider = "anthropic"
-model = "claude-sonnet-4-5-20250929"
+provider_type = "anthropic"
+model = "claude-sonnet-4-6"
 api_key_env = "ANTHROPIC_API_KEY"
 
 [generation]

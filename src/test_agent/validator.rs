@@ -6,7 +6,7 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
-use super::executor::{ExecutionResult, PythonUvExecutor};
+use super::executor::{ExecutionResult, GoExecutor, PythonUvExecutor};
 use super::go_code_gen::GoCodeGenerator;
 use super::go_parser::GoParser;
 use super::python_code_gen::PythonCodeGenerator;
@@ -115,6 +115,8 @@ pub struct TestCodeValidator<'a> {
     parser: Box<dyn LanguageParser>,
     code_generator: Box<dyn LanguageCodeGenerator + 'a>,
     executor: Box<dyn LanguageExecutor>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    execution_mode: ExecutionMode,
     mode: ValidationMode,
     /// Install source from config; when not Registry, local_package is set on code_generator
     install_source: InstallSource,
@@ -149,17 +151,20 @@ impl<'a> TestCodeValidator<'a> {
                             .with_custom_instructions(custom_instructions),
                     ),
                     executor,
+                    execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
                 })
             }
             Language::Go => {
-                // Go only supports container execution (no bare-metal executor yet)
-                if execution_mode == ExecutionMode::BareMetal {
-                    warn!("Go bare-metal executor not available; using container instead");
-                }
-                let executor: Box<dyn LanguageExecutor> =
-                    Box::new(ContainerExecutor::new(config, Language::Go));
+                let executor: Box<dyn LanguageExecutor> = match execution_mode {
+                    ExecutionMode::BareMetal => {
+                        Box::new(GoExecutor::new().with_timeout(config.timeout))
+                    }
+                    ExecutionMode::Container => {
+                        Box::new(ContainerExecutor::new(config, Language::Go))
+                    }
+                };
                 Ok(Self {
                     language: Language::Go,
                     parser: Box::new(GoParser),
@@ -168,12 +173,19 @@ impl<'a> TestCodeValidator<'a> {
                             .with_custom_instructions(custom_instructions),
                     ),
                     executor,
+                    execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
                 })
             }
             _ => anyhow::bail!("Test agent not yet supported for {}", language.as_str()),
         }
+    }
+
+    /// Returns the execution mode used by this validator's executor.
+    #[cfg(test)]
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
     }
 
     /// Create a new test agent validator for Python (convenience wrapper).
@@ -728,6 +740,7 @@ mod tests {
             parser,
             code_generator,
             executor,
+            execution_mode: ExecutionMode::Container,
             mode,
             install_source,
         }
@@ -1303,7 +1316,7 @@ mod tests {
     }
 
     #[test]
-    fn test_new_go_baremetal_falls_back_to_container() {
+    fn test_new_go_baremetal_uses_go_executor() {
         use crate::llm::client::MockLlmClient;
 
         let client = MockLlmClient;
@@ -1311,12 +1324,21 @@ mod tests {
             execution_mode: ExecutionMode::BareMetal,
             ..Default::default()
         };
-        // Go doesn't have a bare-metal executor; should still construct (with warning)
-        let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
-        assert!(
-            validator.is_ok(),
-            "Go should fall back to container even when bare-metal requested"
-        );
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+    }
+
+    #[test]
+    fn test_new_go_container_uses_container_executor() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::Container);
     }
 
     #[test]

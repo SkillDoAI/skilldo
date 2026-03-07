@@ -1,7 +1,7 @@
 # Hybrid — cheap local model for extraction, strong cloud model for validation
 # Best of both worlds: fast + accurate
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "qwen3-coder:latest"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
@@ -15,7 +15,7 @@ test_mode = "thorough"
 
 # Test stage uses GPT-5.2 for code generation (better at writing test code)
 [generation.test_llm]
-provider = "openai"
+provider_type = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 

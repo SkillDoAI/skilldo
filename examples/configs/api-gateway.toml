@@ -6,7 +6,7 @@
 # Replace base_url and model with your provider's values.
 
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "meta/llama-3.1-70b-instruct"
 api_key_env = "GATEWAY_API_KEY"
 base_url = "https://api.your-gateway.com/v1"

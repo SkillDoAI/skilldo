@@ -5,6 +5,7 @@
 //! AI coding assistants. Supports multiple LLM providers (OpenAI, Anthropic, Ollama)
 //! and container-based code validation.
 
+pub mod auth;
 pub mod changelog;
 pub mod cli;
 pub mod config;
