@@ -82,8 +82,14 @@ pub async fn create_client_from_llm_config(
                 warn!("extra_body is ignored for ChatGPT provider (Responses API does not support it)");
             }
             Box::new(
-                ChatGPTClient::new(api_key, llm_config.model.clone(), timeout, use_bearer)?
-                    .with_extra_headers(extra_headers),
+                ChatGPTClient::new(
+                    api_key,
+                    llm_config.model.clone(),
+                    max_tokens,
+                    timeout,
+                    use_bearer,
+                )?
+                .with_extra_headers(extra_headers),
             )
         }
 

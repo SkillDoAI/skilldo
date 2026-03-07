@@ -438,6 +438,7 @@ impl LlmClient for GeminiClient {
 pub struct ChatGPTClient {
     api_key: SecretString,
     model: String,
+    max_tokens: u32,
     base_url: String,
     extra_headers: Vec<(String, String)>,
     client: Client,
@@ -448,6 +449,8 @@ struct ResponsesRequest {
     model: String,
     instructions: String,
     input: Vec<ResponsesInputMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
     store: bool,
 }
 
@@ -476,6 +479,7 @@ impl ChatGPTClient {
     pub fn new(
         api_key: String,
         model: String,
+        max_tokens: u32,
         timeout_secs: u64,
         use_chatgpt_backend: bool,
     ) -> Result<Self> {
@@ -487,6 +491,7 @@ impl ChatGPTClient {
         Ok(Self {
             api_key: api_key.into(),
             model,
+            max_tokens,
             base_url,
             extra_headers: Vec::new(),
             client: build_http_client(timeout_secs)?,
@@ -509,6 +514,7 @@ impl LlmClient for ChatGPTClient {
                 role: "user".to_string(),
                 content: prompt.to_string(),
             }],
+            max_output_tokens: Some(self.max_tokens),
             store: false,
         };
 
@@ -1000,8 +1006,14 @@ mod tests {
 
     #[test]
     fn test_chatgpt_client_creation_backend() {
-        let client =
-            ChatGPTClient::new("key".to_string(), "gpt-5.2-codex".to_string(), 120, true).unwrap();
+        let client = ChatGPTClient::new(
+            "key".to_string(),
+            "gpt-5.2-codex".to_string(),
+            8192,
+            120,
+            true,
+        )
+        .unwrap();
         assert_eq!(client.base_url, "https://chatgpt.com/backend-api/codex");
         assert_eq!(client.model, "gpt-5.2-codex");
     }
@@ -1009,13 +1021,13 @@ mod tests {
     #[test]
     fn test_chatgpt_client_creation_api() {
         let client =
-            ChatGPTClient::new("key".to_string(), "gpt-5.2".to_string(), 120, false).unwrap();
+            ChatGPTClient::new("key".to_string(), "gpt-5.2".to_string(), 8192, 120, false).unwrap();
         assert_eq!(client.base_url, "https://api.openai.com/v1");
     }
 
     #[test]
     fn test_chatgpt_client_extra_headers() {
-        let client = ChatGPTClient::new("key".to_string(), "m".to_string(), 120, true)
+        let client = ChatGPTClient::new("key".to_string(), "m".to_string(), 8192, 120, true)
             .unwrap()
             .with_extra_headers(vec![("X-Custom".to_string(), "val".to_string())]);
         assert_eq!(client.extra_headers.len(), 1);
@@ -1031,15 +1043,29 @@ mod tests {
                 role: "user".to_string(),
                 content: "hello".to_string(),
             }],
+            max_output_tokens: Some(8192),
             store: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["model"], "gpt-5.2-codex");
-        assert!(json.get("stream").is_none());
+        assert_eq!(json["max_output_tokens"], 8192);
         assert_eq!(json["store"], false);
         assert!(json["instructions"].as_str().unwrap().contains("precisely"));
         assert_eq!(json["input"][0]["role"], "user");
         assert_eq!(json["input"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn test_responses_request_max_output_tokens_none_skipped() {
+        let req = ResponsesRequest {
+            model: "m".to_string(),
+            instructions: "i".to_string(),
+            input: vec![],
+            max_output_tokens: None,
+            store: false,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("max_output_tokens").is_none());
     }
 
     #[test]

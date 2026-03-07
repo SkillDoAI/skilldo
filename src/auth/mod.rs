@@ -146,15 +146,30 @@ fn ensure_secure_dir(path: &PathBuf) -> Result<()> {
 }
 
 /// Write file with secure permissions (0o600 on Unix).
+/// Uses `OpenOptions::mode()` to set permissions at creation time, avoiding
+/// a TOCTOU race where the file is briefly world-readable.
 fn write_secure_file(path: &PathBuf, content: &str) -> Result<()> {
-    std::fs::write(path, content)
-        .with_context(|| format!("Failed to write file: {}", path.display()))?;
-
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("Failed to write file: {}", path.display()))?;
+        file.write_all(content.as_bytes())
+            .with_context(|| format!("Failed to write file: {}", path.display()))?;
     }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content)
+            .with_context(|| format!("Failed to write file: {}", path.display()))?;
+    }
+
     Ok(())
 }
 
