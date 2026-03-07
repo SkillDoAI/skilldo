@@ -16,12 +16,28 @@ pub async fn create_client_from_llm_config(
         return Ok(Box::new(MockLlmClient::new()));
     }
 
-    // Try OAuth token first — if configured and tokens are available
+    // Try OAuth token first — if configured and tokens are available.
+    // Errors are logged and treated as None so we fall through to API-key auth.
     let oauth_token = if llm_config.has_oauth() {
-        if let Some(endpoint) = llm_config.resolve_oauth_endpoint()? {
-            crate::auth::resolve_oauth_token(&endpoint).await?
-        } else {
-            None
+        match llm_config.resolve_oauth_endpoint() {
+            Ok(Some(endpoint)) => match crate::auth::resolve_oauth_token(&endpoint).await {
+                Ok(token) => token,
+                Err(e) => {
+                    debug!(
+                        "OAuth token resolution failed for '{}', falling back to API key: {e}",
+                        llm_config.resolved_provider_name()
+                    );
+                    None
+                }
+            },
+            Ok(None) => None,
+            Err(e) => {
+                debug!(
+                    "OAuth endpoint resolution failed for '{}', falling back to API key: {e}",
+                    llm_config.resolved_provider_name()
+                );
+                None
+            }
         }
     } else {
         None
