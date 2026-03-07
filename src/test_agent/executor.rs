@@ -287,8 +287,7 @@ impl LanguageExecutor for GoExecutor {
         let mut init_cmd = Command::new("go");
         init_cmd
             .args(["mod", "init", "test"])
-            .current_dir(temp_dir.path())
-            .stdout(Stdio::null());
+            .current_dir(temp_dir.path());
         let init_output = run_cmd_with_timeout(init_cmd, Duration::from_secs(30)).await?;
         if !init_output.status.success() {
             let stderr = String::from_utf8_lossy(&init_output.stderr);

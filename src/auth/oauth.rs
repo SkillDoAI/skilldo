@@ -16,6 +16,14 @@ const OPENAI_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const CALLBACK_TIMEOUT_SECS: u64 = 120;
 const OAUTH_HTTP_TIMEOUT_SECS: u64 = 30;
 
+/// Escape HTML special characters to prevent injection in error pages.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Build a reqwest client with a timeout for OAuth token operations.
 fn oauth_http_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -141,7 +149,9 @@ async fn start_callback_server_on_port(expected_state: &str, port: u16) -> Resul
                 .get("error_description")
                 .map(|s| s.as_str())
                 .unwrap_or("");
-            let body = format!("<html><body><h1>Authentication Failed</h1><p>{error}: {description}</p><p>You can close this tab.</p></body></html>");
+            let error_escaped = html_escape(error);
+            let desc_escaped = html_escape(description);
+            let body = format!("<html><body><h1>Authentication Failed</h1><p>{error_escaped}: {desc_escaped}</p><p>You can close this tab.</p></body></html>");
             let response = format!(
                 "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(), body
@@ -765,5 +775,16 @@ mod tests {
     #[test]
     fn urlencoding_invalid_hex_chars() {
         assert_eq!(urlencoding::decode("hello%ZZ"), "hello%ZZ");
+    }
+
+    #[test]
+    fn html_escape_prevents_injection() {
+        assert_eq!(
+            html_escape("<script>alert(1)</script>"),
+            "&lt;script&gt;alert(1)&lt;/script&gt;"
+        );
+        assert_eq!(html_escape("a&b"), "a&amp;b");
+        assert_eq!(html_escape("safe text"), "safe text");
+        assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
     }
 }
