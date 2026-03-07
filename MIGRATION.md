@@ -2,7 +2,7 @@
 
 If you're one of the three users using this in our early stages — first off, thank you. Seriously. You're either brave, curious, or lost. We appreciate all three.
 
-There are some design changes we made that'll affect your config going forward. The old names still work (we're not monsters), but they'll be removed in v0.3.0. Here's what changed and how to fix it.
+There are some design changes we made that'll affect your config going forward. Here's what changed, what's deprecated, and what's been removed.
 
 Or, if you're feeling lazy, scroll to the bottom and copy-paste the LLM prompt. Let your AI do it.
 
@@ -11,6 +11,8 @@ Or, if you're feeling lazy, scroll to the bottom and copy-paste the LLM prompt. 
 ## v0.2.3 — The Great Rename
 
 We renamed the pipeline stages from numbered agents (`agent1`, `agent2`, etc.) to actual names that tell you what they do. Revolutionary, we know.
+
+> **Note:** The old `agentN` aliases were deprecated in v0.2.3 and **removed in v0.2.4**. If you're upgrading from v0.2.2 or earlier, you must rename these fields.
 
 ### Config field renames (`skilldo.toml`)
 
@@ -40,7 +42,7 @@ We renamed the pipeline stages from numbered agents (`agent1`, `agent2`, etc.) t
 
 | Was | Is now | Why |
 |-----|--------|-----|
-| `provider` | `provider_type` | Prep for OAuth — `provider` was ambiguous |
+| `provider` | `provider_type` | Prep for OAuth — `provider` still accepted as alias, removed in 0.5.0 |
 
 ### New field: `provider_name`
 
@@ -54,7 +56,7 @@ provider_name = "my-openai-sub"  # optional
 
 ### CLI flag renames
 
-Same idea — numbered flags → named flags. Old ones still work as aliases.
+Same idea — numbered flags → named flags. These aliases were **removed in v0.2.4**.
 
 | Was | Is now |
 |-----|--------|
@@ -65,7 +67,25 @@ Same idea — numbered flags → named flags. Old ones still work as aliases.
 
 ---
 
-## v0.2.4 — OAuth (new fields, nothing breaking)
+## v0.2.4 — OAuth + Breaking Alias Removal
+
+### Breaking: `agentN` aliases removed
+
+The deprecated `agentN` config aliases and CLI flags from v0.2.3 are **removed** in v0.2.4. If you haven't renamed them yet, your config will fail to parse.
+
+**Config fields removed:**
+- `agent1_llm`..`agent5_llm` → use `extract_llm`/`map_llm`/`learn_llm`/`create_llm`/`test_llm`
+- `enable_agent5` → use `enable_test`
+- `agent5_mode` → use `test_mode`
+- `agent1_custom`..`agent5_custom` → use `extract_custom`..`test_custom`
+
+**CLI flags removed:**
+- `--agent5-model` → use `--test-model`
+- `--agent5-provider` → use `--test-provider`
+- `--no-agent5` → use `--no-test`
+- `--agent5-mode` → use `--test-mode`
+
+### OAuth (new fields, additive)
 
 New optional fields you can add to any `[llm]` or per-stage LLM section to use OAuth instead of API keys:
 

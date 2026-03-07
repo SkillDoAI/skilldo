@@ -309,8 +309,17 @@ pub(super) async fn parse_token_response(response: reqwest::Response) -> Result<
 
     let refresh_token = body["refresh_token"].as_str().unwrap_or("").to_string();
 
-    // Calculate expiry: use `expires_in` seconds from now
-    let expires_in = body["expires_in"].as_u64().unwrap_or(3600);
+    // Calculate expiry: use `expires_in` seconds from now.
+    // Some providers return expires_in as a string instead of integer (RFC 6749 says integer,
+    // but Facebook, some enterprise IdPs deviate). Handle both.
+    let expires_in = body["expires_in"]
+        .as_u64()
+        .or_else(|| {
+            body["expires_in"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .unwrap_or(3600);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -545,6 +554,39 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Token exchange failed"));
+    }
+
+    #[tokio::test]
+    async fn exchange_code_parses_string_expires_in() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            // Some providers return expires_in as a string instead of integer
+            .with_body(r#"{"access_token":"at-str","refresh_token":"rt-str","expires_in":"7200"}"#)
+            .create_async()
+            .await;
+
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://unused".to_string(),
+            token_url: server.url() + "/token",
+            scopes: "openid".to_string(),
+            client_id: "cid".to_string(),
+            client_secret: None,
+            provider_name: "test".to_string(),
+        };
+
+        let tokens = exchange_code(&endpoint, "code", "verifier").await.unwrap();
+        assert_eq!(tokens.access_token, "at-str");
+        // Verify expires_at is roughly now + 7200 (not the default 3600)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(tokens.expires_at >= now + 7100);
+        assert!(tokens.expires_at <= now + 7300);
+        mock.assert_async().await;
     }
 
     #[tokio::test]
