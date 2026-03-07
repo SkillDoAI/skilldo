@@ -130,6 +130,12 @@ async fn start_callback_server_on_port(expected_state: &str, port: u16) -> Resul
     // Validate state
     let state = params.get("state").map(|s| s.as_str()).unwrap_or("");
     if state != expected_state {
+        let body = "<html><body><h1>Authentication Failed</h1><p>State mismatch — possible CSRF attack. Please try again.</p><p>You can close this tab.</p></body></html>";
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(), body
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
         bail!("OAuth state mismatch — possible CSRF attack");
     }
 

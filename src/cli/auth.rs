@@ -62,13 +62,21 @@ pub fn status(config_path: Option<String>) -> Result<()> {
                     .as_secs();
 
                 if tokens.is_expired() {
-                    let ago = now.saturating_sub(tokens.expires_at);
-                    println!(
-                        "{}: EXPIRED (expired {}s ago, has refresh token: {})",
-                        endpoint.provider_name,
-                        ago,
-                        !tokens.refresh_token.is_empty()
-                    );
+                    if tokens.expires_at <= now {
+                        let ago = now - tokens.expires_at;
+                        println!(
+                            "{}: EXPIRED (expired {}s ago, has refresh token: {})",
+                            endpoint.provider_name,
+                            ago,
+                            !tokens.refresh_token.is_empty()
+                        );
+                    } else {
+                        let remaining = tokens.expires_at.saturating_sub(now);
+                        println!(
+                            "{}: EXPIRING SOON (expires in {}s, will auto-refresh)",
+                            endpoint.provider_name, remaining
+                        );
+                    }
                 } else {
                     let remaining = tokens.expires_at.saturating_sub(now);
                     println!(
