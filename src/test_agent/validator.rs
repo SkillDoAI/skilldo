@@ -6,7 +6,7 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
-use super::executor::{ExecutionResult, PythonUvExecutor};
+use super::executor::{ExecutionResult, GoExecutor, PythonUvExecutor};
 use super::go_code_gen::GoCodeGenerator;
 use super::go_parser::GoParser;
 use super::python_code_gen::PythonCodeGenerator;
@@ -154,12 +154,14 @@ impl<'a> TestCodeValidator<'a> {
                 })
             }
             Language::Go => {
-                // Go only supports container execution (no bare-metal executor yet)
-                if execution_mode == ExecutionMode::BareMetal {
-                    warn!("Go bare-metal executor not available; using container instead");
-                }
-                let executor: Box<dyn LanguageExecutor> =
-                    Box::new(ContainerExecutor::new(config, Language::Go));
+                let executor: Box<dyn LanguageExecutor> = match execution_mode {
+                    ExecutionMode::BareMetal => {
+                        Box::new(GoExecutor::new().with_timeout(config.timeout))
+                    }
+                    ExecutionMode::Container => {
+                        Box::new(ContainerExecutor::new(config, Language::Go))
+                    }
+                };
                 Ok(Self {
                     language: Language::Go,
                     parser: Box::new(GoParser),
@@ -1303,7 +1305,7 @@ mod tests {
     }
 
     #[test]
-    fn test_new_go_baremetal_falls_back_to_container() {
+    fn test_new_go_baremetal_uses_go_executor() {
         use crate::llm::client::MockLlmClient;
 
         let client = MockLlmClient;
@@ -1311,11 +1313,10 @@ mod tests {
             execution_mode: ExecutionMode::BareMetal,
             ..Default::default()
         };
-        // Go doesn't have a bare-metal executor; should still construct (with warning)
         let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
         assert!(
             validator.is_ok(),
-            "Go should fall back to container even when bare-metal requested"
+            "Go bare-metal executor should construct successfully"
         );
     }
 

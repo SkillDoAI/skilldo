@@ -194,11 +194,11 @@ jobs:
         if: steps.check-secret.outputs.skip != 'true'
         run: cargo build --release
 
-      - name: Clone test library (click)
+      - name: Clone Python test library (click)
         if: steps.check-secret.outputs.skip != 'true'
         run: git clone --branch 8.3.1 --depth 1 https://github.com/pallets/click.git /tmp/click
 
-      - name: Generate SKILL.md
+      - name: Generate Python SKILL.md
         if: steps.check-secret.outputs.skip != 'true'
         run: |
           ./target/release/skilldo generate /tmp/click \
@@ -207,7 +207,7 @@ jobs:
             --max-retries 5 \
             -o /tmp/click-SKILL.md
 
-      - name: Validate output
+      - name: Validate Python output
         if: steps.check-secret.outputs.skip != 'true'
         run: |
           FILE="/tmp/click-SKILL.md"
@@ -275,7 +275,7 @@ jobs:
           echo ""
           echo "=== E2E structural validation passed ==="
 
-      - name: Lint generated skill
+      - name: Lint Python skill
         if: steps.check-secret.outputs.skip != 'true'
         run: ./target/release/skilldo lint /tmp/click-SKILL.md
 
@@ -291,7 +291,6 @@ jobs:
             --model claude-sonnet-4-6 \
             --language go \
             --max-retries 5 \
-            --no-test \
             -o /tmp/chi-SKILL.md
 
       - name: Validate Go output

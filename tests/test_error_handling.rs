@@ -7,12 +7,12 @@ use std::env;
 use std::path::Path;
 use std::str::FromStr;
 
-#[test]
-fn test_missing_api_key() {
+#[tokio::test]
+async fn test_missing_api_key() {
     // Use a unique env var name to avoid race conditions with parallel tests
     let mut config = Config::default();
     config.llm.api_key_env = Some("SKILLDO_TEST_NONEXISTENT_KEY_12345".to_string());
-    let result = factory::create_client(&config, false);
+    let result = factory::create_client(&config, false).await;
     assert!(result.is_err());
     if let Err(e) = result {
         assert!(e.to_string().contains("API key not found"));
@@ -64,26 +64,26 @@ fn test_config_with_invalid_toml() {
     assert!(config.generation.max_retries == 5);
 }
 
-#[test]
-fn test_openai_compatible_client_without_api_key() {
+#[tokio::test]
+async fn test_openai_compatible_client_without_api_key() {
     env::set_var("SKILLDO_TEST_ERR_OAI_EMPTY", "");
     let mut config = Config::default();
     config.llm.provider = Provider::OpenAICompatible;
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_OAI_EMPTY".to_string());
-    let result = factory::create_client(&config, false);
+    let result = factory::create_client(&config, false).await;
     // Empty API key should be accepted for openai-compatible providers (Ollama, etc.)
     assert!(result.is_ok());
     env::remove_var("SKILLDO_TEST_ERR_OAI_EMPTY");
 }
 
-#[test]
-fn test_gemini_client_creation() {
+#[tokio::test]
+async fn test_gemini_client_creation() {
     env::set_var("SKILLDO_TEST_ERR_GEMINI", "test_key");
     let mut config = Config::default();
     config.llm.provider = Provider::Gemini;
     config.llm.model = "gemini-pro".to_string();
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_GEMINI".to_string());
-    let result = factory::create_client(&config, false);
+    let result = factory::create_client(&config, false).await;
     assert!(result.is_ok());
     env::remove_var("SKILLDO_TEST_ERR_GEMINI");
 }
@@ -110,28 +110,28 @@ fn test_config_default_values() {
     assert!(!config.prompts.override_prompts);
 }
 
-#[test]
-fn test_openai_compatible_with_custom_base_url() {
+#[tokio::test]
+async fn test_openai_compatible_with_custom_base_url() {
     env::set_var("SKILLDO_TEST_ERR_COMPAT_1", "test_key");
     let mut config = Config::default();
     config.llm.provider = Provider::OpenAICompatible;
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_COMPAT_1".to_string());
     config.llm.base_url = Some("http://custom:8080/v1".to_string());
 
-    let result = factory::create_client(&config, false);
+    let result = factory::create_client(&config, false).await;
     assert!(result.is_ok());
     env::remove_var("SKILLDO_TEST_ERR_COMPAT_1");
 }
 
-#[test]
-fn test_openai_compatible_without_base_url() {
+#[tokio::test]
+async fn test_openai_compatible_without_base_url() {
     env::set_var("SKILLDO_TEST_ERR_COMPAT_2", "test_key");
     let mut config = Config::default();
     config.llm.provider = Provider::OpenAICompatible;
     config.llm.api_key_env = Some("SKILLDO_TEST_ERR_COMPAT_2".to_string());
     config.llm.base_url = None;
 
-    let result = factory::create_client(&config, false);
+    let result = factory::create_client(&config, false).await;
     // Should use default base_url
     assert!(result.is_ok());
     env::remove_var("SKILLDO_TEST_ERR_COMPAT_2");

@@ -310,7 +310,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     );
 
     // Create LLM client via factory
-    let client = factory::create_client(&config, dry_run)?;
+    let client = factory::create_client(&config, dry_run).await?;
     if dry_run {
         info!("Using mock LLM client");
     } else {
@@ -320,7 +320,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     // Create per-stage LLM clients if configured
     let mut generator = Generator::new(client, config.generation.max_retries);
     if let Some(ref extract_config) = config.generation.extract_llm {
-        let client = factory::create_client_from_llm_config(extract_config, dry_run)?;
+        let client = factory::create_client_from_llm_config(extract_config, dry_run).await?;
         info!(
             "Using {} for extract: {}",
             extract_config.provider, extract_config.model
@@ -328,7 +328,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         generator = generator.with_extract_client(client);
     }
     if let Some(ref map_config) = config.generation.map_llm {
-        let client = factory::create_client_from_llm_config(map_config, dry_run)?;
+        let client = factory::create_client_from_llm_config(map_config, dry_run).await?;
         info!(
             "Using {} for map: {}",
             map_config.provider, map_config.model
@@ -336,7 +336,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         generator = generator.with_map_client(client);
     }
     if let Some(ref learn_config) = config.generation.learn_llm {
-        let client = factory::create_client_from_llm_config(learn_config, dry_run)?;
+        let client = factory::create_client_from_llm_config(learn_config, dry_run).await?;
         info!(
             "Using {} for learn: {}",
             learn_config.provider, learn_config.model
@@ -344,7 +344,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         generator = generator.with_learn_client(client);
     }
     if let Some(ref create_config) = config.generation.create_llm {
-        let client = factory::create_client_from_llm_config(create_config, dry_run)?;
+        let client = factory::create_client_from_llm_config(create_config, dry_run).await?;
         info!(
             "Using {} for create: {}",
             create_config.provider, create_config.model
@@ -353,7 +353,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     }
     if config.generation.enable_review {
         if let Some(ref review_config) = config.generation.review_llm {
-            let client = factory::create_client_from_llm_config(review_config, dry_run)?;
+            let client = factory::create_client_from_llm_config(review_config, dry_run).await?;
             info!(
                 "Using {} for review: {}",
                 review_config.provider, review_config.model
@@ -363,7 +363,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     }
     if config.generation.enable_test {
         if let Some(ref test_config) = config.generation.test_llm {
-            let client = factory::create_client_from_llm_config(test_config, dry_run)?;
+            let client = factory::create_client_from_llm_config(test_config, dry_run).await?;
             info!(
                 "Using {} for test: {}",
                 test_config.provider, test_config.model

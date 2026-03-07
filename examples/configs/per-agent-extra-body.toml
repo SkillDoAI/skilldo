@@ -6,7 +6,7 @@
 # extraction (extract/map/learn), heavy for synthesis (create).
 
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "meta/llama-3.1-70b-instruct"
 api_key_env = "GATEWAY_API_KEY"
 base_url = "https://api.your-gateway.com/v1"
@@ -22,7 +22,7 @@ max_source_tokens = 100000
 
 # Create stage uses higher reasoning effort for synthesis
 [generation.create_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "meta/llama-3.1-70b-instruct"
 api_key_env = "GATEWAY_API_KEY"
 base_url = "https://api.your-gateway.com/v1"
@@ -32,6 +32,6 @@ effort = "high"
 
 # Test stage uses OpenAI for code validation
 [generation.test_llm]
-provider = "openai"
+provider_type = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"

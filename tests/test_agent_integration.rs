@@ -302,7 +302,7 @@ async fn test_validator_selects_patterns_thorough_mode() {
 
 #[tokio::test]
 #[ignore] // Requires container runtime (docker or podman)
-async fn test_full_agent5_flow_with_click() -> Result<()> {
+async fn test_full_test_agent_flow_with_click() -> Result<()> {
     use skilldo::test_agent::TestCodeValidator;
 
     // PEP 723 header so `uv run` installs click in the container
@@ -869,7 +869,7 @@ async fn test_go_e2e_real_llm_fmt() -> Result<()> {
 
     // Use real LLM client from environment
     let config = skilldo::config::Config::default();
-    let client = factory::create_client(&config, false)?;
+    let client = factory::create_client(&config, false).await?;
 
     let container_config = skilldo::config::ContainerConfig {
         execution_mode: skilldo::config::ExecutionMode::Container,

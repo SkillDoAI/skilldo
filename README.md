@@ -12,11 +12,39 @@ Skilldo automatically generates `SKILL.md` agent rules files for open-source lib
 - **3-layer security scanning** — Regex patterns + prompt injection detection + 41 YARA rules (including [Cisco AI Defense](https://github.com/cisco-ai-defense/skill-scanner)) catch malicious content
 - **Multi-provider** — Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, vLLM, etc.)
 - **Per-stage model mixing** — Use a cheap local model for extraction and a frontier cloud model for review. One config, multiple providers.
+- **OAuth 2.0 authentication** — Use your ChatGPT Plus/Pro or Google Workspace subscription instead of paying per-token API rates
 - **Python + Go ecosystems** — Full pipeline support with language-specific parsers, code generators, and container images
 - **Free with local models** — Run the entire pipeline on Ollama with zero API cost
 - **28+ pre-generated skills** — Browse [`examples/skills/`](examples/skills/) for ready-to-use rules for popular Python libraries
 
 The goal: make agent rules a standard part of every open-source package — like README.md or .gitignore.
+
+> **Config file vs CLI:** Skilldo supports both a TOML config file and CLI flags. The config file is more powerful — it supports per-stage model overrides, OAuth, custom headers, extra request body fields, and prompt customization. CLI flags are great for quick runs or overriding a single setting. See [Configuration](#configuration) for details.
+
+## Table of Contents
+
+- [How It Works](#how-it-works)
+- [The Agents](#the-agents)
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+  - [Debugging](#debugging)
+  - [Examples](#examples)
+  - [Lint](#lint)
+  - [Security Scanner](#security-scanner)
+  - [Config Check](#config-check)
+- [Configuration](#configuration)
+  - [Minimal Config](#minimal-config-get-started-fast)
+  - [Full Documented Config](#full-documented-config)
+  - [Supported Providers](#supported-providers)
+  - [Example Config Files](#example-config-files)
+  - [Authentication (OAuth 2.0)](#authentication-oauth-20)
+- [Example Output](#example-output)
+- [Tips and Model Experience](#tips-and-model-experience)
+- [Language Support](#language-support)
+- [Building from Source](#building-from-source)
+- [Requirements](#requirements)
+- [License](#license)
 
 ## How It Works
 
@@ -100,7 +128,7 @@ skilldo generate [PATH] [OPTIONS]
 | `--version <VER>` | Explicit version override, e.g. `"2.1.0"` |
 | `--version-from <STRATEGY>` | Version extraction strategy: `git-tag`, `package`, `branch`, `commit` |
 | `--config <PATH>` | Path to config file |
-| `--provider <PROVIDER>` | LLM provider: `anthropic`, `openai`, `gemini`, `openai-compatible` |
+| `--provider <PROVIDER>` | LLM provider: `anthropic`, `openai`, `chatgpt`, `gemini`, `openai-compatible` |
 | `--model <MODEL>` | Override LLM model (e.g., `gpt-5.2`, `claude-sonnet-4-6`) |
 | `--base-url <URL>` | Base URL for openai-compatible providers |
 | `--max-retries <N>` | Override max generation retries |
@@ -211,7 +239,7 @@ If you have an OpenAI API key, this is all you need:
 
 ```toml
 [llm]
-provider = "openai"
+provider_type = "openai"
 model = "gpt-5.2"
 # Name of the environment variable holding your API key.
 # Skilldo reads the key from this env var at runtime — it never stores keys in config.
@@ -229,8 +257,9 @@ This uses GPT-5.2 for all stages, with test validation enabled by default using 
 # Configures the model used for all stages (unless overridden
 # per-stage via extract_llm, create_llm, test_llm, etc.).
 [llm]
-# Provider type: "anthropic", "openai", "gemini", or "openai-compatible"
-# "provider" also works (legacy alias).
+# Provider type: "anthropic", "openai", "chatgpt", "gemini", or "openai-compatible"
+# "provider" also works (legacy alias, to be removed in 0.5.0).
+# "chatgpt" uses the Responses API (streaming) — for OAuth-based ChatGPT subscription access.
 provider_type = "anthropic"
 
 # Human-readable name for this provider instance.
@@ -251,6 +280,20 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Override max output tokens per LLM request.
 # Defaults: anthropic=8192, openai=8192, openai-compatible=16384, gemini=8192
 # max_tokens = 8192
+
+# Number of automatic retries on network/API errors (default: 3)
+# network_retries = 3
+
+# Delay in seconds between retries (default: 2)
+# retry_delay = 2
+
+# Timeout for individual LLM requests in seconds (default: 120)
+# request_timeout_secs = 120
+
+# Extra HTTP headers injected into every LLM API request.
+# Useful for provider-specific headers (e.g., ChatGPT-Account-ID, OpenAI-Beta).
+# Format: "Header-Name: value" (colon-separated).
+# extra_headers = ["ChatGPT-Account-ID: acct_abc123", "OpenAI-Beta: assistants=v2"]
 
 # Extra fields merged into the LLM request body (for provider-specific params).
 # TOML table style:
@@ -287,20 +330,26 @@ enable_review = true
 # Each is optional — if not set, the stage uses [llm].
 #
 # [generation.test_llm]              # Test stage
-# provider = "openai"
+# provider_type = "openai"
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
 #
 # Also available: extract_llm, map_llm, learn_llm, create_llm, review_llm
 # See examples/configs/reference.toml for the full list.
 
-# ── Container Settings ────────────────────────────────────────
-# The test stage runs generated test code inside containers for safety.
+# ── Container / Execution Settings ────────────────────────────
+# The test stage runs generated test code inside containers or bare-metal.
 [generation.container]
 # Container runtime: "docker" or "podman" (default: "docker")
 runtime = "docker"
 
-# Timeout for container execution in seconds (default: 60)
+# Execution mode: "container" (default) or "bare-metal"
+# Bare-metal runs tests directly on the host — no Docker/Podman needed.
+# Requires the language toolchain installed locally:
+#   Python: uv + python3    Go: go toolchain
+# execution_mode = "container"
+
+# Timeout for test execution in seconds (default: 60)
 # Increase for libraries with heavy dependencies (numpy, pytorch, etc.)
 timeout = 60
 
@@ -332,6 +381,7 @@ cleanup = true
 |----------|------------------------|---------------|-------|
 | **Anthropic** | `"anthropic"` | Yes (`ANTHROPIC_API_KEY`) | Claude models |
 | **OpenAI** | `"openai"` | Yes (`OPENAI_API_KEY`) | GPT models. Handles `max_completion_tokens` for GPT-5+. |
+| **ChatGPT** | `"chatgpt"` | Yes (OAuth or `OPENAI_API_KEY`) | Uses the Responses API (streaming). Models: `gpt-5.2-codex`, `gpt-5.1-codex-mini`, etc. See [Authentication](#authentication-oauth-20). |
 | **Google Gemini** | `"gemini"` | Yes (`GEMINI_API_KEY`) | Gemini models |
 | **OpenAI-compatible** | `"openai-compatible"` | Varies | Ollama, DeepSeek, Groq, Together, Fireworks, xAI, Mistral, vLLM, etc. Set `base_url`. |
 
@@ -347,6 +397,49 @@ Ready-to-use configs for common setups:
 - [`examples/configs/per-agent-extra-body.toml`](examples/configs/per-agent-extra-body.toml) — Per-agent `extra_body` overrides (e.g., different reasoning effort per agent)
 - [`examples/configs/github-models.toml`](examples/configs/github-models.toml) — GitHub Models free tier (for CI/testing)
 - [`examples/configs/reference.toml`](examples/configs/reference.toml) — **Every field documented** (copy what you need)
+
+### Authentication (OAuth 2.0)
+
+Skilldo supports OAuth 2.0 + PKCE for providers that offer subscription-based API access. This lets you use your existing ChatGPT Plus/Pro or Google Workspace subscription instead of paying per-token API rates.
+
+**Setup:** Add OAuth fields to your `skilldo.toml`:
+
+```toml
+[llm]
+provider_type = "openai"
+provider_name = "openai-sub"
+model = "gpt-5.3"
+oauth_auth_url = "https://auth.openai.com/oauth/authorize"
+oauth_token_url = "https://auth.openai.com/oauth/token"
+oauth_scopes = "openid profile email offline_access"
+oauth_client_id_env = "OPENAI_CLIENT_ID"
+```
+
+**Credentials JSON shortcut** — any provider using Google's `client_secret_*.json` format (`{"installed": {...}}` or `{"web": {...}}`) can base64-encode the file into a single env var:
+
+```bash
+export GOOGLE_OAUTH_CREDENTIALS="$(base64 < client_secret_123.json)"
+```
+
+```toml
+[llm]
+provider_type = "gemini"
+provider_name = "google-workspace"
+model = "gemini-2.5-pro"
+oauth_credentials_env = "GOOGLE_OAUTH_CREDENTIALS"
+```
+
+**Commands:**
+
+```bash
+skilldo auth login              # Browser-based OAuth login for all configured providers
+skilldo auth status             # Show token expiry and validity
+skilldo auth logout             # Remove all stored tokens
+```
+
+Tokens are stored at `~/.config/skilldo/tokens/{provider_name}.json` with restricted permissions (0600). Tokens auto-refresh when expired.
+
+Per-stage OAuth is supported — each pipeline stage can use a different provider and OAuth config.
 
 ## Example Output
 
@@ -392,10 +485,12 @@ Generation gets you 90-95% of the way to a good SKILL.md — a validated, well-s
 
 | Language | Status | Notes |
 |----------|--------|-------|
-| Python | Full support | PyPI, setup.py, pyproject.toml, uv environments, container validation |
-| Go | Full support | go.mod, Go modules, `golang:1.25-alpine` container validation |
+| Python | Full support | PyPI, setup.py, pyproject.toml, uv environments, container or bare-metal (`uv` + `python3`) validation |
+| Go | Full support | go.mod, Go modules, container (`golang:1.25-alpine`) or bare-metal (`go` toolchain) validation |
 | JavaScript/TypeScript | Detection only | package.json detected, ecosystem handler planned |
 | Rust | Detection only | Cargo.toml detected, ecosystem handler planned |
+
+Both Python and Go support **bare-metal execution** — run test validation directly on the host without Docker/Podman. Set `execution_mode = "bare-metal"` in `[generation.container]`. This requires the language toolchain installed locally (`uv` + `python3` for Python, `go` for Go).
 
 Full ecosystem handlers for JS/TS and Rust are planned.
 

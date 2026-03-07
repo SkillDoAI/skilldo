@@ -1,6 +1,6 @@
 # Ollama — local models (no API key needed)
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "qwen3-coder:latest"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"

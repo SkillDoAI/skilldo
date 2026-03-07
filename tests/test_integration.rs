@@ -211,6 +211,13 @@ async fn test_pipeline_with_custom_config() {
             extra_body: std::collections::HashMap::new(),
             extra_body_json: None,
             request_timeout_secs: 120,
+            oauth_auth_url: None,
+            oauth_token_url: None,
+            oauth_scopes: None,
+            oauth_client_id_env: None,
+            oauth_client_secret_env: None,
+            oauth_credentials_env: None,
+            extra_headers: Vec::new(),
         },
         generation: GenerationConfig {
             output: None,
@@ -251,7 +258,7 @@ async fn test_pipeline_with_custom_config() {
 
     // Verify config serialization
     let toml_str = toml::to_string(&custom_config).unwrap();
-    assert!(toml_str.contains("provider = \"openai-compatible\""));
+    assert!(toml_str.contains("provider_type = \"openai-compatible\""));
     assert!(toml_str.contains("max_retries = 5"));
 
     // Test config deserialization
@@ -301,7 +308,7 @@ async fn test_error_recovery_llm_client_failure() {
     env::remove_var("AI_API_KEY");
 
     let config = Config::default();
-    let result = factory::create_client(&config, false);
+    let result = factory::create_client(&config, false).await;
 
     assert!(result.is_err());
     if let Err(e) = result {

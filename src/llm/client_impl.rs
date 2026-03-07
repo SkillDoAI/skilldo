@@ -24,6 +24,7 @@ pub struct AnthropicClient {
     model: String,
     max_tokens: u32,
     client: Client,
+    extra_headers: Vec<(String, String)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,7 +57,13 @@ impl AnthropicClient {
             model,
             max_tokens,
             client: build_http_client(timeout_secs)?,
+            extra_headers: Vec::new(),
         })
+    }
+
+    pub fn with_extra_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.extra_headers = headers;
+        self
     }
 }
 
@@ -74,12 +81,16 @@ impl LlmClient for AnthropicClient {
 
         debug!("Calling Anthropic API with model: {}", self.model);
 
-        let response = self
+        let mut req = self
             .client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", self.api_key.expose())
             .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        for (key, value) in &self.extra_headers {
+            req = req.header(key, value);
+        }
+        let response = req
             .json(&request)
             .send()
             .await
@@ -114,6 +125,7 @@ pub struct OpenAIClient {
     base_url: String,
     max_tokens: u32,
     extra_body: std::collections::HashMap<String, serde_json::Value>,
+    extra_headers: Vec<(String, String)>,
     client: Client,
 }
 
@@ -168,8 +180,14 @@ impl OpenAIClient {
             base_url,
             max_tokens,
             extra_body: std::collections::HashMap::new(),
+            extra_headers: Vec::new(),
             client: build_http_client(timeout_secs)?,
         })
+    }
+
+    pub fn with_extra_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.extra_headers = headers;
+        self
     }
 
     pub fn with_extra_body(
@@ -244,6 +262,9 @@ impl LlmClient for OpenAIClient {
         if !self.api_key.expose().is_empty() && self.api_key.expose().to_lowercase() != "none" {
             req = req.header("authorization", format!("Bearer {}", self.api_key.expose()));
         }
+        for (key, value) in &self.extra_headers {
+            req = req.header(key, value);
+        }
 
         let response = req
             .send()
@@ -278,6 +299,10 @@ pub struct GeminiClient {
     model: String,
     max_tokens: u32,
     client: Client,
+    /// When true, use `Authorization: Bearer` header instead of `x-goog-api-key`.
+    /// Set when using OAuth tokens instead of API keys.
+    use_bearer_auth: bool,
+    extra_headers: Vec<(String, String)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -330,7 +355,20 @@ impl GeminiClient {
             model,
             max_tokens,
             client: build_http_client(timeout_secs)?,
+            use_bearer_auth: false,
+            extra_headers: Vec::new(),
         })
+    }
+
+    /// Enable Bearer auth (for OAuth tokens instead of API keys).
+    pub fn with_bearer_auth(mut self, enable: bool) -> Self {
+        self.use_bearer_auth = enable;
+        self
+    }
+
+    pub fn with_extra_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.extra_headers = headers;
+        self
     }
 }
 
@@ -355,11 +393,19 @@ impl LlmClient for GeminiClient {
             self.model
         );
 
-        let response = self
+        let mut req = self
             .client
             .post(&url)
-            .header("x-goog-api-key", self.api_key.expose())
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        req = if self.use_bearer_auth {
+            req.header("authorization", format!("Bearer {}", self.api_key.expose()))
+        } else {
+            req.header("x-goog-api-key", self.api_key.expose())
+        };
+        for (key, value) in &self.extra_headers {
+            req = req.header(key, value);
+        }
+        let response = req
             .json(&request)
             .send()
             .await
@@ -382,6 +428,146 @@ impl LlmClient for GeminiClient {
             .and_then(|c| c.content.parts.first())
             .map(|p| p.text.clone())
             .context("No content in Gemini response")
+    }
+}
+
+// ============================================================================
+// ChatGPT Client (Responses API)
+// ============================================================================
+
+pub struct ChatGPTClient {
+    api_key: SecretString,
+    model: String,
+    base_url: String,
+    extra_headers: Vec<(String, String)>,
+    client: Client,
+}
+
+#[derive(Debug, Serialize)]
+struct ResponsesRequest {
+    model: String,
+    instructions: String,
+    input: Vec<ResponsesInputMessage>,
+    store: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ResponsesInputMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesResponse {
+    output: Vec<ResponsesOutput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesOutput {
+    content: Option<Vec<ResponsesContent>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesContent {
+    text: Option<String>,
+}
+
+impl ChatGPTClient {
+    pub fn new(
+        api_key: String,
+        model: String,
+        timeout_secs: u64,
+        use_chatgpt_backend: bool,
+    ) -> Result<Self> {
+        let base_url = if use_chatgpt_backend {
+            "https://chatgpt.com/backend-api/codex".to_string()
+        } else {
+            "https://api.openai.com/v1".to_string()
+        };
+        Ok(Self {
+            api_key: api_key.into(),
+            model,
+            base_url,
+            extra_headers: Vec::new(),
+            client: build_http_client(timeout_secs)?,
+        })
+    }
+
+    pub fn with_extra_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.extra_headers = headers;
+        self
+    }
+}
+
+#[async_trait]
+impl LlmClient for ChatGPTClient {
+    async fn complete(&self, prompt: &str) -> Result<String> {
+        let request = ResponsesRequest {
+            model: self.model.clone(),
+            instructions: "Follow the user's instructions precisely.".to_string(),
+            input: vec![ResponsesInputMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
+            store: false,
+        };
+
+        let base = self.base_url.trim_end_matches('/');
+        let url = if base.ends_with("/responses") {
+            base.to_string()
+        } else {
+            format!("{}/responses", base)
+        };
+
+        debug!(
+            "Calling Responses API at {} with model: {}",
+            url, self.model
+        );
+
+        let mut req = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", self.api_key.expose()))
+            .json(&request);
+
+        for (key, value) in &self.extra_headers {
+            req = req.header(key, value);
+        }
+
+        let response = req.send().await.context("Failed to send request")?;
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .context("Failed to read error response")?;
+            bail!(
+                "Responses API error {} {}: {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or(""),
+                body
+            );
+        }
+
+        let api_response: ResponsesResponse = response
+            .json()
+            .await
+            .context("Failed to parse Responses API response")?;
+
+        let text: String = api_response
+            .output
+            .iter()
+            .flat_map(|o| o.content.iter().flatten())
+            .filter_map(|c| c.text.as_deref())
+            .collect();
+
+        if text.is_empty() {
+            bail!("No text content in Responses API response")
+        }
+
+        Ok(text)
     }
 }
 
@@ -810,5 +996,94 @@ mod tests {
         assert!(!trimmed.contains("/v1/"));
         let url = format!("{}/chat/completions", trimmed);
         assert_eq!(url, "http://localhost:11434/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_chatgpt_client_creation_backend() {
+        let client =
+            ChatGPTClient::new("key".to_string(), "gpt-5.2-codex".to_string(), 120, true).unwrap();
+        assert_eq!(client.base_url, "https://chatgpt.com/backend-api/codex");
+        assert_eq!(client.model, "gpt-5.2-codex");
+    }
+
+    #[test]
+    fn test_chatgpt_client_creation_api() {
+        let client =
+            ChatGPTClient::new("key".to_string(), "gpt-5.2".to_string(), 120, false).unwrap();
+        assert_eq!(client.base_url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_chatgpt_client_extra_headers() {
+        let client = ChatGPTClient::new("key".to_string(), "m".to_string(), 120, true)
+            .unwrap()
+            .with_extra_headers(vec![("X-Custom".to_string(), "val".to_string())]);
+        assert_eq!(client.extra_headers.len(), 1);
+        assert_eq!(client.extra_headers[0].0, "X-Custom");
+    }
+
+    #[test]
+    fn test_responses_request_serialization() {
+        let req = ResponsesRequest {
+            model: "gpt-5.2-codex".to_string(),
+            instructions: "Follow the user's instructions precisely.".to_string(),
+            input: vec![ResponsesInputMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            store: false,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["model"], "gpt-5.2-codex");
+        assert!(json.get("stream").is_none());
+        assert_eq!(json["store"], false);
+        assert!(json["instructions"].as_str().unwrap().contains("precisely"));
+        assert_eq!(json["input"][0]["role"], "user");
+        assert_eq!(json["input"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn test_responses_response_parsing() {
+        let json = r#"{
+            "output": [{
+                "content": [{"text": "Hello, world!"}]
+            }]
+        }"#;
+        let response: ResponsesResponse = serde_json::from_str(json).unwrap();
+        let text: String = response
+            .output
+            .iter()
+            .flat_map(|o| o.content.iter().flatten())
+            .filter_map(|c| c.text.as_deref())
+            .collect();
+        assert_eq!(text, "Hello, world!");
+    }
+
+    #[test]
+    fn test_responses_response_empty_output() {
+        let json = r#"{"output": []}"#;
+        let response: ResponsesResponse = serde_json::from_str(json).unwrap();
+        let text: String = response
+            .output
+            .iter()
+            .flat_map(|o| o.content.iter().flatten())
+            .filter_map(|c| c.text.as_deref())
+            .collect();
+        assert!(text.is_empty());
+    }
+
+    #[test]
+    fn test_chatgpt_url_construction() {
+        // Base URL without /responses → appends
+        let base = "https://chatgpt.com/backend-api/codex";
+        let trimmed = base.trim_end_matches('/');
+        assert!(!trimmed.ends_with("/responses"));
+        let url = format!("{}/responses", trimmed);
+        assert_eq!(url, "https://chatgpt.com/backend-api/codex/responses");
+
+        // Base URL already ending with /responses → no double append
+        let base2 = "https://chatgpt.com/backend-api/codex/responses";
+        let trimmed2 = base2.trim_end_matches('/');
+        assert!(trimmed2.ends_with("/responses"));
     }
 }

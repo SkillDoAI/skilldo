@@ -21,11 +21,19 @@
 # let you run individual stages on different models. See below.
 
 [llm]
-# Provider: "anthropic", "openai", "gemini", or "openai-compatible"
-provider = "anthropic"
+# Provider type: "anthropic", "openai", "chatgpt", "gemini", or "openai-compatible"
+# "provider" also works (legacy alias for provider_type).
+# "chatgpt" uses the Responses API (streaming) — for OAuth-based ChatGPT
+# subscription use. Models: gpt-5.2-codex, gpt-5.1-codex-mini, etc.
+provider_type = "anthropic"
+
+# Human-readable name for this provider instance (e.g., "deepseek", "my-vllm").
+# Used as a label in logs and as the token storage key for OAuth.
+# Defaults to the provider_type value if not set.
+# provider_name = "anthropic-main"
 
 # Model name (provider-specific)
-model = "claude-sonnet-4-5-20250929"
+model = "claude-sonnet-4-6"
 
 # Environment variable containing the API key.
 # Skilldo reads the key from this env var at runtime — never stores keys in config.
@@ -38,7 +46,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Override max output tokens per LLM request.
 # If not set, uses provider-specific defaults:
 #   anthropic: 8192
-#   openai: 8192
+#   openai/chatgpt: 8192
 #   openai-compatible: 16384  (local models benefit from larger buffers)
 #   gemini: 8192
 # max_tokens = 8192
@@ -50,6 +58,14 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Delay between network retries in seconds (constant interval).
 # With default 10 retries × 120s = 20 minutes max wait for rate limits.
 # retry_delay = 120
+
+# Timeout for individual LLM requests in seconds (default: 120).
+# request_timeout_secs = 120
+
+# Extra HTTP headers injected into every LLM API request.
+# Useful for provider-specific headers (e.g., ChatGPT-Account-ID, OpenAI-Beta).
+# Format: "Header-Name: value" (colon-separated).
+# extra_headers = ["ChatGPT-Account-ID: acct_abc123", "OpenAI-Beta: assistants=v2"]
 
 # Extra fields merged into the LLM request body.
 # Use for provider-specific parameters not covered by standard fields.
@@ -71,6 +87,24 @@ api_key_env = "ANTHROPIC_API_KEY"
 # If both are set, they are merged. On key conflicts, extra_body_json wins.
 
 
+# ── OAuth 2.0 Authentication (Optional) ──────────────────────────────
+# Use OAuth to authenticate with providers that support subscription-based
+# access (ChatGPT Plus/Pro, Google Workspace, etc.) instead of API keys.
+#
+# oauth_auth_url = "https://auth.openai.com/oauth/authorize"
+# oauth_token_url = "https://auth.openai.com/oauth/token"
+# oauth_scopes = "openid profile email offline_access"
+# oauth_client_id_env = "OPENAI_CLIENT_ID"       # env var name holding client ID
+# oauth_client_secret_env = "OPENAI_CLIENT_SECRET" # env var name (optional, for confidential clients)
+#
+# Google shortcut — base64-encode your client_secret_*.json file:
+#   export GOOGLE_OAUTH_CREDENTIALS="$(base64 < client_secret_123.json)"
+# oauth_credentials_env = "GOOGLE_OAUTH_CREDENTIALS"
+#
+# Tokens are stored at ~/.config/skilldo/tokens/{provider_name}.json (0600).
+# Run `skilldo auth login` to authenticate, `skilldo auth status` to check.
+
+
 # ── Generation Settings ──────────────────────────────────────────────
 
 [generation]
@@ -88,8 +122,8 @@ parallel_extraction = true
 # Larger libraries may need more; small libraries waste tokens at high values.
 max_source_tokens = 100000
 
-# Enable test stage code validation in containers.
-# When true, generated test code runs in Docker/Podman to verify patterns work.
+# Enable test stage code validation (default: true).
+# When true, generated test code runs to verify patterns work.
 # Disable with --no-test on CLI or set to false here.
 enable_test = true
 
@@ -116,8 +150,8 @@ enable_review = true
 # If not set, the review stage uses the main [llm] config.
 
 # [generation.review_llm]
-# provider = "anthropic"
-# model = "claude-sonnet-4-5-20250929"
+# provider_type = "anthropic"
+# model = "claude-sonnet-4-6"
 # api_key_env = "ANTHROPIC_API_KEY"
 
 
@@ -129,7 +163,7 @@ enable_review = true
 # If not set, the test stage uses the main [llm] config.
 
 # [generation.test_llm]
-# provider = "openai"
+# provider_type = "openai"
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
 # base_url = ""
@@ -148,37 +182,46 @@ enable_review = true
 # Each section has the same fields as [llm].
 
 # [generation.extract_llm]
-# provider = "openai-compatible"
+# provider_type = "openai-compatible"
 # model = "qwen3-coder:latest"
 # api_key_env = "none"
 # base_url = "http://localhost:11434/v1"
 
 # [generation.map_llm]
-# provider = "openai-compatible"
+# provider_type = "openai-compatible"
 # model = "qwen3-coder:latest"
 # api_key_env = "none"
 # base_url = "http://localhost:11434/v1"
 
 # [generation.learn_llm]
-# provider = "openai-compatible"
+# provider_type = "openai-compatible"
 # model = "qwen3-coder:latest"
 # api_key_env = "none"
 # base_url = "http://localhost:11434/v1"
 
 # [generation.create_llm]
-# provider = "anthropic"
-# model = "claude-sonnet-4-5-20250929"
+# provider_type = "anthropic"
+# model = "claude-sonnet-4-6"
 # api_key_env = "ANTHROPIC_API_KEY"
 
 
 # ── Container Settings ───────────────────────────────────────────────
 # The test stage runs generated test code inside containers for safety.
+# Both Python and Go support bare-metal execution as an alternative
+# (see execution_mode below).
 
 [generation.container]
 # Container runtime: "podman" or "docker" (auto-detected if omitted)
 runtime = "docker"
 
-# Timeout for container execution in seconds.
+# Execution mode for the test stage:
+#   "container"   — run tests in Docker/Podman containers (default, safest)
+#   "bare-metal"  — run tests directly on the host (no container needed)
+# Bare-metal mode requires the language toolchain installed locally:
+#   Python: uv + python3    Go: go toolchain
+# execution_mode = "container"
+
+# Timeout for test execution in seconds.
 # Increase for libraries with heavy C dependencies (numpy, scipy, pytorch)
 # — pip install takes time.
 timeout = 60
@@ -187,7 +230,7 @@ timeout = 60
 cleanup = true
 
 # Library install source for test stage validation:
-#   "registry"       — install from PyPI (default, works for published packages)
+#   "registry"       — install from PyPI / Go modules (default, works for published packages)
 #   "local-install"  — mount local repo at /src, run `pip install /src`
 #                      (requires pyproject.toml or setup.py in the repo)
 #   "local-mount"    — mount local repo, add to PYTHONPATH

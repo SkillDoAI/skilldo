@@ -9,7 +9,7 @@
 # Docs: https://docs.github.com/en/github-models
 
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "Phi-4-reasoning"
 api_key_env = "MODELS_SECRET"
 base_url = "https://models.inference.ai.azure.com"
