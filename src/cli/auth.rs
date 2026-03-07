@@ -152,12 +152,11 @@ fn collect_all_endpoints(config: &Config) -> Result<Vec<OAuthEndpoint>> {
 /// Group endpoints by OAuth app (token_url + client_id) for login dedup.
 /// Returns: Vec<(first_endpoint, all_provider_names_sharing_this_app)>
 fn group_by_oauth_app(endpoints: &[OAuthEndpoint]) -> Vec<(&OAuthEndpoint, Vec<&str>)> {
-    let mut groups: std::collections::HashMap<String, (&OAuthEndpoint, Vec<&str>)> =
+    let mut groups: std::collections::HashMap<(&str, &str), (&OAuthEndpoint, Vec<&str>)> =
         std::collections::HashMap::new();
     for ep in endpoints {
-        let key = format!("{}|{}", ep.token_url, ep.client_id);
         groups
-            .entry(key)
+            .entry((&ep.token_url, &ep.client_id))
             .and_modify(|(_, names)| names.push(&ep.provider_name))
             .or_insert((ep, vec![&ep.provider_name]));
     }

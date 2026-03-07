@@ -103,10 +103,15 @@ pub fn load_tokens(provider_name: &str) -> Result<Option<TokenSet>> {
 /// Delete tokens for a provider. Returns Ok even if file doesn't exist.
 pub fn delete_tokens(provider_name: &str) -> Result<()> {
     let path = token_path(provider_name)?;
-    if path.exists() {
-        std::fs::remove_file(&path)
-            .with_context(|| format!("Failed to delete token file: {}", path.display()))?;
-        debug!("Deleted tokens for {provider_name}");
+    match std::fs::remove_file(&path) {
+        Ok(()) => {
+            debug!("Deleted tokens for {provider_name}");
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(anyhow::Error::new(e)
+                .context(format!("Failed to delete token file: {}", path.display())))
+        }
     }
     Ok(())
 }
