@@ -170,6 +170,7 @@ fn group_by_oauth_app(endpoints: &[OAuthEndpoint]) -> Vec<(&OAuthEndpoint, Vec<&
 mod tests {
     use super::*;
     use crate::config::Config;
+    use serial_test::serial;
 
     #[test]
     fn collect_all_endpoints_empty_by_default() {
@@ -179,6 +180,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn collect_all_endpoints_deduplicates_same_provider_name() {
         let mut config = Config::default();
         // Set OAuth on both global and extract stage with same endpoint AND same provider_name
@@ -200,6 +202,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn collect_all_endpoints_keeps_different_provider_names() {
         let mut config = Config::default();
         config.llm.oauth_auth_url = Some("https://auth.example.com/authorize".to_string());
@@ -248,6 +251,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn collect_all_endpoints_different_providers() {
         let mut config = Config::default();
         config.llm.oauth_auth_url = Some("https://auth1.example.com/authorize".to_string());
@@ -297,6 +301,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn status_shows_valid_token() {
         let provider = "test-cli-auth-status-valid";
         let tokens = auth::TokenSet {
@@ -388,6 +393,7 @@ provider_name = "{provider_name}"
     }
 
     #[test]
+    #[serial]
     fn status_with_valid_token() {
         let provider = "test-cli-status-valid-tok";
         let env_var = "SKILLDO_TEST_CLI_STATUS_VALID";
@@ -409,6 +415,7 @@ provider_name = "{provider_name}"
     }
 
     #[test]
+    #[serial]
     fn status_with_expired_token() {
         let provider = "test-cli-status-expired-tok";
         let env_var = "SKILLDO_TEST_CLI_STATUS_EXP";
@@ -430,6 +437,7 @@ provider_name = "{provider_name}"
     }
 
     #[test]
+    #[serial]
     fn status_with_no_token() {
         let provider = "test-cli-status-no-tok";
         let env_var = "SKILLDO_TEST_CLI_STATUS_NONE";
@@ -443,6 +451,7 @@ provider_name = "{provider_name}"
     }
 
     #[test]
+    #[serial]
     fn status_with_expiring_soon_token() {
         let provider = "test-cli-status-expiring-soon";
         let env_var = "SKILLDO_TEST_CLI_STATUS_SOON";
@@ -470,6 +479,7 @@ provider_name = "{provider_name}"
     }
 
     #[test]
+    #[serial]
     fn logout_with_config_deletes_tokens() {
         let provider = "test-cli-logout-cfg";
         let env_var = "SKILLDO_TEST_CLI_LOGOUT";

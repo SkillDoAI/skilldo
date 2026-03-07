@@ -142,11 +142,15 @@ fn ensure_secure_dir(path: &PathBuf) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
+        use std::os::unix::fs::PermissionsExt;
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(path)
             .with_context(|| format!("Failed to create directory: {}", path.display()))?;
+        // Enforce 0o700 on pre-existing directories (DirBuilder only sets mode at creation)
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("Failed to set directory permissions: {}", path.display()))?;
         Ok(())
     }
 

@@ -31,6 +31,7 @@ libgit2-sys = { version = "0.18", features = ["vendored"] }
 
 [dev-dependencies]
 mockito = "1"
+serial_test = "3"
 
 [profile.release]
 overflow-checks = true

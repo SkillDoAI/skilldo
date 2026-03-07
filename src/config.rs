@@ -935,6 +935,7 @@ impl Default for GenerationConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_default_config() {
@@ -1805,6 +1806,7 @@ api_key_env = "none"
     }
 
     #[test]
+    #[serial]
     fn test_resolve_oauth_endpoint_with_explicit_fields() {
         std::env::set_var("SKILLDO_TEST_OAUTH_CID", "my-client-id");
         std::env::set_var("SKILLDO_TEST_OAUTH_CS", "my-secret");
@@ -1829,6 +1831,7 @@ api_key_env = "none"
     }
 
     #[test]
+    #[serial]
     fn test_resolve_oauth_endpoint_missing_auth_url_errors() {
         std::env::set_var("SKILLDO_TEST_OAUTH_CID2", "cid");
         let mut llm = Config::default().llm;
@@ -1846,6 +1849,7 @@ api_key_env = "none"
     }
 
     #[test]
+    #[serial]
     fn test_resolve_oauth_endpoint_missing_token_url_errors() {
         std::env::set_var("SKILLDO_TEST_OAUTH_CID3", "cid");
         let mut llm = Config::default().llm;
@@ -1877,6 +1881,7 @@ api_key_env = "none"
     }
 
     #[test]
+    #[serial]
     fn test_load_credentials_json_installed_format() {
         let json = r#"{"installed":{"client_id":"cid","client_secret":"cs","auth_uri":"https://auth","token_uri":"https://token"}}"#;
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json);
@@ -1897,6 +1902,7 @@ api_key_env = "none"
     }
 
     #[test]
+    #[serial]
     fn test_load_credentials_json_web_format() {
         let json = r#"{"web":{"client_id":"web-cid","client_secret":"web-cs","auth_uri":"https://web-auth","token_uri":"https://web-token"}}"#;
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json);
@@ -1913,6 +1919,7 @@ api_key_env = "none"
     }
 
     #[test]
+    #[serial]
     fn test_load_credentials_json_invalid_base64() {
         std::env::set_var("SKILLDO_TEST_CREDS_BAD", "not-valid-base64!!!");
 
@@ -1927,6 +1934,7 @@ api_key_env = "none"
     }
 
     #[test]
+    #[serial]
     fn test_load_credentials_json_empty_env_returns_none() {
         std::env::set_var("SKILLDO_TEST_CREDS_EMPTY", "");
 
@@ -1940,6 +1948,7 @@ api_key_env = "none"
     }
 
     #[test]
+    #[serial]
     fn test_explicit_fields_override_credentials_json() {
         let json = r#"{"installed":{"client_id":"cred-cid","auth_uri":"https://cred-auth","token_uri":"https://cred-token"}}"#;
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json);

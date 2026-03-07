@@ -456,8 +456,17 @@ struct ResponsesRequest {
 
 #[derive(Debug, Serialize)]
 struct ResponsesInputMessage {
+    #[serde(rename = "type")]
+    msg_type: String,
     role: String,
-    content: String,
+    content: Vec<ResponsesInputContent>,
+}
+
+#[derive(Debug, Serialize)]
+struct ResponsesInputContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -511,8 +520,12 @@ impl LlmClient for ChatGPTClient {
             model: self.model.clone(),
             instructions: "Follow the user's instructions precisely.".to_string(),
             input: vec![ResponsesInputMessage {
+                msg_type: "message".to_string(),
                 role: "user".to_string(),
-                content: prompt.to_string(),
+                content: vec![ResponsesInputContent {
+                    content_type: "input_text".to_string(),
+                    text: prompt.to_string(),
+                }],
             }],
             max_output_tokens: Some(self.max_tokens),
             store: false,
@@ -1043,8 +1056,12 @@ mod tests {
             model: "gpt-5.2-codex".to_string(),
             instructions: "Follow the user's instructions precisely.".to_string(),
             input: vec![ResponsesInputMessage {
+                msg_type: "message".to_string(),
                 role: "user".to_string(),
-                content: "hello".to_string(),
+                content: vec![ResponsesInputContent {
+                    content_type: "input_text".to_string(),
+                    text: "hello".to_string(),
+                }],
             }],
             max_output_tokens: Some(8192),
             store: false,
@@ -1054,8 +1071,10 @@ mod tests {
         assert_eq!(json["max_output_tokens"], 8192);
         assert_eq!(json["store"], false);
         assert!(json["instructions"].as_str().unwrap().contains("precisely"));
+        assert_eq!(json["input"][0]["type"], "message");
         assert_eq!(json["input"][0]["role"], "user");
-        assert_eq!(json["input"][0]["content"], "hello");
+        assert_eq!(json["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(json["input"][0]["content"][0]["text"], "hello");
     }
 
     #[test]
