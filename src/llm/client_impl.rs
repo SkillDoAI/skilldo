@@ -491,12 +491,15 @@ impl ChatGPTClient {
         max_tokens: u32,
         timeout_secs: u64,
         use_chatgpt_backend: bool,
+        base_url: Option<String>,
     ) -> Result<Self> {
-        let base_url = if use_chatgpt_backend {
-            "https://chatgpt.com/backend-api/codex".to_string()
-        } else {
-            "https://api.openai.com/v1".to_string()
-        };
+        let base_url = base_url.unwrap_or_else(|| {
+            if use_chatgpt_backend {
+                "https://chatgpt.com/backend-api/codex".to_string()
+            } else {
+                "https://api.openai.com/v1".to_string()
+            }
+        });
         Ok(Self {
             api_key: api_key.into(),
             model,
@@ -1028,6 +1031,7 @@ mod tests {
             8192,
             120,
             true,
+            None,
         )
         .unwrap();
         assert_eq!(client.base_url, "https://chatgpt.com/backend-api/codex");
@@ -1036,14 +1040,35 @@ mod tests {
 
     #[test]
     fn test_chatgpt_client_creation_api() {
-        let client =
-            ChatGPTClient::new("key".to_string(), "gpt-5.2".to_string(), 8192, 120, false).unwrap();
+        let client = ChatGPTClient::new(
+            "key".to_string(),
+            "gpt-5.2".to_string(),
+            8192,
+            120,
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(client.base_url, "https://api.openai.com/v1");
     }
 
     #[test]
+    fn test_chatgpt_client_base_url_override() {
+        let client = ChatGPTClient::new(
+            "key".to_string(),
+            "m".to_string(),
+            8192,
+            120,
+            true,
+            Some("https://proxy.example.com/api".to_string()),
+        )
+        .unwrap();
+        assert_eq!(client.base_url, "https://proxy.example.com/api");
+    }
+
+    #[test]
     fn test_chatgpt_client_extra_headers() {
-        let client = ChatGPTClient::new("key".to_string(), "m".to_string(), 8192, 120, true)
+        let client = ChatGPTClient::new("key".to_string(), "m".to_string(), 8192, 120, true, None)
             .unwrap()
             .with_extra_headers(vec![("X-Custom".to_string(), "val".to_string())]);
         assert_eq!(client.extra_headers.len(), 1);
@@ -1140,7 +1165,7 @@ mod tests {
         // ChatGPTClient with api_key="none" should not add Authorization header.
         // This mirrors the OpenAI client's guard for keyless/OAuth providers.
         let client =
-            ChatGPTClient::new("none".to_string(), "m".to_string(), 8192, 120, true).unwrap();
+            ChatGPTClient::new("none".to_string(), "m".to_string(), 8192, 120, true, None).unwrap();
         let key = client.api_key.expose();
         // Verify the guard condition matches
         assert!(key.to_lowercase() == "none");
@@ -1148,7 +1173,8 @@ mod tests {
 
     #[test]
     fn test_chatgpt_client_skips_auth_header_for_empty_key() {
-        let client = ChatGPTClient::new(String::new(), "m".to_string(), 8192, 120, true).unwrap();
+        let client =
+            ChatGPTClient::new(String::new(), "m".to_string(), 8192, 120, true, None).unwrap();
         let key = client.api_key.expose();
         assert!(key.is_empty());
     }

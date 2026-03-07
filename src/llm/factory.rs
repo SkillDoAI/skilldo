@@ -48,7 +48,16 @@ pub async fn create_client_from_llm_config(
             env::var(&env_var).unwrap_or_default()
         } else {
             env::var(&env_var).map_err(|_| {
-                anyhow::anyhow!("API key not found in environment variable: {}", env_var)
+                if llm_config.has_oauth() {
+                    anyhow::anyhow!(
+                        "No OAuth tokens found for '{}'. Run `skilldo auth login` first, \
+                         or set {} for API key auth.",
+                        llm_config.resolved_provider_name(),
+                        env_var
+                    )
+                } else {
+                    anyhow::anyhow!("API key not found in environment variable: {}", env_var)
+                }
             })?
         };
         (key, false)
@@ -88,6 +97,7 @@ pub async fn create_client_from_llm_config(
                     max_tokens,
                     timeout,
                     use_bearer,
+                    llm_config.base_url.clone(),
                 )?
                 .with_extra_headers(extra_headers),
             )
@@ -134,6 +144,7 @@ pub async fn create_client(config: &Config, dry_run: bool) -> Result<Box<dyn Llm
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
 
     #[tokio::test]
@@ -143,6 +154,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_anthropic_client() {
         env::set_var("SKILLDO_TEST_FACTORY_ANTHRO", "test_key");
         let mut config = Config::default();
@@ -153,6 +165,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_openai_client() {
         env::set_var("SKILLDO_TEST_FACTORY_OAI", "test_key");
         let mut config = Config::default();
@@ -173,6 +186,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_gemini_client() {
         env::set_var("SKILLDO_TEST_FACTORY_GEMINI", "test_key");
         let mut config = Config::default();
@@ -235,6 +249,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_client_from_llm_config_anthropic() {
         env::set_var("SKILLDO_TEST_FACTORY_LLM_KEY_1", "test_key");
         let config = make_llm_config(
@@ -248,6 +263,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_client_from_llm_config_openai() {
         env::set_var("SKILLDO_TEST_FACTORY_LLM_KEY_2", "test_key");
         let config = make_llm_config(
@@ -261,6 +277,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_client_from_llm_config_gemini() {
         env::set_var("SKILLDO_TEST_FACTORY_LLM_KEY_3", "test_key");
         let config = make_llm_config(
@@ -285,6 +302,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_client_from_llm_config_chatgpt() {
         env::set_var("SKILLDO_TEST_FACTORY_LLM_KEY_4", "test_key");
         let config = make_llm_config(
@@ -319,6 +337,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_client_with_oauth_token() {
         let provider_name = "test-factory-oauth";
         let tokens = crate::auth::TokenSet {
@@ -344,6 +363,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_gemini_client_with_bearer_auth() {
         let provider_name = "test-factory-gemini-oauth";
         let tokens = crate::auth::TokenSet {
