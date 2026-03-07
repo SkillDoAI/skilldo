@@ -175,8 +175,11 @@ pub async fn device_code_login(endpoint: &OAuthEndpoint) -> Result<super::TokenS
         ("code", &authorization_code),
         ("redirect_uri", &redirect_uri),
         ("client_id", &endpoint.client_id),
-        ("code_verifier", &code_verifier),
     ];
+
+    if !code_verifier.is_empty() {
+        params.push(("code_verifier", &code_verifier));
+    }
 
     let secret_ref;
     if let Some(secret) = &endpoint.client_secret {

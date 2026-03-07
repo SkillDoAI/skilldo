@@ -324,14 +324,22 @@ impl LlmConfig {
     pub fn resolve_extra_headers(&self) -> anyhow::Result<Vec<(String, String)>> {
         self.extra_headers
             .iter()
-            .map(|h| {
-                let (key, value) = h.split_once(':').ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Invalid extra_headers entry (expected 'Name: value'): {}",
-                        h
-                    )
-                })?;
-                Ok((key.trim().to_string(), value.trim().to_string()))
+            .filter_map(|h| {
+                let (key, value) = match h.split_once(':') {
+                    Some(kv) => kv,
+                    None => {
+                        return Some(Err(anyhow::anyhow!(
+                            "Invalid extra_headers entry (expected 'Name: value'): {}",
+                            h
+                        )))
+                    }
+                };
+                let key = key.trim();
+                if key.is_empty() {
+                    tracing::warn!("Skipping extra_headers entry with empty name: {}", h);
+                    return None;
+                }
+                Some(Ok((key.to_string(), value.trim().to_string())))
             })
             .collect()
     }

@@ -14,6 +14,15 @@ const DEFAULT_REDIRECT_URI: &str = "http://localhost:8085/callback";
 const OPENAI_REDIRECT_PORT: u16 = 1455;
 const OPENAI_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const CALLBACK_TIMEOUT_SECS: u64 = 120;
+const OAUTH_HTTP_TIMEOUT_SECS: u64 = 30;
+
+/// Build a reqwest client with a timeout for OAuth token operations.
+fn oauth_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS))
+        .build()
+        .context("Failed to build OAuth HTTP client")
+}
 
 /// Get the redirect URI and port for the given endpoint.
 fn redirect_config(endpoint: &OAuthEndpoint) -> (u16, &'static str) {
@@ -43,8 +52,12 @@ pub fn build_auth_url(endpoint: &OAuthEndpoint, challenge: &str, state: &str) ->
         urlencoding::encode(challenge),
     );
 
-    // Some providers require access_type=offline for refresh tokens
-    url.push_str("&access_type=offline");
+    // Google requires access_type=offline for refresh tokens.
+    // Per RFC 6749, authorization servers MUST ignore unrecognized params,
+    // so this is safe to send to non-Google providers.
+    if endpoint.auth_url.contains("accounts.google.com") {
+        url.push_str("&access_type=offline");
+    }
     url
 }
 
@@ -143,7 +156,7 @@ pub async fn exchange_code(
     code: &str,
     verifier: &str,
 ) -> Result<TokenSet> {
-    let client = reqwest::Client::new();
+    let client = oauth_http_client()?;
 
     let (_, redirect_uri) = redirect_config(endpoint);
     let mut params = vec![
@@ -180,7 +193,7 @@ pub async fn exchange_code(
 
 /// Refresh an expired access token using a refresh token.
 pub async fn refresh_tokens(endpoint: &OAuthEndpoint, refresh_token: &str) -> Result<TokenSet> {
-    let client = reqwest::Client::new();
+    let client = oauth_http_client()?;
 
     let mut params = vec![
         ("grant_type", "refresh_token"),
@@ -287,8 +300,15 @@ mod urlencoding {
         while let Some(b) = bytes.next() {
             match b {
                 b'%' => {
-                    let hi = bytes.next().unwrap_or(b'0');
-                    let lo = bytes.next().unwrap_or(b'0');
+                    let Some(hi) = bytes.next() else {
+                        result.push(b'%');
+                        break;
+                    };
+                    let Some(lo) = bytes.next() else {
+                        result.push(b'%');
+                        result.push(hi);
+                        break;
+                    };
                     let hex = [hi, lo];
                     if let Ok(s) = std::str::from_utf8(&hex) {
                         if let Ok(byte) = u8::from_str_radix(s, 16) {
@@ -296,7 +316,7 @@ mod urlencoding {
                             continue;
                         }
                     }
-                    // Malformed — pass through literally
+                    // Malformed hex — pass through literally
                     result.push(b'%');
                     result.push(hi);
                     result.push(lo);
@@ -333,6 +353,38 @@ mod tests {
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("state=state456"));
         assert!(url.contains("scope=openid%20email"));
+        // access_type=offline only added for Google URLs
+        assert!(!url.contains("access_type=offline"));
+    }
+
+    #[test]
+    fn build_auth_url_uses_ampersand_when_query_exists() {
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://auth.example.com/authorize?prompt=consent".to_string(),
+            token_url: "https://auth.example.com/token".to_string(),
+            scopes: "openid".to_string(),
+            client_id: "c".to_string(),
+            client_secret: None,
+            provider_name: "test".to_string(),
+        };
+        let url = build_auth_url(&endpoint, "ch", "st");
+        // Should use & not ? since auth_url already has query params
+        assert!(
+            url.starts_with("https://auth.example.com/authorize?prompt=consent&response_type=code")
+        );
+    }
+
+    #[test]
+    fn build_auth_url_adds_access_type_for_google() {
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+            token_url: "https://oauth2.googleapis.com/token".to_string(),
+            scopes: "openid".to_string(),
+            client_id: "google-client".to_string(),
+            client_secret: None,
+            provider_name: "google".to_string(),
+        };
+        let url = build_auth_url(&endpoint, "c", "s");
         assert!(url.contains("access_type=offline"));
     }
 
