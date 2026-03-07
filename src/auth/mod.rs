@@ -87,11 +87,14 @@ pub fn save_tokens(provider_name: &str, tokens: &TokenSet) -> Result<()> {
 /// Load tokens from disk. Returns None if file doesn't exist.
 pub fn load_tokens(provider_name: &str) -> Result<Option<TokenSet>> {
     let path = token_path(provider_name)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read token file: {}", path.display()))?;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(anyhow::Error::new(e)
+                .context(format!("Failed to read token file: {}", path.display())))
+        }
+    };
     let tokens: TokenSet = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse token file: {}", path.display()))?;
     Ok(Some(tokens))

@@ -161,7 +161,9 @@ fn group_by_oauth_app(endpoints: &[OAuthEndpoint]) -> Vec<(&OAuthEndpoint, Vec<&
             .and_modify(|(_, names)| names.push(&ep.provider_name))
             .or_insert((ep, vec![&ep.provider_name]));
     }
-    groups.into_values().collect()
+    let mut result: Vec<_> = groups.into_values().collect();
+    result.sort_by(|a, b| a.0.provider_name.cmp(&b.0.provider_name));
+    result
 }
 
 #[cfg(test)]
