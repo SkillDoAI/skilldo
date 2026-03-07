@@ -353,4 +353,46 @@ mod tests {
 
         delete_tokens(name).unwrap();
     }
+
+    #[tokio::test]
+    async fn resolve_oauth_token_refreshes_expired_token() {
+        let name = "test-resolve-refresh";
+        let tokens = TokenSet {
+            access_token: "old-at".to_string(),
+            refresh_token: "old-rt".to_string(),
+            expires_at: 0, // expired
+        };
+        save_tokens(name, &tokens).unwrap();
+
+        // Set up mock server for refresh
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"access_token":"refreshed-at","refresh_token":"refreshed-rt","expires_in":3600}"#,
+            )
+            .create_async()
+            .await;
+
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://auth.example.com/authorize".to_string(),
+            token_url: format!("{}/token", server.url()),
+            scopes: "openid".to_string(),
+            client_id: "test".to_string(),
+            client_secret: None,
+            provider_name: name.to_string(),
+        };
+
+        let result = resolve_oauth_token(&endpoint).await.unwrap();
+        assert_eq!(result, Some("refreshed-at".to_string()));
+
+        // Verify refreshed tokens were saved
+        let loaded = load_tokens(name).unwrap().unwrap();
+        assert_eq!(loaded.access_token, "refreshed-at");
+        assert_eq!(loaded.refresh_token, "refreshed-rt");
+
+        delete_tokens(name).unwrap();
+    }
 }

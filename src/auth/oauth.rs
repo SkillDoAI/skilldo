@@ -896,6 +896,59 @@ mod tests {
         assert!(!url_has_host("", "auth.openai.com"));
     }
 
+    #[tokio::test]
+    async fn callback_server_returns_error_when_no_code() {
+        let port = 18089u16;
+
+        let server =
+            tokio::spawn(async move { start_callback_server_on_port("test-state", port).await });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        // Send a request with correct state but no code parameter
+        let _ = client
+            .get(format!("http://127.0.0.1:{port}/callback?state=test-state"))
+            .send()
+            .await;
+
+        let result = server.await.unwrap();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No authorization code"));
+    }
+
+    #[tokio::test]
+    async fn callback_server_public_wrapper_uses_correct_port() {
+        // Test start_callback_server (the public wrapper) with a non-OpenAI endpoint
+        // to cover the public API path (lines 91-97)
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://auth.example.com/authorize".to_string(),
+            token_url: "https://auth.example.com/token".to_string(),
+            scopes: "openid".to_string(),
+            client_id: "test".to_string(),
+            client_secret: None,
+            provider_name: "test".to_string(),
+        };
+
+        let server =
+            tokio::spawn(async move { start_callback_server("my-state", &endpoint).await });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        // Default port is 8085 for non-OpenAI endpoints
+        let _ = client
+            .get("http://127.0.0.1:8085/callback?code=pub-code&state=my-state")
+            .send()
+            .await;
+
+        let result = server.await.unwrap().unwrap();
+        assert_eq!(result, "pub-code");
+    }
+
     #[test]
     fn html_escape_prevents_injection() {
         assert_eq!(

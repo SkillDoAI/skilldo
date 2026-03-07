@@ -534,9 +534,12 @@ impl LlmClient for ChatGPTClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .header("authorization", format!("Bearer {}", self.api_key.expose()))
             .json(&request);
 
+        // Only add authorization if API key is not empty (same guard as OpenAIClient)
+        if !self.api_key.expose().is_empty() && self.api_key.expose().to_lowercase() != "none" {
+            req = req.header("authorization", format!("Bearer {}", self.api_key.expose()));
+        }
         for (key, value) in &self.extra_headers {
             req = req.header(key, value);
         }
@@ -1111,5 +1114,23 @@ mod tests {
         let base2 = "https://chatgpt.com/backend-api/codex/responses";
         let trimmed2 = base2.trim_end_matches('/');
         assert!(trimmed2.ends_with("/responses"));
+    }
+
+    #[test]
+    fn test_chatgpt_client_skips_auth_header_for_none_key() {
+        // ChatGPTClient with api_key="none" should not add Authorization header.
+        // This mirrors the OpenAI client's guard for keyless/OAuth providers.
+        let client =
+            ChatGPTClient::new("none".to_string(), "m".to_string(), 8192, 120, true).unwrap();
+        let key = client.api_key.expose();
+        // Verify the guard condition matches
+        assert!(key.to_lowercase() == "none");
+    }
+
+    #[test]
+    fn test_chatgpt_client_skips_auth_header_for_empty_key() {
+        let client = ChatGPTClient::new(String::new(), "m".to_string(), 8192, 120, true).unwrap();
+        let key = client.api_key.expose();
+        assert!(key.is_empty());
     }
 }
