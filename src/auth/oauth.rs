@@ -143,7 +143,20 @@ async fn start_callback_server_on_port(expected_state: &str, port: u16) -> Resul
             })
             .collect();
 
-        // Check for error response
+        // Validate state first — ignore connections with wrong/missing state
+        let state = params.get("state").map(|s| s.as_str()).unwrap_or("");
+        if state != expected_state {
+            debug!("Ignoring connection with wrong state, waiting for correct callback");
+            let body = "<html><body><h1>Authentication Failed</h1><p>State mismatch — please try again.</p><p>You can close this tab.</p></body></html>";
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            continue;
+        }
+
+        // Check for error response (only after state is validated)
         if let Some(error) = params.get("error") {
             let description = params
                 .get("error_description")
@@ -160,23 +173,18 @@ async fn start_callback_server_on_port(expected_state: &str, port: u16) -> Resul
             bail!("OAuth error: {error} — {description}");
         }
 
-        // Validate state — reject mismatches but keep listening
-        let state = params.get("state").map(|s| s.as_str()).unwrap_or("");
-        if state != expected_state {
-            debug!("Ignoring connection with wrong state, waiting for correct callback");
-            let body = "<html><body><h1>Authentication Failed</h1><p>State mismatch — please try again.</p><p>You can close this tab.</p></body></html>";
-            let response = format!(
-                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(), body
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
-            continue;
-        }
-
         // Extract code
         let code = match params.get("code") {
             Some(c) => c.clone(),
-            None => bail!("No authorization code in callback"),
+            None => {
+                let body = "<html><body><h1>Authentication Failed</h1><p>No authorization code received. Please try again.</p><p>You can close this tab.</p></body></html>";
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                bail!("No authorization code in callback");
+            }
         };
 
         // Send success response

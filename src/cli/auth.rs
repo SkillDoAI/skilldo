@@ -8,7 +8,7 @@ use crate::config::Config;
 /// Run the OAuth login flow for all configured OAuth providers.
 pub async fn login(config_path: Option<String>) -> Result<()> {
     let config = Config::load_with_path(config_path)?;
-    let endpoints = collect_unique_endpoints(&config)?;
+    let endpoints = collect_all_endpoints(&config)?;
 
     if endpoints.is_empty() {
         anyhow::bail!(
@@ -17,7 +17,11 @@ pub async fn login(config_path: Option<String>) -> Result<()> {
         );
     }
 
-    for endpoint in &endpoints {
+    // Group by OAuth app so we only auth once per unique server+client_id,
+    // but save tokens under ALL provider_names that share the app.
+    let groups = group_by_oauth_app(&endpoints);
+
+    for (endpoint, provider_names) in &groups {
         info!("Authenticating with {}...", endpoint.provider_name);
 
         let tokens = if auth::device_code::should_use_device_code(endpoint) {
@@ -33,7 +37,10 @@ pub async fn login(config_path: Option<String>) -> Result<()> {
             auth::oauth::exchange_code(endpoint, &code, &verifier).await?
         };
 
-        auth::save_tokens(&endpoint.provider_name, &tokens)?;
+        // Save under all provider_names sharing this OAuth app
+        for name in provider_names {
+            auth::save_tokens(name, &tokens)?;
+        }
         info!(
             "Authenticated with {} successfully.",
             endpoint.provider_name
@@ -46,7 +53,7 @@ pub async fn login(config_path: Option<String>) -> Result<()> {
 /// Show OAuth token status for all configured providers.
 pub fn status(config_path: Option<String>) -> Result<()> {
     let config = Config::load_with_path(config_path)?;
-    let endpoints = collect_unique_endpoints(&config)?;
+    let endpoints = collect_all_endpoints(&config)?;
 
     if endpoints.is_empty() {
         println!("No OAuth endpoints configured.");
@@ -97,7 +104,7 @@ pub fn status(config_path: Option<String>) -> Result<()> {
 /// Delete all stored OAuth tokens for configured providers.
 pub fn logout(config_path: Option<String>) -> Result<()> {
     let config = Config::load_with_path(config_path)?;
-    let endpoints = collect_unique_endpoints(&config)?;
+    let endpoints = collect_all_endpoints(&config)?;
 
     if endpoints.is_empty() {
         println!("No OAuth endpoints configured.");
@@ -112,12 +119,15 @@ pub fn logout(config_path: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// Collect unique OAuth endpoints from the config (dedup by token_url + client_id).
-fn collect_unique_endpoints(config: &Config) -> Result<Vec<OAuthEndpoint>> {
-    let mut seen = HashSet::new();
+/// Collect all OAuth endpoints from the config, deduplicating by provider_name.
+///
+/// Multiple stages may share the same OAuth server (same token_url + client_id)
+/// but have different provider_names. All are returned so that token storage
+/// works correctly for each provider_name.
+fn collect_all_endpoints(config: &Config) -> Result<Vec<OAuthEndpoint>> {
+    let mut seen_names = HashSet::new();
     let mut endpoints = Vec::new();
 
-    // Collect from all LlmConfig sources: global + per-stage overrides
     let llm_configs: Vec<&crate::config::LlmConfig> = std::iter::once(&config.llm)
         .chain(config.generation.extract_llm.as_ref())
         .chain(config.generation.map_llm.as_ref())
@@ -129,8 +139,8 @@ fn collect_unique_endpoints(config: &Config) -> Result<Vec<OAuthEndpoint>> {
 
     for llm_config in llm_configs {
         if let Some(endpoint) = llm_config.resolve_oauth_endpoint()? {
-            let key = format!("{}|{}", endpoint.token_url, endpoint.client_id);
-            if seen.insert(key) {
+            // Dedup by provider_name (same name = same token file)
+            if seen_names.insert(endpoint.provider_name.clone()) {
                 endpoints.push(endpoint);
             }
         }
@@ -139,41 +149,104 @@ fn collect_unique_endpoints(config: &Config) -> Result<Vec<OAuthEndpoint>> {
     Ok(endpoints)
 }
 
+/// Group endpoints by OAuth app (token_url + client_id) for login dedup.
+/// Returns: Vec<(first_endpoint, all_provider_names_sharing_this_app)>
+fn group_by_oauth_app(endpoints: &[OAuthEndpoint]) -> Vec<(&OAuthEndpoint, Vec<&str>)> {
+    let mut groups: std::collections::HashMap<String, (&OAuthEndpoint, Vec<&str>)> =
+        std::collections::HashMap::new();
+    for ep in endpoints {
+        let key = format!("{}|{}", ep.token_url, ep.client_id);
+        groups
+            .entry(key)
+            .and_modify(|(_, names)| names.push(&ep.provider_name))
+            .or_insert((ep, vec![&ep.provider_name]));
+    }
+    groups.into_values().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
 
     #[test]
-    fn collect_unique_endpoints_empty_by_default() {
+    fn collect_all_endpoints_empty_by_default() {
         let config = Config::default();
-        let endpoints = collect_unique_endpoints(&config).unwrap();
+        let endpoints = collect_all_endpoints(&config).unwrap();
         assert!(endpoints.is_empty());
     }
 
     #[test]
-    fn collect_unique_endpoints_deduplicates() {
+    fn collect_all_endpoints_deduplicates_same_provider_name() {
         let mut config = Config::default();
-        // Set OAuth on both global and extract stage with same endpoint
+        // Set OAuth on both global and extract stage with same endpoint AND same provider_name
         config.llm.oauth_auth_url = Some("https://auth.example.com/authorize".to_string());
         config.llm.oauth_token_url = Some("https://auth.example.com/token".to_string());
         config.llm.oauth_client_id_env = Some("SKILLDO_TEST_AUTH_CID".to_string());
+        config.llm.provider_name = Some("shared-provider".to_string());
 
         std::env::set_var("SKILLDO_TEST_AUTH_CID", "same-client");
 
-        let mut extract_llm = config.llm.clone();
-        extract_llm.provider_name = Some("extract-provider".to_string());
+        let extract_llm = config.llm.clone();
+        // Same provider_name → deduped to 1
         config.generation.extract_llm = Some(extract_llm);
 
-        let endpoints = collect_unique_endpoints(&config).unwrap();
-        // Same token_url + client_id → deduplicated to 1
+        let endpoints = collect_all_endpoints(&config).unwrap();
         assert_eq!(endpoints.len(), 1);
 
         std::env::remove_var("SKILLDO_TEST_AUTH_CID");
     }
 
     #[test]
-    fn collect_unique_endpoints_different_providers() {
+    fn collect_all_endpoints_keeps_different_provider_names() {
+        let mut config = Config::default();
+        config.llm.oauth_auth_url = Some("https://auth.example.com/authorize".to_string());
+        config.llm.oauth_token_url = Some("https://auth.example.com/token".to_string());
+        config.llm.oauth_client_id_env = Some("SKILLDO_TEST_AUTH_CID_MULTI".to_string());
+        config.llm.provider_name = Some("global-provider".to_string());
+
+        std::env::set_var("SKILLDO_TEST_AUTH_CID_MULTI", "same-client");
+
+        let mut extract_llm = config.llm.clone();
+        extract_llm.provider_name = Some("extract-provider".to_string());
+        config.generation.extract_llm = Some(extract_llm);
+
+        let endpoints = collect_all_endpoints(&config).unwrap();
+        // Same OAuth app but different provider_names → both kept
+        assert_eq!(endpoints.len(), 2);
+
+        std::env::remove_var("SKILLDO_TEST_AUTH_CID_MULTI");
+    }
+
+    #[test]
+    fn group_by_oauth_app_groups_shared_server() {
+        let endpoints = vec![
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "cid".to_string(),
+                client_secret: None,
+                provider_name: "provider-a".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "cid".to_string(),
+                client_secret: None,
+                provider_name: "provider-b".to_string(),
+            },
+        ];
+        let groups = group_by_oauth_app(&endpoints);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].1.len(), 2);
+        assert!(groups[0].1.contains(&"provider-a"));
+        assert!(groups[0].1.contains(&"provider-b"));
+    }
+
+    #[test]
+    fn collect_all_endpoints_different_providers() {
         let mut config = Config::default();
         config.llm.oauth_auth_url = Some("https://auth1.example.com/authorize".to_string());
         config.llm.oauth_token_url = Some("https://auth1.example.com/token".to_string());
@@ -189,7 +262,7 @@ mod tests {
         test_llm.provider_name = Some("test-provider".to_string());
         config.generation.test_llm = Some(test_llm);
 
-        let endpoints = collect_unique_endpoints(&config).unwrap();
+        let endpoints = collect_all_endpoints(&config).unwrap();
         assert_eq!(endpoints.len(), 2);
 
         std::env::remove_var("SKILLDO_TEST_AUTH_CID1");
@@ -239,7 +312,7 @@ mod tests {
         config.llm.provider_name = Some(provider.to_string());
 
         std::env::set_var("SKILLDO_TEST_STATUS_CID", "test-client");
-        let endpoints = collect_unique_endpoints(&config).unwrap();
+        let endpoints = collect_all_endpoints(&config).unwrap();
         assert_eq!(endpoints.len(), 1);
         assert_eq!(endpoints[0].provider_name, provider);
 

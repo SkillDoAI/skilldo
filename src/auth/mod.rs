@@ -133,15 +133,25 @@ pub async fn resolve_oauth_token(endpoint: &OAuthEndpoint) -> Result<Option<Stri
 }
 
 /// Create directory with secure permissions (0o700 on Unix).
+/// Uses `DirBuilder::mode()` to set permissions at creation time, avoiding
+/// a TOCTOU race where the directory is briefly world-readable.
 fn ensure_secure_dir(path: &PathBuf) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+            .with_context(|| format!("Failed to create directory: {}", path.display()))?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
     std::fs::create_dir_all(path)
         .with_context(|| format!("Failed to create directory: {}", path.display()))?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-    }
+    #[cfg(not(unix))]
     Ok(())
 }
 

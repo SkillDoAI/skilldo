@@ -1321,6 +1321,22 @@ mod tests {
     }
 
     #[test]
+    fn test_new_go_container_uses_container_executor() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Go container executor should construct successfully"
+        );
+    }
+
+    #[test]
     fn test_new_unsupported_language_errors() {
         use crate::llm::client::MockLlmClient;
 
