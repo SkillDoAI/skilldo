@@ -394,7 +394,19 @@ async fn main() -> Result<()> {
             }
         },
         Commands::HelloWorld { config } => {
-            cli::hello_world::run(config).await?;
+            let cfg = crate::config::Config::load_with_path(config)?;
+            let client = crate::llm::factory::create_client(&cfg, false).await?;
+            println!(
+                "\u{1F426} Asking {} ({})...\n",
+                cfg.llm.resolved_provider_name(),
+                cfg.llm.model
+            );
+            let response = client
+                .complete(
+                    "What is the airspeed velocity of an unladen swallow? Be brief and witty.",
+                )
+                .await?;
+            println!("{response}");
         }
     }
 
@@ -1382,5 +1394,31 @@ mod tests {
             panic!("Expected Login action");
         };
         assert_eq!(config, Some("my.toml".to_string()));
+    }
+
+    #[test]
+    fn test_dispatch_hello_world() {
+        let cli = Cli::try_parse_from(["skilldo", "hello-world"]).unwrap();
+        assert!(matches!(cli.command, Commands::HelloWorld { config: None }));
+    }
+
+    #[test]
+    fn test_dispatch_hello_world_with_config() {
+        let cli = Cli::try_parse_from(["skilldo", "hello-world", "--config", "test.toml"]).unwrap();
+        let Commands::HelloWorld { config } = cli.command else {
+            panic!("Expected HelloWorld command");
+        };
+        assert_eq!(config, Some("test.toml".to_string()));
+    }
+
+    #[test]
+    fn test_hello_world_is_hidden() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let hello = cmd
+            .get_subcommands()
+            .find(|s| s.get_name() == "hello-world");
+        assert!(hello.is_some());
+        assert!(hello.unwrap().is_hide_set());
     }
 }
