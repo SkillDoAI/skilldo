@@ -85,16 +85,21 @@ pub async fn start_callback_server(
 
 /// Internal: callback server on a specified port (used by tests to avoid port collisions).
 async fn start_callback_server_on_port(expected_state: &str, port: u16) -> Result<String> {
-    // Try IPv4 first (matches redirect_uri which uses "localhost"),
-    // fall back to IPv6 for systems where localhost resolves to ::1.
-    let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await {
-        Ok(l) => l,
-        Err(_) => tokio::net::TcpListener::bind(format!("[::1]:{port}"))
-            .await
-            .with_context(|| format!("Failed to bind to port {port} for OAuth callback"))?,
-    };
+    // Always bind IPv4 (redirect_uri uses "localhost" which resolves to 127.0.0.1).
+    let v4_listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+        .await
+        .with_context(|| format!("Failed to bind to 127.0.0.1:{port} for OAuth callback"))?;
 
-    debug!("OAuth callback server listening on port {port}");
+    // Also try IPv6 — on some systems localhost resolves to ::1.
+    // If it fails (IPv6 not enabled, port conflict), just ignore it.
+    let v6_listener = tokio::net::TcpListener::bind(format!("[::1]:{port}"))
+        .await
+        .ok();
+    if v6_listener.is_some() {
+        debug!("OAuth callback server listening on port {port} (IPv4 + IPv6)");
+    } else {
+        debug!("OAuth callback server listening on port {port} (IPv4 only)");
+    }
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let deadline =
@@ -106,7 +111,19 @@ async fn start_callback_server_on_port(expected_state: &str, port: u16) -> Resul
             bail!("OAuth callback timed out after {CALLBACK_TIMEOUT_SECS}s — did you complete login in the browser?");
         }
 
-        let accept_result = tokio::time::timeout(remaining, listener.accept()).await;
+        // Accept from whichever listener gets a connection first
+        let accept_result = match &v6_listener {
+            Some(v6) => {
+                tokio::time::timeout(remaining, async {
+                    tokio::select! {
+                        r = v4_listener.accept() => r,
+                        r = v6.accept() => r,
+                    }
+                })
+                .await
+            }
+            None => tokio::time::timeout(remaining, v4_listener.accept()).await,
+        };
         let (mut stream, _) = match accept_result {
             Ok(Ok(conn)) => conn,
             Ok(Err(e)) => {
