@@ -23,7 +23,7 @@
 [llm]
 # Provider type: "anthropic", "openai", "chatgpt", "gemini", or "openai-compatible"
 # "provider" also works (legacy alias for provider_type).
-# "chatgpt" uses the Responses API (streaming) — for OAuth-based ChatGPT
+# "chatgpt" uses the Responses API — for OAuth-based ChatGPT
 # subscription use. Models: gpt-5.2-codex, gpt-5.1-codex-mini, etc.
 provider_type = "anthropic"
 

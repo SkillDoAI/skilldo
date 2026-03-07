@@ -259,7 +259,7 @@ This uses GPT-5.2 for all stages, with test validation enabled by default using 
 [llm]
 # Provider type: "anthropic", "openai", "chatgpt", "gemini", or "openai-compatible"
 # "provider" also works (legacy alias, to be removed in 0.5.0).
-# "chatgpt" uses the Responses API (streaming) — for OAuth-based ChatGPT subscription access.
+# "chatgpt" uses the Responses API — for OAuth-based ChatGPT subscription access.
 provider_type = "anthropic"
 
 # Human-readable name for this provider instance.
@@ -381,7 +381,7 @@ cleanup = true
 |----------|------------------------|---------------|-------|
 | **Anthropic** | `"anthropic"` | Yes (`ANTHROPIC_API_KEY`) | Claude models |
 | **OpenAI** | `"openai"` | Yes (`OPENAI_API_KEY`) | GPT models. Handles `max_completion_tokens` for GPT-5+. |
-| **ChatGPT** | `"chatgpt"` | Yes (OAuth or `OPENAI_API_KEY`) | Uses the Responses API (streaming). Models: `gpt-5.2-codex`, `gpt-5.1-codex-mini`, etc. See [Authentication](#authentication-oauth-20). |
+| **ChatGPT** | `"chatgpt"` | Yes (OAuth or `OPENAI_API_KEY`) | Uses the Responses API. Models: `gpt-5.2-codex`, `gpt-5.1-codex-mini`, etc. See [Authentication](#authentication-oauth-20). |
 | **Google Gemini** | `"gemini"` | Yes (`GEMINI_API_KEY`) | Gemini models |
 | **OpenAI-compatible** | `"openai-compatible"` | Varies | Ollama, DeepSeek, Groq, Together, Fireworks, xAI, Mistral, vLLM, etc. Set `base_url`. |
 

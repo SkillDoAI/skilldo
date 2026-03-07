@@ -27,9 +27,15 @@ fn redirect_config(endpoint: &OAuthEndpoint) -> (u16, &'static str) {
 /// Build the authorization URL for the browser.
 pub fn build_auth_url(endpoint: &OAuthEndpoint, challenge: &str, state: &str) -> String {
     let (_, redirect_uri) = redirect_config(endpoint);
+    let separator = if endpoint.auth_url.contains('?') {
+        "&"
+    } else {
+        "?"
+    };
     let mut url = format!(
-        "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+        "{}{}response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
         endpoint.auth_url,
+        separator,
         urlencoding::encode(&endpoint.client_id),
         urlencoding::encode(redirect_uri),
         urlencoding::encode(&endpoint.scopes),
