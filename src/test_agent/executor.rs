@@ -794,6 +794,18 @@ func main() {
     }
 
     #[tokio::test]
+    async fn test_go_setup_environment_rejects_bad_deps() {
+        if !GoExecutor::check_go_available().await {
+            return;
+        }
+        let executor = GoExecutor::new();
+        let result = executor
+            .setup_environment(&["valid-pkg; rm -rf /".to_string()])
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn test_go_cleanup_is_noop() {
         let executor = GoExecutor::new();
         let temp_dir = TempDir::new().unwrap();

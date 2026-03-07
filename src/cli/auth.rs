@@ -368,6 +368,33 @@ provider_name = "{provider_name}"
     }
 
     #[test]
+    fn status_with_expiring_soon_token() {
+        let provider = "test-cli-status-expiring-soon";
+        let env_var = "SKILLDO_TEST_CLI_STATUS_SOON";
+        std::env::set_var(env_var, "client-id");
+
+        // Set expires_at to 30s from now — within the 60s safety buffer
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tokens = auth::TokenSet {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            expires_at: now + 30,
+        };
+        assert!(tokens.is_expired()); // within safety buffer
+        auth::save_tokens(provider, &tokens).unwrap();
+
+        let config_path = write_temp_oauth_config(provider, env_var);
+        let result = status(Some(config_path));
+        assert!(result.is_ok());
+
+        auth::delete_tokens(provider).unwrap();
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
     fn logout_with_config_deletes_tokens() {
         let provider = "test-cli-logout-cfg";
         let env_var = "SKILLDO_TEST_CLI_LOGOUT";

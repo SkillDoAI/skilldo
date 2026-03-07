@@ -11,6 +11,7 @@ use tracing::{debug, info};
 use super::OAuthEndpoint;
 
 const POLL_TIMEOUT_SECS: u64 = 900; // 15 minutes
+const OAUTH_HTTP_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, Deserialize)]
 struct UserCodeResponse {
@@ -65,6 +66,7 @@ struct DeviceTokenResponse {
 pub async fn device_code_login(endpoint: &OAuthEndpoint) -> Result<super::TokenSet> {
     let client = reqwest::Client::builder()
         .user_agent(format!("skilldo-cli/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS))
         .build()
         .context("Failed to build HTTP client")?;
     // OpenAI device code endpoints live under {issuer}/api/accounts/deviceauth/

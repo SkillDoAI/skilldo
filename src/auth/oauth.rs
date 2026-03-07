@@ -42,15 +42,17 @@ pub fn build_auth_url(endpoint: &OAuthEndpoint, challenge: &str, state: &str) ->
         "?"
     };
     let mut url = format!(
-        "{}{}response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+        "{}{}response_type=code&client_id={}&redirect_uri={}&state={}&code_challenge={}&code_challenge_method=S256",
         endpoint.auth_url,
         separator,
         urlencoding::encode(&endpoint.client_id),
         urlencoding::encode(redirect_uri),
-        urlencoding::encode(&endpoint.scopes),
         urlencoding::encode(state),
         urlencoding::encode(challenge),
     );
+    if !endpoint.scopes.is_empty() {
+        url.push_str(&format!("&scope={}", urlencoding::encode(&endpoint.scopes)));
+    }
 
     // Google requires access_type=offline for refresh tokens.
     // Per RFC 6749, authorization servers MUST ignore unrecognized params,
@@ -75,85 +77,108 @@ pub async fn start_callback_server(
 
 /// Internal: callback server on a specified port (used by tests to avoid port collisions).
 async fn start_callback_server_on_port(expected_state: &str, port: u16) -> Result<String> {
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
-        .await
-        .with_context(|| format!("Failed to bind to port {port} for OAuth callback"))?;
+    // Try IPv4 first (matches redirect_uri which uses "localhost"),
+    // fall back to IPv6 for systems where localhost resolves to ::1.
+    let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await {
+        Ok(l) => l,
+        Err(_) => tokio::net::TcpListener::bind(format!("[::1]:{port}"))
+            .await
+            .with_context(|| format!("Failed to bind to port {port} for OAuth callback"))?,
+    };
 
     debug!("OAuth callback server listening on port {port}");
 
-    let timeout = tokio::time::Duration::from_secs(CALLBACK_TIMEOUT_SECS);
-    let accept_result = tokio::time::timeout(timeout, listener.accept()).await;
-
-    let (mut stream, _) = match accept_result {
-        Ok(Ok(conn)) => conn,
-        Ok(Err(e)) => bail!("Failed to accept connection: {e}"),
-        Err(_) => bail!("OAuth callback timed out after {CALLBACK_TIMEOUT_SECS}s — did you complete login in the browser?"),
-    };
-
-    // Read the HTTP request
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+    let deadline =
+        tokio::time::Instant::now() + tokio::time::Duration::from_secs(CALLBACK_TIMEOUT_SECS);
 
-    // Parse the request line: GET /callback?code=...&state=... HTTP/1.1
-    let path = request
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("");
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            bail!("OAuth callback timed out after {CALLBACK_TIMEOUT_SECS}s — did you complete login in the browser?");
+        }
 
-    let query = path.split('?').nth(1).unwrap_or("");
-    let params: std::collections::HashMap<String, String> = query
-        .split('&')
-        .filter_map(|pair| {
-            let (key, value) = pair.split_once('=')?;
-            Some((key.to_string(), urlencoding::decode(value)))
-        })
-        .collect();
+        let accept_result = tokio::time::timeout(remaining, listener.accept()).await;
+        let (mut stream, _) = match accept_result {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => {
+                debug!("Failed to accept connection, retrying: {e}");
+                continue;
+            }
+            Err(_) => bail!("OAuth callback timed out after {CALLBACK_TIMEOUT_SECS}s — did you complete login in the browser?"),
+        };
 
-    // Check for error response
-    if let Some(error) = params.get("error") {
-        let description = params
-            .get("error_description")
-            .map(|s| s.as_str())
+        // Read the HTTP request
+        let mut buf = vec![0u8; 4096];
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                debug!("Failed to read from connection, retrying: {e}");
+                continue;
+            }
+        };
+        let request = String::from_utf8_lossy(&buf[..n]);
+
+        // Parse the request line: GET /callback?code=...&state=... HTTP/1.1
+        let path = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
             .unwrap_or("");
-        let body = format!("<html><body><h1>Authentication Failed</h1><p>{error}: {description}</p><p>You can close this tab.</p></body></html>");
+
+        let query = path.split('?').nth(1).unwrap_or("");
+        let params: std::collections::HashMap<String, String> = query
+            .split('&')
+            .filter_map(|pair| {
+                let (key, value) = pair.split_once('=')?;
+                Some((key.to_string(), urlencoding::decode(value)))
+            })
+            .collect();
+
+        // Check for error response
+        if let Some(error) = params.get("error") {
+            let description = params
+                .get("error_description")
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            let body = format!("<html><body><h1>Authentication Failed</h1><p>{error}: {description}</p><p>You can close this tab.</p></body></html>");
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            bail!("OAuth error: {error} — {description}");
+        }
+
+        // Validate state — reject mismatches but keep listening
+        let state = params.get("state").map(|s| s.as_str()).unwrap_or("");
+        if state != expected_state {
+            debug!("Ignoring connection with wrong state, waiting for correct callback");
+            let body = "<html><body><h1>Authentication Failed</h1><p>State mismatch — please try again.</p><p>You can close this tab.</p></body></html>";
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            continue;
+        }
+
+        // Extract code
+        let code = match params.get("code") {
+            Some(c) => c.clone(),
+            None => bail!("No authorization code in callback"),
+        };
+
+        // Send success response
+        let body = "<html><body><h1>Authentication Successful</h1><p>You can close this tab and return to the terminal.</p></body></html>";
         let response = format!(
-            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(), body
         );
         let _ = stream.write_all(response.as_bytes()).await;
-        bail!("OAuth error: {error} — {description}");
+
+        return Ok(code);
     }
-
-    // Validate state
-    let state = params.get("state").map(|s| s.as_str()).unwrap_or("");
-    if state != expected_state {
-        let body = "<html><body><h1>Authentication Failed</h1><p>State mismatch — possible CSRF attack. Please try again.</p><p>You can close this tab.</p></body></html>";
-        let response = format!(
-            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(), body
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
-        bail!("OAuth state mismatch — possible CSRF attack");
-    }
-
-    // Extract code
-    let code = params
-        .get("code")
-        .ok_or_else(|| anyhow::anyhow!("No authorization code in callback"))?
-        .clone();
-
-    // Send success response
-    let body = "<html><body><h1>Authentication Successful</h1><p>You can close this tab and return to the terminal.</p></body></html>";
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(), body
-    );
-    let _ = stream.write_all(response.as_bytes()).await;
-
-    Ok(code)
 }
 
 /// Exchange an authorization code for tokens.
@@ -448,30 +473,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn callback_server_rejects_wrong_state() {
-        let port = 18086u16;
-
-        let server =
-            tokio::spawn(
-                async move { start_callback_server_on_port("expected-state", port).await },
-            );
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-        let client = reqwest::Client::new();
-        let _ = client
-            .get(format!(
-                "http://127.0.0.1:{port}/callback?code=xyz&state=wrong-state"
-            ))
-            .send()
-            .await;
-
-        let result = server.await.unwrap();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("state mismatch"));
-    }
-
-    #[tokio::test]
     async fn exchange_code_with_mock_server() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
@@ -702,5 +703,67 @@ mod tests {
         let result = server.await.unwrap();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("access_denied"));
+    }
+
+    #[tokio::test]
+    async fn callback_server_ignores_wrong_state_then_accepts_correct() {
+        let port = 18088u16;
+
+        let server =
+            tokio::spawn(async move { start_callback_server_on_port("correct-state", port).await });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        // First request with wrong state — should be ignored
+        let _ = client
+            .get(format!(
+                "http://127.0.0.1:{port}/callback?code=wrong&state=bad-state"
+            ))
+            .send()
+            .await;
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Second request with correct state — should succeed
+        let _ = client
+            .get(format!(
+                "http://127.0.0.1:{port}/callback?code=good-code&state=correct-state"
+            ))
+            .send()
+            .await;
+
+        let result = server.await.unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "good-code");
+    }
+
+    #[test]
+    fn build_auth_url_omits_scope_when_empty() {
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://example.com/auth".to_string(),
+            token_url: "https://example.com/token".to_string(),
+            scopes: String::new(),
+            client_id: "cid".to_string(),
+            client_secret: None,
+            provider_name: "test".to_string(),
+        };
+        let url = build_auth_url(&endpoint, "challenge", "state");
+        assert!(!url.contains("scope="));
+    }
+
+    #[test]
+    fn urlencoding_malformed_trailing_percent() {
+        assert_eq!(urlencoding::decode("hello%"), "hello%");
+    }
+
+    #[test]
+    fn urlencoding_malformed_single_hex_digit() {
+        assert_eq!(urlencoding::decode("hello%2"), "hello%2");
+    }
+
+    #[test]
+    fn urlencoding_invalid_hex_chars() {
+        assert_eq!(urlencoding::decode("hello%ZZ"), "hello%ZZ");
     }
 }
