@@ -33,12 +33,25 @@ fn oauth_http_client() -> Result<reqwest::Client> {
 }
 
 /// Get the redirect URI and port for the given endpoint.
+/// Uses host-level matching (not substring) to identify OpenAI's auth server.
 fn redirect_config(endpoint: &OAuthEndpoint) -> (u16, &'static str) {
-    if endpoint.auth_url.contains("auth.openai.com") {
+    if url_has_host(&endpoint.auth_url, "auth.openai.com") {
         (OPENAI_REDIRECT_PORT, OPENAI_REDIRECT_URI)
     } else {
         (DEFAULT_REDIRECT_PORT, DEFAULT_REDIRECT_URI)
     }
+}
+
+/// Check if a URL's host matches exactly (not a substring match).
+/// Parses the host from the URL without adding a `url` crate dependency.
+fn url_has_host(url: &str, expected_host: &str) -> bool {
+    // Format: scheme://host[:port]/path
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|host_port| host_port.split(':').next())
+        .map(|host| host == expected_host)
+        .unwrap_or(false)
 }
 
 /// Build the authorization URL for the browser.
@@ -65,7 +78,7 @@ pub fn build_auth_url(endpoint: &OAuthEndpoint, challenge: &str, state: &str) ->
     // Google requires access_type=offline for refresh tokens.
     // Per RFC 6749, authorization servers MUST ignore unrecognized params,
     // so this is safe to send to non-Google providers.
-    if endpoint.auth_url.contains("accounts.google.com") {
+    if url_has_host(&endpoint.auth_url, "accounts.google.com") {
         url.push_str("&access_type=offline");
     }
     url
@@ -842,6 +855,45 @@ mod tests {
     #[test]
     fn urlencoding_invalid_hex_chars() {
         assert_eq!(urlencoding::decode("hello%ZZ"), "hello%ZZ");
+    }
+
+    #[test]
+    fn url_has_host_exact_match() {
+        assert!(url_has_host(
+            "https://auth.openai.com/oauth/authorize",
+            "auth.openai.com"
+        ));
+        assert!(url_has_host(
+            "https://accounts.google.com/o/oauth2/v2/auth",
+            "accounts.google.com"
+        ));
+    }
+
+    #[test]
+    fn url_has_host_rejects_substring() {
+        // Must NOT match substrings — prevents spoofing
+        assert!(!url_has_host(
+            "https://not-auth.openai.com.evil.com/authorize",
+            "auth.openai.com"
+        ));
+        assert!(!url_has_host(
+            "https://fake-accounts.google.com/auth",
+            "accounts.google.com"
+        ));
+    }
+
+    #[test]
+    fn url_has_host_handles_port() {
+        assert!(url_has_host(
+            "https://auth.openai.com:443/authorize",
+            "auth.openai.com"
+        ));
+    }
+
+    #[test]
+    fn url_has_host_handles_invalid() {
+        assert!(!url_has_host("not-a-url", "auth.openai.com"));
+        assert!(!url_has_host("", "auth.openai.com"));
     }
 
     #[test]

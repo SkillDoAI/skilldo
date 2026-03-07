@@ -115,6 +115,8 @@ pub struct TestCodeValidator<'a> {
     parser: Box<dyn LanguageParser>,
     code_generator: Box<dyn LanguageCodeGenerator + 'a>,
     executor: Box<dyn LanguageExecutor>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    execution_mode: ExecutionMode,
     mode: ValidationMode,
     /// Install source from config; when not Registry, local_package is set on code_generator
     install_source: InstallSource,
@@ -149,6 +151,7 @@ impl<'a> TestCodeValidator<'a> {
                             .with_custom_instructions(custom_instructions),
                     ),
                     executor,
+                    execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
                 })
@@ -170,12 +173,19 @@ impl<'a> TestCodeValidator<'a> {
                             .with_custom_instructions(custom_instructions),
                     ),
                     executor,
+                    execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
                 })
             }
             _ => anyhow::bail!("Test agent not yet supported for {}", language.as_str()),
         }
+    }
+
+    /// Returns the execution mode used by this validator's executor.
+    #[cfg(test)]
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
     }
 
     /// Create a new test agent validator for Python (convenience wrapper).
@@ -730,6 +740,7 @@ mod tests {
             parser,
             code_generator,
             executor,
+            execution_mode: ExecutionMode::Container,
             mode,
             install_source,
         }
@@ -1313,11 +1324,8 @@ mod tests {
             execution_mode: ExecutionMode::BareMetal,
             ..Default::default()
         };
-        let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
-        assert!(
-            validator.is_ok(),
-            "Go bare-metal executor should construct successfully"
-        );
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
     }
 
     #[test]
@@ -1329,11 +1337,8 @@ mod tests {
             execution_mode: ExecutionMode::Container,
             ..Default::default()
         };
-        let validator = TestCodeValidator::new(&Language::Go, &client, config, None);
-        assert!(
-            validator.is_ok(),
-            "Go container executor should construct successfully"
-        );
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::Container);
     }
 
     #[test]
