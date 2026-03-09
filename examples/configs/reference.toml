@@ -112,7 +112,8 @@ api_key_env = "ANTHROPIC_API_KEY"
 #
 # Set provider_type = "cli" and configure cli_command, cli_args, cli_json_path.
 # Prompt is piped to the CLI via stdin. Response is captured from stdout.
-# If cli_json_path is set, stdout is parsed as JSON and that field is extracted.
+# If cli_json_path is set, stdout is parsed as JSON and that path is extracted.
+# Supports dot-notation for nested fields: "data.response" traverses {"data":{"response":"..."}}.
 # Parallel extraction is automatically disabled for CLI providers.
 #
 # Example: Claude CLI

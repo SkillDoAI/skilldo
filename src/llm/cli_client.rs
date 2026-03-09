@@ -97,18 +97,23 @@ impl LlmClient for CliClient {
 
         let stdout = String::from_utf8(output.stdout).context("CLI output is not valid UTF-8")?;
 
-        // Extract from JSON if json_path is configured
+        // Extract from JSON if json_path is configured.
+        // Supports dot-notation for nested paths: "data.response"
         match &self.json_path {
-            Some(field) => {
+            Some(path) => {
                 let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
                     .with_context(|| "CLI output is not valid JSON")?;
-                match parsed.get(field) {
+                let value = path.split('.').try_fold(&parsed, |acc, key| acc.get(key));
+                match value {
                     Some(serde_json::Value::String(s)) => Ok(s.clone()),
                     Some(other) => Ok(other.to_string()),
                     None => bail!(
-                        "CLI JSON output missing field '{}'. Keys: {:?}",
-                        field,
-                        parsed.as_object().map(|o| o.keys().collect::<Vec<_>>())
+                        "CLI JSON output missing path '{}'. Keys: {:?}",
+                        path,
+                        parsed
+                            .as_object()
+                            .map(|o| o.keys().collect::<Vec<_>>())
+                            .unwrap_or_default()
                     ),
                 }
             }
@@ -145,6 +150,37 @@ mod tests {
         );
         let result = client.complete("ignored").await.unwrap();
         assert_eq!(result, "extracted text");
+    }
+
+    #[tokio::test]
+    async fn test_cli_client_json_nested_path() {
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                r#"echo '{"data": {"response": "nested value"}}'"#.to_string(),
+            ],
+            Some("data.response".to_string()),
+            TEST_TIMEOUT,
+        );
+        let result = client.complete("ignored").await.unwrap();
+        assert_eq!(result, "nested value");
+    }
+
+    #[tokio::test]
+    async fn test_cli_client_json_nested_path_missing() {
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                r#"echo '{"data": {"other": "value"}}'"#.to_string(),
+            ],
+            Some("data.response".to_string()),
+            TEST_TIMEOUT,
+        );
+        let result = client.complete("ignored").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data.response"));
     }
 
     #[tokio::test]
