@@ -1100,6 +1100,13 @@ mod tests {
     }
 
     #[test]
+    fn test_clean_frontmatter_no_frontmatter() {
+        // Content without frontmatter should pass through unchanged
+        let input = "# Just a heading\n\nSome content\n";
+        assert_eq!(clean_frontmatter(input), input);
+    }
+
+    #[test]
     fn test_clean_frontmatter_no_change_when_clean() {
         let input = "---\nname: click\ndescription: CLI framework\nmetadata:\n  version: \"8.1.7\"\n  ecosystem: python\n---\n\n## Imports\nContent here\n";
         let result = normalize_skill_md(input, "click", "8.1.7", "python", None, &[], None);

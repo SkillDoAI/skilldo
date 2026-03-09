@@ -324,6 +324,18 @@ mod tests {
 
     #[tokio::test]
     #[cfg(unix)]
+    async fn test_cli_client_broken_pipe() {
+        // `true` exits immediately without reading stdin — triggers BrokenPipe
+        // on large prompts. Send enough data to make the pipe buffer overflow.
+        let client = CliClient::new("true".to_string(), vec![], None, TEST_TIMEOUT);
+        let large_prompt = "x".repeat(1_000_000);
+        // Should succeed (BrokenPipe is silently handled, exit code 0)
+        let result = client.complete(&large_prompt).await;
+        assert!(result.is_ok(), "BrokenPipe should be handled gracefully");
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
     async fn test_cli_client_timeout() {
         // `sleep 10` with a 1-second timeout should fail with a clear message
         let client = CliClient::new(

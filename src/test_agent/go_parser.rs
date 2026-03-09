@@ -609,4 +609,11 @@ import (
             "code should contain Println"
         );
     }
+
+    #[test]
+    fn extract_name_missing_returns_none() {
+        let parser = GoParser;
+        let skill = "---\ndescription: no name field\n---\n\n## Overview\n";
+        assert_eq!(parser.extract_name(skill).unwrap(), None);
+    }
 }

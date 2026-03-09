@@ -102,6 +102,17 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_license_multibyte_boundary() {
+        // 598 ASCII bytes + a 3-byte UTF-8 char (€) = 601 bytes total.
+        // The 600-byte cutoff lands inside the multi-byte char, triggering
+        // the char boundary adjustment loop (lines 13-15).
+        let mut content = "MIT License ".repeat(49); // 49 * 12 = 588 bytes
+        content.push_str("1234567890"); // 598 bytes
+        content.push('€'); // 3-byte UTF-8 char → total 601
+        assert_eq!(classify_license(&content), Some("MIT".to_string()));
+    }
+
+    #[test]
     fn test_license_filenames_contains_common() {
         assert!(LICENSE_FILENAMES.contains(&"LICENSE"));
         assert!(LICENSE_FILENAMES.contains(&"LICENSE.md"));

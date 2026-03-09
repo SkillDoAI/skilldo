@@ -2183,4 +2183,16 @@ model = "claude-sonnet-4-6"
         config.generation.extract_llm = Some(stage_llm);
         assert!(config.has_cli_provider());
     }
+
+    #[test]
+    fn test_cli_provider_default_api_key_env() {
+        assert_eq!(Provider::Cli.default_api_key_env(), "none");
+    }
+
+    #[test]
+    fn test_cli_provider_max_tokens() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::Cli;
+        assert_eq!(config.llm.get_max_tokens(), 16384);
+    }
 }
