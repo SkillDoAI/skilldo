@@ -6,7 +6,7 @@ api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com/v1"
 
 [generation]
-max_retries = 5
+max_retries = 10
 max_source_tokens = 100000
 enable_test = true
 test_mode = "thorough"
