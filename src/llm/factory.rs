@@ -254,6 +254,10 @@ mod tests {
             oauth_client_secret_env: None,
             oauth_credentials_env: None,
             extra_headers: Vec::new(),
+            model_type: crate::config::ModelType::Api,
+            cli_command: None,
+            cli_args: vec![],
+            cli_json_path: None,
         }
     }
 

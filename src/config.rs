@@ -157,6 +157,15 @@ impl std::str::FromStr for Provider {
     }
 }
 
+/// Whether the LLM is accessed via HTTP API or local CLI tool.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelType {
+    #[default]
+    Api,
+    Cli,
+}
+
 /// Root configuration — loaded from TOML, merged with CLI overrides.
 /// Discovery: explicit path → CWD → git root → user config dir → defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,6 +262,27 @@ pub struct LlmConfig {
     /// Use for provider-specific headers not covered by standard fields.
     #[serde(default)]
     pub extra_headers: Vec<String>,
+
+    // ── CLI provider fields ──────────────────────────────────────
+    /// Model access type: "api" (HTTP, default) or "cli" (shell out to vendor CLI).
+    #[serde(default)]
+    pub model_type: ModelType,
+
+    /// CLI binary name or path (e.g., "claude", "codex", "gemini").
+    /// Only used when model_type = "cli".
+    #[serde(default)]
+    pub cli_command: Option<String>,
+
+    /// Additional CLI arguments (e.g., ["-p", "--output-format", "json"]).
+    /// Only used when model_type = "cli".
+    #[serde(default)]
+    pub cli_args: Vec<String>,
+
+    /// JSON field path to extract the response text from CLI output.
+    /// E.g., "result" extracts obj["result"]. If unset, uses raw stdout.
+    /// Only used when model_type = "cli".
+    #[serde(default)]
+    pub cli_json_path: Option<String>,
 }
 
 fn default_network_retries() -> usize {
@@ -898,6 +928,10 @@ impl Default for Config {
                 oauth_client_secret_env: None,
                 oauth_credentials_env: None,
                 extra_headers: Vec::new(),
+                model_type: ModelType::Api,
+                cli_command: None,
+                cli_args: Vec::new(),
+                cli_json_path: None,
             },
             generation: GenerationConfig::default(),
             prompts: PromptsConfig::default(),
@@ -1047,6 +1081,10 @@ mod tests {
             oauth_client_secret_env: None,
             oauth_credentials_env: None,
             extra_headers: Vec::new(),
+            model_type: ModelType::Api,
+            cli_command: None,
+            cli_args: Vec::new(),
+            cli_json_path: None,
         };
         assert_eq!(llm.get_max_tokens(), 8192);
 
@@ -2074,5 +2112,45 @@ max_source_tokens = 50000
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.llm.extra_headers.len(), 2);
         assert_eq!(config.llm.extra_headers[0], "X-Custom: value");
+    }
+
+    // ── ModelType + CLI config field tests ───────────────────────
+
+    #[test]
+    fn test_model_type_default_is_api() {
+        let config = Config::default();
+        assert_eq!(config.llm.model_type, ModelType::Api);
+    }
+
+    #[test]
+    fn test_model_type_cli_deser() {
+        let toml = r#"
+[llm]
+provider_type = "anthropic"
+model = "claude-sonnet-4-6"
+model_type = "cli"
+cli_command = "claude"
+cli_args = ["-p", "--output-format", "json"]
+cli_json_path = "result"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.llm.model_type, ModelType::Cli);
+        assert_eq!(config.llm.cli_command.as_deref(), Some("claude"));
+        assert_eq!(config.llm.cli_args, vec!["-p", "--output-format", "json"]);
+        assert_eq!(config.llm.cli_json_path.as_deref(), Some("result"));
+    }
+
+    #[test]
+    fn test_model_type_api_no_cli_fields() {
+        let toml = r#"
+[llm]
+provider_type = "anthropic"
+model = "claude-sonnet-4-6"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.llm.model_type, ModelType::Api);
+        assert!(config.llm.cli_command.is_none());
+        assert!(config.llm.cli_args.is_empty());
+        assert!(config.llm.cli_json_path.is_none());
     }
 }
