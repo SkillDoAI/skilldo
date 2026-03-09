@@ -8,8 +8,8 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Added `provider_type = "cli"` — shell out to vendor CLIs (claude, codex, gemini) instead of HTTP API calls for subscription-based model access
 - Added `cli_command`, `cli_args`, `cli_json_path` config fields for CLI provider configuration (json_path supports dot-notation for nested fields like `data.response`)
 - Added auto-disable of parallel extraction when any stage uses a CLI provider
-- Added `Severity::deduction()` method to replace 3 duplicated match blocks in security module
-- Added shared ecosystem utilities: `classify_license()`, `LICENSE_FILENAMES`, `is_setup_py_indirect()` in `ecosystems/mod.rs`
+- Added `Severity::deduction()` method to replace 2 duplicated match blocks in security module
+- Added shared ecosystem utilities: `classify_license()`, `LICENSE_FILENAMES` in `ecosystems/mod.rs`
 - Added normalizer: strips blank lines inside YAML frontmatter, trims trailing whitespace on `---` delimiters
 - Added normalizer: detects and strips metadata fields (e.g., `generated-by`) leaking from frontmatter into body content
 - Added dual-licensing SPDX expression guidance (`MIT OR Apache-2.0`) to create prompt
