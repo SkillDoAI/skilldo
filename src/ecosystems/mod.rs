@@ -5,13 +5,6 @@ pub mod python;
 pub(crate) const LICENSE_FILENAMES: &[&str] =
     &["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "COPYING"];
 
-/// Detect whether a setup.py value is an indirect reference (dict access,
-/// about/meta variable lookup) rather than a literal version string.
-#[allow(dead_code)] // shared utility; consumers pending
-pub(crate) fn is_setup_py_indirect(value: &str) -> bool {
-    value.starts_with('[') || value.contains("about") || value.contains("meta")
-}
-
 /// Classify a license file by its content (first few hundred chars).
 pub(crate) fn classify_license(content: &str) -> Option<String> {
     // Only lowercase the prefix we actually inspect (avoid full-file allocation)
@@ -54,26 +47,6 @@ pub(crate) fn classify_license(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_setup_py_indirect_dict_access() {
-        assert!(is_setup_py_indirect(r#"about["__title__"]"#));
-    }
-
-    #[test]
-    fn test_is_setup_py_indirect_meta_access() {
-        assert!(is_setup_py_indirect("meta['version']"));
-    }
-
-    #[test]
-    fn test_is_setup_py_indirect_bracket() {
-        assert!(is_setup_py_indirect("[metadata]"));
-    }
-
-    #[test]
-    fn test_is_setup_py_indirect_normal_string() {
-        assert!(!is_setup_py_indirect("1.2.3"));
-    }
 
     #[test]
     fn test_classify_license_mit() {

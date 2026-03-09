@@ -121,27 +121,28 @@ pub fn ensure_references(content: &str, project_urls: &[(String, String)]) -> St
     format!("{}{}", content, refs)
 }
 
+/// Find (open, close) line indices of the YAML frontmatter `---` delimiters.
+fn find_frontmatter_bounds(lines: &[&str]) -> Option<(usize, usize)> {
+    let mut first = None;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() == "---" {
+            match first {
+                None => first = Some(i),
+                Some(open) => return Some((open, i)),
+            }
+        }
+    }
+    None
+}
+
 /// Clean up frontmatter: remove blank lines, trim trailing whitespace on --- delimiters.
 fn clean_frontmatter(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find opening and closing --- positions
-    let mut dash_positions = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim() == "---" {
-            dash_positions.push(i);
-            if dash_positions.len() == 2 {
-                break;
-            }
-        }
-    }
-
-    if dash_positions.len() < 2 {
-        return content.to_string();
-    }
-
-    let open = dash_positions[0];
-    let close = dash_positions[1];
+    let (open, close) = match find_frontmatter_bounds(&lines) {
+        Some(bounds) => bounds,
+        None => return content.to_string(),
+    };
 
     // Check if any cleaning is needed
     let needs_blank_removal = lines[open + 1..close].iter().any(|l| l.trim().is_empty());
@@ -188,21 +189,8 @@ fn clean_frontmatter(content: &str) -> String {
 fn strip_leaked_metadata(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find end of frontmatter
-    let mut fm_end = None;
-    let mut dashes = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim() == "---" {
-            dashes += 1;
-            if dashes == 2 {
-                fm_end = Some(i);
-                break;
-            }
-        }
-    }
-
-    let fm_end = match fm_end {
-        Some(i) => i,
+    let fm_end = match find_frontmatter_bounds(&lines) {
+        Some((_, close)) => close,
         None => return content.to_string(),
     };
 
@@ -244,21 +232,8 @@ fn strip_leaked_metadata(content: &str) -> String {
 fn strip_meta_text(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find end of frontmatter
-    let mut fm_end = None;
-    let mut dashes = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim() == "---" {
-            dashes += 1;
-            if dashes == 2 {
-                fm_end = Some(i);
-                break;
-            }
-        }
-    }
-
-    let fm_end = match fm_end {
-        Some(i) => i,
+    let fm_end = match find_frontmatter_bounds(&lines) {
+        Some((_, close)) => close,
         None => return content.to_string(),
     };
 
@@ -377,21 +352,8 @@ fn strip_duplicate_frontmatter(content: &str) -> String {
 fn strip_body_markdown_fence(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find end of frontmatter
-    let mut fm_end = None;
-    let mut dashes = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim() == "---" {
-            dashes += 1;
-            if dashes == 2 {
-                fm_end = Some(i);
-                break;
-            }
-        }
-    }
-
-    let fm_end = match fm_end {
-        Some(i) => i,
+    let fm_end = match find_frontmatter_bounds(&lines) {
+        Some((_, close)) => close,
         None => return content.to_string(),
     };
 

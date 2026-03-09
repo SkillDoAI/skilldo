@@ -26,6 +26,7 @@ pub async fn create_client_from_llm_config(
             command,
             llm_config.cli_args.clone(),
             llm_config.cli_json_path.clone(),
+            llm_config.request_timeout_secs,
         );
         return Ok(Box::new(RetryClient::new(
             Box::new(client),
