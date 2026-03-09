@@ -456,7 +456,7 @@ cli_args = ["-p", "--output-format", "json"]
 cli_json_path = "result"
 ```
 
-The prompt is piped to the CLI via stdin. If `cli_json_path` is set, stdout is parsed as JSON and that field is extracted as the response text.
+The prompt is piped to the CLI via stdin. If `cli_json_path` is set, stdout is parsed as JSON and that path is extracted as the response text. Dot-notation is supported for nested fields (e.g., `"data.response"` traverses `{"data":{"response":"..."}}`).
 
 Parallel extraction is automatically disabled for CLI providers (vendor CLIs typically share a single auth session).
 
