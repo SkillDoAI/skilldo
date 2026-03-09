@@ -1154,9 +1154,19 @@ mod tests {
     }
 
     #[test]
-    fn classify_license_bsd_3_clause_via_redistribution() {
+    fn classify_license_bsd2_via_redistribution_without_endorsement() {
+        // Redistribution phrase without non-endorsement clause → BSD-2-Clause
         assert_eq!(
             classify_license("Redistribution and use in source and binary forms..."),
+            Some("BSD-2-Clause".into())
+        );
+    }
+
+    #[test]
+    fn classify_license_bsd3_via_non_endorsement_clause() {
+        // Redistribution phrase WITH non-endorsement clause → BSD-3-Clause
+        assert_eq!(
+            classify_license("Redistribution and use in source and binary forms, with or without modification, are permitted provided that neither the name of the copyright holder..."),
             Some("BSD-3-Clause".into())
         );
     }

@@ -23,10 +23,17 @@ pub(crate) fn classify_license(content: &str) -> Option<String> {
         Some("Apache-2.0".into())
     } else if prefix.contains("bsd 2-clause") {
         Some("BSD-2-Clause".into())
-    } else if prefix.contains("bsd 3-clause")
-        || prefix.contains("redistribution and use in source and binary")
-    {
+    } else if prefix.contains("bsd 3-clause") {
         Some("BSD-3-Clause".into())
+    } else if prefix.contains("redistribution and use in source and binary") {
+        // Distinguish BSD-3 from BSD-2 by the non-endorsement clause
+        if prefix.contains("neither the name of")
+            || prefix.contains("may be used to endorse or promote")
+        {
+            Some("BSD-3-Clause".into())
+        } else {
+            Some("BSD-2-Clause".into())
+        }
     } else if prefix.contains("mozilla public license") {
         Some("MPL-2.0".into())
     } else if prefix.contains("gnu general public license") {
@@ -81,11 +88,17 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_bsd3_via_redistribution_phrase() {
-        // A license with the redistribution phrase but no explicit "bsd N-clause" header
-        // defaults to BSD-3-Clause.
-        let bsd3 = "Copyright (c) 2024\n\nRedistribution and use in source and binary forms...";
+    fn test_classify_bsd3_via_non_endorsement_clause() {
+        // BSD-3-Clause detected by non-endorsement clause, not just header
+        let bsd3 = "Copyright (c) 2024\n\nRedistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:\n\n1. Redistributions of source code...\n2. Redistributions in binary form...\n3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products...";
         assert_eq!(classify_license(bsd3), Some("BSD-3-Clause".to_string()));
+    }
+
+    #[test]
+    fn test_classify_bsd2_via_redistribution_without_endorsement() {
+        // Redistribution phrase without non-endorsement clause → BSD-2-Clause
+        let bsd2 = "Copyright (c) 2024\n\nRedistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:\n\n1. Redistributions of source code...\n2. Redistributions in binary form...";
+        assert_eq!(classify_license(bsd2), Some("BSD-2-Clause".to_string()));
     }
 
     #[test]

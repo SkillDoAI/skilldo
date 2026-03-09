@@ -194,20 +194,27 @@ fn strip_leaked_metadata(content: &str) -> String {
         None => return content.to_string(),
     };
 
-    let metadata_patterns = ["generated-by: skilldo"];
+    let metadata_patterns = ["generated-by: skilldo/"];
     let mut result: Vec<&str> = Vec::with_capacity(lines.len());
     let mut stripped_any = false;
+    let mut in_code_block = false;
 
     for (i, line) in lines.iter().enumerate() {
         if i <= fm_end {
             result.push(line);
             continue;
         }
-        let trimmed = line.trim().to_lowercase();
-        if metadata_patterns.iter().any(|p| trimmed.starts_with(p)) {
-            warn!("Stripping leaked metadata from body: '{}'", line.trim());
-            stripped_any = true;
-            continue;
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_code_block = !in_code_block;
+        }
+        if !in_code_block {
+            let lower = trimmed.to_lowercase();
+            if metadata_patterns.iter().any(|p| lower.starts_with(p)) {
+                warn!("Stripping leaked metadata from body: '{}'", trimmed);
+                stripped_any = true;
+                continue;
+            }
         }
         result.push(line);
     }
@@ -1060,6 +1067,19 @@ mod tests {
         assert!(
             after_fm.contains("generated-by: skilldo"),
             "Table content should be preserved:\n{}",
+            after_fm
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_preserves_code_blocks() {
+        // "generated-by: skilldo/..." inside a fenced code block is NOT stripped
+        let input = "---\nname: testify\ndescription: Go testing\nmetadata:\n  version: \"1.9.0\"\n  ecosystem: go\n  generated-by: skilldo/0.2.4\n---\n\n## Overview\n\n```yaml\ngenerated-by: skilldo/0.2.4\n```\n\nMore content\n";
+        let result = normalize_skill_md(input, "testify", "1.9.0", "go", None, &[], Some("0.2.4"));
+        let after_fm = result.split("\n---\n").nth(1).unwrap();
+        assert!(
+            after_fm.contains("generated-by: skilldo"),
+            "Code block content should be preserved:\n{}",
             after_fm
         );
     }

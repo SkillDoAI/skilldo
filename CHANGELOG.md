@@ -15,6 +15,8 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Added dual-licensing SPDX expression guidance (`MIT OR Apache-2.0`) to create prompt
 - Bumped `review_max_retries` default from 5 to 10
 - Improved CLI provider error messages: shows up to 5 lines of stderr (was 1) for better debugging
+- Improved BSD license classification: uses non-endorsement clause to distinguish BSD-3-Clause from BSD-2-Clause (was relying on header ordering only)
+- Improved normalizer: `strip_leaked_metadata` now skips lines inside fenced code blocks to prevent content corruption
 - Fixed auth CLI tests failing when local `skilldo.toml` has OAuth config
 - CI: switched e2e tests from Anthropic to Cerebras (`gpt-oss-120b` via `openai-compatible`)
 
