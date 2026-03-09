@@ -163,8 +163,7 @@ pub async fn create_client_from_llm_config(
         ),
 
         Provider::Cli => {
-            // Unreachable: Provider::Cli is handled by the early return above.
-            anyhow::bail!("provider_type = \"cli\" requires cli_command to be set");
+            unreachable!("Provider::Cli is handled by the early return above")
         }
     };
 
