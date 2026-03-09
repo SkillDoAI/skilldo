@@ -39,7 +39,7 @@ impl CliClient {
 #[async_trait]
 impl LlmClient for CliClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
-        debug!("CLI client: {} {:?}", self.command, self.args);
+        debug!("CLI client: {} ({} arg(s))", self.command, self.args.len());
 
         let mut child = Command::new(&self.command)
             .args(&self.args)
@@ -50,20 +50,28 @@ impl LlmClient for CliClient {
             .spawn()
             .with_context(|| format!("Failed to spawn CLI: {}", self.command))?;
 
-        // Write prompt to stdin, then drop to signal EOF.
-        // Ignore BrokenPipe — the CLI may exit before reading all input.
-        if let Some(mut stdin) = child.stdin.take() {
-            if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
-                if e.kind() != std::io::ErrorKind::BrokenPipe {
-                    return Err(anyhow::anyhow!("Failed to write prompt to CLI stdin: {e}"));
-                }
-                debug!("CLI stdin closed early (broken pipe) — continuing");
-            }
-        }
-
+        // Wrap stdin write + wait in a single timeout so neither can hang.
         let timeout = Duration::from_secs(self.timeout_secs);
-        let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-            Ok(result) => result.context("Failed to read CLI output")?,
+        let output = match tokio::time::timeout(timeout, async {
+            // Write prompt to stdin, then drop to signal EOF.
+            // Ignore BrokenPipe — the CLI may exit before reading all input.
+            if let Some(mut stdin) = child.stdin.take() {
+                if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
+                    if e.kind() != std::io::ErrorKind::BrokenPipe {
+                        return Err(anyhow::anyhow!("Failed to write prompt to CLI stdin: {e}"));
+                    }
+                    debug!("CLI stdin closed early (broken pipe) — continuing");
+                }
+            }
+
+            child
+                .wait_with_output()
+                .await
+                .context("Failed to read CLI output")
+        })
+        .await
+        {
+            Ok(result) => result?,
             Err(_) => {
                 bail!(
                     "CLI command '{}' timed out after {}s",

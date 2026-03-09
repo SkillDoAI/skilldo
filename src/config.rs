@@ -696,7 +696,7 @@ fn default_max_source_tokens() -> usize {
     100000
 }
 
-fn default_review_max_retries() -> usize {
+pub(crate) fn default_review_max_retries() -> usize {
     10
 }
 

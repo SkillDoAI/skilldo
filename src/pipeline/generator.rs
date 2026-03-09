@@ -165,7 +165,7 @@ impl Generator {
             enable_review: true,                 // Default to enabled
             skip_introspection: false,           // Default to enabled
             enable_security_scan: true,          // Default to enabled
-            review_max_retries: 10,              // Default to 10 retries
+            review_max_retries: crate::config::default_review_max_retries(),
             container_config: ContainerConfig::default(),
             parallel_extraction: true,
             existing_skill: None,

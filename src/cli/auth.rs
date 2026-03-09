@@ -275,14 +275,15 @@ mod tests {
     }
 
     /// Create a minimal config file with no OAuth endpoints for testing.
+    /// Uses PID to avoid races when tests run in parallel.
     fn empty_config_path() -> String {
-        let path = "/tmp/skilldo-test-empty-config.toml";
+        let path = format!("/tmp/skilldo-test-empty-config-{}.toml", std::process::id());
         std::fs::write(
-            path,
+            &path,
             "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n",
         )
         .unwrap();
-        path.to_string()
+        path
     }
 
     #[test]

@@ -328,6 +328,11 @@ fn check_api_key(
     is_local: bool,
     results: &mut CheckResult,
 ) {
+    // CLI providers don't use API keys at all
+    if *provider == Provider::Cli {
+        results.pass(format!("{}: CLI provider (no API key needed)", label));
+        return;
+    }
     // Only downgrade missing/empty API key to a warning for truly local endpoints.
     let key_optional = is_local;
     match api_key_env {
