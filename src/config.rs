@@ -534,7 +534,7 @@ pub struct GenerationConfig {
     #[serde(default = "default_true")]
     pub enable_security_scan: bool,
 
-    /// Max retries for review -> create feedback loop (default: 5)
+    /// Max retries for review -> create feedback loop (default: 10)
     #[serde(default = "default_review_max_retries")]
     pub review_max_retries: usize,
 
