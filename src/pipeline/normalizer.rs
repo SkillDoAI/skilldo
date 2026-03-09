@@ -135,7 +135,7 @@ fn find_frontmatter_bounds(lines: &[&str]) -> Option<(usize, usize)> {
     None
 }
 
-/// Clean up frontmatter: remove blank lines, trim trailing whitespace on --- delimiters.
+/// Clean up frontmatter: remove blank lines, normalize `---` delimiters (strip leading/trailing whitespace).
 fn clean_frontmatter(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
@@ -203,8 +203,8 @@ fn strip_leaked_metadata(content: &str) -> String {
             result.push(line);
             continue;
         }
-        let lower = line.to_lowercase();
-        if metadata_patterns.iter().any(|p| lower.contains(p)) {
+        let trimmed = line.trim().to_lowercase();
+        if metadata_patterns.iter().any(|p| trimmed.starts_with(p)) {
             warn!("Stripping leaked metadata from body: '{}'", line.trim());
             stripped_any = true;
             continue;
@@ -1039,14 +1039,27 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_leaked_metadata() {
-        let input = "---\nname: testify\ndescription: Go testing\nmetadata:\n  version: \"1.9.0\"\n  ecosystem: go\n  generated-by: skilldo/0.2.4\n---\n\n## Overview\n\nSome content\n\n| Feature | Status |\n| --- | --- |\n| generated-by: skilldo/0.2.4 | stable |\n\nMore content\n";
+    fn test_strip_leaked_metadata_standalone_line() {
+        // A standalone "generated-by: skilldo/..." line after frontmatter is stripped
+        let input = "---\nname: testify\ndescription: Go testing\nmetadata:\n  version: \"1.9.0\"\n  ecosystem: go\n  generated-by: skilldo/0.2.4\n---\n\n## Overview\n\ngenerated-by: skilldo/0.2.4\n\nMore content\n";
         let result = normalize_skill_md(input, "testify", "1.9.0", "go", None, &[], Some("0.2.4"));
-        // The leaked metadata line in the table should be removed
         let after_fm = result.split("\n---\n").nth(1).unwrap();
         assert!(
             !after_fm.contains("generated-by: skilldo"),
-            "Metadata should not leak into body:\n{}",
+            "Standalone leaked metadata should be stripped:\n{}",
+            after_fm
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_preserves_table_content() {
+        // "generated-by: skilldo/..." inside a table cell is NOT stripped (not a leak)
+        let input = "---\nname: testify\ndescription: Go testing\nmetadata:\n  version: \"1.9.0\"\n  ecosystem: go\n  generated-by: skilldo/0.2.4\n---\n\n## Overview\n\n| Feature | Status |\n| --- | --- |\n| generated-by: skilldo/0.2.4 | stable |\n\nMore content\n";
+        let result = normalize_skill_md(input, "testify", "1.9.0", "go", None, &[], Some("0.2.4"));
+        let after_fm = result.split("\n---\n").nth(1).unwrap();
+        assert!(
+            after_fm.contains("generated-by: skilldo"),
+            "Table content should be preserved:\n{}",
             after_fm
         );
     }
