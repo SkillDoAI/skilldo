@@ -21,12 +21,12 @@ pub(crate) fn classify_license(content: &str) -> Option<String> {
         Some("MIT".into())
     } else if prefix.contains("apache license") && prefix.contains("version 2") {
         Some("Apache-2.0".into())
+    } else if prefix.contains("bsd 2-clause") {
+        Some("BSD-2-Clause".into())
     } else if prefix.contains("bsd 3-clause")
         || prefix.contains("redistribution and use in source and binary")
     {
         Some("BSD-3-Clause".into())
-    } else if prefix.contains("bsd 2-clause") {
-        Some("BSD-2-Clause".into())
     } else if prefix.contains("mozilla public license") {
         Some("MPL-2.0".into())
     } else if prefix.contains("gnu general public license") {
@@ -70,6 +70,22 @@ mod tests {
             classify_license("Some random text that is not a license"),
             None
         );
+    }
+
+    #[test]
+    fn test_classify_bsd2_with_redistribution_phrase() {
+        // BSD-2-Clause files also contain "redistribution and use in source and binary"
+        // — must not be misclassified as BSD-3-Clause.
+        let bsd2 = "BSD 2-Clause License\n\nRedistribution and use in source and binary forms, with or without modification, are permitted...";
+        assert_eq!(classify_license(bsd2), Some("BSD-2-Clause".to_string()));
+    }
+
+    #[test]
+    fn test_classify_bsd3_via_redistribution_phrase() {
+        // A license with the redistribution phrase but no explicit "bsd N-clause" header
+        // defaults to BSD-3-Clause.
+        let bsd3 = "Copyright (c) 2024\n\nRedistribution and use in source and binary forms...";
+        assert_eq!(classify_license(bsd3), Some("BSD-3-Clause".to_string()));
     }
 
     #[test]
