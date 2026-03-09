@@ -83,10 +83,15 @@ impl LlmClient for CliClient {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let preview: String = stderr.lines().take(5).collect::<Vec<_>>().join(" | ");
             bail!(
                 "CLI exited with {}: {}",
                 output.status,
-                stderr.lines().next().unwrap_or("(no stderr)")
+                if preview.is_empty() {
+                    "(no stderr)"
+                } else {
+                    &preview
+                }
             );
         }
 
