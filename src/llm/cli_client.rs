@@ -50,12 +50,15 @@ impl LlmClient for CliClient {
             .spawn()
             .with_context(|| format!("Failed to spawn CLI: {}", self.command))?;
 
-        // Write prompt to stdin, then drop to signal EOF
+        // Write prompt to stdin, then drop to signal EOF.
+        // Ignore BrokenPipe — the CLI may exit before reading all input.
         if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(prompt.as_bytes())
-                .await
-                .context("Failed to write prompt to CLI stdin")?;
+            if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
+                if e.kind() != std::io::ErrorKind::BrokenPipe {
+                    return Err(anyhow::anyhow!("Failed to write prompt to CLI stdin: {e}"));
+                }
+                debug!("CLI stdin closed early (broken pipe) — continuing");
+            }
         }
 
         let timeout = Duration::from_secs(self.timeout_secs);
