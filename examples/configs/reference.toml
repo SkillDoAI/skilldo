@@ -140,9 +140,9 @@ test_mode = "thorough"
 # Disable with --no-review on CLI or set to false here.
 enable_review = true
 
-# Max retries for review → create feedback loop (default: 10).
+# Max retries for review → create feedback loop (default: 5).
 # If review finds issues, it sends targeted complaints to the create agent.
-# review_max_retries = 10
+# review_max_retries = 5
 
 
 # ── Review Stage LLM Override ─────────────────────────────────────────
