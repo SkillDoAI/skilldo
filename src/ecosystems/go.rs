@@ -166,11 +166,11 @@ impl GoHandler {
 
     /// Extract license text from LICENSE file.
     pub fn get_license(&self) -> Option<String> {
-        for name in &["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "COPYING"] {
+        for name in super::LICENSE_FILENAMES {
             let path = self.repo_path.join(name);
             if let Ok(content) = fs::read_to_string(&path) {
                 // Return first line (usually the license name) or classify
-                if let Some(license) = classify_license(&content) {
+                if let Some(license) = super::classify_license(&content) {
                     return Some(license);
                 }
                 // Fallback: first non-empty line
@@ -586,47 +586,9 @@ fn is_major_version_suffix(segment: &str) -> bool {
         && segment[1..].parse::<u32>().is_ok_and(|n| n >= 2)
 }
 
-/// Classify a license file by its content (first few hundred chars).
-fn classify_license(content: &str) -> Option<String> {
-    // Only lowercase the prefix we actually inspect (avoid full-file allocation)
-    let byte_end = content.len().min(600);
-    let mut end = byte_end;
-    while end > 0 && !content.is_char_boundary(end) {
-        end -= 1;
-    }
-    let prefix = content[..end].to_lowercase();
-
-    if prefix.contains("mit license")
-        || prefix.contains("permission is hereby granted, free of charge")
-    {
-        Some("MIT".into())
-    } else if prefix.contains("apache license") && prefix.contains("version 2") {
-        Some("Apache-2.0".into())
-    } else if prefix.contains("bsd 3-clause")
-        || prefix.contains("redistribution and use in source and binary")
-    {
-        Some("BSD-3-Clause".into())
-    } else if prefix.contains("bsd 2-clause") {
-        Some("BSD-2-Clause".into())
-    } else if prefix.contains("mozilla public license") {
-        Some("MPL-2.0".into())
-    } else if prefix.contains("gnu general public license") {
-        if prefix.contains("version 3") {
-            Some("GPL-3.0".into())
-        } else {
-            Some("GPL-2.0".into())
-        }
-    } else if prefix.contains("the unlicense") || prefix.contains("unlicense") {
-        Some("Unlicense".into())
-    } else if prefix.contains("isc license") {
-        Some("ISC".into())
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::classify_license;
     use super::*;
     use std::fs;
 
