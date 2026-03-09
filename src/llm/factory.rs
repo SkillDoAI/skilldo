@@ -16,6 +16,24 @@ pub async fn create_client_from_llm_config(
         return Ok(Box::new(MockLlmClient::new()));
     }
 
+    // CLI provider: shell out to a CLI tool instead of HTTP API
+    if llm_config.model_type == crate::config::ModelType::Cli {
+        let command = llm_config
+            .cli_command
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("cli_command is required when model_type = \"cli\""))?;
+        let client = super::cli_client::CliClient::new(
+            command,
+            llm_config.cli_args.clone(),
+            llm_config.cli_json_path.clone(),
+        );
+        return Ok(Box::new(RetryClient::new(
+            Box::new(client),
+            llm_config.network_retries,
+            llm_config.retry_delay,
+        )));
+    }
+
     // Try OAuth token first — if configured and tokens are available.
     // Errors are logged and treated as None so we fall through to API-key auth.
     let oauth_token = if llm_config.has_oauth() {
@@ -380,6 +398,38 @@ mod tests {
 
         crate::auth::delete_tokens(provider_name).unwrap();
         env::remove_var("SKILLDO_TEST_FACTORY_OAUTH_CID");
+    }
+
+    #[tokio::test]
+    async fn test_create_client_cli_provider() {
+        let mut config = make_llm_config(Provider::Anthropic, None, None);
+        config.model_type = crate::config::ModelType::Cli;
+        config.cli_command = Some("cat".to_string());
+        config.cli_args = vec![];
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_client_cli_missing_command() {
+        let mut config = make_llm_config(Provider::Anthropic, None, None);
+        config.model_type = crate::config::ModelType::Cli;
+        // cli_command is None — should error
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("cli_command"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_client_cli_dry_run_still_returns_mock() {
+        let mut config = make_llm_config(Provider::Anthropic, None, None);
+        config.model_type = crate::config::ModelType::Cli;
+        config.cli_command = Some("cat".to_string());
+        // dry_run should still return mock, even with CLI config
+        let result = create_client_from_llm_config(&config, true).await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

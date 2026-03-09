@@ -11,7 +11,6 @@ use super::client::LlmClient;
 
 /// LLM client that invokes a CLI tool as a subprocess.
 /// Prompt is piped via stdin; response is captured from stdout.
-#[allow(dead_code)] // public API; wired up by factory in a follow-up task
 pub struct CliClient {
     command: String,
     args: Vec<String>,
@@ -19,7 +18,6 @@ pub struct CliClient {
 }
 
 impl CliClient {
-    #[allow(dead_code)] // public API; wired up by factory in a follow-up task
     pub fn new(command: String, args: Vec<String>, json_path: Option<String>) -> Self {
         Self {
             command,
