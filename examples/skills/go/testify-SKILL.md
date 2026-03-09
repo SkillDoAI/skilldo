@@ -220,7 +220,6 @@ func TestMetrics(t *testing.T) {
 
 | Package | On failure | Use when |
 |
-  generated-by: skilldo/claude-sonnet-4-6 + review:gpt-5.3-codex, test:gpt-5.3-codex
 ---------|-----------|----------|
 | `assert` | Marks test failed, continues | Collecting multiple failures |
 | `require` | Calls `t.FailNow()`, stops test | Nil dereference risk or setup steps |
