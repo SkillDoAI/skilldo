@@ -207,6 +207,8 @@ fn strip_leaked_metadata(content: &str) -> String {
         let trimmed = line.trim();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_code_block = !in_code_block;
+            result.push(line);
+            continue;
         }
         if !in_code_block {
             let lower = trimmed.to_lowercase();

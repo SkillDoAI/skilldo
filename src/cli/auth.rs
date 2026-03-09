@@ -274,42 +274,39 @@ mod tests {
         std::env::remove_var("SKILLDO_TEST_AUTH_CID2");
     }
 
-    /// Create a minimal config file with no OAuth endpoints for testing.
-    /// Uses atomic counter to avoid races when tests run in parallel threads.
-    fn empty_config_path() -> String {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = format!(
-            "/tmp/skilldo-test-empty-config-{}-{}.toml",
-            std::process::id(),
-            id
-        );
-        std::fs::write(
-            &path,
-            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n",
+    /// Create a minimal temp config file with no OAuth endpoints for testing.
+    /// Returns NamedTempFile so the file is auto-deleted when dropped.
+    fn empty_config_file() -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut f = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        write!(
+            f,
+            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n"
         )
         .unwrap();
-        path
+        f
     }
 
     #[test]
     fn status_no_endpoints_prints_message() {
-        let result = status(Some(empty_config_path()));
+        let f = empty_config_file();
+        let result = status(Some(f.path().to_string_lossy().into_owned()));
         assert!(result.is_ok());
     }
 
     #[test]
     fn logout_no_endpoints_prints_message() {
-        let result = logout(Some(empty_config_path()));
+        let f = empty_config_file();
+        let result = logout(Some(f.path().to_string_lossy().into_owned()));
         assert!(result.is_ok());
     }
 
     #[test]
     fn login_no_endpoints_errors() {
+        let f = empty_config_file();
         let result = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(login(Some(empty_config_path())));
+            .block_on(login(Some(f.path().to_string_lossy().into_owned())));
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

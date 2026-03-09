@@ -121,16 +121,30 @@ impl LlmClient for CliClient {
                                 }
                             }
                         }
-                        let available = node
-                            .as_object()
-                            .map(|o| o.keys().collect::<Vec<_>>())
-                            .unwrap_or_default();
-                        bail!(
-                            "CLI JSON output missing '{}' in path '{}'. Available keys: {:?}",
-                            failed_at,
-                            path,
-                            available
-                        )
+                        if let Some(obj) = node.as_object() {
+                            let available: Vec<_> = obj.keys().collect();
+                            bail!(
+                                "CLI JSON output missing '{}' in path '{}'. Available keys: {:?}",
+                                failed_at,
+                                path,
+                                available
+                            )
+                        } else {
+                            let kind = match node {
+                                serde_json::Value::String(_) => "string",
+                                serde_json::Value::Number(_) => "number",
+                                serde_json::Value::Bool(_) => "bool",
+                                serde_json::Value::Array(_) => "array",
+                                serde_json::Value::Null => "null",
+                                _ => "non-object",
+                            };
+                            bail!(
+                                "CLI JSON path '{}': cannot look up '{}' in a {} value",
+                                path,
+                                failed_at,
+                                kind
+                            )
+                        }
                     }
                 }
             }
@@ -271,6 +285,28 @@ mod tests {
         );
         let result = client.complete("hello").await.unwrap();
         assert_eq!(result, "42");
+    }
+
+    #[tokio::test]
+    async fn test_cli_client_json_path_type_mismatch() {
+        // Path traversal into a non-object value should report the type
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                r#"echo '{"data": "just a string"}'  "#.to_string(),
+            ],
+            Some("data.nested".to_string()),
+            TEST_TIMEOUT,
+        );
+        let result = client.complete("ignored").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("string"), "should report value type: {err}");
+        assert!(
+            err.contains("nested"),
+            "should report failing segment: {err}"
+        );
     }
 
     #[tokio::test]
