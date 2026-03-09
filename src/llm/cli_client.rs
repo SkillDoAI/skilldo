@@ -103,18 +103,35 @@ impl LlmClient for CliClient {
             Some(path) => {
                 let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
                     .with_context(|| "CLI output is not valid JSON")?;
-                let value = path.split('.').try_fold(&parsed, |acc, key| acc.get(key));
+                let segments: Vec<&str> = path.split('.').collect();
+                let value = segments.iter().try_fold(&parsed, |acc, key| acc.get(*key));
                 match value {
                     Some(serde_json::Value::String(s)) => Ok(s.clone()),
                     Some(other) => Ok(other.to_string()),
-                    None => bail!(
-                        "CLI JSON output missing path '{}'. Keys: {:?}",
-                        path,
-                        parsed
+                    None => {
+                        // Walk path to find where traversal broke and report those keys
+                        let mut node = &parsed;
+                        let mut failed_at = &segments[0];
+                        for seg in &segments {
+                            match node.get(*seg) {
+                                Some(next) => node = next,
+                                None => {
+                                    failed_at = seg;
+                                    break;
+                                }
+                            }
+                        }
+                        let available = node
                             .as_object()
                             .map(|o| o.keys().collect::<Vec<_>>())
-                            .unwrap_or_default()
-                    ),
+                            .unwrap_or_default();
+                        bail!(
+                            "CLI JSON output missing '{}' in path '{}'. Available keys: {:?}",
+                            failed_at,
+                            path,
+                            available
+                        )
+                    }
                 }
             }
             None => Ok(stdout),
@@ -180,7 +197,20 @@ mod tests {
         );
         let result = client.complete("ignored").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("data.response"));
+        let err = result.unwrap_err().to_string();
+        // Should report the failing segment and keys at that level
+        assert!(
+            err.contains("'response'"),
+            "should name failing segment: {err}"
+        );
+        assert!(
+            err.contains("data.response"),
+            "should include full path: {err}"
+        );
+        assert!(
+            err.contains("other"),
+            "should show available keys at 'data': {err}"
+        );
     }
 
     #[tokio::test]
