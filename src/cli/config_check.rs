@@ -58,7 +58,18 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         config.llm.provider, config.llm.model
     ));
 
-    // 3. Check main API key env var
+    // 3. Validate CLI provider has cli_command set
+    if config.llm.provider == Provider::Cli {
+        if config.llm.cli_command.is_some() {
+            results.pass("CLI provider: cli_command configured".to_string());
+        } else {
+            results.error(
+                "CLI provider requires cli_command (e.g. cli_command = \"claude\")".to_string(),
+            );
+        }
+    }
+
+    // 4. Check main API key env var
     check_api_key(
         &config.llm.api_key_env,
         "Main LLM",
@@ -67,7 +78,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         &mut results,
     );
 
-    // 4. Check base_url for openai-compatible
+    // 5. Check base_url for openai-compatible
     if config.llm.provider == Provider::OpenAICompatible {
         if config.llm.base_url.is_some() {
             results.pass("Base URL configured for openai-compatible provider".to_string());
@@ -78,13 +89,13 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         }
     }
 
-    // 5. Check generation settings
+    // 6. Check generation settings
     results.pass(format!(
         "Generation: max_retries={}, max_source_tokens={}",
         config.generation.max_retries, config.generation.max_source_tokens
     ));
 
-    // 6. Check test agent
+    // 7. Check test agent
     if config.generation.enable_test {
         results.pass(format!(
             "test agent enabled (mode: {})",
@@ -1663,6 +1674,31 @@ runtime = "nonexistent_runtime_xyz"
                 .any(|p| p.contains("test LLM override")),
             "Should report stage provider override"
         );
+    }
+
+    #[test]
+    fn test_cli_provider_missing_cli_command_errors() {
+        let mut f = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        use std::io::Write;
+        write!(f, "[llm]\nprovider_type = \"cli\"\nmodel = \"test\"\n").unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        let result = run(Some(path), false);
+        // Should succeed (non-strict) but report the error internally
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cli_provider_with_cli_command_passes() {
+        let mut f = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        use std::io::Write;
+        write!(
+            f,
+            "[llm]\nprovider_type = \"cli\"\nmodel = \"test\"\ncli_command = \"claude\"\n"
+        )
+        .unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        let result = run(Some(path), false);
+        assert!(result.is_ok());
     }
 
     #[test]

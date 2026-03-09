@@ -457,4 +457,30 @@ mod tests {
         crate::auth::delete_tokens(provider_name).unwrap();
         env::remove_var("SKILLDO_TEST_FACTORY_GEMINI_OAUTH_CID");
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_client_oauth_configured_no_tokens_no_key() {
+        // OAuth configured but no tokens saved and no API key — should error with
+        // "Run `skilldo auth login`" message (line 86-89 in factory.rs)
+        let mut config = make_llm_config(
+            Provider::Anthropic,
+            Some("SKILLDO_TEST_FACTORY_OAUTH_NOKEY"),
+            None,
+        );
+        config.oauth_auth_url = Some("https://example.com/auth".to_string());
+        config.oauth_token_url = Some("https://example.com/token".to_string());
+        config.oauth_client_id_env = Some("SKILLDO_TEST_FACTORY_OAUTH_CID".to_string());
+        env::set_var("SKILLDO_TEST_FACTORY_OAUTH_CID", "test-client-id");
+
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(
+            err.contains("auth login"),
+            "Should suggest `skilldo auth login`: {err}"
+        );
+
+        env::remove_var("SKILLDO_TEST_FACTORY_OAUTH_CID");
+    }
 }

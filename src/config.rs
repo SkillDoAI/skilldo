@@ -2195,4 +2195,37 @@ model = "claude-sonnet-4-6"
         config.llm.provider = Provider::Cli;
         assert_eq!(config.llm.get_max_tokens(), 16384);
     }
+
+    #[test]
+    fn test_resolve_extra_body_non_object_json() {
+        let mut config = Config::default();
+        config.llm.extra_body_json = Some("[1, 2, 3]".to_string());
+        let err = config.llm.resolve_extra_body().unwrap_err();
+        assert!(
+            err.to_string().contains("must be a JSON object"),
+            "Should reject non-object JSON: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_extra_headers_skips_empty_key() {
+        let mut config = Config::default();
+        config.llm.extra_headers = vec![": value-only".to_string()];
+        let headers = config.llm.resolve_extra_headers().unwrap();
+        assert!(headers.is_empty(), "Empty key should be skipped");
+    }
+
+    #[test]
+    fn test_resolve_env_var_empty_value() {
+        // Set an env var to empty string — resolve_env_var should return None
+        let mut config = Config::default();
+        config.llm.oauth_client_id_env = Some("SKILLDO_TEST_EMPTY_VAR".to_string());
+        std::env::set_var("SKILLDO_TEST_EMPTY_VAR", "");
+        let result = config
+            .llm
+            .resolve_env_var(&config.llm.oauth_client_id_env)
+            .unwrap();
+        assert!(result.is_none(), "Empty env var should return None");
+        std::env::remove_var("SKILLDO_TEST_EMPTY_VAR");
+    }
 }

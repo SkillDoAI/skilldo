@@ -51,23 +51,37 @@ impl LlmClient for CliClient {
             .with_context(|| format!("Failed to spawn CLI: {}", self.command))?;
 
         // Wrap stdin write + wait in a single timeout so neither can hang.
+        // Write stdin concurrently with wait_with_output to avoid deadlock:
+        // if the CLI fills its stdout pipe buffer before reading all stdin,
+        // sequential write-then-wait would block on both sides.
         let timeout = Duration::from_secs(self.timeout_secs);
+        let stdin_handle = child.stdin.take();
+        let prompt_bytes = prompt.as_bytes().to_vec();
         let output = match tokio::time::timeout(timeout, async {
-            // Write prompt to stdin, then drop to signal EOF.
-            // Ignore BrokenPipe — the CLI may exit before reading all input.
-            if let Some(mut stdin) = child.stdin.take() {
-                if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
-                    if e.kind() != std::io::ErrorKind::BrokenPipe {
-                        return Err(anyhow::anyhow!("Failed to write prompt to CLI stdin: {e}"));
+            // Spawn stdin write as a concurrent task so output reading can proceed.
+            let stdin_task = tokio::spawn(async move {
+                if let Some(mut stdin) = stdin_handle {
+                    if let Err(e) = stdin.write_all(&prompt_bytes).await {
+                        if e.kind() != std::io::ErrorKind::BrokenPipe {
+                            return Err(anyhow::anyhow!(
+                                "Failed to write prompt to CLI stdin: {e}"
+                            ));
+                        }
+                        debug!("CLI stdin closed early (broken pipe) — continuing");
                     }
-                    debug!("CLI stdin closed early (broken pipe) — continuing");
                 }
-            }
+                Ok(())
+            });
 
-            child
+            let output = child
                 .wait_with_output()
                 .await
-                .context("Failed to read CLI output")
+                .context("Failed to read CLI output")?;
+            // Surface any stdin write error (ignoring JoinError — child is dead anyway)
+            if let Ok(Err(e)) = stdin_task.await {
+                return Err(e);
+            }
+            Ok(output)
         })
         .await
         {
