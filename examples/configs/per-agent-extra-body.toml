@@ -15,7 +15,7 @@ base_url = "https://api.your-gateway.com/v1"
 effort = "low"
 
 [generation]
-max_retries = 5
+max_retries = 10
 max_source_tokens = 100000
 # Disable parallel extraction if your gateway has tight rate limits
 # parallel_extraction = false

@@ -111,7 +111,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Max retry attempts for the generate → validate → fix loop.
 # Each retry re-runs the create stage with error feedback.
 # Increase for local models (10+) — they sometimes need several passes.
-max_retries = 5
+max_retries = 10
 
 # Run agents 1-3 in parallel (default: true).
 # Disable for local models (Ollama) to avoid overloading the machine.
@@ -167,7 +167,7 @@ enable_review = true
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
 # base_url = ""
-# max_tokens = 8192
+# max_tokens = 16384
 # network_retries = 10
 # retry_delay = 120
 

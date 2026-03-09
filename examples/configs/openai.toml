@@ -5,7 +5,7 @@ model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
 
 [generation]
-max_retries = 5
+max_retries = 10
 max_source_tokens = 100000
 enable_test = true
 test_mode = "thorough"
