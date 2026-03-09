@@ -3,6 +3,20 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.2.5
+
+- Added `model_type = "cli"` provider — shell out to vendor CLIs (claude, codex, gemini) instead of HTTP API calls for subscription-based model access
+- Added `cli_command`, `cli_args`, `cli_json_path` config fields for generic CLI provider configuration
+- Added auto-disable of parallel extraction when any stage uses a CLI provider
+- Added `Severity::deduction()` method to replace 3 duplicated match blocks in security module
+- Added shared ecosystem utilities: `classify_license()`, `LICENSE_FILENAMES`, `is_setup_py_indirect()` in `ecosystems/mod.rs`
+- Added normalizer: strips blank lines inside YAML frontmatter, trims trailing whitespace on `---` delimiters
+- Added normalizer: detects and strips metadata fields (e.g., `generated-by`) leaking from frontmatter into body content
+- Added dual-licensing SPDX expression guidance (`MIT OR Apache-2.0`) to create prompt
+- Bumped `review_max_retries` default from 5 to 10
+- Fixed auth CLI tests failing when local `skilldo.toml` has OAuth config
+- CI: switched e2e tests from Anthropic to Cerebras (`gpt-oss-120b` via `openai-compatible`)
+
 ## 0.2.4
 
 - Added generic OAuth 2.0 + PKCE authentication for any provider (Google, OpenAI, or any OAuth 2.0-compatible endpoint)

@@ -105,6 +105,29 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Run `skilldo auth login` to authenticate, `skilldo auth status` to check.
 
 
+# ── CLI Provider Mode (Optional) ─────────────────────────────────────
+# Shell out to vendor CLIs instead of making HTTP API calls.
+# Useful for subscription-based models (Claude Pro, ChatGPT Plus) where
+# direct API access isn't available or violates ToS.
+#
+# model_type = "cli"
+# cli_command = "claude"
+# cli_args = ["-p", "--output-format", "json"]
+# cli_json_path = "result"
+#
+# Prompt is piped to the CLI via stdin. Response is captured from stdout.
+# If cli_json_path is set, stdout is parsed as JSON and that field is extracted.
+# Parallel extraction is automatically disabled for CLI providers.
+#
+# Examples for other CLIs:
+#   cli_command = "codex"
+#   cli_args = ["-a", "never", "exec", "--json"]
+#
+#   cli_command = "gemini"
+#   cli_args = ["--output-format", "json", "-y"]
+#   cli_json_path = "result"
+
+
 # ── Generation Settings ──────────────────────────────────────────────
 
 [generation]
