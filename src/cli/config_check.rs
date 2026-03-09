@@ -1635,4 +1635,52 @@ runtime = "nonexistent_runtime_xyz"
         let config = Config::default(); // Anthropic
         assert!(!is_likely_local_provider(&config));
     }
+
+    #[test]
+    fn test_check_api_key_cli_provider_skips() {
+        let mut results = CheckResult::new();
+        check_api_key(&None, "Test CLI", &Provider::Cli, false, &mut results);
+        assert!(results.errors.is_empty(), "CLI provider should not error");
+        assert!(
+            results.passed.iter().any(|p| p.contains("CLI provider")),
+            "Should report CLI provider pass"
+        );
+    }
+
+    #[test]
+    fn test_check_stage_provider_reports_override() {
+        let mut results = CheckResult::new();
+        check_stage_provider(
+            "test",
+            &Provider::Anthropic,
+            "claude-sonnet-4-6",
+            &mut results,
+        );
+        assert!(
+            results
+                .passed
+                .iter()
+                .any(|p| p.contains("test LLM override")),
+            "Should report stage provider override"
+        );
+    }
+
+    #[test]
+    fn test_check_api_key_none_env_var() {
+        let mut results = CheckResult::new();
+        check_api_key(
+            &Some("none".to_string()),
+            "Local",
+            &Provider::OpenAICompatible,
+            true,
+            &mut results,
+        );
+        assert!(
+            results
+                .passed
+                .iter()
+                .any(|p| p.contains("no API key needed")),
+            "Should pass for 'none' api key env"
+        );
+    }
 }
