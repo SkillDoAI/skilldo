@@ -906,7 +906,7 @@ Required sections in order:
 1. **Frontmatter** (YAML between `---` delimiters):
    name: {}
    description: One clear sentence describing the library's purpose and main capabilities.
-   license: {}
+   license: {} (for dual-licensed packages, use SPDX expression syntax: "MIT OR Apache-2.0", not "MIT/Apache-2.0")
    metadata:
      version: "{}"
      ecosystem: {ecosystem}
