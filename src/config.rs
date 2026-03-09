@@ -860,6 +860,25 @@ impl Config {
         Ok(config)
     }
 
+    /// Returns true if any configured LLM (main or per-stage) uses CLI model type.
+    /// Used to auto-disable parallel extraction (CLI providers need serial execution).
+    pub fn has_cli_provider(&self) -> bool {
+        if self.llm.model_type == ModelType::Cli {
+            return true;
+        }
+        let stage_llms = [
+            &self.generation.extract_llm,
+            &self.generation.map_llm,
+            &self.generation.learn_llm,
+            &self.generation.create_llm,
+            &self.generation.review_llm,
+            &self.generation.test_llm,
+        ];
+        stage_llms
+            .iter()
+            .any(|opt| opt.as_ref().is_some_and(|c| c.model_type == ModelType::Cli))
+    }
+
     /// Try to load config from a path.
     /// Returns Ok(None) if file doesn't exist, Ok(Some) if loaded, Err on parse failure.
     fn try_load_from_path<P: AsRef<Path>>(path: P) -> Result<Option<Self>> {
@@ -2152,5 +2171,27 @@ model = "claude-sonnet-4-6"
         assert!(config.llm.cli_command.is_none());
         assert!(config.llm.cli_args.is_empty());
         assert!(config.llm.cli_json_path.is_none());
+    }
+
+    #[test]
+    fn test_has_cli_provider_default_is_false() {
+        let config = Config::default();
+        assert!(!config.has_cli_provider());
+    }
+
+    #[test]
+    fn test_has_cli_provider_main_llm() {
+        let mut config = Config::default();
+        config.llm.model_type = ModelType::Cli;
+        assert!(config.has_cli_provider());
+    }
+
+    #[test]
+    fn test_has_cli_provider_stage_llm() {
+        let mut config = Config::default();
+        let mut stage_llm = config.llm.clone();
+        stage_llm.model_type = ModelType::Cli;
+        config.generation.extract_llm = Some(stage_llm);
+        assert!(config.has_cli_provider());
     }
 }
