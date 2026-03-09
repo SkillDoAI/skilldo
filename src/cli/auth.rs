@@ -275,9 +275,16 @@ mod tests {
     }
 
     /// Create a minimal config file with no OAuth endpoints for testing.
-    /// Uses PID to avoid races when tests run in parallel.
+    /// Uses atomic counter to avoid races when tests run in parallel threads.
     fn empty_config_path() -> String {
-        let path = format!("/tmp/skilldo-test-empty-config-{}.toml", std::process::id());
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = format!(
+            "/tmp/skilldo-test-empty-config-{}-{}.toml",
+            std::process::id(),
+            id
+        );
         std::fs::write(
             &path,
             "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n",
