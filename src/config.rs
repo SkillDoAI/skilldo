@@ -673,7 +673,7 @@ fn default_max_source_tokens() -> usize {
 }
 
 fn default_review_max_retries() -> usize {
-    5
+    10
 }
 
 impl GenerationConfig {
@@ -1077,7 +1077,7 @@ mod tests {
             test_mode: "thorough".to_string(),
             enable_review: true,
             enable_security_scan: true,
-            review_max_retries: 5,
+            review_max_retries: 10,
             extract_llm: None,
             map_llm: None,
             learn_llm: None,
@@ -1495,7 +1495,7 @@ test_custom = "test instructions"
     fn test_new_review_config_defaults() {
         let config = Config::default();
         assert!(config.generation.enable_review);
-        assert_eq!(config.generation.review_max_retries, 5);
+        assert_eq!(config.generation.review_max_retries, 10);
         assert!(config.generation.review_llm.is_none());
         assert!(config.prompts.review_custom.is_none());
     }
