@@ -218,7 +218,6 @@ async fn test_pipeline_with_custom_config() {
             oauth_client_secret_env: None,
             oauth_credentials_env: None,
             extra_headers: Vec::new(),
-            model_type: skilldo::config::ModelType::Api,
             cli_command: None,
             cli_args: Vec::new(),
             cli_json_path: None,

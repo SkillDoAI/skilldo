@@ -102,6 +102,7 @@ impl std::fmt::Display for InstallSource {
 /// Supported LLM providers. `OpenAICompatible` covers Ollama and any
 /// endpoint that speaks the OpenAI chat completions API. `ChatGPT` is
 /// an alias for `OpenAI` intended for OAuth-based ChatGPT subscription use.
+/// `Cli` is for configs that shell out to vendor CLIs instead of HTTP API calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provider {
     #[serde(rename = "anthropic")]
@@ -114,6 +115,8 @@ pub enum Provider {
     OpenAICompatible,
     #[serde(rename = "gemini")]
     Gemini,
+    #[serde(rename = "cli")]
+    Cli,
 }
 
 impl Provider {
@@ -124,6 +127,7 @@ impl Provider {
             Provider::Anthropic => "ANTHROPIC_API_KEY",
             Provider::Gemini => "GEMINI_API_KEY",
             Provider::OpenAICompatible => "OPENAI_API_KEY",
+            Provider::Cli => "none",
         }
     }
 }
@@ -136,6 +140,7 @@ impl std::fmt::Display for Provider {
             Provider::ChatGPT => write!(f, "chatgpt"),
             Provider::OpenAICompatible => write!(f, "openai-compatible"),
             Provider::Gemini => write!(f, "gemini"),
+            Provider::Cli => write!(f, "cli"),
         }
     }
 }
@@ -149,21 +154,13 @@ impl std::str::FromStr for Provider {
             "chatgpt" => Ok(Provider::ChatGPT),
             "openai-compatible" => Ok(Provider::OpenAICompatible),
             "gemini" => Ok(Provider::Gemini),
+            "cli" => Ok(Provider::Cli),
             unknown => Err(anyhow::anyhow!(
-                "Unknown provider: {}. Valid: anthropic, openai, chatgpt, openai-compatible, gemini",
+                "Unknown provider: {}. Valid: anthropic, openai, chatgpt, openai-compatible, gemini, cli",
                 unknown
             )),
         }
     }
-}
-
-/// Whether the LLM is accessed via HTTP API or local CLI tool.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ModelType {
-    #[default]
-    Api,
-    Cli,
 }
 
 /// Root configuration — loaded from TOML, merged with CLI overrides.
@@ -263,24 +260,20 @@ pub struct LlmConfig {
     #[serde(default)]
     pub extra_headers: Vec<String>,
 
-    // ── CLI provider fields ──────────────────────────────────────
-    /// Model access type: "api" (HTTP, default) or "cli" (shell out to vendor CLI).
-    #[serde(default)]
-    pub model_type: ModelType,
-
+    // ── CLI provider fields (provider_type = "cli") ─────────────
     /// CLI binary name or path (e.g., "claude", "codex", "gemini").
-    /// Only used when model_type = "cli".
+    /// Only used when provider_type = "cli".
     #[serde(default)]
     pub cli_command: Option<String>,
 
-    /// Additional CLI arguments (e.g., ["-p", "--output-format", "json"]).
-    /// Only used when model_type = "cli".
+    /// Additional CLI arguments (e.g., ["-p", "", "--output-format", "json"]).
+    /// Only used when provider_type = "cli".
     #[serde(default)]
     pub cli_args: Vec<String>,
 
     /// JSON field path to extract the response text from CLI output.
-    /// E.g., "result" extracts obj["result"]. If unset, uses raw stdout.
-    /// Only used when model_type = "cli".
+    /// E.g., "response" extracts obj["response"]. If unset, uses raw stdout.
+    /// Only used when provider_type = "cli".
     #[serde(default)]
     pub cli_json_path: Option<String>,
 }
@@ -317,6 +310,7 @@ impl LlmConfig {
             Provider::OpenAI | Provider::ChatGPT => 8192,
             Provider::OpenAICompatible => 16384, // ollama and similar
             Provider::Gemini => 8192,
+            Provider::Cli => 16384, // generous default for CLI providers
         }
     }
 
@@ -863,7 +857,7 @@ impl Config {
     /// Returns true if any configured LLM (main or per-stage) uses CLI model type.
     /// Used to auto-disable parallel extraction (CLI providers need serial execution).
     pub fn has_cli_provider(&self) -> bool {
-        if self.llm.model_type == ModelType::Cli {
+        if self.llm.provider == Provider::Cli {
             return true;
         }
         let stage_llms = [
@@ -876,7 +870,7 @@ impl Config {
         ];
         stage_llms
             .iter()
-            .any(|opt| opt.as_ref().is_some_and(|c| c.model_type == ModelType::Cli))
+            .any(|opt| opt.as_ref().is_some_and(|c| c.provider == Provider::Cli))
     }
 
     /// Try to load config from a path.
@@ -947,7 +941,6 @@ impl Default for Config {
                 oauth_client_secret_env: None,
                 oauth_credentials_env: None,
                 extra_headers: Vec::new(),
-                model_type: ModelType::Api,
                 cli_command: None,
                 cli_args: Vec::new(),
                 cli_json_path: None,
@@ -1100,7 +1093,6 @@ mod tests {
             oauth_client_secret_env: None,
             oauth_credentials_env: None,
             extra_headers: Vec::new(),
-            model_type: ModelType::Api,
             cli_command: None,
             cli_args: Vec::new(),
             cli_json_path: None,
@@ -1731,6 +1723,7 @@ model = "gemini-2.5-pro"
             "openai-compatible"
         );
         assert_eq!(format!("{}", Provider::Gemini), "gemini");
+        assert_eq!(format!("{}", Provider::Cli), "cli");
     }
 
     #[test]
@@ -2133,41 +2126,37 @@ max_source_tokens = 50000
         assert_eq!(config.llm.extra_headers[0], "X-Custom: value");
     }
 
-    // ── ModelType + CLI config field tests ───────────────────────
+    // ── CLI provider config field tests ──────────────────────────
 
     #[test]
-    fn test_model_type_default_is_api() {
-        let config = Config::default();
-        assert_eq!(config.llm.model_type, ModelType::Api);
-    }
-
-    #[test]
-    fn test_model_type_cli_deser() {
+    fn test_cli_provider_deser() {
         let toml = r#"
 [llm]
-provider_type = "anthropic"
-model = "claude-sonnet-4-6"
-model_type = "cli"
-cli_command = "claude"
-cli_args = ["-p", "--output-format", "json"]
-cli_json_path = "result"
+provider_type = "cli"
+model = "gemini-3-pro-preview"
+cli_command = "gemini"
+cli_args = ["-p", "", "--output-format", "json"]
+cli_json_path = "response"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.llm.model_type, ModelType::Cli);
-        assert_eq!(config.llm.cli_command.as_deref(), Some("claude"));
-        assert_eq!(config.llm.cli_args, vec!["-p", "--output-format", "json"]);
-        assert_eq!(config.llm.cli_json_path.as_deref(), Some("result"));
+        assert_eq!(config.llm.provider, Provider::Cli);
+        assert_eq!(config.llm.cli_command.as_deref(), Some("gemini"));
+        assert_eq!(
+            config.llm.cli_args,
+            vec!["-p", "", "--output-format", "json"]
+        );
+        assert_eq!(config.llm.cli_json_path.as_deref(), Some("response"));
     }
 
     #[test]
-    fn test_model_type_api_no_cli_fields() {
+    fn test_non_cli_provider_no_cli_fields() {
         let toml = r#"
 [llm]
 provider_type = "anthropic"
 model = "claude-sonnet-4-6"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.llm.model_type, ModelType::Api);
+        assert_eq!(config.llm.provider, Provider::Anthropic);
         assert!(config.llm.cli_command.is_none());
         assert!(config.llm.cli_args.is_empty());
         assert!(config.llm.cli_json_path.is_none());
@@ -2182,7 +2171,7 @@ model = "claude-sonnet-4-6"
     #[test]
     fn test_has_cli_provider_main_llm() {
         let mut config = Config::default();
-        config.llm.model_type = ModelType::Cli;
+        config.llm.provider = Provider::Cli;
         assert!(config.has_cli_provider());
     }
 
@@ -2190,7 +2179,7 @@ model = "claude-sonnet-4-6"
     fn test_has_cli_provider_stage_llm() {
         let mut config = Config::default();
         let mut stage_llm = config.llm.clone();
-        stage_llm.model_type = ModelType::Cli;
+        stage_llm.provider = Provider::Cli;
         config.generation.extract_llm = Some(stage_llm);
         assert!(config.has_cli_provider());
     }

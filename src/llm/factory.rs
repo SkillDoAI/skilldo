@@ -17,11 +17,10 @@ pub async fn create_client_from_llm_config(
     }
 
     // CLI provider: shell out to a CLI tool instead of HTTP API
-    if llm_config.model_type == crate::config::ModelType::Cli {
-        let command = llm_config
-            .cli_command
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("cli_command is required when model_type = \"cli\""))?;
+    if llm_config.provider == Provider::Cli {
+        let command = llm_config.cli_command.clone().ok_or_else(|| {
+            anyhow::anyhow!("cli_command is required when provider_type = \"cli\"")
+        })?;
         let client = super::cli_client::CliClient::new(
             command,
             llm_config.cli_args.clone(),
@@ -162,6 +161,11 @@ pub async fn create_client_from_llm_config(
                 .with_bearer_auth(use_bearer)
                 .with_extra_headers(extra_headers),
         ),
+
+        Provider::Cli => {
+            // Unreachable: Provider::Cli is handled by the early return above.
+            anyhow::bail!("provider_type = \"cli\" requires cli_command to be set");
+        }
     };
 
     Ok(Box::new(RetryClient::new(
@@ -273,7 +277,6 @@ mod tests {
             oauth_client_secret_env: None,
             oauth_credentials_env: None,
             extra_headers: Vec::new(),
-            model_type: crate::config::ModelType::Api,
             cli_command: None,
             cli_args: vec![],
             cli_json_path: None,
@@ -403,8 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_client_cli_provider() {
-        let mut config = make_llm_config(Provider::Anthropic, None, None);
-        config.model_type = crate::config::ModelType::Cli;
+        let mut config = make_llm_config(Provider::Cli, None, None);
         config.cli_command = Some("cat".to_string());
         config.cli_args = vec![];
         let result = create_client_from_llm_config(&config, false).await;
@@ -413,8 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_client_cli_missing_command() {
-        let mut config = make_llm_config(Provider::Anthropic, None, None);
-        config.model_type = crate::config::ModelType::Cli;
+        let config = make_llm_config(Provider::Cli, None, None);
         // cli_command is None — should error
         let result = create_client_from_llm_config(&config, false).await;
         assert!(result.is_err());
@@ -425,8 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_client_cli_dry_run_still_returns_mock() {
-        let mut config = make_llm_config(Provider::Anthropic, None, None);
-        config.model_type = crate::config::ModelType::Cli;
+        let mut config = make_llm_config(Provider::Cli, None, None);
         config.cli_command = Some("cat".to_string());
         // dry_run should still return mock, even with CLI config
         let result = create_client_from_llm_config(&config, true).await;

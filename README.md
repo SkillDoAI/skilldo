@@ -449,11 +449,11 @@ Shell out to vendor CLIs (Claude Code, Codex, Gemini CLI) instead of making HTTP
 
 ```toml
 [llm]
-model_type = "cli"
+provider_type = "cli"
+model = "claude-sonnet-4-6"  # informational label
 cli_command = "claude"
 cli_args = ["-p", "--output-format", "json"]
 cli_json_path = "result"
-model = "claude-sonnet-4-6"  # informational label
 ```
 
 The prompt is piped to the CLI via stdin. If `cli_json_path` is set, stdout is parsed as JSON and that field is extracted as the response text.
@@ -464,13 +464,15 @@ Other CLI examples:
 
 ```toml
 # Codex CLI
+provider_type = "cli"
 cli_command = "codex"
 cli_args = ["-a", "never", "exec", "--json"]
 
 # Gemini CLI
+provider_type = "cli"
 cli_command = "gemini"
-cli_args = ["--output-format", "json", "-y"]
-cli_json_path = "result"
+cli_args = ["-p", "", "--output-format", "json", "-m", "gemini-3-pro-preview", "-y"]
+cli_json_path = "response"
 ```
 
 ## Example Output

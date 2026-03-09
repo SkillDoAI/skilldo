@@ -110,22 +110,27 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Useful for subscription-based models (Claude Pro, ChatGPT Plus) where
 # direct API access isn't available or violates ToS.
 #
-# model_type = "cli"
-# cli_command = "claude"
-# cli_args = ["-p", "--output-format", "json"]
-# cli_json_path = "result"
-#
+# Set provider_type = "cli" and configure cli_command, cli_args, cli_json_path.
 # Prompt is piped to the CLI via stdin. Response is captured from stdout.
 # If cli_json_path is set, stdout is parsed as JSON and that field is extracted.
 # Parallel extraction is automatically disabled for CLI providers.
 #
-# Examples for other CLIs:
+# Example: Claude CLI
+#   provider_type = "cli"
+#   cli_command = "claude"
+#   cli_args = ["-p", "--output-format", "json"]
+#   cli_json_path = "result"
+#
+# Example: Codex CLI
+#   provider_type = "cli"
 #   cli_command = "codex"
 #   cli_args = ["-a", "never", "exec", "--json"]
 #
+# Example: Gemini CLI
+#   provider_type = "cli"
 #   cli_command = "gemini"
-#   cli_args = ["--output-format", "json", "-y"]
-#   cli_json_path = "result"
+#   cli_args = ["-p", "", "--output-format", "json", "-m", "gemini-3-pro-preview", "-y"]
+#   cli_json_path = "response"
 
 
 # ── Generation Settings ──────────────────────────────────────────────
