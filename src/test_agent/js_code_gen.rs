@@ -79,27 +79,16 @@ impl<'a> JsCodeGenerator<'a> {
                 let code_start = start + fence.len();
                 if let Some(end) = Self::find_closing_fence(&trimmed[code_start..], fence) {
                     let mut code = trimmed[code_start..code_start + end].trim();
-                    // Strip known language tags
+                    // Strip language tag line: any single word on the first line
+                    // that looks like a language identifier (e.g., python, ruby).
+                    // LLMs occasionally emit wrong tags; leaving them would be a
+                    // syntax error, so strip any single-word first line.
                     if let Some((first_line, rest)) = code.split_once('\n') {
-                        let tag = first_line.trim().to_ascii_lowercase();
-                        const KNOWN_TAGS: &[&str] = &[
-                            "javascript",
-                            "js",
-                            "typescript",
-                            "ts",
-                            "jsx",
-                            "tsx",
-                            "bash",
-                            "sh",
-                            "shell",
-                            "text",
-                            "txt",
-                            "json",
-                            "yaml",
-                            "yml",
-                            "toml",
-                        ];
-                        if KNOWN_TAGS.contains(&tag.as_str()) {
+                        let tag = first_line.trim();
+                        if !tag.is_empty()
+                            && !tag.contains(' ')
+                            && tag.chars().all(|c| c.is_alphanumeric() || c == '-')
+                        {
                             code = rest.trim();
                         }
                     }
@@ -442,10 +431,23 @@ console.log("✓ Test passed: Tilde");
     }
 
     #[test]
-    fn test_extract_code_generic_block_unknown_tag_preserved() {
-        // Generic ``` block where first line is NOT a known tag — preserve it
+    fn test_extract_code_generic_block_code_first_line_preserved() {
+        // Generic ``` block where first line is real code (not a tag) — preserve it
         let response = "```\nconst x = 42;\nconsole.log(x);\n```\n";
         let code = JsCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("const x = 42"));
+    }
+
+    #[test]
+    fn test_extract_code_generic_block_strips_non_js_tag() {
+        // LLMs occasionally emit a wrong language tag (e.g., python) for JS code.
+        // The generic fence handler should strip any single-word tag line.
+        let response = "```\npython\nconst x = 42;\nconsole.log(x);\n```\n";
+        let code = JsCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            !code.contains("python"),
+            "Non-JS tag should be stripped, got: {code}"
+        );
         assert!(code.contains("const x = 42"));
     }
 

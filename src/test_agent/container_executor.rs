@@ -64,7 +64,7 @@ impl ContainerExecutor {
             // being interpreted as npm flags.
             let quoted: Vec<String> = deps.iter().map(|d| format!("'{}'", d)).collect();
             lines.push(format!(
-                "npm install --no-save --ignore-scripts --no-audit --no-fund -- {} > /dev/null",
+                "npm install --no-save --ignore-scripts --no-audit --no-fund -- {} > /dev/null 2>&1",
                 quoted.join(" ")
             ));
         }
