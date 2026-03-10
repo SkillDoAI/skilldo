@@ -105,6 +105,35 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Run `skilldo auth login` to authenticate, `skilldo auth status` to check.
 
 
+# ── CLI Provider Mode (Optional) ─────────────────────────────────────
+# Shell out to vendor CLIs instead of making HTTP API calls.
+# Useful for subscription-based models (Claude Pro, ChatGPT Plus) where
+# direct API access isn't available or violates ToS.
+#
+# Set provider_type = "cli" and configure cli_command, cli_args, cli_json_path.
+# Prompt is piped to the CLI via stdin. Response is captured from stdout.
+# If cli_json_path is set, stdout is parsed as JSON and that path is extracted.
+# Supports dot-notation for nested fields: "data.response" traverses {"data":{"response":"..."}}.
+# Parallel extraction is automatically disabled for CLI providers.
+#
+# Example: Claude CLI
+#   provider_type = "cli"
+#   cli_command = "claude"
+#   cli_args = ["-p", "--output-format", "json"]
+#   cli_json_path = "result"
+#
+# Example: Codex CLI
+#   provider_type = "cli"
+#   cli_command = "codex"
+#   cli_args = ["-a", "never", "exec", "--json"]
+#
+# Example: Gemini CLI
+#   provider_type = "cli"
+#   cli_command = "gemini"
+#   cli_args = ["-p", "", "--output-format", "json", "-m", "gemini-3-pro-preview", "-y"]
+#   cli_json_path = "response"
+
+
 # ── Generation Settings ──────────────────────────────────────────────
 
 [generation]
@@ -142,7 +171,7 @@ enable_review = true
 
 # Max retries for review → create feedback loop (default: 5).
 # If review finds issues, it sends targeted complaints to the create agent.
-# review_max_retries = 5
+# review_max_retries = 10
 
 
 # ── Review Stage LLM Override ─────────────────────────────────────────

@@ -16,6 +16,31 @@ pub async fn create_client_from_llm_config(
         return Ok(Box::new(MockLlmClient::new()));
     }
 
+    // CLI provider: shell out to a CLI tool instead of HTTP API
+    if llm_config.provider == Provider::Cli {
+        let command = llm_config
+            .cli_command
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "cli_command is required and must be non-empty when provider_type = \"cli\""
+                )
+            })?
+            .to_string();
+        let client = super::cli_client::CliClient::new(
+            command,
+            llm_config.cli_args.clone(),
+            llm_config.cli_json_path.clone(),
+            llm_config.request_timeout_secs,
+        );
+        return Ok(Box::new(RetryClient::new(
+            Box::new(client),
+            llm_config.network_retries,
+            llm_config.retry_delay,
+        )));
+    }
+
     // Try OAuth token first — if configured and tokens are available.
     // Errors are logged and treated as None so we fall through to API-key auth.
     let oauth_token = if llm_config.has_oauth() {
@@ -143,6 +168,10 @@ pub async fn create_client_from_llm_config(
                 .with_bearer_auth(use_bearer)
                 .with_extra_headers(extra_headers),
         ),
+
+        Provider::Cli => {
+            unreachable!("Provider::Cli is handled by the early return above")
+        }
     };
 
     Ok(Box::new(RetryClient::new(
@@ -254,6 +283,9 @@ mod tests {
             oauth_client_secret_env: None,
             oauth_credentials_env: None,
             extra_headers: Vec::new(),
+            cli_command: None,
+            cli_args: vec![],
+            cli_json_path: None,
         }
     }
 
@@ -379,6 +411,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_client_cli_provider() {
+        let mut config = make_llm_config(Provider::Cli, None, None);
+        config.cli_command = Some("cat".to_string());
+        config.cli_args = vec![];
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_client_cli_missing_command() {
+        let config = make_llm_config(Provider::Cli, None, None);
+        // cli_command is None — should error
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("cli_command"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_client_cli_dry_run_still_returns_mock() {
+        let mut config = make_llm_config(Provider::Cli, None, None);
+        config.cli_command = Some("cat".to_string());
+        // dry_run should still return mock, even with CLI config
+        let result = create_client_from_llm_config(&config, true).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
     #[serial]
     async fn test_create_gemini_client_with_bearer_auth() {
         let provider_name = "test-factory-gemini-oauth";
@@ -402,5 +463,44 @@ mod tests {
 
         crate::auth::delete_tokens(provider_name).unwrap();
         env::remove_var("SKILLDO_TEST_FACTORY_GEMINI_OAUTH_CID");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_client_oauth_configured_no_tokens_no_key() {
+        // OAuth configured but no tokens saved and no API key — should error with
+        // "Run `skilldo auth login`" message (line 86-89 in factory.rs)
+        let mut config = make_llm_config(
+            Provider::Anthropic,
+            Some("SKILLDO_TEST_FACTORY_OAUTH_NOKEY"),
+            None,
+        );
+        config.oauth_auth_url = Some("https://example.com/auth".to_string());
+        config.oauth_token_url = Some("https://example.com/token".to_string());
+        config.oauth_client_id_env = Some("SKILLDO_TEST_FACTORY_OAUTH_CID".to_string());
+        env::set_var("SKILLDO_TEST_FACTORY_OAUTH_CID", "test-client-id");
+
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(
+            err.contains("auth login"),
+            "Should suggest `skilldo auth login`: {err}"
+        );
+
+        env::remove_var("SKILLDO_TEST_FACTORY_OAUTH_CID");
+    }
+
+    #[tokio::test]
+    async fn test_create_client_cli_empty_command_errors() {
+        let mut config = make_llm_config(Provider::Cli, None, None);
+        config.cli_command = Some("  ".to_string());
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(
+            err.contains("must be non-empty"),
+            "Should reject whitespace-only cli_command: {err}"
+        );
     }
 }

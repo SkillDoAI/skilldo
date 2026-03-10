@@ -948,4 +948,24 @@ mod tests {
             "no introspection issue should be added"
         );
     }
+
+    #[test]
+    fn test_print_review_issues_runs_without_panic() {
+        let issues = vec![
+            ReviewIssue {
+                severity: Severity::Error,
+                category: "accuracy".to_string(),
+                complaint: "Wrong version".to_string(),
+                evidence: "says 1.0, actually 2.0".to_string(),
+            },
+            ReviewIssue {
+                severity: Severity::Warning,
+                category: "style".to_string(),
+                complaint: "Minor nit".to_string(),
+                evidence: String::new(), // empty evidence branch
+            },
+        ];
+        // Exercises both the evidence and no-evidence branches
+        print_review_issues(&issues);
+    }
 }

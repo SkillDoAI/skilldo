@@ -218,6 +218,9 @@ async fn test_pipeline_with_custom_config() {
             oauth_client_secret_env: None,
             oauth_credentials_env: None,
             extra_headers: Vec::new(),
+            cli_command: None,
+            cli_args: Vec::new(),
+            cli_json_path: None,
         },
         generation: GenerationConfig {
             output: None,
@@ -230,7 +233,7 @@ async fn test_pipeline_with_custom_config() {
             test_mode: "thorough".to_string(),
             enable_review: false,
             enable_security_scan: true,
-            review_max_retries: 5,
+            review_max_retries: 10,
             extract_llm: None,
             map_llm: None,
             learn_llm: None,

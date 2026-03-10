@@ -174,6 +174,11 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         info!("CLI override: parallel_extraction = false");
         config.generation.parallel_extraction = false;
     }
+    // Auto-disable parallel extraction for CLI providers (single auth session)
+    if config.has_cli_provider() && config.generation.parallel_extraction {
+        warn!("Auto-disabling parallel extraction (CLI provider detected)");
+        config.generation.parallel_extraction = false;
+    }
 
     // Default source_path to the repo path (not CWD) for local install/mount modes
     if config.generation.container.source_path.is_none()

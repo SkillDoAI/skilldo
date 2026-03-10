@@ -169,7 +169,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
     steps:
       - uses: actions/checkout@v6
 
@@ -183,8 +183,8 @@ jobs:
       - name: Check API access
         id: check-secret
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::warning::ANTHROPIC_API_KEY not configured — skipping E2E"
+          if [ -z "$CEREBRAS2_API_KEY" ]; then
+            echo "::warning::CEREBRAS2_API_KEY not configured — skipping E2E"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -202,10 +202,13 @@ jobs:
         if: steps.check-secret.outputs.skip != 'true'
         run: |
           ./target/release/skilldo generate /tmp/click \
-            --provider anthropic \
-            --model claude-sonnet-4-6 \
+            --provider openai-compatible \
+            --model gpt-oss-120b \
+            --base-url https://api.cerebras.ai/v1 \
             --max-retries 5 \
             -o /tmp/click-SKILL.md
+        env:
+          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
 
       - name: Validate Python output
         if: steps.check-secret.outputs.skip != 'true'
@@ -287,11 +290,14 @@ jobs:
         if: steps.check-secret.outputs.skip != 'true'
         run: |
           ./target/release/skilldo generate /tmp/chi \
-            --provider anthropic \
-            --model claude-sonnet-4-6 \
+            --provider openai-compatible \
+            --model gpt-oss-120b \
+            --base-url https://api.cerebras.ai/v1 \
             --language go \
             --max-retries 5 \
             -o /tmp/chi-SKILL.md
+        env:
+          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
 
       - name: Validate Go output
         if: steps.check-secret.outputs.skip != 'true'

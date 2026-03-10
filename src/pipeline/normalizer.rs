@@ -121,6 +121,117 @@ pub fn ensure_references(content: &str, project_urls: &[(String, String)]) -> St
     format!("{}{}", content, refs)
 }
 
+/// Find (open, close) line indices of the YAML frontmatter `---` delimiters.
+fn find_frontmatter_bounds(lines: &[&str]) -> Option<(usize, usize)> {
+    let mut first = None;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() == "---" {
+            match first {
+                None => first = Some(i),
+                Some(open) => return Some((open, i)),
+            }
+        }
+    }
+    None
+}
+
+/// Clean up frontmatter: remove blank lines, normalize `---` delimiters (strip leading/trailing whitespace).
+fn clean_frontmatter(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+
+    let (open, close) = match find_frontmatter_bounds(&lines) {
+        Some(bounds) => bounds,
+        None => return content.to_string(),
+    };
+
+    // Check if any cleaning is needed
+    let needs_blank_removal = lines[open + 1..close].iter().any(|l| l.trim().is_empty());
+    let needs_trim = lines[open].len() != 3 || lines[close].len() != 3;
+
+    if !needs_blank_removal && !needs_trim {
+        return content.to_string();
+    }
+
+    // Build result: before frontmatter + clean frontmatter + after frontmatter
+    let mut result = Vec::new();
+
+    // Lines before frontmatter (if any)
+    for line in &lines[..open] {
+        result.push(*line);
+    }
+
+    // Opening delimiter (clean)
+    result.push("---");
+
+    // Frontmatter body — skip blank lines
+    for line in &lines[open + 1..close] {
+        if !line.trim().is_empty() {
+            result.push(line);
+        }
+    }
+
+    // Closing delimiter (clean)
+    result.push("---");
+
+    // Rest of content
+    for line in &lines[close + 1..] {
+        result.push(line);
+    }
+
+    let mut out = result.join("\n");
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Strip metadata fields that leaked from frontmatter into the body content.
+fn strip_leaked_metadata(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+
+    let fm_end = match find_frontmatter_bounds(&lines) {
+        Some((_, close)) => close,
+        None => return content.to_string(),
+    };
+
+    let metadata_patterns = ["generated-by: skilldo/"];
+    let mut result: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut stripped_any = false;
+    let mut in_code_block = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        if i <= fm_end {
+            result.push(line);
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_code_block = !in_code_block;
+            result.push(line);
+            continue;
+        }
+        if !in_code_block {
+            let lower = trimmed.to_lowercase();
+            if metadata_patterns.iter().any(|p| lower.starts_with(p)) {
+                warn!("Stripping leaked metadata from body: '{}'", trimmed);
+                stripped_any = true;
+                continue;
+            }
+        }
+        result.push(line);
+    }
+
+    if !stripped_any {
+        return content.to_string();
+    }
+
+    let mut out = result.join("\n");
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Strip meta-text preamble that LLMs sometimes emit before the real content.
 /// Removes ALL lines between frontmatter and the first markdown heading (## or #)
 /// or code fence (```). This catches conversational preambles like:
@@ -130,21 +241,8 @@ pub fn ensure_references(content: &str, project_urls: &[(String, String)]) -> St
 fn strip_meta_text(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find end of frontmatter
-    let mut fm_end = None;
-    let mut dashes = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim() == "---" {
-            dashes += 1;
-            if dashes == 2 {
-                fm_end = Some(i);
-                break;
-            }
-        }
-    }
-
-    let fm_end = match fm_end {
-        Some(i) => i,
+    let fm_end = match find_frontmatter_bounds(&lines) {
+        Some((_, close)) => close,
         None => return content.to_string(),
     };
 
@@ -263,21 +361,8 @@ fn strip_duplicate_frontmatter(content: &str) -> String {
 fn strip_body_markdown_fence(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find end of frontmatter
-    let mut fm_end = None;
-    let mut dashes = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim() == "---" {
-            dashes += 1;
-            if dashes == 2 {
-                fm_end = Some(i);
-                break;
-            }
-        }
-    }
-
-    let fm_end = match fm_end {
-        Some(i) => i,
+    let fm_end = match find_frontmatter_bounds(&lines) {
+        Some((_, close)) => close,
         None => return content.to_string(),
     };
 
@@ -364,8 +449,14 @@ pub fn normalize_skill_md(
         generated_with,
     );
 
+    // 1.5. Clean frontmatter (remove blank lines, trim --- whitespace)
+    normalized = clean_frontmatter(&normalized);
+
     // 2. Strip meta-text preamble (LLM framing text)
     normalized = strip_meta_text(&normalized);
+
+    // 2.5. Strip leaked metadata from body
+    normalized = strip_leaked_metadata(&normalized);
 
     // 3. Strip duplicate frontmatter blocks
     normalized = strip_duplicate_frontmatter(&normalized);
@@ -923,5 +1014,102 @@ mod tests {
             result.ends_with("```\n"),
             "Should end with closing fence and newline"
         );
+    }
+
+    #[test]
+    fn test_clean_frontmatter_removes_blank_lines() {
+        let input = "---\nname: click\n\ndescription: CLI framework\n\nmetadata:\n  version: \"8.1.7\"\n  ecosystem: python\n---\n\n## Imports";
+        let result = normalize_skill_md(input, "click", "8.1.7", "python", None, &[], None);
+        // Extract frontmatter block
+        let fm_start = result.find("---\n").unwrap();
+        let fm_end = result[fm_start + 4..].find("\n---").unwrap();
+        let frontmatter = &result[fm_start + 4..fm_start + 4 + fm_end];
+        assert!(
+            !frontmatter.contains("\n\n"),
+            "Frontmatter should not contain blank lines, got:\n{}",
+            frontmatter
+        );
+    }
+
+    #[test]
+    fn test_clean_frontmatter_trims_delimiter_whitespace() {
+        let input = "---  \nname: click\ndescription: CLI framework\nmetadata:\n  version: \"8.1.7\"\n  ecosystem: python\n---  \n\n## Imports";
+        let result = normalize_skill_md(input, "click", "8.1.7", "python", None, &[], None);
+        // Check that --- delimiters are clean (no trailing spaces)
+        for line in result.lines() {
+            if line.starts_with("---") && line.trim() == "---" {
+                assert_eq!(
+                    line, "---",
+                    "Delimiter should not have trailing whitespace: '{}'",
+                    line
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_standalone_line() {
+        // A standalone "generated-by: skilldo/..." line after frontmatter is stripped
+        let input = "---\nname: testify\ndescription: Go testing\nmetadata:\n  version: \"1.9.0\"\n  ecosystem: go\n  generated-by: skilldo/0.2.4\n---\n\n## Overview\n\ngenerated-by: skilldo/0.2.4\n\nMore content\n";
+        let result = normalize_skill_md(input, "testify", "1.9.0", "go", None, &[], Some("0.2.4"));
+        let after_fm = result.split("\n---\n").nth(1).unwrap();
+        assert!(
+            !after_fm.contains("generated-by: skilldo"),
+            "Standalone leaked metadata should be stripped:\n{}",
+            after_fm
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_preserves_table_content() {
+        // "generated-by: skilldo/..." inside a table cell is NOT stripped (not a leak)
+        let input = "---\nname: testify\ndescription: Go testing\nmetadata:\n  version: \"1.9.0\"\n  ecosystem: go\n  generated-by: skilldo/0.2.4\n---\n\n## Overview\n\n| Feature | Status |\n| --- | --- |\n| generated-by: skilldo/0.2.4 | stable |\n\nMore content\n";
+        let result = normalize_skill_md(input, "testify", "1.9.0", "go", None, &[], Some("0.2.4"));
+        let after_fm = result.split("\n---\n").nth(1).unwrap();
+        assert!(
+            after_fm.contains("generated-by: skilldo"),
+            "Table content should be preserved:\n{}",
+            after_fm
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_preserves_code_blocks() {
+        // "generated-by: skilldo/..." inside a fenced code block is NOT stripped
+        let input = "---\nname: testify\ndescription: Go testing\nmetadata:\n  version: \"1.9.0\"\n  ecosystem: go\n  generated-by: skilldo/0.2.4\n---\n\n## Overview\n\n```yaml\ngenerated-by: skilldo/0.2.4\n```\n\nMore content\n";
+        let result = normalize_skill_md(input, "testify", "1.9.0", "go", None, &[], Some("0.2.4"));
+        let after_fm = result.split("\n---\n").nth(1).unwrap();
+        assert!(
+            after_fm.contains("generated-by: skilldo"),
+            "Code block content should be preserved:\n{}",
+            after_fm
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_preserves_frontmatter() {
+        let input = "---\nname: test\ndescription: test lib\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n  generated-by: skilldo/0.2.4\n---\n\n## Imports\n\nNormal content\n";
+        let result = normalize_skill_md(input, "test", "1.0", "python", None, &[], Some("0.2.4"));
+        // The generated-by in frontmatter should be preserved
+        let parts: Vec<&str> = result.splitn(3, "---").collect();
+        assert!(parts.len() >= 3);
+        assert!(
+            parts[1].contains("generated-by: skilldo/0.2.4"),
+            "Frontmatter should keep generated-by"
+        );
+    }
+
+    #[test]
+    fn test_clean_frontmatter_no_frontmatter() {
+        // Content without frontmatter should pass through unchanged
+        let input = "# Just a heading\n\nSome content\n";
+        assert_eq!(clean_frontmatter(input), input);
+    }
+
+    #[test]
+    fn test_clean_frontmatter_no_change_when_clean() {
+        let input = "---\nname: click\ndescription: CLI framework\nmetadata:\n  version: \"8.1.7\"\n  ecosystem: python\n---\n\n## Imports\nContent here\n";
+        let result = normalize_skill_md(input, "click", "8.1.7", "python", None, &[], None);
+        assert_eq!(result, input, "Clean frontmatter should not be modified");
     }
 }

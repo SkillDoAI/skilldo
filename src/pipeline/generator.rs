@@ -165,7 +165,7 @@ impl Generator {
             enable_review: true,                 // Default to enabled
             skip_introspection: false,           // Default to enabled
             enable_security_scan: true,          // Default to enabled
-            review_max_retries: 5,               // Default to 5 retries
+            review_max_retries: crate::config::default_review_max_retries(),
             container_config: ContainerConfig::default(),
             parallel_extraction: true,
             existing_skill: None,
@@ -1188,7 +1188,7 @@ mod tests {
     fn test_generator_defaults_review_enabled_and_retries() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 3);
         assert!(gen.enable_review);
-        assert_eq!(gen.review_max_retries, 5);
+        assert_eq!(gen.review_max_retries, 10);
         assert!(gen.review_client.is_none());
     }
 

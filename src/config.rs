@@ -102,6 +102,7 @@ impl std::fmt::Display for InstallSource {
 /// Supported LLM providers. `OpenAICompatible` covers Ollama and any
 /// endpoint that speaks the OpenAI chat completions API. `ChatGPT` is
 /// an alias for `OpenAI` intended for OAuth-based ChatGPT subscription use.
+/// `Cli` is for configs that shell out to vendor CLIs instead of HTTP API calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provider {
     #[serde(rename = "anthropic")]
@@ -114,6 +115,8 @@ pub enum Provider {
     OpenAICompatible,
     #[serde(rename = "gemini")]
     Gemini,
+    #[serde(rename = "cli")]
+    Cli,
 }
 
 impl Provider {
@@ -124,6 +127,7 @@ impl Provider {
             Provider::Anthropic => "ANTHROPIC_API_KEY",
             Provider::Gemini => "GEMINI_API_KEY",
             Provider::OpenAICompatible => "OPENAI_API_KEY",
+            Provider::Cli => "none",
         }
     }
 }
@@ -136,6 +140,7 @@ impl std::fmt::Display for Provider {
             Provider::ChatGPT => write!(f, "chatgpt"),
             Provider::OpenAICompatible => write!(f, "openai-compatible"),
             Provider::Gemini => write!(f, "gemini"),
+            Provider::Cli => write!(f, "cli"),
         }
     }
 }
@@ -149,8 +154,9 @@ impl std::str::FromStr for Provider {
             "chatgpt" => Ok(Provider::ChatGPT),
             "openai-compatible" => Ok(Provider::OpenAICompatible),
             "gemini" => Ok(Provider::Gemini),
+            "cli" => Ok(Provider::Cli),
             unknown => Err(anyhow::anyhow!(
-                "Unknown provider: {}. Valid: anthropic, openai, chatgpt, openai-compatible, gemini",
+                "Unknown provider: {}. Valid: anthropic, openai, chatgpt, openai-compatible, gemini, cli",
                 unknown
             )),
         }
@@ -253,6 +259,23 @@ pub struct LlmConfig {
     /// Use for provider-specific headers not covered by standard fields.
     #[serde(default)]
     pub extra_headers: Vec<String>,
+
+    // ── CLI provider fields (provider_type = "cli") ─────────────
+    /// CLI binary name or path (e.g., "claude", "codex", "gemini").
+    /// Only used when provider_type = "cli".
+    #[serde(default)]
+    pub cli_command: Option<String>,
+
+    /// Additional CLI arguments (e.g., ["-p", "", "--output-format", "json"]).
+    /// Only used when provider_type = "cli".
+    #[serde(default)]
+    pub cli_args: Vec<String>,
+
+    /// JSON field path to extract the response text from CLI output.
+    /// E.g., "response" extracts obj["response"]. If unset, uses raw stdout.
+    /// Only used when provider_type = "cli".
+    #[serde(default)]
+    pub cli_json_path: Option<String>,
 }
 
 fn default_network_retries() -> usize {
@@ -287,6 +310,7 @@ impl LlmConfig {
             Provider::OpenAI | Provider::ChatGPT => 8192,
             Provider::OpenAICompatible => 16384, // ollama and similar
             Provider::Gemini => 8192,
+            Provider::Cli => 16384, // generous default for CLI providers
         }
     }
 
@@ -504,7 +528,7 @@ pub struct GenerationConfig {
     #[serde(default = "default_true")]
     pub enable_security_scan: bool,
 
-    /// Max retries for review -> create feedback loop (default: 5)
+    /// Max retries for review -> create feedback loop (default: 10)
     #[serde(default = "default_review_max_retries")]
     pub review_max_retries: usize,
 
@@ -672,8 +696,8 @@ fn default_max_source_tokens() -> usize {
     100000
 }
 
-fn default_review_max_retries() -> usize {
-    5
+pub(crate) fn default_review_max_retries() -> usize {
+    10
 }
 
 impl GenerationConfig {
@@ -830,6 +854,25 @@ impl Config {
         Ok(config)
     }
 
+    /// Returns true if any configured LLM (main or per-stage) uses CLI model type.
+    /// Used to auto-disable parallel extraction (CLI providers need serial execution).
+    pub fn has_cli_provider(&self) -> bool {
+        if self.llm.provider == Provider::Cli {
+            return true;
+        }
+        let stage_llms = [
+            &self.generation.extract_llm,
+            &self.generation.map_llm,
+            &self.generation.learn_llm,
+            &self.generation.create_llm,
+            &self.generation.review_llm,
+            &self.generation.test_llm,
+        ];
+        stage_llms
+            .iter()
+            .any(|opt| opt.as_ref().is_some_and(|c| c.provider == Provider::Cli))
+    }
+
     /// Try to load config from a path.
     /// Returns Ok(None) if file doesn't exist, Ok(Some) if loaded, Err on parse failure.
     fn try_load_from_path<P: AsRef<Path>>(path: P) -> Result<Option<Self>> {
@@ -898,6 +941,9 @@ impl Default for Config {
                 oauth_client_secret_env: None,
                 oauth_credentials_env: None,
                 extra_headers: Vec::new(),
+                cli_command: None,
+                cli_args: Vec::new(),
+                cli_json_path: None,
             },
             generation: GenerationConfig::default(),
             prompts: PromptsConfig::default(),
@@ -1047,6 +1093,9 @@ mod tests {
             oauth_client_secret_env: None,
             oauth_credentials_env: None,
             extra_headers: Vec::new(),
+            cli_command: None,
+            cli_args: Vec::new(),
+            cli_json_path: None,
         };
         assert_eq!(llm.get_max_tokens(), 8192);
 
@@ -1077,7 +1126,7 @@ mod tests {
             test_mode: "thorough".to_string(),
             enable_review: true,
             enable_security_scan: true,
-            review_max_retries: 5,
+            review_max_retries: 10,
             extract_llm: None,
             map_llm: None,
             learn_llm: None,
@@ -1495,7 +1544,7 @@ test_custom = "test instructions"
     fn test_new_review_config_defaults() {
         let config = Config::default();
         assert!(config.generation.enable_review);
-        assert_eq!(config.generation.review_max_retries, 5);
+        assert_eq!(config.generation.review_max_retries, 10);
         assert!(config.generation.review_llm.is_none());
         assert!(config.prompts.review_custom.is_none());
     }
@@ -1674,6 +1723,7 @@ model = "gemini-2.5-pro"
             "openai-compatible"
         );
         assert_eq!(format!("{}", Provider::Gemini), "gemini");
+        assert_eq!(format!("{}", Provider::Cli), "cli");
     }
 
     #[test]
@@ -2074,5 +2124,108 @@ max_source_tokens = 50000
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.llm.extra_headers.len(), 2);
         assert_eq!(config.llm.extra_headers[0], "X-Custom: value");
+    }
+
+    // ── CLI provider config field tests ──────────────────────────
+
+    #[test]
+    fn test_cli_provider_deser() {
+        let toml = r#"
+[llm]
+provider_type = "cli"
+model = "gemini-3-pro-preview"
+cli_command = "gemini"
+cli_args = ["-p", "", "--output-format", "json"]
+cli_json_path = "response"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.llm.provider, Provider::Cli);
+        assert_eq!(config.llm.cli_command.as_deref(), Some("gemini"));
+        assert_eq!(
+            config.llm.cli_args,
+            vec!["-p", "", "--output-format", "json"]
+        );
+        assert_eq!(config.llm.cli_json_path.as_deref(), Some("response"));
+    }
+
+    #[test]
+    fn test_non_cli_provider_no_cli_fields() {
+        let toml = r#"
+[llm]
+provider_type = "anthropic"
+model = "claude-sonnet-4-6"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.llm.provider, Provider::Anthropic);
+        assert!(config.llm.cli_command.is_none());
+        assert!(config.llm.cli_args.is_empty());
+        assert!(config.llm.cli_json_path.is_none());
+    }
+
+    #[test]
+    fn test_has_cli_provider_default_is_false() {
+        let config = Config::default();
+        assert!(!config.has_cli_provider());
+    }
+
+    #[test]
+    fn test_has_cli_provider_main_llm() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::Cli;
+        assert!(config.has_cli_provider());
+    }
+
+    #[test]
+    fn test_has_cli_provider_stage_llm() {
+        let mut config = Config::default();
+        let mut stage_llm = config.llm.clone();
+        stage_llm.provider = Provider::Cli;
+        config.generation.extract_llm = Some(stage_llm);
+        assert!(config.has_cli_provider());
+    }
+
+    #[test]
+    fn test_cli_provider_default_api_key_env() {
+        assert_eq!(Provider::Cli.default_api_key_env(), "none");
+    }
+
+    #[test]
+    fn test_cli_provider_max_tokens() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::Cli;
+        assert_eq!(config.llm.get_max_tokens(), 16384);
+    }
+
+    #[test]
+    fn test_resolve_extra_body_non_object_json() {
+        let mut config = Config::default();
+        config.llm.extra_body_json = Some("[1, 2, 3]".to_string());
+        let err = config.llm.resolve_extra_body().unwrap_err();
+        assert!(
+            err.to_string().contains("must be a JSON object"),
+            "Should reject non-object JSON: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_extra_headers_skips_empty_key() {
+        let mut config = Config::default();
+        config.llm.extra_headers = vec![": value-only".to_string()];
+        let headers = config.llm.resolve_extra_headers().unwrap();
+        assert!(headers.is_empty(), "Empty key should be skipped");
+    }
+
+    #[test]
+    fn test_resolve_env_var_empty_value() {
+        // Set an env var to empty string — resolve_env_var should return None
+        let mut config = Config::default();
+        config.llm.oauth_client_id_env = Some("SKILLDO_TEST_EMPTY_VAR".to_string());
+        std::env::set_var("SKILLDO_TEST_EMPTY_VAR", "");
+        let result = config
+            .llm
+            .resolve_env_var(&config.llm.oauth_client_id_env)
+            .unwrap();
+        assert!(result.is_none(), "Empty env var should return None");
+        std::env::remove_var("SKILLDO_TEST_EMPTY_VAR");
     }
 }

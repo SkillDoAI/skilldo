@@ -35,6 +35,19 @@ pub enum Severity {
     Critical,
 }
 
+impl Severity {
+    /// Point deduction for a security finding of this severity.
+    pub fn deduction(self) -> i32 {
+        match self {
+            Self::Critical => 30,
+            Self::High => 15,
+            Self::Medium => 5,
+            Self::Low => 2,
+            Self::Info => 0,
+        }
+    }
+}
+
 impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -194,16 +207,7 @@ pub fn scan_skill(content: &str) -> ScanReport {
     dedup_findings(&mut findings);
 
     // Score: start at 100, deduct per finding weighted by severity
-    let deductions: i32 = findings
-        .iter()
-        .map(|f| match f.severity {
-            Severity::Critical => 30,
-            Severity::High => 15,
-            Severity::Medium => 5,
-            Severity::Low => 2,
-            Severity::Info => 0,
-        })
-        .sum();
+    let deductions: i32 = findings.iter().map(|f| f.severity.deduction()).sum();
 
     let score = (100i32 - deductions).clamp(0, 100) as u8;
 
@@ -525,6 +529,15 @@ print(response.json())
     // --- Display and count_by_severity unit tests ---
 
     #[test]
+    fn test_severity_deduction_values() {
+        assert_eq!(Severity::Critical.deduction(), 30);
+        assert_eq!(Severity::High.deduction(), 15);
+        assert_eq!(Severity::Medium.deduction(), 5);
+        assert_eq!(Severity::Low.deduction(), 2);
+        assert_eq!(Severity::Info.deduction(), 0);
+    }
+
+    #[test]
     fn test_severity_display_all_variants() {
         assert_eq!(Severity::Critical.to_string(), "critical");
         assert_eq!(Severity::High.to_string(), "high");
@@ -664,16 +677,7 @@ print(response.json())
 
         // Expected deductions: 2 Low * 2 + 2 Info * 0 = 4
         // Expected score: 100 - 4 = 96
-        let deductions: i32 = findings
-            .iter()
-            .map(|f| match f.severity {
-                Severity::Critical => 30,
-                Severity::High => 15,
-                Severity::Medium => 5,
-                Severity::Low => 2,
-                Severity::Info => 0,
-            })
-            .sum();
+        let deductions: i32 = findings.iter().map(|f| f.severity.deduction()).sum();
         let expected_score = (100i32 - deductions).clamp(0, 100) as u8;
         assert_eq!(expected_score, 96);
 

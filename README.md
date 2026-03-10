@@ -13,6 +13,7 @@ Skilldo automatically generates `SKILL.md` agent rules files for open-source lib
 - **Multi-provider** — Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, vLLM, etc.)
 - **Per-stage model mixing** — Use a cheap local model for extraction and a frontier cloud model for review. One config, multiple providers.
 - **OAuth 2.0 authentication** — Use your ChatGPT Plus/Pro or Google Workspace subscription instead of paying per-token API rates
+- **CLI provider mode** — Shell out to vendor CLIs (Claude Code, Codex, Gemini CLI) for subscription-based access without API keys
 - **Python + Go ecosystems** — Full pipeline support with language-specific parsers, code generators, and container images
 - **Free with local models** — Run the entire pipeline on Ollama with zero API cost
 - **28+ pre-generated skills** — Browse [`examples/skills/`](examples/skills/) for ready-to-use rules for popular Python libraries
@@ -39,6 +40,7 @@ The goal: make agent rules a standard part of every open-source package — like
   - [Supported Providers](#supported-providers)
   - [Example Config Files](#example-config-files)
   - [Authentication (OAuth 2.0)](#authentication-oauth-20)
+  - [CLI Provider Mode](#cli-provider-mode)
 - [Example Output](#example-output)
 - [Tips and Model Experience](#tips-and-model-experience)
 - [Language Support](#language-support)
@@ -440,6 +442,38 @@ skilldo auth logout             # Remove all stored tokens
 Tokens are stored at `~/.config/skilldo/tokens/{provider_name}.json` with restricted permissions (0600). Tokens auto-refresh when expired.
 
 Per-stage OAuth is supported — each pipeline stage can use a different provider and OAuth config.
+
+### CLI Provider Mode
+
+Shell out to vendor CLIs (Claude Code, Codex, Gemini CLI) instead of making HTTP API calls. Useful when you have a subscription (Claude Pro, ChatGPT Plus) but direct API access isn't available or violates ToS.
+
+```toml
+[llm]
+provider_type = "cli"
+model = "claude-sonnet-4-6"  # informational label
+cli_command = "claude"
+cli_args = ["-p", "--output-format", "json"]
+cli_json_path = "result"
+```
+
+The prompt is piped to the CLI via stdin. If `cli_json_path` is set, stdout is parsed as JSON and that path is extracted as the response text. Dot-notation is supported for nested fields (e.g., `"data.response"` traverses `{"data":{"response":"..."}}`).
+
+Parallel extraction is automatically disabled for CLI providers (vendor CLIs typically share a single auth session).
+
+Other CLI examples:
+
+```toml
+# Codex CLI
+provider_type = "cli"
+cli_command = "codex"
+cli_args = ["-a", "never", "exec", "--json"]
+
+# Gemini CLI
+provider_type = "cli"
+cli_command = "gemini"
+cli_args = ["-p", "", "--output-format", "json", "-m", "gemini-3-pro-preview", "-y"]
+cli_json_path = "response"
+```
 
 ## Example Output
 

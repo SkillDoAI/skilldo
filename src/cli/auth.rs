@@ -274,24 +274,39 @@ mod tests {
         std::env::remove_var("SKILLDO_TEST_AUTH_CID2");
     }
 
+    /// Create a minimal temp config file with no OAuth endpoints for testing.
+    /// Returns NamedTempFile so the file is auto-deleted when dropped.
+    fn empty_config_file() -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut f = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        write!(
+            f,
+            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n"
+        )
+        .unwrap();
+        f
+    }
+
     #[test]
     fn status_no_endpoints_prints_message() {
-        // Default config has no OAuth endpoints
-        let result = status(None);
+        let f = empty_config_file();
+        let result = status(Some(f.path().to_string_lossy().into_owned()));
         assert!(result.is_ok());
     }
 
     #[test]
     fn logout_no_endpoints_prints_message() {
-        let result = logout(None);
+        let f = empty_config_file();
+        let result = logout(Some(f.path().to_string_lossy().into_owned()));
         assert!(result.is_ok());
     }
 
     #[test]
     fn login_no_endpoints_errors() {
+        let f = empty_config_file();
         let result = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(login(None));
+            .block_on(login(Some(f.path().to_string_lossy().into_owned())));
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

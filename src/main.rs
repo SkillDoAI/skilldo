@@ -218,12 +218,12 @@ enum Commands {
         action: AuthAction,
     },
 
-    /// Quick LLM auth smoke test
+    /// Quick LLM auth smoke test (requires --config)
     #[command(hide = true)]
     HelloWorld {
-        /// Path to config file
+        /// Path to config file (required)
         #[arg(long)]
-        config: Option<String>,
+        config: String,
     },
 }
 
@@ -394,7 +394,7 @@ async fn main() -> Result<()> {
             }
         },
         Commands::HelloWorld { config } => {
-            let cfg = crate::config::Config::load_with_path(config)?;
+            let cfg = crate::config::Config::load_with_path(Some(config))?;
             let client = crate::llm::factory::create_client(&cfg, false).await?;
             println!(
                 "\u{1F426} Asking {} ({})...\n",
@@ -1397,9 +1397,10 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_hello_world() {
-        let cli = Cli::try_parse_from(["skilldo", "hello-world"]).unwrap();
-        assert!(matches!(cli.command, Commands::HelloWorld { config: None }));
+    fn test_dispatch_hello_world_requires_config() {
+        // Without --config, parsing should fail (config is required)
+        let result = Cli::try_parse_from(["skilldo", "hello-world"]);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1408,7 +1409,7 @@ mod tests {
         let Commands::HelloWorld { config } = cli.command else {
             panic!("Expected HelloWorld command");
         };
-        assert_eq!(config, Some("test.toml".to_string()));
+        assert_eq!(config, "test.toml".to_string());
     }
 
     #[test]

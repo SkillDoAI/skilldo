@@ -58,7 +58,10 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         config.llm.provider, config.llm.model
     ));
 
-    // 3. Check main API key env var
+    // 3. Validate CLI provider has cli_command set
+    check_cli_command("main", &config.llm, &mut results);
+
+    // 4. Check main API key env var
     check_api_key(
         &config.llm.api_key_env,
         "Main LLM",
@@ -67,7 +70,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         &mut results,
     );
 
-    // 4. Check base_url for openai-compatible
+    // 5. Check base_url for openai-compatible
     if config.llm.provider == Provider::OpenAICompatible {
         if config.llm.base_url.is_some() {
             results.pass("Base URL configured for openai-compatible provider".to_string());
@@ -78,13 +81,13 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         }
     }
 
-    // 5. Check generation settings
+    // 6. Check generation settings
     results.pass(format!(
         "Generation: max_retries={}, max_source_tokens={}",
         config.generation.max_retries, config.generation.max_source_tokens
     ));
 
-    // 6. Check test agent
+    // 7. Check test agent
     if config.generation.enable_test {
         results.pass(format!(
             "test agent enabled (mode: {})",
@@ -94,6 +97,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         // Check test agent LLM override if configured
         if let Some(ref test_llm) = config.generation.test_llm {
             check_stage_provider("test", &test_llm.provider, &test_llm.model, &mut results);
+            check_cli_command("test", test_llm, &mut results);
             check_api_key(
                 &test_llm.api_key_env,
                 "test LLM",
@@ -119,6 +123,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
                 &review_llm.model,
                 &mut results,
             );
+            check_cli_command("review", review_llm, &mut results);
             check_api_key(
                 &review_llm.api_key_env,
                 "review LLM",
@@ -141,6 +146,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
     for (name, llm_opt) in &stage_llms {
         if let Some(llm) = llm_opt {
             check_stage_provider(name, &llm.provider, &llm.model, &mut results);
+            check_cli_command(name, llm, &mut results);
             check_api_key(
                 &llm.api_key_env,
                 &format!("{} LLM", name),
@@ -321,6 +327,26 @@ fn check_stage_provider(
     ));
 }
 
+fn check_cli_command(stage_name: &str, llm: &crate::config::LlmConfig, results: &mut CheckResult) {
+    if llm.provider != Provider::Cli {
+        return;
+    }
+    match &llm.cli_command {
+        Some(cmd) if !cmd.trim().is_empty() => {
+            results.pass(format!(
+                "{}: CLI provider cli_command configured",
+                stage_name
+            ));
+        }
+        _ => {
+            results.error(format!(
+                "{} CLI provider requires cli_command (e.g. cli_command = \"claude\")",
+                stage_name
+            ));
+        }
+    }
+}
+
 fn check_api_key(
     api_key_env: &Option<String>,
     label: &str,
@@ -328,6 +354,11 @@ fn check_api_key(
     is_local: bool,
     results: &mut CheckResult,
 ) {
+    // CLI providers don't use API keys at all
+    if *provider == Provider::Cli {
+        results.pass(format!("{}: CLI provider (no API key needed)", label));
+        return;
+    }
     // Only downgrade missing/empty API key to a warning for truly local endpoints.
     let key_optional = is_local;
     match api_key_env {
@@ -1629,5 +1660,116 @@ runtime = "nonexistent_runtime_xyz"
     fn test_is_likely_local_provider_non_compat() {
         let config = Config::default(); // Anthropic
         assert!(!is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_check_api_key_cli_provider_skips() {
+        let mut results = CheckResult::new();
+        check_api_key(&None, "Test CLI", &Provider::Cli, false, &mut results);
+        assert!(results.errors.is_empty(), "CLI provider should not error");
+        assert!(
+            results.passed.iter().any(|p| p.contains("CLI provider")),
+            "Should report CLI provider pass"
+        );
+    }
+
+    #[test]
+    fn test_check_stage_provider_reports_override() {
+        let mut results = CheckResult::new();
+        check_stage_provider(
+            "test",
+            &Provider::Anthropic,
+            "claude-sonnet-4-6",
+            &mut results,
+        );
+        assert!(
+            results
+                .passed
+                .iter()
+                .any(|p| p.contains("test LLM override")),
+            "Should report stage provider override"
+        );
+    }
+
+    #[test]
+    fn test_cli_provider_missing_cli_command_errors() {
+        let mut f = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        use std::io::Write;
+        write!(f, "[llm]\nprovider_type = \"cli\"\nmodel = \"test\"\n").unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        let result = run(Some(path), false);
+        // Should succeed (non-strict) but report the error internally
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cli_provider_with_cli_command_passes() {
+        let mut f = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        use std::io::Write;
+        write!(
+            f,
+            "[llm]\nprovider_type = \"cli\"\nmodel = \"test\"\ncli_command = \"claude\"\n"
+        )
+        .unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        let result = run(Some(path), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_cli_command_empty_string_errors() {
+        let mut results = CheckResult::new();
+        let config: crate::config::Config =
+            toml::from_str("[llm]\nprovider_type = \"cli\"\nmodel = \"x\"\ncli_command = \"  \"")
+                .unwrap();
+        check_cli_command("test", &config.llm, &mut results);
+        assert!(
+            results.errors.iter().any(|e| e.contains("cli_command")),
+            "Empty/whitespace cli_command should error"
+        );
+    }
+
+    #[test]
+    fn test_check_cli_command_per_stage_validation() {
+        let mut f = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        use std::io::Write;
+        write!(
+            f,
+            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n\
+             [generation.extract_llm]\nprovider_type = \"cli\"\nmodel = \"x\"\n"
+        )
+        .unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        // Non-strict: succeeds but would contain error for missing cli_command
+        let result = run(Some(path), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_cli_command_non_cli_skips() {
+        let mut results = CheckResult::new();
+        let config = crate::config::Config::default(); // Anthropic
+        check_cli_command("main", &config.llm, &mut results);
+        assert!(results.errors.is_empty(), "Non-CLI provider should skip");
+        assert!(results.passed.is_empty(), "Non-CLI provider should skip");
+    }
+
+    #[test]
+    fn test_check_api_key_none_env_var() {
+        let mut results = CheckResult::new();
+        check_api_key(
+            &Some("none".to_string()),
+            "Local",
+            &Provider::OpenAICompatible,
+            true,
+            &mut results,
+        );
+        assert!(
+            results
+                .passed
+                .iter()
+                .any(|p| p.contains("no API key needed")),
+            "Should pass for 'none' api key env"
+        );
     }
 }
