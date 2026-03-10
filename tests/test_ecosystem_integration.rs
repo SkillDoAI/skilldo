@@ -94,9 +94,24 @@ async fn test_detect_then_collect_with_budget() -> Result<()> {
 // ── Unsupported languages bail cleanly ───────────────────────────────────
 
 #[tokio::test]
-async fn test_collect_javascript_not_yet_supported() {
+async fn test_collect_javascript_minimal() {
     let tmp = TempDir::new().unwrap();
-    fs::write(tmp.path().join("package.json"), "{}").unwrap();
+    fs::write(
+        tmp.path().join("package.json"),
+        r#"{"name": "test-pkg", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("index.js"),
+        "module.exports = function() { return 42; };\n",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join("test")).unwrap();
+    fs::write(
+        tmp.path().join("test/index.test.js"),
+        "const assert = require('assert');\nassert.strictEqual(1, 1);\n",
+    )
+    .unwrap();
 
     let language = detect_language(tmp.path()).unwrap();
     assert_eq!(language, Language::JavaScript);
@@ -104,13 +119,12 @@ async fn test_collect_javascript_not_yet_supported() {
     let collector = Collector::new(tmp.path(), language);
     let result = collector.collect().await;
 
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("not yet implemented"),
-        "Expected 'not yet implemented' error, got: {}",
-        err
-    );
+    assert!(result.is_ok(), "collect failed: {:?}", result.unwrap_err());
+    let data = result.unwrap();
+    assert_eq!(data.package_name, "test-pkg");
+    assert_eq!(data.version, "1.0.0");
+    assert!(!data.source_content.is_empty());
+    assert!(!data.test_content.is_empty());
 }
 
 #[tokio::test]
