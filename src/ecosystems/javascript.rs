@@ -43,13 +43,6 @@ impl JsHandler {
         let mut files = Vec::new();
         self.collect_js_files(&self.repo_path, &mut files, 0, true)?;
 
-        if files.is_empty() {
-            bail!(
-                "No tests found in {}. Tests are required for generating skills.",
-                self.repo_path.display()
-            );
-        }
-
         info!("Found {} JS/TS test files", files.len());
         Ok(files)
     }
@@ -58,11 +51,19 @@ impl JsHandler {
     pub fn find_docs(&self) -> Result<Vec<PathBuf>> {
         let mut docs = Vec::new();
 
-        for name in &["README.md", "README.rst", "README.txt", "README"] {
-            let path = self.repo_path.join(name);
-            if path.exists() {
-                docs.push(path);
-                break;
+        // Case-insensitive README detection (handles readme.md, Readme.md, etc.)
+        if let Ok(entries) = fs::read_dir(&self.repo_path) {
+            for entry in entries.flatten() {
+                if let Ok(ft) = entry.file_type() {
+                    if ft.is_file() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if name.to_ascii_lowercase().starts_with("readme") {
+                                docs.push(entry.path());
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -768,17 +769,13 @@ mod tests {
     // ── Coverage gap tests ────────────────────────────────────────────
 
     #[test]
-    fn test_find_test_files_empty_fails() {
+    fn test_find_test_files_empty_returns_empty_vec() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("index.js"), "module.exports = {};\n").unwrap();
 
         let handler = JsHandler::new(dir.path());
-        let result = handler.find_test_files();
-        assert!(result.is_err());
-        assert!(
-            result.unwrap_err().to_string().contains("No tests found"),
-            "should bail with 'No tests found'"
-        );
+        let result = handler.find_test_files().unwrap();
+        assert!(result.is_empty(), "no tests should return empty Vec");
     }
 
     #[test]
