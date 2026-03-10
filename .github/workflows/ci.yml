@@ -252,7 +252,7 @@ jobs:
           done
 
           # 5. No security lint keywords in prose (basic sanity check)
-          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -Pn '(?<!`)rm -rf /(?!tmp)'; then
+          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -P '(?<!`)rm -rf /(?!tmp)'; then
             echo "::error::Security: destructive command found in output"
             ERRORS=$((ERRORS + 1))
           else
@@ -337,7 +337,7 @@ jobs:
           done
 
           # No security lint keywords in prose (basic sanity check)
-          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -Pn '(?<!`)rm -rf /(?!tmp)'; then
+          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -P '(?<!`)rm -rf /(?!tmp)'; then
             echo "::error::Go: destructive command found in output"
             ERRORS=$((ERRORS + 1))
           else
@@ -420,7 +420,7 @@ jobs:
             fi
           done
 
-          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -Pn '(?<!`)rm -rf /(?!tmp)'; then
+          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -P '(?<!`)rm -rf /(?!tmp)'; then
             echo "::error::JS: destructive command found in output"
             ERRORS=$((ERRORS + 1))
           else

@@ -185,7 +185,7 @@ impl JsHandler {
     }
 
     /// Extract dependency names from package.json `dependencies` (not devDependencies).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn extract_dependencies(&self) -> Result<Vec<String>> {
         let pkg = self.read_package_json()?;
         let deps = match pkg["dependencies"].as_object() {
