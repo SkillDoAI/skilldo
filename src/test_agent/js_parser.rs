@@ -524,6 +524,21 @@ const express = require('express');
     }
 
     #[test]
+    fn npm_install_skips_mid_flags() {
+        let parser = JsParser;
+        // Flags appearing after package names (e.g. --save-exact) should be skipped
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\nnpm install express --save-exact body-parser\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(deps.contains(&"express".to_string()));
+        assert!(deps.contains(&"body-parser".to_string()));
+        assert!(
+            !deps.iter().any(|d| d.starts_with('-')),
+            "flags should not appear as deps: {:?}",
+            deps
+        );
+    }
+
+    #[test]
     fn import_multiline_destructured() {
         let parser = JsParser;
         let skill = r#"---

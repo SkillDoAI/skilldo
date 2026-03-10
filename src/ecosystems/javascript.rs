@@ -383,6 +383,20 @@ mod tests {
     use super::*;
     use std::fs;
 
+    // ── is_js_file free function ──────────────────────────────────────
+
+    #[test]
+    fn test_is_js_file() {
+        assert!(is_js_file("foo.js"));
+        assert!(is_js_file("bar.ts"));
+        assert!(is_js_file("baz.jsx"));
+        assert!(is_js_file("qux.tsx"));
+        assert!(!is_js_file("foo.py"));
+        assert!(!is_js_file("foo.rs"));
+        assert!(!is_js_file("foo.json"));
+        assert!(!is_js_file("foo"));
+    }
+
     // ── File discovery tests ──────────────────────────────────────────
 
     #[test]
