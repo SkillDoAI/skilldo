@@ -63,8 +63,9 @@ impl<'a> JsCodeGenerator<'a> {
                 if let Some(start) = Self::find_opening_fence(trimmed, &tagged_fence) {
                     let code_start = start + tagged_fence.len();
                     let after = &trimmed[code_start..];
-                    let newline_pos = after.find('\n').unwrap_or(0);
-                    let actual_start = code_start + newline_pos;
+                    // Skip to the line after the tag (past the first \n)
+                    let actual_start =
+                        code_start + after.find('\n').map(|p| p + 1).unwrap_or(after.len());
                     if let Some(end) = Self::find_closing_fence(&trimmed[actual_start..], fence) {
                         let code = trimmed[actual_start..actual_start + end].trim();
                         return Ok(code.to_string());
@@ -79,16 +80,76 @@ impl<'a> JsCodeGenerator<'a> {
                 let code_start = start + fence.len();
                 if let Some(end) = Self::find_closing_fence(&trimmed[code_start..], fence) {
                     let mut code = trimmed[code_start..code_start + end].trim();
-                    // Strip language tag line: any single word on the first line
-                    // that looks like a language identifier (e.g., python, ruby).
-                    // LLMs occasionally emit wrong tags; leaving them would be a
-                    // syntax error, so strip any single-word first line.
+                    // Strip known language tags that LLMs emit on generic fences.
+                    // Comprehensive list to avoid leaving non-JS tags as code.
                     if let Some((first_line, rest)) = code.split_once('\n') {
-                        let tag = first_line.trim();
-                        if !tag.is_empty()
-                            && !tag.contains(' ')
-                            && tag.chars().all(|c| c.is_alphanumeric() || c == '-')
-                        {
+                        let tag = first_line.trim().to_ascii_lowercase();
+                        const LANG_TAGS: &[&str] = &[
+                            "javascript",
+                            "js",
+                            "typescript",
+                            "ts",
+                            "jsx",
+                            "tsx",
+                            "python",
+                            "py",
+                            "ruby",
+                            "rb",
+                            "go",
+                            "golang",
+                            "rust",
+                            "java",
+                            "c",
+                            "cpp",
+                            "csharp",
+                            "cs",
+                            "swift",
+                            "kotlin",
+                            "php",
+                            "perl",
+                            "lua",
+                            "r",
+                            "scala",
+                            "elixir",
+                            "haskell",
+                            "bash",
+                            "sh",
+                            "shell",
+                            "zsh",
+                            "fish",
+                            "powershell",
+                            "ps1",
+                            "sql",
+                            "html",
+                            "css",
+                            "scss",
+                            "less",
+                            "xml",
+                            "svg",
+                            "json",
+                            "yaml",
+                            "yml",
+                            "toml",
+                            "ini",
+                            "conf",
+                            "text",
+                            "txt",
+                            "plain",
+                            "plaintext",
+                            "markdown",
+                            "md",
+                            "diff",
+                            "patch",
+                            "log",
+                            "csv",
+                            "node",
+                            "deno",
+                            "bun",
+                            "esm",
+                            "cjs",
+                            "mjs",
+                        ];
+                        if LANG_TAGS.contains(&tag.as_str()) {
                             code = rest.trim();
                         }
                     }
