@@ -203,11 +203,11 @@ impl Collector {
     async fn collect_javascript(&self) -> Result<CollectedData> {
         let handler = JsHandler::new(&self.repo_path);
 
-        let example_paths = handler.find_example_files()?;
+        let example_paths = handler.find_examples()?;
         let test_paths = handler.find_test_files()?;
-        let doc_paths = handler.find_doc_files()?;
+        let doc_paths = handler.find_docs()?;
         let source_paths = handler.find_source_files()?;
-        let changelog_path = handler.find_changelog_files();
+        let changelog_path = handler.find_changelog();
         let version = handler.extract_version()?;
         let license = handler.detect_license();
         let project_urls = handler.extract_project_urls();

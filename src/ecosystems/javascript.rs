@@ -55,7 +55,7 @@ impl JsHandler {
     }
 
     /// Find documentation files (.md, excluding node_modules).
-    pub fn find_doc_files(&self) -> Result<Vec<PathBuf>> {
+    pub fn find_docs(&self) -> Result<Vec<PathBuf>> {
         let mut docs = Vec::new();
 
         for name in &["README.md", "README.rst", "README.txt", "README"] {
@@ -78,7 +78,7 @@ impl JsHandler {
     }
 
     /// Find example files (examples/, example/, demo/, demos/ dirs).
-    pub fn find_example_files(&self) -> Result<Vec<PathBuf>> {
+    pub fn find_examples(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
 
         for dir_name in &["examples", "example", "demo", "demos"] {
@@ -95,7 +95,7 @@ impl JsHandler {
     }
 
     /// Find changelog file at repo root.
-    pub fn find_changelog_files(&self) -> Option<PathBuf> {
+    pub fn find_changelog(&self) -> Option<PathBuf> {
         for name in &["CHANGELOG.md", "CHANGES.md", "HISTORY.md"] {
             let path = self.repo_path.join(name);
             if path.is_file() {
@@ -334,24 +334,11 @@ impl JsHandler {
 
     /// Check if a directory name should be excluded from traversal.
     fn is_excluded_dir(name: &str) -> bool {
-        matches!(
-            name,
-            "node_modules"
-                | ".next"
-                | "dist"
-                | "build"
-                | ".turbo"
-                | "coverage"
-                | ".nuxt"
-                | ".output"
-                | ".git"
-                | ".github"
-                | ".vscode"
-        ) || name.starts_with('.')
+        name.starts_with('.') || matches!(name, "node_modules" | "dist" | "build" | "coverage")
     }
 
     /// File priority for sorting: index/main files first, then src/lib, then rest.
-    fn file_priority(&self, path: &Path) -> (i32, PathBuf) {
+    fn file_priority(&self, path: &Path) -> i32 {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         let stem = Path::new(name)
@@ -361,7 +348,7 @@ impl JsHandler {
 
         // Priority 0: index.js, index.ts, main.js, main.ts (any extension combo)
         if matches!(stem, "index" | "main") {
-            return (0, path.to_path_buf());
+            return 0;
         }
 
         // Priority 1: files in src/ or lib/ directories
@@ -370,11 +357,11 @@ impl JsHandler {
             let s = c.as_os_str().to_str().unwrap_or("");
             matches!(s, "src" | "lib")
         }) {
-            return (1, path.to_path_buf());
+            return 1;
         }
 
         // Priority 2: everything else
-        (2, path.to_path_buf())
+        2
     }
 }
 
@@ -682,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_changelog_files() {
+    fn test_find_changelog() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("CHANGELOG.md"),
@@ -691,7 +678,7 @@ mod tests {
         .unwrap();
 
         let handler = JsHandler::new(dir.path());
-        let changelog = handler.find_changelog_files();
+        let changelog = handler.find_changelog();
         assert!(changelog.is_some());
         assert_eq!(
             changelog.unwrap().file_name().unwrap().to_str().unwrap(),

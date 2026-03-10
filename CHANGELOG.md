@@ -3,6 +3,17 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.3.0
+
+- Added full JavaScript/TypeScript ecosystem support — package.json metadata, npm dependency management, `node:24-alpine` container image, bare-metal (`node` + `npm`) validation
+- Added `JsHandler` ecosystem handler with file discovery, priority scoring, license detection, and project URL extraction
+- Added `JsParser` for extracting imports (CommonJS `require()` and ES Module `import`), detecting 42 Node.js built-in modules, normalizing scoped/subpath packages
+- Added `JsCodeGenerator` for extracting code from js/javascript/ts/typescript/jsx/tsx fenced blocks
+- Added `NodeExecutor` for bare-metal JavaScript test execution
+- Added npm subpath import normalization — collapses `lodash/chunk` → `lodash` and `@scope/pkg/utils` → `@scope/pkg` for correct `npm install`
+- Added JavaScript e2e smoke test in CI (lodash 4.17.21 via Cerebras)
+- Fixed npm install command construction — `Command::args()` doesn't use a shell, so quotes passed as literal characters
+
 ## 0.2.5
 
 - Added `provider_type = "cli"` — shell out to vendor CLIs (claude, codex, gemini) instead of HTTP API calls for subscription-based model access
