@@ -9,6 +9,7 @@ use tracing::{info, warn};
 
 use crate::detector::Language;
 use crate::ecosystems::go::GoHandler;
+use crate::ecosystems::javascript::JsHandler;
 use crate::ecosystems::python::{pyproject_project_field, PythonHandler};
 
 /// Find the largest byte index <= `index` that is a char boundary in `s`.
@@ -55,8 +56,9 @@ impl Collector {
         match self.language {
             Language::Python => self.collect_python().await,
             Language::Go => self.collect_go().await,
+            Language::JavaScript => self.collect_javascript().await,
             _ => bail!(
-                "Support for {:?} not yet implemented. Currently Python and Go are supported.",
+                "Support for {:?} not yet implemented. Currently Python, Go, and JavaScript/TypeScript are supported.",
                 self.language
             ),
         }
@@ -181,7 +183,79 @@ impl Collector {
         };
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
-        let package_name = handler.get_package_name()?;
+        let mut package_name = handler.get_package_name()?;
+        if crate::util::sanitize_dep_name(&package_name).is_err() {
+            warn!(
+                "Go package name '{}' contains unexpected characters, using 'unknown'",
+                package_name
+            );
+            package_name = "unknown".to_string();
+        }
+
+        Ok(CollectedData {
+            package_name,
+            version,
+            license,
+            project_urls,
+            language: self.language.clone(),
+            source_file_count: source_paths.len(),
+            examples_content,
+            test_content,
+            docs_content,
+            source_content,
+            changelog_content,
+        })
+    }
+
+    async fn collect_javascript(&self) -> Result<CollectedData> {
+        let handler = JsHandler::new(&self.repo_path);
+
+        let example_paths = handler.find_examples()?;
+        let test_paths = handler.find_test_files()?;
+        let doc_paths = handler.find_docs()?;
+        let source_paths = handler.find_source_files()?;
+        let changelog_path = handler.find_changelog();
+        let version = handler.extract_version()?;
+        let license = handler.detect_license();
+        let project_urls = handler.extract_project_urls();
+
+        // Same budget allocation as Python/Go
+        let budget = self.max_source_chars;
+        let examples_budget = budget * 30 / 100;
+        let test_budget = budget * 30 / 100;
+        let docs_budget = budget * 20 / 100;
+        let changelog_budget = budget * 5 / 100;
+
+        let examples_content = Self::read_files(&example_paths, examples_budget)?;
+        let test_content = Self::read_files(&test_paths, test_budget)?;
+        let docs_content = Self::read_files(&doc_paths, docs_budget)?;
+        let changelog_content = if let Some(path) = changelog_path {
+            Self::read_file_limited(&path, changelog_budget)?
+        } else {
+            String::new()
+        };
+
+        let fixed_actual = examples_content.len()
+            + test_content.len()
+            + docs_content.len()
+            + changelog_content.len();
+        let remaining = budget.saturating_sub(fixed_actual);
+        let source_budget = match source_paths.len() {
+            n if n > 2000 => remaining,
+            n if n > 1000 => remaining * 60 / 100,
+            n if n > 300 => remaining * 40 / 100,
+            _ => remaining,
+        };
+        let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
+
+        let mut package_name = handler.extract_package_name()?;
+        if crate::util::sanitize_dep_name(&package_name).is_err() {
+            warn!(
+                "JS package name '{}' contains unexpected characters, using 'unknown'",
+                package_name
+            );
+            package_name = "unknown".to_string();
+        }
 
         Ok(CollectedData {
             package_name,
@@ -1075,7 +1149,7 @@ setup(
     #[tokio::test]
     async fn test_collect_unsupported_language() {
         let dir = TempDir::new().unwrap();
-        let c = Collector::new(dir.path(), Language::JavaScript);
+        let c = Collector::new(dir.path(), Language::Rust);
         let result = c.collect().await;
         assert!(result.is_err());
         assert!(result
@@ -1399,14 +1473,91 @@ setup(
     // -- collect: unsupported languages --
 
     #[tokio::test]
-    async fn test_collect_javascript_unsupported() {
+    async fn test_collect_javascript_minimal_project() {
         let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"test-lib","version":"1.0.0","license":"MIT"}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("index.js"),
+            "module.exports = function() { return 42; };\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("__tests__")).unwrap();
+        fs::write(
+            dir.path().join("__tests__").join("index.test.js"),
+            "const lib = require('../index');\nconsole.log(lib());\n",
+        )
+        .unwrap();
+
         let c = Collector::new(dir.path(), Language::JavaScript);
-        let result = c.collect().await;
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("JavaScript"));
-        assert!(msg.contains("not yet implemented"));
+        let data = c.collect().await.unwrap();
+
+        assert_eq!(data.language, Language::JavaScript);
+        assert_eq!(data.package_name, "test-lib");
+        assert_eq!(data.version, "1.0.0");
+        assert_eq!(data.license, Some("MIT".to_string()));
+        assert!(!data.source_content.is_empty());
+        assert!(data.source_file_count >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_collect_javascript_with_changelog_and_urls() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"my-lib","version":"2.0.0","license":"Apache-2.0","homepage":"https://example.com","bugs":"https://example.com/issues","repository":"https://example.com/repo"}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("index.js"), "exports.x = 1;\n").unwrap();
+        fs::write(
+            dir.path().join("CHANGELOG.md"),
+            "# Changelog\n## 2.0.0\n- Initial release\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::JavaScript);
+        let data = c.collect().await.unwrap();
+
+        assert_eq!(data.version, "2.0.0");
+        assert_eq!(data.license, Some("Apache-2.0".to_string()));
+        assert!(!data.changelog_content.is_empty());
+        assert!(data.project_urls.iter().any(|(k, _)| k == "Homepage"));
+        assert!(data.project_urls.iter().any(|(k, _)| k == "Issues"));
+        assert!(data.project_urls.iter().any(|(k, _)| k == "Repository"));
+    }
+
+    #[tokio::test]
+    async fn test_collect_javascript_no_changelog() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"no-cl","version":"0.1.0"}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("lib.js"), "module.exports = {};\n").unwrap();
+
+        let c = Collector::new(dir.path(), Language::JavaScript);
+        let data = c.collect().await.unwrap();
+
+        assert!(data.changelog_content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_collect_javascript_fallback_package_name() {
+        // package.json with no "name" field — should fall back to dir name
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"version":"1.0.0"}"#).unwrap();
+        fs::write(dir.path().join("index.js"), "exports.x = 1;\n").unwrap();
+
+        let c = Collector::new(dir.path(), Language::JavaScript);
+        let data = c.collect().await.unwrap();
+
+        // Falls back to directory name, which should pass sanitize_dep_name
+        assert!(!data.package_name.is_empty());
+        assert_ne!(data.package_name, "unknown");
     }
 
     #[tokio::test]

@@ -213,6 +213,34 @@ mod tests {
     }
 
     #[test]
+    fn retry_prompt_truncates_long_error() {
+        let long_error = "x".repeat(3000);
+        let prompt = build_retry_prompt(
+            &sample_pattern(),
+            &TEST_ENV,
+            "old code",
+            &long_error,
+            None,
+            None,
+        );
+        // Error should be truncated to ~1500 chars, not the full 3000
+        assert!(!prompt.contains(&"x".repeat(2000)));
+        assert!(prompt.contains(&"x".repeat(1000)));
+    }
+
+    #[test]
+    fn retry_prompt_truncates_at_utf8_boundary() {
+        // Build a string with multi-byte chars right around the truncation point
+        let mut error = "a".repeat(1498);
+        error.push('é'); // 2-byte UTF-8 char, puts boundary at 1500
+        error.push_str(&"b".repeat(500));
+        let prompt =
+            build_retry_prompt(&sample_pattern(), &TEST_ENV, "old code", &error, None, None);
+        // Should not panic on truncation and should contain the leading 'a's
+        assert!(prompt.contains(&"a".repeat(100)));
+    }
+
+    #[test]
     fn retry_prompt_without_extras() {
         let prompt = build_retry_prompt(
             &sample_pattern(),

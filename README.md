@@ -14,7 +14,7 @@ Skilldo automatically generates `SKILL.md` agent rules files for open-source lib
 - **Per-stage model mixing** — Use a cheap local model for extraction and a frontier cloud model for review. One config, multiple providers.
 - **OAuth 2.0 authentication** — Use your ChatGPT Plus/Pro or Google Workspace subscription instead of paying per-token API rates
 - **CLI provider mode** — Shell out to vendor CLIs (Claude Code, Codex, Gemini CLI) for subscription-based access without API keys
-- **Python + Go ecosystems** — Full pipeline support with language-specific parsers, code generators, and container images
+- **Python, Go, and JavaScript/TypeScript ecosystems** — Full pipeline support with language-specific parsers, code generators, and container images
 - **Free with local models** — Run the entire pipeline on Ollama with zero API cost
 - **28+ pre-generated skills** — Browse [`examples/skills/`](examples/skills/) for ready-to-use rules for popular Python libraries
 
@@ -521,12 +521,12 @@ Generation gets you 90-95% of the way to a good SKILL.md — a validated, well-s
 |----------|--------|-------|
 | Python | Full support | PyPI, setup.py, pyproject.toml, uv environments, container or bare-metal (`uv` + `python3`) validation |
 | Go | Full support | go.mod, Go modules, container (`golang:1.25-alpine`) or bare-metal (`go` toolchain) validation |
-| JavaScript/TypeScript | Detection only | package.json detected, ecosystem handler planned |
+| JavaScript/TypeScript | Full support | package.json, npm, container (`node:24-alpine`) or bare-metal (`node` + `npm`) validation |
 | Rust | Detection only | Cargo.toml detected, ecosystem handler planned |
 
-Both Python and Go support **bare-metal execution** — run test validation directly on the host without Docker/Podman. Set `execution_mode = "bare-metal"` in `[generation.container]`. This requires the language toolchain installed locally (`uv` + `python3` for Python, `go` for Go).
+Python, Go, and JavaScript/TypeScript support **bare-metal execution** — run test validation directly on the host without Docker/Podman. Set `execution_mode = "bare-metal"` in `[generation.container]`. This requires the language toolchain installed locally (`uv` + `python3` for Python, `go` for Go, `node` + `npm` for JS/TS).
 
-Full ecosystem handlers for JS/TS and Rust are planned.
+A full ecosystem handler for Rust is planned.
 
 ## Building from Source
 

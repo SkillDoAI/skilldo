@@ -362,6 +362,162 @@ impl LanguageExecutor for GoExecutor {
     }
 }
 
+/// Node.js executor — runs `node test.js` in a temp directory with `npm install`
+pub struct NodeExecutor {
+    timeout_secs: u64,
+}
+
+impl NodeExecutor {
+    pub fn new() -> Self {
+        Self { timeout_secs: 60 }
+    }
+
+    pub fn with_timeout(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self
+    }
+
+    /// Check if node is available in PATH
+    async fn check_node_available() -> bool {
+        Command::new("node")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// Check if npm is available in PATH
+    async fn check_npm_available() -> bool {
+        Command::new("npm")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+impl Default for NodeExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageExecutor for NodeExecutor {
+    async fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
+        info!(
+            "Setting up Node.js environment with {} dependencies",
+            deps.len()
+        );
+
+        if !Self::check_node_available().await {
+            bail!("node is not installed or not in PATH");
+        }
+
+        let temp_dir = TempDir::new().context("Failed to create temp directory")?;
+        debug!("Created temp directory: {}", temp_dir.path().display());
+
+        // Initialize package.json with "type":"module" so ESM import syntax works.
+        let package_json =
+            r#"{"name":"skilldo-test","version":"0.1.0","private":true,"type":"module"}"#;
+        fs::write(temp_dir.path().join("package.json"), package_json)
+            .context("Failed to write package.json")?;
+
+        // npm install for each dependency
+        // No shell quoting needed — Command passes args directly to the process.
+        // sanitize_dep_name already rejects shell metacharacters, and `--` prevents
+        // flag injection.
+        if !deps.is_empty() {
+            if !Self::check_npm_available().await {
+                bail!("npm is not installed or not in PATH");
+            }
+            for dep in deps {
+                sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+            }
+
+            info!("Installing Node.js dependencies: {}", deps.join(", "));
+            let mut npm_cmd = Command::new("npm");
+            npm_cmd
+                .args([
+                    "install",
+                    "--no-save",
+                    "--ignore-scripts",
+                    "--no-audit",
+                    "--no-fund",
+                    "--",
+                ])
+                .args(deps)
+                .current_dir(temp_dir.path());
+            let npm_output = run_cmd_with_timeout(npm_cmd, Duration::from_secs(120)).await?;
+            if !npm_output.status.success() {
+                let stderr = String::from_utf8_lossy(&npm_output.stderr);
+                bail!("npm install failed: {}", stderr);
+            }
+        }
+
+        info!("Node.js environment setup complete");
+
+        Ok(ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: deps.to_vec(),
+        })
+    }
+
+    async fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
+        debug!("Running Node.js code ({} bytes)", code.len());
+
+        let script_path = env.temp_dir.path().join("test.js");
+        fs::write(&script_path, code).context("Failed to write test.js")?;
+
+        let timeout = Duration::from_secs(self.timeout_secs);
+        let mut node_cmd = Command::new("node");
+        node_cmd.arg("test.js").current_dir(env.temp_dir.path());
+
+        let result = run_cmd_with_timeout(node_cmd, timeout).await;
+
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    debug!("Node.js code execution passed");
+                    Ok(ExecutionResult::Pass(stdout))
+                } else {
+                    // Combine stdout + stderr for retry feedback — console.log()
+                    // output (the LLM's primary diagnostic channel) goes to stdout.
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let combined = format!("{stdout}\n{stderr}").trim().to_string();
+                    debug!("Node.js code execution failed");
+                    Ok(ExecutionResult::Fail(combined))
+                }
+            }
+            Err(e) => {
+                if crate::error::SkillDoError::is_timeout(&e) {
+                    warn!(
+                        "Node.js code execution timed out after {} seconds",
+                        self.timeout_secs
+                    );
+                    Ok(ExecutionResult::Timeout)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,6 +963,111 @@ func main() {
     #[tokio::test]
     async fn test_go_cleanup_is_noop() {
         let executor = GoExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        assert!(executor.cleanup(&env).await.is_ok());
+    }
+
+    // --- NodeExecutor tests ---
+
+    #[tokio::test]
+    async fn test_check_node_available() {
+        // Just check it doesn't panic - availability depends on system
+        let _ = NodeExecutor::check_node_available().await;
+    }
+
+    #[tokio::test]
+    async fn test_check_npm_available() {
+        // Just check it doesn't panic - availability depends on system
+        let _ = NodeExecutor::check_npm_available().await;
+    }
+
+    #[test]
+    fn test_node_executor_default() {
+        let executor = NodeExecutor::default();
+        assert_eq!(executor.timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_node_executor_with_timeout() {
+        let executor = NodeExecutor::new().with_timeout(30);
+        assert_eq!(executor.timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_node_executor_with_timeout_chained() {
+        let executor = NodeExecutor::new().with_timeout(120);
+        assert_eq!(executor.timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_node_executor_with_timeout_zero() {
+        let executor = NodeExecutor::new().with_timeout(0);
+        assert_eq!(executor.timeout_secs, 0);
+    }
+
+    #[tokio::test]
+    async fn test_node_setup_environment_no_deps() {
+        if !NodeExecutor::check_node_available().await {
+            return; // Skip if node not installed
+        }
+        let executor = NodeExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        assert!(env.temp_dir.path().exists());
+        assert!(env.temp_dir.path().join("package.json").exists());
+    }
+
+    #[tokio::test]
+    async fn test_node_run_simple_code() {
+        if !NodeExecutor::check_node_available().await {
+            return;
+        }
+        let executor = NodeExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"console.log("Hello from Node.js test");"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_pass());
+        if let ExecutionResult::Pass(output) = result {
+            assert!(output.contains("Hello from Node.js test"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_node_run_failing_code() {
+        if !NodeExecutor::check_node_available().await {
+            return;
+        }
+        let executor = NodeExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"process.exit(1);"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
+    }
+
+    #[tokio::test]
+    async fn test_node_setup_environment_rejects_bad_deps() {
+        if !NodeExecutor::check_node_available().await {
+            return;
+        }
+        let executor = NodeExecutor::new();
+        let result = executor
+            .setup_environment(&["valid-pkg; rm -rf /".to_string()])
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_node_cleanup_is_noop() {
+        let executor = NodeExecutor::new();
         let temp_dir = TempDir::new().unwrap();
         let env = ExecutionEnv {
             temp_dir,

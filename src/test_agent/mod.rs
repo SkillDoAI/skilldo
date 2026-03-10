@@ -7,6 +7,8 @@ pub mod container_executor;
 pub mod executor;
 pub mod go_code_gen;
 pub mod go_parser;
+pub mod js_code_gen;
+pub mod js_parser;
 pub mod parser;
 pub mod python_code_gen;
 pub mod python_parser;
