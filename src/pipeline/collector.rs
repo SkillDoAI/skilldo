@@ -1504,6 +1504,63 @@ setup(
     }
 
     #[tokio::test]
+    async fn test_collect_javascript_with_changelog_and_urls() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"my-lib","version":"2.0.0","license":"Apache-2.0","homepage":"https://example.com","bugs":"https://example.com/issues","repository":"https://example.com/repo"}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("index.js"), "exports.x = 1;\n").unwrap();
+        fs::write(
+            dir.path().join("CHANGELOG.md"),
+            "# Changelog\n## 2.0.0\n- Initial release\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::JavaScript);
+        let data = c.collect().await.unwrap();
+
+        assert_eq!(data.version, "2.0.0");
+        assert_eq!(data.license, Some("Apache-2.0".to_string()));
+        assert!(!data.changelog_content.is_empty());
+        assert!(data.project_urls.iter().any(|(k, _)| k == "Homepage"));
+        assert!(data.project_urls.iter().any(|(k, _)| k == "Issues"));
+        assert!(data.project_urls.iter().any(|(k, _)| k == "Repository"));
+    }
+
+    #[tokio::test]
+    async fn test_collect_javascript_no_changelog() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"no-cl","version":"0.1.0"}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("lib.js"), "module.exports = {};\n").unwrap();
+
+        let c = Collector::new(dir.path(), Language::JavaScript);
+        let data = c.collect().await.unwrap();
+
+        assert!(data.changelog_content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_collect_javascript_fallback_package_name() {
+        // package.json with no "name" field — should fall back to dir name
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"version":"1.0.0"}"#).unwrap();
+        fs::write(dir.path().join("index.js"), "exports.x = 1;\n").unwrap();
+
+        let c = Collector::new(dir.path(), Language::JavaScript);
+        let data = c.collect().await.unwrap();
+
+        // Falls back to directory name, which should pass sanitize_dep_name
+        assert!(!data.package_name.is_empty());
+        assert_ne!(data.package_name, "unknown");
+    }
+
+    #[tokio::test]
     async fn test_collect_rust_unsupported() {
         let dir = TempDir::new().unwrap();
         let c = Collector::new(dir.path(), Language::Rust);
