@@ -18,9 +18,16 @@ pub async fn create_client_from_llm_config(
 
     // CLI provider: shell out to a CLI tool instead of HTTP API
     if llm_config.provider == Provider::Cli {
-        let command = llm_config.cli_command.clone().ok_or_else(|| {
-            anyhow::anyhow!("cli_command is required when provider_type = \"cli\"")
-        })?;
+        let command = llm_config
+            .cli_command
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "cli_command is required and must be non-empty when provider_type = \"cli\""
+                )
+            })?
+            .to_string();
         let client = super::cli_client::CliClient::new(
             command,
             llm_config.cli_args.clone(),
@@ -482,5 +489,18 @@ mod tests {
         );
 
         env::remove_var("SKILLDO_TEST_FACTORY_OAUTH_CID");
+    }
+
+    #[tokio::test]
+    async fn test_create_client_cli_empty_command_errors() {
+        let mut config = make_llm_config(Provider::Cli, None, None);
+        config.cli_command = Some("  ".to_string());
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(
+            err.contains("must be non-empty"),
+            "Should reject whitespace-only cli_command: {err}"
+        );
     }
 }

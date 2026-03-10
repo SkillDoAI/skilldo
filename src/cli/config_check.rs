@@ -59,15 +59,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
     ));
 
     // 3. Validate CLI provider has cli_command set
-    if config.llm.provider == Provider::Cli {
-        if config.llm.cli_command.is_some() {
-            results.pass("CLI provider: cli_command configured".to_string());
-        } else {
-            results.error(
-                "CLI provider requires cli_command (e.g. cli_command = \"claude\")".to_string(),
-            );
-        }
-    }
+    check_cli_command("main", &config.llm, &mut results);
 
     // 4. Check main API key env var
     check_api_key(
@@ -105,6 +97,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
         // Check test agent LLM override if configured
         if let Some(ref test_llm) = config.generation.test_llm {
             check_stage_provider("test", &test_llm.provider, &test_llm.model, &mut results);
+            check_cli_command("test", test_llm, &mut results);
             check_api_key(
                 &test_llm.api_key_env,
                 "test LLM",
@@ -130,6 +123,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
                 &review_llm.model,
                 &mut results,
             );
+            check_cli_command("review", review_llm, &mut results);
             check_api_key(
                 &review_llm.api_key_env,
                 "review LLM",
@@ -152,6 +146,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
     for (name, llm_opt) in &stage_llms {
         if let Some(llm) = llm_opt {
             check_stage_provider(name, &llm.provider, &llm.model, &mut results);
+            check_cli_command(name, llm, &mut results);
             check_api_key(
                 &llm.api_key_env,
                 &format!("{} LLM", name),
@@ -330,6 +325,26 @@ fn check_stage_provider(
         "{} LLM override: {} ({})",
         stage_name, provider, model
     ));
+}
+
+fn check_cli_command(stage_name: &str, llm: &crate::config::LlmConfig, results: &mut CheckResult) {
+    if llm.provider != Provider::Cli {
+        return;
+    }
+    match &llm.cli_command {
+        Some(cmd) if !cmd.trim().is_empty() => {
+            results.pass(format!(
+                "{}: CLI provider cli_command configured",
+                stage_name
+            ));
+        }
+        _ => {
+            results.error(format!(
+                "{} CLI provider requires cli_command (e.g. cli_command = \"claude\")",
+                stage_name
+            ));
+        }
+    }
 }
 
 fn check_api_key(
@@ -1699,6 +1714,44 @@ runtime = "nonexistent_runtime_xyz"
         let path = f.path().to_str().unwrap().to_string();
         let result = run(Some(path), false);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_cli_command_empty_string_errors() {
+        let mut results = CheckResult::new();
+        let config: crate::config::Config =
+            toml::from_str("[llm]\nprovider_type = \"cli\"\nmodel = \"x\"\ncli_command = \"  \"")
+                .unwrap();
+        check_cli_command("test", &config.llm, &mut results);
+        assert!(
+            results.errors.iter().any(|e| e.contains("cli_command")),
+            "Empty/whitespace cli_command should error"
+        );
+    }
+
+    #[test]
+    fn test_check_cli_command_per_stage_validation() {
+        let mut f = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        use std::io::Write;
+        write!(
+            f,
+            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n\
+             [generation.extract_llm]\nprovider_type = \"cli\"\nmodel = \"x\"\n"
+        )
+        .unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        // Non-strict: succeeds but would contain error for missing cli_command
+        let result = run(Some(path), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_cli_command_non_cli_skips() {
+        let mut results = CheckResult::new();
+        let config = crate::config::Config::default(); // Anthropic
+        check_cli_command("main", &config.llm, &mut results);
+        assert!(results.errors.is_empty(), "Non-CLI provider should skip");
+        assert!(results.passed.is_empty(), "Non-CLI provider should skip");
     }
 
     #[test]
