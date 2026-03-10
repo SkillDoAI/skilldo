@@ -176,7 +176,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     }
     // Auto-disable parallel extraction for CLI providers (single auth session)
     if config.has_cli_provider() && config.generation.parallel_extraction {
-        info!("Auto-disabling parallel extraction (CLI provider detected)");
+        warn!("Auto-disabling parallel extraction (CLI provider detected)");
         config.generation.parallel_extraction = false;
     }
 
