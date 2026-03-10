@@ -366,6 +366,89 @@ jobs:
         if: steps.check-secret.outputs.skip != 'true'
         run: ./target/release/skilldo lint /tmp/chi-SKILL.md
 
+      - name: Clone JS test library (lodash)
+        if: steps.check-secret.outputs.skip != 'true'
+        run: git clone --branch 4.17.21 --depth 1 https://github.com/lodash/lodash.git /tmp/lodash
+
+      - name: Generate JavaScript SKILL.md
+        if: steps.check-secret.outputs.skip != 'true'
+        run: |
+          ./target/release/skilldo generate /tmp/lodash \
+            --provider openai-compatible \
+            --model gpt-oss-120b \
+            --base-url https://api.cerebras.ai/v1 \
+            --language javascript \
+            --max-retries 5 \
+            -o /tmp/lodash-SKILL.md
+        env:
+          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
+
+      - name: Validate JavaScript output
+        if: steps.check-secret.outputs.skip != 'true'
+        run: |
+          FILE="/tmp/lodash-SKILL.md"
+          ERRORS=0
+
+          if [ ! -s "$FILE" ]; then
+            echo "::error::JS SKILL.md is empty or missing"
+            exit 1
+          fi
+          echo "JS: File exists ($(wc -c < "$FILE") bytes)"
+
+          if ! head -1 "$FILE" | grep -q '^---'; then
+            echo "::error::JS: Missing YAML frontmatter"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "JS: Has YAML frontmatter"
+          fi
+
+          for field in "name:" "version:" "ecosystem:"; do
+            if ! head -20 "$FILE" | grep -q "$field"; then
+              echo "::error::JS: Missing frontmatter field: $field"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "JS: Frontmatter has $field"
+            fi
+          done
+
+          for section in "## Imports" "## Core Patterns" "## Pitfalls"; do
+            if ! grep -q "$section" "$FILE"; then
+              echo "::error::JS: Missing required section: $section"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "JS: Has section: $section"
+            fi
+          done
+
+          if grep -Pn '(?<!`)rm -rf /(?!tmp)' "$FILE"; then
+            echo "::error::JS: destructive command found in output"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "JS: No destructive commands in prose"
+          fi
+
+          SIZE=$(wc -c < "$FILE")
+          if [ "$SIZE" -lt 500 ]; then
+            echo "::error::JS SKILL.md suspiciously small ($SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          elif [ "$SIZE" -gt 512000 ]; then
+            echo "::error::JS SKILL.md suspiciously large ($SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "JS: Reasonable size ($SIZE bytes)"
+          fi
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::JS E2E validation failed with $ERRORS error(s)"
+            exit 1
+          fi
+          echo ""
+          echo "=== JS E2E structural validation passed ==="
+
+      - name: Lint JavaScript generated skill
+        if: steps.check-secret.outputs.skip != 'true'
+        run: ./target/release/skilldo lint /tmp/lodash-SKILL.md
+
       - name: Upload generated skills
         if: steps.check-secret.outputs.skip != 'true' && always()
         uses: actions/upload-artifact@v7
@@ -374,4 +457,5 @@ jobs:
           path: |
             /tmp/click-SKILL.md
             /tmp/chi-SKILL.md
+            /tmp/lodash-SKILL.md
           if-no-files-found: ignore

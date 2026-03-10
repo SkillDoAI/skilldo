@@ -227,7 +227,21 @@ impl LanguageParser for JsParser {
             }
         }
 
-        dependencies.retain(|dep| match sanitize_dep_name(dep) {
+        // Normalize subpath imports: `lodash/chunk` → `lodash`, `@scope/pkg/foo` → `@scope/pkg`
+        let dependencies: Vec<String> = dependencies
+            .into_iter()
+            .map(|dep| Self::normalize_package_name(&dep))
+            .collect();
+
+        // Deduplicate after normalization
+        let mut seen = Vec::new();
+        for dep in &dependencies {
+            if !seen.contains(dep) {
+                seen.push(dep.clone());
+            }
+        }
+
+        seen.retain(|dep| match sanitize_dep_name(dep) {
             Ok(_) => true,
             Err(e) => {
                 warn!("Dropping invalid dependency at ingestion: {}", e);
@@ -235,11 +249,8 @@ impl LanguageParser for JsParser {
             }
         });
 
-        debug!(
-            "Extracted {} dependencies from SKILL.md",
-            dependencies.len()
-        );
-        Ok(dependencies)
+        debug!("Extracted {} dependencies from SKILL.md", seen.len());
+        Ok(seen)
     }
 }
 
@@ -247,6 +258,23 @@ impl JsParser {
     /// Check if an import path is relative (starts with `.` or `/`)
     fn is_relative_import(name: &str) -> bool {
         name.starts_with('.') || name.starts_with('/')
+    }
+
+    /// Normalize subpath imports to the root package name.
+    /// `lodash/chunk` → `lodash`, `@scope/pkg/utils` → `@scope/pkg`, `express` → `express`
+    fn normalize_package_name(name: &str) -> String {
+        if name.starts_with('@') {
+            // Scoped package: @scope/name/subpath → @scope/name
+            let parts: Vec<&str> = name.splitn(3, '/').collect();
+            if parts.len() >= 2 {
+                format!("{}/{}", parts[0], parts[1])
+            } else {
+                name.to_string()
+            }
+        } else {
+            // Unscoped package: lodash/chunk → lodash
+            name.split('/').next().unwrap_or(name).to_string()
+        }
     }
 }
 
@@ -558,5 +586,51 @@ import styled from '@emotion/react';
         let parser = JsParser;
         let skill = "---\ndescription: no name field\n---\n\n## Overview\n";
         assert_eq!(parser.extract_name(skill).unwrap(), None);
+    }
+
+    #[test]
+    fn normalize_unscoped_subpath() {
+        assert_eq!(JsParser::normalize_package_name("lodash/chunk"), "lodash");
+        assert_eq!(JsParser::normalize_package_name("lodash/fp/map"), "lodash");
+    }
+
+    #[test]
+    fn normalize_scoped_subpath() {
+        assert_eq!(
+            JsParser::normalize_package_name("@emotion/react/utils"),
+            "@emotion/react"
+        );
+    }
+
+    #[test]
+    fn normalize_no_subpath() {
+        assert_eq!(JsParser::normalize_package_name("express"), "express");
+        assert_eq!(
+            JsParser::normalize_package_name("@types/node"),
+            "@types/node"
+        );
+    }
+
+    #[test]
+    fn subpath_imports_collapsed_in_extract() {
+        let parser = JsParser;
+        let skill = r#"---
+name: lodash
+---
+
+## Imports
+
+```javascript
+const _ = require('lodash');
+const chunk = require('lodash/chunk');
+const uniq = require('lodash/uniq');
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert_eq!(
+            deps,
+            vec!["lodash"],
+            "subpath imports should collapse to root package"
+        );
     }
 }
