@@ -756,6 +756,20 @@ rule aaa_test_rule {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn with_rules_dir_unreadable_dir_errors() {
+        // Cover line 162: read_dir error when dir permissions deny access
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = YaraScanner::with_rules_dir(dir.path());
+        // Restore permissions so tempdir cleanup works
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = result.err().expect("should fail on unreadable dir");
+        assert!(err.contains("Failed to read rules dir"), "got: {err}");
+    }
+
     #[test]
     fn with_rules_dir_custom_rule_with_integer_and_bool_metadata() {
         // Cover lines 277-278: MetadataValue::Integer and MetadataValue::Boolean
@@ -789,6 +803,68 @@ rule meta_type_test {
                 .any(|f| f.message.contains("Test integer and boolean metadata")),
             "Custom rule with integer/boolean metadata should fire, got: {:?}",
             findings.iter().map(|f| format!("{f}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn meta_str_integer_metadata_value() {
+        // Cover line 286: MetadataValue::Integer branch in meta_str()
+        // When a YARA rule uses an integer for "description", scan() should
+        // extract it as a string via i.to_string().
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("int_meta.yara"),
+            r#"
+rule int_meta_rule {
+    meta:
+        description = 42
+        severity = "high"
+    strings:
+        $t = "INT_META_TRIGGER_42"
+    condition:
+        $t
+}
+"#,
+        )
+        .unwrap();
+
+        let s = YaraScanner::with_rules_dir(dir.path()).unwrap();
+        let findings = s.scan("INT_META_TRIGGER_42");
+        assert!(
+            findings.iter().any(|f| f.message == "42"),
+            "Integer metadata should be converted to string '42', got: {:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn meta_str_boolean_metadata_value() {
+        // Cover line 287: MetadataValue::Boolean branch in meta_str()
+        // When a YARA rule uses a boolean for "description", scan() should
+        // extract it as "true"/"false" via b.to_string().
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("bool_meta.yara"),
+            r#"
+rule bool_meta_rule {
+    meta:
+        description = true
+        severity = "medium"
+    strings:
+        $t = "BOOL_META_TRIGGER_TF"
+    condition:
+        $t
+}
+"#,
+        )
+        .unwrap();
+
+        let s = YaraScanner::with_rules_dir(dir.path()).unwrap();
+        let findings = s.scan("BOOL_META_TRIGGER_TF");
+        assert!(
+            findings.iter().any(|f| f.message == "true"),
+            "Boolean metadata should be converted to string 'true', got: {:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
         );
     }
 
