@@ -64,7 +64,7 @@ impl<'a> JsCodeGenerator<'a> {
                     let after = &trimmed[code_start..];
                     let newline_pos = after.find('\n').unwrap_or(0);
                     let actual_start = code_start + newline_pos;
-                    if let Some(end) = trimmed[actual_start..].find(*fence) {
+                    if let Some(end) = Self::find_closing_fence(&trimmed[actual_start..], fence) {
                         let code = trimmed[actual_start..actual_start + end].trim();
                         return Ok(code.to_string());
                     }
@@ -76,7 +76,7 @@ impl<'a> JsCodeGenerator<'a> {
         for fence in &["```", "~~~"] {
             if let Some(start) = trimmed.find(*fence) {
                 let code_start = start + fence.len();
-                if let Some(end) = trimmed[code_start..].find(*fence) {
+                if let Some(end) = Self::find_closing_fence(&trimmed[code_start..], fence) {
                     let mut code = trimmed[code_start..code_start + end].trim();
                     // Strip known language tags
                     if let Some((first_line, rest)) = code.split_once('\n') {
@@ -109,6 +109,14 @@ impl<'a> JsCodeGenerator<'a> {
 
         // If no code block found, use the response as-is
         Ok(trimmed.to_string())
+    }
+
+    /// Find the closing fence that starts at the beginning of a line.
+    /// Returns the byte offset within `text` where the fence begins.
+    fn find_closing_fence(text: &str, fence: &str) -> Option<usize> {
+        // Search for fence preceded by a newline (line-start anchored)
+        let needle = format!("\n{fence}");
+        text.find(&needle).map(|i| i + 1) // +1 to skip the \n
     }
 }
 

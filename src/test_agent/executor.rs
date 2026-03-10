@@ -411,8 +411,9 @@ impl LanguageExecutor for NodeExecutor {
         let temp_dir = TempDir::new().context("Failed to create temp directory")?;
         debug!("Created temp directory: {}", temp_dir.path().display());
 
-        // Initialize package.json
-        let package_json = r#"{"name":"skilldo-test","version":"0.1.0","private":true}"#;
+        // Initialize package.json with "type":"module" so ESM import syntax works.
+        let package_json =
+            r#"{"name":"skilldo-test","version":"0.1.0","private":true,"type":"module"}"#;
         fs::write(temp_dir.path().join("package.json"), package_json)
             .context("Failed to write package.json")?;
 
@@ -467,9 +468,13 @@ impl LanguageExecutor for NodeExecutor {
                     debug!("Node.js code execution passed");
                     Ok(ExecutionResult::Pass(stdout))
                 } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    // Combine stdout + stderr for retry feedback — console.log()
+                    // output (the LLM's primary diagnostic channel) goes to stdout.
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let combined = format!("{stdout}\n{stderr}").trim().to_string();
                     debug!("Node.js code execution failed");
-                    Ok(ExecutionResult::Fail(stderr))
+                    Ok(ExecutionResult::Fail(combined))
                 }
             }
             Err(e) => {
