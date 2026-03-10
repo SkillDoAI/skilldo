@@ -612,6 +612,56 @@ import styled from '@emotion/react';
     }
 
     #[test]
+    fn categorize_pattern_configuration() {
+        assert_eq!(
+            JsParser::categorize_pattern("Setup and Config", "initialize the client"),
+            PatternCategory::Configuration
+        );
+        assert_eq!(
+            JsParser::categorize_pattern("Environment Variables", "setup env"),
+            PatternCategory::Configuration
+        );
+    }
+
+    #[test]
+    fn categorize_pattern_error_handling() {
+        assert_eq!(
+            JsParser::categorize_pattern("Error Handling", "catch and throw"),
+            PatternCategory::ErrorHandling
+        );
+        assert_eq!(
+            JsParser::categorize_pattern("Try Catch", "handle errors with throw"),
+            PatternCategory::ErrorHandling
+        );
+    }
+
+    #[test]
+    fn categorize_pattern_other() {
+        assert_eq!(
+            JsParser::categorize_pattern("Custom Middleware", "custom middleware"),
+            PatternCategory::Other
+        );
+    }
+
+    #[test]
+    fn extract_deps_drops_invalid_names() {
+        let parser = JsParser;
+        // A dep with a flag-injection attempt should be dropped
+        let skill = "---\nname: foo\n---\n\n## Imports\n\n```javascript\nconst x = require('--malicious');\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.is_empty(),
+            "should drop deps that fail sanitize_dep_name"
+        );
+    }
+
+    #[test]
+    fn normalize_scoped_bare() {
+        // Edge case: just "@scope" with no slash
+        assert_eq!(JsParser::normalize_package_name("@scope"), "@scope");
+    }
+
+    #[test]
     fn subpath_imports_collapsed_in_extract() {
         let parser = JsParser;
         let skill = r#"---

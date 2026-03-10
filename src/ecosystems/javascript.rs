@@ -699,4 +699,218 @@ mod tests {
         let deps = handler.extract_dependencies().unwrap();
         assert!(deps.is_empty());
     }
+
+    // ── Coverage gap tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_find_test_files_empty_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("index.js"), "module.exports = {};\n").unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        let result = handler.find_test_files();
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("No tests found"),
+            "should bail with 'No tests found'"
+        );
+    }
+
+    #[test]
+    fn test_find_docs_with_readme_and_docs_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("README.md"), "# Hello\n").unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs").join("guide.md"), "# Guide\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert!(docs.len() >= 2, "should find README + docs/guide.md");
+    }
+
+    #[test]
+    fn test_find_docs_recursive_skips_dot_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("docs/.hidden")).unwrap();
+        fs::write(root.join("docs/.hidden/secret.md"), "secret\n").unwrap();
+        fs::write(root.join("docs/public.md"), "public\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        let names: Vec<&str> = docs
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"public.md"));
+        assert!(!names.contains(&"secret.md"), "should skip .hidden dir");
+    }
+
+    #[test]
+    fn test_find_examples_collects_from_examples_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("examples/nested")).unwrap();
+        fs::write(root.join("examples/basic.js"), "console.log('hi');\n").unwrap();
+        fs::write(root.join("examples/nested/advanced.ts"), "export {};\n").unwrap();
+        // Also put a non-JS file that should be ignored
+        fs::write(root.join("examples/readme.txt"), "not JS\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"basic.js"));
+        assert!(names.contains(&"advanced.ts"));
+        assert!(!names.contains(&"readme.txt"));
+    }
+
+    #[test]
+    fn test_find_examples_skips_excluded_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("examples/node_modules")).unwrap();
+        fs::write(root.join("examples/demo.js"), "console.log('demo');\n").unwrap();
+        fs::write(
+            root.join("examples/node_modules/dep.js"),
+            "module.exports = {};\n",
+        )
+        .unwrap();
+
+        let handler = JsHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"demo.js"));
+        assert!(!names.contains(&"dep.js"));
+    }
+
+    #[test]
+    fn test_detect_license_fallback_to_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name": "foo"}"#).unwrap();
+        fs::write(
+            dir.path().join("LICENSE"),
+            "Custom License v1.0\n\nDo whatever you want.\n",
+        )
+        .unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        let license = handler.detect_license();
+        assert_eq!(license.unwrap(), "Custom License v1.0");
+    }
+
+    #[test]
+    fn test_detect_license_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name": "foo"}"#).unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        assert!(handler.detect_license().is_none());
+    }
+
+    #[test]
+    fn test_extract_project_urls_bugs_url() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name": "foo", "bugs": {"url": "https://github.com/org/foo/issues"}}"#,
+        )
+        .unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        let urls = handler.extract_project_urls();
+        assert!(urls
+            .iter()
+            .any(|(k, v)| k == "Issues" && v.contains("issues")));
+    }
+
+    #[test]
+    fn test_extract_project_urls_no_package_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = JsHandler::new(dir.path());
+        let urls = handler.extract_project_urls();
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn test_collect_js_files_nested_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src/utils")).unwrap();
+        fs::write(root.join("src/index.ts"), "export {};\n").unwrap();
+        fs::write(root.join("src/utils/helpers.ts"), "export {};\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"index.ts"));
+        assert!(names.contains(&"helpers.ts"));
+    }
+
+    #[test]
+    fn test_collect_js_files_excludes_build_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("index.js"), "module.exports = {};\n").unwrap();
+        for d in &["dist", "build", "coverage", ".next"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+            fs::write(root.join(d).join("output.js"), "compiled\n").unwrap();
+        }
+
+        let handler = JsHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"index.js"));
+        assert!(!names.contains(&"output.js"), "should exclude build dirs");
+    }
+
+    #[test]
+    fn test_collect_docs_recursive_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("docs/api")).unwrap();
+        fs::write(root.join("docs/intro.md"), "# Intro\n").unwrap();
+        fs::write(root.join("docs/api/reference.md"), "# API\n").unwrap();
+        fs::write(root.join("docs/api/notes.rst"), "Notes\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        let names: Vec<&str> = docs
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"intro.md"));
+        assert!(names.contains(&"reference.md"));
+        assert!(names.contains(&"notes.rst"));
+    }
+
+    #[test]
+    fn test_collect_docs_recursive_skips_node_modules() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("docs/node_modules")).unwrap();
+        fs::write(root.join("docs/guide.md"), "# Guide\n").unwrap();
+        fs::write(root.join("docs/node_modules/dep.md"), "dep\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        let names: Vec<&str> = docs
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"guide.md"));
+        assert!(!names.contains(&"dep.md"));
+    }
 }

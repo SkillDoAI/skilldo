@@ -413,4 +413,38 @@ console.log("✓ Test passed: Tilde");
         assert!(code.contains("const http"));
         assert!(!code.contains("~~~"));
     }
+
+    #[test]
+    fn test_extract_code_generic_block_strips_known_tag() {
+        // Generic ``` block where first line is a known language tag
+        let response = "```\njavascript\nconst x = 42;\nconsole.log(x);\n```\n";
+        let code = JsCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("const x = 42"));
+        assert!(
+            !code.contains("javascript"),
+            "should strip known tag from generic block"
+        );
+    }
+
+    #[test]
+    fn test_extract_code_generic_block_unknown_tag_preserved() {
+        // Generic ``` block where first line is NOT a known tag — preserve it
+        let response = "```\nconst x = 42;\nconsole.log(x);\n```\n";
+        let code = JsCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("const x = 42"));
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_mock() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = JsCodeGenerator::new(&mock_client);
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "const x = 1;", "ReferenceError: y is not defined")
+            .await;
+        assert!(result.is_ok());
+    }
 }
