@@ -27,8 +27,10 @@ static SIDE_EFFECT_IMPORT_RE: Lazy<Regex> =
 static REQUIRE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"require\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
 static NPM_INSTALL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?m)npm\s+install\s+(?:--save\s+|--save-dev\s+|-S\s+|-D\s+)*(.+?)(?:\s*$|`)")
-        .unwrap()
+    Regex::new(
+        r"(?m)npm\s+(?:install|i|add)\s+(?:--save\s+|--save-dev\s+|-S\s+|-D\s+)*(.+?)(?:\s*$|`)",
+    )
+    .unwrap()
 });
 
 /// JavaScript/TypeScript-specific parser for SKILL.md files
@@ -544,6 +546,24 @@ const express = require('express');
         assert!(deps.contains(&"express".to_string()));
         assert!(deps.contains(&"body-parser".to_string()));
         assert!(deps.contains(&"cors".to_string()));
+    }
+
+    #[test]
+    fn npm_i_shorthand() {
+        let parser = JsParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```bash\nnpm i express body-parser\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(deps.contains(&"express".to_string()));
+        assert!(deps.contains(&"body-parser".to_string()));
+    }
+
+    #[test]
+    fn npm_add_shorthand() {
+        let parser = JsParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\nnpm add lodash\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(deps.contains(&"lodash".to_string()));
     }
 
     #[test]
