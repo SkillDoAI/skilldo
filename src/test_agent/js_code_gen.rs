@@ -16,6 +16,7 @@ pub const JS_ENV: TestEnv = TestEnv {
     runner: "`node test.js`",
     env_notes: "\
 - Write a single .js file that can be run with `node test.js`
+- Use ESM `import` syntax (not CommonJS `require`) — the environment uses `\"type\": \"module\"`
 - Use `process.exit(1)` for assertion failures, `console.log()` for success messages",
 };
 
