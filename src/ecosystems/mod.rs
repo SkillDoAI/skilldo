@@ -1,4 +1,5 @@
 pub mod go;
+pub mod javascript;
 pub mod python;
 
 /// Common license file names found at the root of open-source repositories.

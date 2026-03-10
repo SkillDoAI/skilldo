@@ -6,9 +6,11 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
-use super::executor::{ExecutionResult, GoExecutor, PythonUvExecutor};
+use super::executor::{ExecutionResult, GoExecutor, NodeExecutor, PythonUvExecutor};
 use super::go_code_gen::GoCodeGenerator;
 use super::go_parser::GoParser;
+use super::js_code_gen::JsCodeGenerator;
+use super::js_parser::JsParser;
 use super::python_code_gen::PythonCodeGenerator;
 use super::python_parser::PythonParser;
 use super::{CodePattern, LanguageCodeGenerator, LanguageExecutor, LanguageParser};
@@ -170,6 +172,28 @@ impl<'a> TestCodeValidator<'a> {
                     parser: Box::new(GoParser),
                     code_generator: Box::new(
                         GoCodeGenerator::new(llm_client)
+                            .with_custom_instructions(custom_instructions),
+                    ),
+                    executor,
+                    execution_mode,
+                    mode: ValidationMode::default(),
+                    install_source,
+                })
+            }
+            Language::JavaScript => {
+                let executor: Box<dyn LanguageExecutor> = match execution_mode {
+                    ExecutionMode::BareMetal => {
+                        Box::new(NodeExecutor::new().with_timeout(config.timeout))
+                    }
+                    ExecutionMode::Container => {
+                        Box::new(ContainerExecutor::new(config, Language::JavaScript))
+                    }
+                };
+                Ok(Self {
+                    language: Language::JavaScript,
+                    parser: Box::new(JsParser),
+                    code_generator: Box::new(
+                        JsCodeGenerator::new(llm_client)
                             .with_custom_instructions(custom_instructions),
                     ),
                     executor,
@@ -1342,12 +1366,68 @@ mod tests {
     }
 
     #[test]
+    fn test_new_javascript_validator_constructs() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new(&Language::JavaScript, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "JavaScript validator should construct successfully"
+        );
+    }
+
+    #[test]
+    fn test_new_javascript_validator_with_custom_instructions() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new(
+            &Language::JavaScript,
+            &client,
+            config,
+            Some("Use async/await patterns".to_string()),
+        );
+        assert!(validator.is_ok());
+    }
+
+    #[test]
+    fn test_new_javascript_baremetal_uses_node_executor() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            ..Default::default()
+        };
+        let validator =
+            TestCodeValidator::new(&Language::JavaScript, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+    }
+
+    #[test]
+    fn test_new_javascript_container_uses_container_executor() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            ..Default::default()
+        };
+        let validator =
+            TestCodeValidator::new(&Language::JavaScript, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::Container);
+    }
+
+    #[test]
     fn test_new_unsupported_language_errors() {
         use crate::llm::client::MockLlmClient;
 
         let client = MockLlmClient;
         let config = ContainerConfig::default();
-        let result = TestCodeValidator::new(&Language::JavaScript, &client, config, None);
+        let result = TestCodeValidator::new(&Language::Rust, &client, config, None);
         assert!(result.is_err());
         let msg = format!("{}", result.err().unwrap());
         assert!(msg.contains("not yet supported"));
@@ -1378,5 +1458,34 @@ mod tests {
             "Go feedback should reference go language"
         );
         assert!(feedback.contains("Config"));
+    }
+
+    #[test]
+    fn test_generate_feedback_javascript_language() {
+        let result = TestResult {
+            passed: 1,
+            failed: 1,
+            test_cases: vec![
+                TestCase {
+                    pattern_name: "Basic".to_string(),
+                    result: ExecutionResult::Pass("ok".to_string()),
+                    generated_code: "console.log(\"ok\")".to_string(),
+                },
+                TestCase {
+                    pattern_name: "Middleware".to_string(),
+                    result: ExecutionResult::Fail(
+                        "ReferenceError: express is not defined".to_string(),
+                    ),
+                    generated_code: "app.use(express.json())".to_string(),
+                },
+            ],
+        };
+
+        let feedback = result.generate_feedback(&Language::JavaScript).unwrap();
+        assert!(
+            feedback.contains("javascript"),
+            "JS feedback should reference javascript language"
+        );
+        assert!(feedback.contains("Middleware"));
     }
 }

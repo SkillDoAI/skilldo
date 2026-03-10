@@ -665,7 +665,7 @@ fn default_python_image() -> String {
 }
 
 fn default_node_image() -> String {
-    "node:20-slim".to_string()
+    "node:24-alpine".to_string()
 }
 
 fn default_rust_image() -> String {

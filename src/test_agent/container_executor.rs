@@ -683,7 +683,7 @@ mod tests {
             executor.config.python_image,
             "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
         );
-        assert_eq!(executor.config.javascript_image, "node:20-slim");
+        assert_eq!(executor.config.javascript_image, "node:24-alpine");
         assert_eq!(executor.config.rust_image, "rust:1.75-slim");
         assert_eq!(executor.config.go_image, "golang:1.25-alpine");
         assert_eq!(executor.config.timeout, 60);
@@ -876,7 +876,7 @@ mod tests {
     #[test]
     fn test_get_image_with_default_config_javascript() {
         let executor = ContainerExecutor::new(ContainerConfig::default(), Language::JavaScript);
-        assert_eq!(executor.get_image(), "node:20-slim");
+        assert_eq!(executor.get_image(), "node:24-alpine");
     }
 
     #[test]
