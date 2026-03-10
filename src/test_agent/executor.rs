@@ -388,6 +388,18 @@ impl NodeExecutor {
             .map(|s| s.success())
             .unwrap_or(false)
     }
+
+    /// Check if npm is available in PATH
+    async fn check_npm_available() -> bool {
+        Command::new("npm")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 }
 
 impl Default for NodeExecutor {
@@ -422,6 +434,9 @@ impl LanguageExecutor for NodeExecutor {
         // sanitize_dep_name already rejects shell metacharacters, and `--` prevents
         // flag injection.
         if !deps.is_empty() {
+            if !Self::check_npm_available().await {
+                bail!("npm is not installed or not in PATH");
+            }
             for dep in deps {
                 sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             }
@@ -957,6 +972,12 @@ func main() {
     async fn test_check_node_available() {
         // Just check it doesn't panic - availability depends on system
         let _ = NodeExecutor::check_node_available().await;
+    }
+
+    #[tokio::test]
+    async fn test_check_npm_available() {
+        // Just check it doesn't panic - availability depends on system
+        let _ = NodeExecutor::check_npm_available().await;
     }
 
     #[test]

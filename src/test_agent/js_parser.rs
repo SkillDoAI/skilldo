@@ -15,7 +15,7 @@ use crate::util::sanitize_dep_name;
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
 static CODE_BLOCK_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?i)(?:```|~~~)(?:(?:js|javascript|typescript|ts|jsx|tsx)?)?\n([\s\S]*?)\n(?:```|~~~)",
+        r"(?im)^(?:```|~~~)(?:(?:js|javascript|typescript|ts|jsx|tsx)?)?\n([\s\S]*?)\n(?:```|~~~)",
     )
     .unwrap()
 });

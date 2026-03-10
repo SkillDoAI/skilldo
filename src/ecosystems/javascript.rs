@@ -298,7 +298,7 @@ impl JsHandler {
         }
 
         if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.') || name == "node_modules" {
+            if Self::is_excluded_dir(name) {
                 return Ok(());
             }
         }
