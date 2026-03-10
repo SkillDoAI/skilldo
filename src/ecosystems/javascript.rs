@@ -108,10 +108,15 @@ impl JsHandler {
     // ── Metadata extraction ────────────────────────────────────────────
 
     /// Extract package name from package.json `name` field.
+    /// Falls back to the repo directory name if `name` is missing (private/workspace packages).
     pub fn extract_package_name(&self) -> Result<String> {
         let pkg = self.read_package_json()?;
-        pkg["name"]
-            .as_str()
+        if let Some(name) = pkg["name"].as_str() {
+            return Ok(name.to_string());
+        }
+        self.repo_path
+            .file_name()
+            .and_then(|n| n.to_str())
             .map(String::from)
             .ok_or_else(|| anyhow::anyhow!("No 'name' field in package.json"))
     }
@@ -161,7 +166,10 @@ impl JsHandler {
             urls.push(("Homepage".into(), homepage.to_string()));
         }
 
-        if let Some(bugs_url) = pkg["bugs"]["url"].as_str() {
+        // bugs can be a string URL or an object with a `url` field
+        if let Some(bugs_url) = pkg["bugs"].as_str() {
+            urls.push(("Issues".into(), bugs_url.to_string()));
+        } else if let Some(bugs_url) = pkg["bugs"]["url"].as_str() {
             urls.push(("Issues".into(), bugs_url.to_string()));
         }
 
@@ -880,6 +888,34 @@ mod tests {
         assert!(urls
             .iter()
             .any(|(k, v)| k == "Issues" && v.contains("issues")));
+    }
+
+    #[test]
+    fn test_extract_project_urls_bugs_string() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name": "foo", "bugs": "https://github.com/org/foo/issues"}"#,
+        )
+        .unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        let urls = handler.extract_project_urls();
+        assert!(urls
+            .iter()
+            .any(|(k, v)| k == "Issues" && v.contains("issues")));
+    }
+
+    #[test]
+    fn test_extract_package_name_fallback_to_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // package.json without a name field
+        fs::write(dir.path().join("package.json"), r#"{"private": true}"#).unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        let name = handler.extract_package_name().unwrap();
+        // Should fall back to the directory name (temp dir name)
+        assert!(!name.is_empty());
     }
 
     #[test]

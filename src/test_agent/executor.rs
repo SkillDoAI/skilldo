@@ -444,7 +444,14 @@ impl LanguageExecutor for NodeExecutor {
             info!("Installing Node.js dependencies: {}", deps.join(", "));
             let mut npm_cmd = Command::new("npm");
             npm_cmd
-                .args(["install", "--no-save", "--"])
+                .args([
+                    "install",
+                    "--no-save",
+                    "--ignore-scripts",
+                    "--no-audit",
+                    "--no-fund",
+                    "--",
+                ])
                 .args(deps)
                 .current_dir(temp_dir.path());
             let npm_output = run_cmd_with_timeout(npm_cmd, Duration::from_secs(120)).await?;
