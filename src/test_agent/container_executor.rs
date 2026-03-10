@@ -50,9 +50,11 @@ impl ContainerExecutor {
 
     /// Generate dependency installation script for JavaScript/TypeScript
     fn generate_node_install_script(&self, deps: &[String]) -> Result<String> {
-        if deps.is_empty() {
-            Ok(String::new())
-        } else {
+        // Always write package.json with type:module so ESM import syntax works.
+        let mut lines = vec![
+            r#"echo '{"name":"skilldo-test","version":"0.1.0","private":true,"type":"module"}' > package.json"#.to_string(),
+        ];
+        if !deps.is_empty() {
             for dep in deps {
                 sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             }
@@ -61,11 +63,12 @@ impl ContainerExecutor {
             // The `--` terminator prevents dep names starting with `-` from
             // being interpreted as npm flags.
             let quoted: Vec<String> = deps.iter().map(|d| format!("'{}'", d)).collect();
-            Ok(format!(
+            lines.push(format!(
                 "npm install --no-save -- {} > /dev/null 2>&1",
                 quoted.join(" ")
-            ))
+            ));
         }
+        Ok(lines.join("\n"))
     }
 
     /// Generate dependency installation script for Go.
@@ -435,13 +438,17 @@ mod tests {
 
         let deps = vec!["express".to_string(), "cors".to_string()];
         let script = executor.generate_node_install_script(&deps).unwrap();
+        assert!(script.contains("package.json"), "should write package.json");
+        assert!(script.contains("type"), "should include type:module");
         assert!(script.contains("npm install"));
         assert!(script.contains("express"));
         assert!(script.contains("cors"));
 
-        // Empty deps
+        // Empty deps — still writes package.json for ESM support
         let empty = executor.generate_node_install_script(&[]).unwrap();
-        assert!(empty.is_empty());
+        assert!(empty.contains("package.json"));
+        assert!(empty.contains("type"));
+        assert!(!empty.contains("npm install"));
 
         // Shell injection rejected
         let bad = vec!["express; rm -rf /".to_string()];
@@ -770,10 +777,11 @@ mod tests {
         let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["express".to_string()];
         let script = executor.generate_node_install_script(&deps).unwrap();
-        assert_eq!(
-            script,
-            "npm install --no-save -- 'express' > /dev/null 2>&1"
+        assert!(
+            script.contains("package.json"),
+            "should write package.json with type:module"
         );
+        assert!(script.contains("npm install --no-save -- 'express'"));
     }
 
     #[test]
@@ -785,10 +793,11 @@ mod tests {
             "helmet".to_string(),
         ];
         let script = executor.generate_node_install_script(&deps).unwrap();
-        assert_eq!(
-            script,
-            "npm install --no-save -- 'express' 'cors' 'helmet' > /dev/null 2>&1"
+        assert!(
+            script.contains("package.json"),
+            "should write package.json with type:module"
         );
+        assert!(script.contains("npm install --no-save -- 'express' 'cors' 'helmet'"));
     }
 
     #[test]

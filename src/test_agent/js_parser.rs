@@ -116,6 +116,8 @@ impl JsParser {
             "stream",
             "string_decoder",
             "sys",
+            "sqlite",
+            "test",
             "timers",
             "tls",
             "trace_events",
