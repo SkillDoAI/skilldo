@@ -15,7 +15,7 @@ use crate::util::sanitize_dep_name;
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
 static CODE_BLOCK_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?i)(?:```|~~~)(?:(?:js|javascript|typescript|ts|jsx|tsx)?)?\n([\s\S]*?)(?:```|~~~)",
+        r"(?i)(?:```|~~~)(?:(?:js|javascript|typescript|ts|jsx|tsx)?)?\n([\s\S]*?)\n(?:```|~~~)",
     )
     .unwrap()
 });
@@ -113,6 +113,7 @@ impl JsParser {
             "querystring",
             "readline",
             "repl",
+            "sea",
             "stream",
             "string_decoder",
             "sys",
@@ -284,9 +285,9 @@ impl LanguageParser for JsParser {
 }
 
 impl JsParser {
-    /// Check if an import path is relative (starts with `.` or `/`)
+    /// Check if an import path is relative or internal (`./`, `/`, `#` subpath imports).
     fn is_relative_import(name: &str) -> bool {
-        name.starts_with('.') || name.starts_with('/')
+        name.starts_with('.') || name.starts_with('/') || name.starts_with('#')
     }
 
     /// Normalize subpath imports to the root package name.
@@ -651,6 +652,29 @@ import express from 'express';
 "#;
         let deps = parser.extract_dependencies(skill).unwrap();
         assert_eq!(deps, vec!["express"]);
+    }
+
+    #[test]
+    fn hash_subpath_imports_filtered() {
+        let parser = JsParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```javascript
+import config from '#app/config';
+import logger from '#utils/logger';
+import express from 'express';
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert_eq!(
+            deps,
+            vec!["express"],
+            "# subpath imports should be filtered as internal"
+        );
     }
 
     #[test]
