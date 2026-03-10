@@ -21,6 +21,9 @@ static CODE_BLOCK_RE: Lazy<Regex> = Lazy::new(|| {
 });
 static IMPORT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?m)^import\s+[\s\S]*?from\s+['"]([^'"]+)['"]"#).unwrap());
+/// Side-effect imports: `import 'dotenv/config'` (no `from` keyword).
+static SIDE_EFFECT_IMPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?m)^import\s+['"]([^'"]+)['"]"#).unwrap());
 static REQUIRE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"require\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
 static NPM_INSTALL_RE: Lazy<Regex> = Lazy::new(|| {
@@ -71,9 +74,15 @@ impl JsParser {
     }
 
     /// Check if a module name is a Node.js built-in module.
-    /// Handles the `node:` prefix (e.g. `node:fs` → checks "fs").
+    /// Handles the `node:` prefix (e.g. `node:fs` → checks "fs") and
+    /// subpath imports (e.g. `fs/promises` → checks "fs").
     fn is_builtin_module(name: &str) -> bool {
         let name = name.strip_prefix("node:").unwrap_or(name);
+        // Strip subpath: fs/promises → fs, assert/strict → assert
+        let name = match name.find('/') {
+            Some(i) if !name.starts_with('@') => &name[..i],
+            _ => name,
+        };
 
         const BUILTIN_MODULES: &[&str] = &[
             "assert",
@@ -199,6 +208,17 @@ impl LanguageParser for JsParser {
 
         // ES module imports: import ... from 'package'
         for cap in IMPORT_RE.captures_iter(imports_content) {
+            let pkg = cap[1].to_string();
+            if !Self::is_relative_import(&pkg)
+                && !Self::is_builtin_module(&pkg)
+                && !dependencies.contains(&pkg)
+            {
+                dependencies.push(pkg);
+            }
+        }
+
+        // Side-effect imports: import 'dotenv/config'
+        for cap in SIDE_EFFECT_IMPORT_RE.captures_iter(imports_content) {
             let pkg = cap[1].to_string();
             if !Self::is_relative_import(&pkg)
                 && !Self::is_builtin_module(&pkg)
@@ -456,6 +476,15 @@ app.get('/users', async (req, res) => {
     }
 
     #[test]
+    fn is_builtin_module_subpath() {
+        assert!(JsParser::is_builtin_module("fs/promises"));
+        assert!(JsParser::is_builtin_module("assert/strict"));
+        assert!(JsParser::is_builtin_module("node:fs/promises"));
+        // Scoped packages should NOT be treated as builtins
+        assert!(!JsParser::is_builtin_module("@scope/pkg"));
+    }
+
+    #[test]
     fn is_builtin_rejects_external_packages() {
         assert!(!JsParser::is_builtin_module("express"));
         assert!(!JsParser::is_builtin_module("lodash"));
@@ -534,6 +563,19 @@ const express = require('express');
         assert!(
             !deps.iter().any(|d| d.starts_with('-')),
             "flags should not appear as deps: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn import_side_effect() {
+        let parser = JsParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```javascript\nimport 'dotenv/config'\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"dotenv".to_string()),
+            "side-effect import should capture 'dotenv', got: {:?}",
             deps
         );
     }

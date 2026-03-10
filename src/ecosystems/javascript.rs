@@ -222,8 +222,12 @@ impl JsHandler {
                         continue;
                     }
                     if !test_mode {
-                        // Source mode: exclude tests, .d.ts, .min.js
-                        if name.ends_with(".d.ts") || name.ends_with(".min.js") {
+                        // Source mode: exclude tests, declaration files, .min.js
+                        if name.ends_with(".d.ts")
+                            || name.ends_with(".d.mts")
+                            || name.ends_with(".d.cts")
+                            || name.ends_with(".min.js")
+                        {
                             continue;
                         }
                         if Self::is_test_file(&path, &self.repo_path) {
@@ -370,12 +374,16 @@ impl JsHandler {
 
 // ── Free functions ──────────────────────────────────────────────────────
 
-/// Check if a filename has a JS/TS extension.
+/// Check if a filename has a JS/TS extension (including ESM/CJS variants).
 fn is_js_file(name: &str) -> bool {
     name.ends_with(".js")
         || name.ends_with(".ts")
         || name.ends_with(".jsx")
         || name.ends_with(".tsx")
+        || name.ends_with(".mjs")
+        || name.ends_with(".cjs")
+        || name.ends_with(".mts")
+        || name.ends_with(".cts")
 }
 
 #[cfg(test)]
@@ -391,6 +399,10 @@ mod tests {
         assert!(is_js_file("bar.ts"));
         assert!(is_js_file("baz.jsx"));
         assert!(is_js_file("qux.tsx"));
+        assert!(is_js_file("foo.mjs"));
+        assert!(is_js_file("foo.cjs"));
+        assert!(is_js_file("foo.mts"));
+        assert!(is_js_file("foo.cts"));
         assert!(!is_js_file("foo.py"));
         assert!(!is_js_file("foo.rs"));
         assert!(!is_js_file("foo.json"));

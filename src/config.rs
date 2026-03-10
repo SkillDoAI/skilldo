@@ -585,7 +585,7 @@ pub struct ContainerConfig {
     #[serde(default = "default_python_image")]
     pub python_image: String,
 
-    /// Container image for JavaScript/TypeScript (default: "node:20-slim")
+    /// Container image for JavaScript/TypeScript (default: "node:24-alpine")
     #[serde(default = "default_node_image")]
     pub javascript_image: String,
 
