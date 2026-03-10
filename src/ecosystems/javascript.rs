@@ -326,12 +326,12 @@ impl JsHandler {
             return true;
         }
 
-        // Directory-based patterns: __tests__/, test/, tests/
+        // Directory-based patterns: __tests__/, __spec__/, test/, tests/, spec/
         // Use the relative path so parent dirs outside the repo don't false-match.
         let relative = path.strip_prefix(repo_path).unwrap_or(path);
         relative.components().any(|c| {
             let s = c.as_os_str().to_str().unwrap_or("");
-            matches!(s, "__tests__" | "test" | "tests")
+            matches!(s, "__tests__" | "__spec__" | "test" | "tests" | "spec")
         })
     }
 
@@ -938,5 +938,29 @@ mod tests {
         fs::write(project.join("test/foo.test.js"), "test\n").unwrap();
         let test_path = project.join("test/foo.test.js");
         assert!(JsHandler::is_test_file(&test_path, &project));
+    }
+
+    #[test]
+    fn is_test_file_recognizes_spec_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // spec/ (Jasmine/Mocha convention)
+        fs::create_dir_all(root.join("spec")).unwrap();
+        fs::write(root.join("spec/helpers.js"), "setup\n").unwrap();
+        assert!(JsHandler::is_test_file(&root.join("spec/helpers.js"), root));
+
+        // __spec__/ (Jest spec convention)
+        fs::create_dir_all(root.join("__spec__")).unwrap();
+        fs::write(root.join("__spec__/util.js"), "test\n").unwrap();
+        assert!(JsHandler::is_test_file(
+            &root.join("__spec__/util.js"),
+            root
+        ));
+
+        // Source file should NOT be a test file
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/index.js"), "code\n").unwrap();
+        assert!(!JsHandler::is_test_file(&root.join("src/index.js"), root));
     }
 }

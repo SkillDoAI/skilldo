@@ -20,7 +20,7 @@ static CODE_BLOCK_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 static IMPORT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?m)^import\s+.*?from\s+['"]([^'"]+)['"]"#).unwrap());
+    Lazy::new(|| Regex::new(r#"(?m)^import\s+[\s\S]*?from\s+['"]([^'"]+)['"]"#).unwrap());
 static REQUIRE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"require\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
 static NPM_INSTALL_RE: Lazy<Regex> = Lazy::new(|| {
@@ -521,6 +521,31 @@ const express = require('express');
         let deps = parser.extract_dependencies(skill).unwrap();
         assert!(deps.contains(&"express".to_string()));
         assert!(deps.contains(&"morgan".to_string()));
+    }
+
+    #[test]
+    fn import_multiline_destructured() {
+        let parser = JsParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```javascript
+import {
+    Router,
+    Request,
+    Response,
+} from 'express';
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"express".to_string()),
+            "multi-line destructured import should capture 'express', got: {:?}",
+            deps
+        );
     }
 
     #[test]
