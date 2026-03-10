@@ -117,12 +117,13 @@ impl JsHandler {
     }
 
     /// Extract version from package.json `version` field.
+    /// Returns `"0.0.0"` if the field is missing (common in private/workspace packages).
     pub fn extract_version(&self) -> Result<String> {
         let pkg = self.read_package_json()?;
-        pkg["version"]
+        Ok(pkg["version"]
             .as_str()
             .map(String::from)
-            .ok_or_else(|| anyhow::anyhow!("No 'version' field in package.json"))
+            .unwrap_or_else(|| "0.0.0".to_string()))
     }
 
     /// Detect license from package.json `license` field, with fallback to LICENSE file.
@@ -341,7 +342,11 @@ impl JsHandler {
 
     /// Check if a directory name should be excluded from traversal.
     fn is_excluded_dir(name: &str) -> bool {
-        name.starts_with('.') || matches!(name, "node_modules" | "dist" | "build" | "coverage")
+        name.starts_with('.')
+            || matches!(
+                name,
+                "node_modules" | "dist" | "build" | "coverage" | "vendor" | "bower_components"
+            )
     }
 
     /// File priority for sorting: index/main files first, then src/lib, then rest.
@@ -568,6 +573,24 @@ mod tests {
 
         let handler = JsHandler::new(dir.path());
         assert_eq!(handler.extract_version().unwrap(), "1.2.3");
+    }
+
+    #[test]
+    fn test_extract_version_missing_defaults_to_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name": "foo"}"#).unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        assert_eq!(handler.extract_version().unwrap(), "0.0.0");
+    }
+
+    #[test]
+    fn test_is_excluded_dir_vendor_and_bower() {
+        assert!(JsHandler::is_excluded_dir("vendor"));
+        assert!(JsHandler::is_excluded_dir("bower_components"));
+        assert!(JsHandler::is_excluded_dir("node_modules"));
+        assert!(!JsHandler::is_excluded_dir("src"));
+        assert!(!JsHandler::is_excluded_dir("lib"));
     }
 
     #[test]
