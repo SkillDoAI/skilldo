@@ -279,7 +279,11 @@ impl JsHandler {
             let Ok(ft) = entry.file_type() else { continue };
             if ft.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if is_js_file(name) {
+                    if is_js_file(name)
+                        && !name.ends_with(".d.ts")
+                        && !name.ends_with(".d.mts")
+                        && !name.ends_with(".d.cts")
+                    {
                         files.push(path);
                     }
                 }
@@ -826,6 +830,40 @@ mod tests {
         assert!(names.contains(&"basic.js"));
         assert!(names.contains(&"advanced.ts"));
         assert!(!names.contains(&"readme.txt"));
+    }
+
+    #[test]
+    fn test_find_examples_excludes_declaration_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("examples")).unwrap();
+        fs::write(root.join("examples/basic.js"), "console.log('hi');\n").unwrap();
+        fs::write(
+            root.join("examples/types.d.ts"),
+            "declare const x: number;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("examples/types.d.mts"),
+            "declare const y: number;\n",
+        )
+        .unwrap();
+
+        let handler = JsHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"basic.js"));
+        assert!(
+            !names.contains(&"types.d.ts"),
+            "should exclude .d.ts from examples"
+        );
+        assert!(
+            !names.contains(&"types.d.mts"),
+            "should exclude .d.mts from examples"
+        );
     }
 
     #[test]
