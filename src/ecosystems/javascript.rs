@@ -226,13 +226,13 @@ impl JsHandler {
                         if name.ends_with(".d.ts") || name.ends_with(".min.js") {
                             continue;
                         }
-                        if Self::is_test_file(&path) {
+                        if Self::is_test_file(&path, &self.repo_path) {
                             continue;
                         }
                         files.push(path);
                     } else {
                         // Test mode: only include test files
-                        if Self::is_test_file(&path) {
+                        if Self::is_test_file(&path, &self.repo_path) {
                             files.push(path);
                         }
                     }
@@ -317,7 +317,8 @@ impl JsHandler {
     }
 
     /// Check if a file matches JS/TS test patterns.
-    fn is_test_file(path: &Path) -> bool {
+    /// `repo_path` is stripped so parent dirs outside the repo don't match.
+    fn is_test_file(path: &Path, repo_path: &Path) -> bool {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         // Name-based patterns: *.test.js, *.spec.js, *.test.ts, *.spec.ts, etc.
@@ -326,7 +327,9 @@ impl JsHandler {
         }
 
         // Directory-based patterns: __tests__/, test/, tests/
-        path.components().any(|c| {
+        // Use the relative path so parent dirs outside the repo don't false-match.
+        let relative = path.strip_prefix(repo_path).unwrap_or(path);
+        relative.components().any(|c| {
             let s = c.as_os_str().to_str().unwrap_or("");
             matches!(s, "__tests__" | "test" | "tests")
         })
@@ -912,5 +915,28 @@ mod tests {
             .collect();
         assert!(names.contains(&"guide.md"));
         assert!(!names.contains(&"dep.md"));
+    }
+
+    #[test]
+    fn is_test_file_ignores_parent_dir_named_test() {
+        // Repo at /tmp/.../tests/myproject — parent "tests" should NOT cause
+        // source files to be misclassified as test files.
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("tests").join("myproject");
+        fs::create_dir_all(project.join("src")).unwrap();
+        fs::write(project.join("src/index.js"), "module.exports = 1;\n").unwrap();
+
+        let source_path = project.join("src/index.js");
+        // With repo_path = project, the parent "tests" dir is stripped away.
+        assert!(
+            !JsHandler::is_test_file(&source_path, &project),
+            "src/index.js should NOT be a test file even when parent dir is 'tests'"
+        );
+
+        // But a real test file inside the repo IS detected.
+        fs::create_dir_all(project.join("test")).unwrap();
+        fs::write(project.join("test/foo.test.js"), "test\n").unwrap();
+        let test_path = project.join("test/foo.test.js");
+        assert!(JsHandler::is_test_file(&test_path, &project));
     }
 }

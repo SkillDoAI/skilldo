@@ -24,7 +24,7 @@ static IMPORT_RE: Lazy<Regex> =
 static REQUIRE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"require\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
 static NPM_INSTALL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"npm\s+install\s+(?:--save\s+|--save-dev\s+|-S\s+|-D\s+)*([a-zA-Z0-9@._/\-]+)")
+    Regex::new(r"(?m)npm\s+install\s+(?:--save\s+|--save-dev\s+|-S\s+|-D\s+)*(.+?)(?:\s*$|`)")
         .unwrap()
 });
 
@@ -219,11 +219,18 @@ impl LanguageParser for JsParser {
             }
         }
 
-        // npm install instructions: npm install express
+        // npm install instructions: npm install express body-parser
+        // Capture the full tail and split by whitespace to get each package.
         for cap in NPM_INSTALL_RE.captures_iter(imports_content) {
-            let pkg = cap[1].to_string();
-            if !dependencies.contains(&pkg) {
-                dependencies.push(pkg);
+            for name in cap[1].split_whitespace() {
+                let pkg = name.to_string();
+                // Skip flags (--save, -D, etc.) and non-package tokens
+                if pkg.starts_with('-') {
+                    continue;
+                }
+                if !Self::is_builtin_module(&pkg) && !dependencies.contains(&pkg) {
+                    dependencies.push(pkg);
+                }
             }
         }
 
@@ -494,6 +501,26 @@ const express = require('express');
         let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\nnpm install express\n```\n";
         let deps = parser.extract_dependencies(skill).unwrap();
         assert!(deps.contains(&"express".to_string()));
+    }
+
+    #[test]
+    fn npm_install_multiple_packages() {
+        let parser = JsParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```bash\nnpm install express body-parser cors\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(deps.contains(&"express".to_string()));
+        assert!(deps.contains(&"body-parser".to_string()));
+        assert!(deps.contains(&"cors".to_string()));
+    }
+
+    #[test]
+    fn npm_install_with_flags_and_multiple_packages() {
+        let parser = JsParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\nnpm install --save express morgan\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(deps.contains(&"express".to_string()));
+        assert!(deps.contains(&"morgan".to_string()));
     }
 
     #[test]
