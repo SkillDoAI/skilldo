@@ -283,6 +283,7 @@ impl JsHandler {
                         && !name.ends_with(".d.ts")
                         && !name.ends_with(".d.mts")
                         && !name.ends_with(".d.cts")
+                        && !name.contains(".min.")
                     {
                         files.push(path);
                     }
