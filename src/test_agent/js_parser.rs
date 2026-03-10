@@ -247,8 +247,8 @@ impl LanguageParser for JsParser {
         for cap in NPM_INSTALL_RE.captures_iter(imports_content) {
             for name in cap[1].split_whitespace() {
                 let pkg = name.to_string();
-                // Skip flags (--save, -D, etc.) and non-package tokens
-                if pkg.starts_with('-') {
+                // Skip flags (--save, -D, etc.) and relative/internal path specs
+                if pkg.starts_with('-') || Self::is_relative_import(&pkg) {
                     continue;
                 }
                 if !Self::is_builtin_module(&pkg) && !dependencies.contains(&pkg) {
@@ -567,6 +567,19 @@ const express = require('express');
             !deps.iter().any(|d| d.starts_with('-')),
             "flags should not appear as deps: {:?}",
             deps
+        );
+    }
+
+    #[test]
+    fn npm_install_skips_relative_paths() {
+        let parser = JsParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```bash\nnpm install ./vendor/pkg ../lib express\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert_eq!(
+            deps,
+            vec!["express"],
+            "relative paths should be filtered from npm install"
         );
     }
 

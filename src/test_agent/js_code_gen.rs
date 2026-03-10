@@ -60,7 +60,7 @@ impl<'a> JsCodeGenerator<'a> {
         for fence in &["```", "~~~"] {
             for tag in &["javascript", "js", "typescript", "ts", "jsx", "tsx"] {
                 let tagged_fence = format!("{fence}{tag}");
-                if let Some(start) = trimmed.find(&tagged_fence) {
+                if let Some(start) = Self::find_opening_fence(trimmed, &tagged_fence) {
                     let code_start = start + tagged_fence.len();
                     let after = &trimmed[code_start..];
                     let newline_pos = after.find('\n').unwrap_or(0);
@@ -75,7 +75,7 @@ impl<'a> JsCodeGenerator<'a> {
 
         // Try generic ``` or ~~~ code block
         for fence in &["```", "~~~"] {
-            if let Some(start) = trimmed.find(*fence) {
+            if let Some(start) = Self::find_opening_fence(trimmed, fence) {
                 let code_start = start + fence.len();
                 if let Some(end) = Self::find_closing_fence(&trimmed[code_start..], fence) {
                     let mut code = trimmed[code_start..code_start + end].trim();
@@ -110,6 +110,12 @@ impl<'a> JsCodeGenerator<'a> {
 
         // If no code block found, use the response as-is
         Ok(trimmed.to_string())
+    }
+
+    /// Find an opening fence anchored to the start of a line (or start of text).
+    fn find_opening_fence(text: &str, fence: &str) -> Option<usize> {
+        text.match_indices(fence)
+            .find_map(|(i, _)| (i == 0 || text.as_bytes()[i - 1] == b'\n').then_some(i))
     }
 
     /// Find the closing fence that starts at the beginning of a line.
