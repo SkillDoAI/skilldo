@@ -64,7 +64,7 @@ impl ContainerExecutor {
             // being interpreted as npm flags.
             let quoted: Vec<String> = deps.iter().map(|d| format!("'{}'", d)).collect();
             lines.push(format!(
-                "npm install --no-save -- {} > /dev/null",
+                "npm install --no-save --ignore-scripts --no-audit --no-fund -- {} > /dev/null",
                 quoted.join(" ")
             ));
         }
@@ -572,7 +572,9 @@ mod tests {
         let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
         let deps = vec!["express".to_string(), "cors".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
-        assert!(script.contains("npm install --no-save -- 'express' 'cors'"));
+        assert!(script.contains(
+            "npm install --no-save --ignore-scripts --no-audit --no-fund -- 'express' 'cors'"
+        ));
         assert!(script.contains("node test.js"));
     }
 
@@ -781,7 +783,8 @@ mod tests {
             script.contains("package.json"),
             "should write package.json with type:module"
         );
-        assert!(script.contains("npm install --no-save -- 'express'"));
+        assert!(script
+            .contains("npm install --no-save --ignore-scripts --no-audit --no-fund -- 'express'"));
     }
 
     #[test]
@@ -797,7 +800,7 @@ mod tests {
             script.contains("package.json"),
             "should write package.json with type:module"
         );
-        assert!(script.contains("npm install --no-save -- 'express' 'cors' 'helmet'"));
+        assert!(script.contains("npm install --no-save --ignore-scripts --no-audit --no-fund -- 'express' 'cors' 'helmet'"));
     }
 
     #[test]
@@ -1025,7 +1028,8 @@ mod tests {
         assert!(script_path.exists());
         let script = fs::read_to_string(&script_path).unwrap();
         assert!(script.contains("#!/bin/sh"));
-        assert!(script.contains("npm install --no-save -- 'express'"));
+        assert!(script
+            .contains("npm install --no-save --ignore-scripts --no-audit --no-fund -- 'express'"));
         assert!(script.contains("node test.js"));
     }
 
