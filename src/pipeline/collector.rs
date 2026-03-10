@@ -183,7 +183,14 @@ impl Collector {
         };
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
-        let package_name = handler.get_package_name()?;
+        let mut package_name = handler.get_package_name()?;
+        if crate::util::sanitize_dep_name(&package_name).is_err() {
+            warn!(
+                "Go package name '{}' contains unexpected characters, using 'unknown'",
+                package_name
+            );
+            package_name = "unknown".to_string();
+        }
 
         Ok(CollectedData {
             package_name,
@@ -241,7 +248,14 @@ impl Collector {
         };
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
-        let package_name = handler.extract_package_name()?;
+        let mut package_name = handler.extract_package_name()?;
+        if crate::util::sanitize_dep_name(&package_name).is_err() {
+            warn!(
+                "JS package name '{}' contains unexpected characters, using 'unknown'",
+                package_name
+            );
+            package_name = "unknown".to_string();
+        }
 
         Ok(CollectedData {
             package_name,

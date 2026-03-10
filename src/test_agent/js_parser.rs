@@ -295,18 +295,26 @@ impl JsParser {
     /// Normalize subpath imports to the root package name.
     /// `lodash/chunk` → `lodash`, `@scope/pkg/utils` → `@scope/pkg`, `express` → `express`
     fn normalize_package_name(name: &str) -> String {
-        if name.starts_with('@') {
+        let base = if name.starts_with('@') {
             // Scoped package: @scope/name/subpath → @scope/name
             let parts: Vec<&str> = name.splitn(3, '/').collect();
             if parts.len() >= 2 {
                 format!("{}/{}", parts[0], parts[1])
             } else {
-                name.to_string()
+                return name.to_string();
             }
         } else {
             // Unscoped package: lodash/chunk → lodash
             name.split('/').next().unwrap_or(name).to_string()
+        };
+
+        // Strip version specifier: lodash@4.17.21 → lodash, @scope/pkg@^2 → @scope/pkg
+        if let Some(at_pos) = base.rfind('@') {
+            if at_pos > 0 {
+                return base[..at_pos].to_string();
+            }
         }
+        base
     }
 }
 
@@ -827,6 +835,27 @@ import styled from '@emotion/react';
     fn normalize_scoped_bare() {
         // Edge case: just "@scope" with no slash
         assert_eq!(JsParser::normalize_package_name("@scope"), "@scope");
+    }
+
+    #[test]
+    fn normalize_strips_version_specifier() {
+        // npm install lodash@4.17.21 → lodash
+        assert_eq!(JsParser::normalize_package_name("lodash@4.17.21"), "lodash");
+        assert_eq!(
+            JsParser::normalize_package_name("express@^4.0.0"),
+            "express"
+        );
+        // Scoped: @scope/pkg@^2.0 → @scope/pkg
+        assert_eq!(
+            JsParser::normalize_package_name("@emotion/react@^11.0"),
+            "@emotion/react"
+        );
+        // No version: should remain unchanged
+        assert_eq!(JsParser::normalize_package_name("lodash"), "lodash");
+        assert_eq!(
+            JsParser::normalize_package_name("@types/node"),
+            "@types/node"
+        );
     }
 
     #[test]
