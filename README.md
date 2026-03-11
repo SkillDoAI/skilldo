@@ -8,7 +8,7 @@
 Skilldo automatically generates `SKILL.md` agent rules files for open-source libraries. Point it at any repo and get structured rules that help AI coding assistants (Claude, Cursor, Copilot, Codex, etc.) use the library correctly — with validated, tested code examples.
 
 - **6-agent pipeline** — Extract, Map, Learn, Create, Review, and Test stages with automatic retry loops on failure
-- **Container-validated code** — Generated patterns are compiled and executed in Docker/Podman containers to catch hallucinated APIs before they ship
+- **Validated code examples** — Generated patterns are executed locally (or in Docker/Podman containers with `--container`) to catch hallucinated APIs before they ship
 - **3-layer security scanning** — Regex patterns + prompt injection detection + 41 YARA rules (including [Cisco AI Defense](https://github.com/cisco-ai-defense/skill-scanner)) catch malicious content
 - **Multi-provider** — Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, vLLM, etc.)
 - **Per-stage model mixing** — Use a cheap local model for extraction and a frontier cloud model for review. One config, multiple providers.
@@ -16,6 +16,7 @@ Skilldo automatically generates `SKILL.md` agent rules files for open-source lib
 - **CLI provider mode** — Shell out to vendor CLIs (Claude Code, Codex, Gemini CLI) for subscription-based access without API keys
 - **Python, Go, and JavaScript/TypeScript ecosystems** — Full pipeline support with language-specific parsers, code generators, and container images
 - **Free with local models** — Run the entire pipeline on Ollama with zero API cost
+- **Zero global pollution** — Test validation runs in isolated temp directories; nothing installed to your system
 - **28+ pre-generated skills** — Browse [`examples/skills/`](examples/skills/) for ready-to-use rules for popular Python libraries
 
 The goal: make agent rules a standard part of every open-source package — like README.md or .gitignore.
@@ -549,35 +550,31 @@ cargo audit
 ## Requirements
 
 **Runtime:**
-- Rust 1.70+
-- Docker or Podman (for test validation)
+- Rust 1.70+ (for building from source)
 - An LLM API key (or Ollama for local models)
+
+**Language-specific prerequisites** (for the test validation stage):
+
+| Language | Required Tools | Install |
+|----------|---------------|---------|
+| Python | `uv` | `pip install uv` or `brew install uv` |
+| Go | `go` (1.21+) | [go.dev/dl](https://go.dev/dl/) |
+| JavaScript | `node` (18+), `npm` | [nodejs.org](https://nodejs.org/) |
+
+These tools are only needed if the test agent is enabled (it is by default). Skilldo creates isolated temp directories for each test run — no global state is modified.
+
+**Container mode** (optional): Pass `--container` to run test code in Docker/Podman containers instead. Requires `docker` or `podman`.
 
 **External commands** (invoked at runtime via shell):
 
 | Command | Required? | Purpose |
 |---------|-----------|---------|
 | `git` | Optional | Version detection fallback (`git describe --tags`, `git rev-parse`) when package metadata doesn't contain a version |
-| `docker` or `podman` | For test stage | Runs generated test code in isolated containers |
-| `uv` | For test stage (local) | Sets up Python environments for local (non-container) validation |
-| `python3` | For non-container validation | Direct Python execution when containers aren't available |
 
 **Development / Testing:**
-- [uv](https://docs.astral.sh/uv/) — required to run the full test suite (test stage executor tests use `uv` to create isolated Python environments)
-- [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) — for coverage reports (`make coverage` will install it automatically)
+- [uv](https://docs.astral.sh/uv/) — required to run the full test suite
+- [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) — for coverage reports
 - [pre-commit](https://pre-commit.com/) — for git hooks (`pre-commit install && pre-commit install --hook-type pre-push`)
-
-Install dev dependencies:
-```bash
-# Check everything is available
-make check-deps
-
-# Install uv if needed
-pip install uv    # or: brew install uv
-
-# Install pre-commit hooks
-pre-commit install && pre-commit install --hook-type pre-push
-```
 
 ## License
 
