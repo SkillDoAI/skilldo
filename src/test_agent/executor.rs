@@ -283,10 +283,18 @@ impl LanguageExecutor for GoExecutor {
         let temp_dir = TempDir::new().context("Failed to create temp directory")?;
         debug!("Created temp directory: {}", temp_dir.path().display());
 
+        // Isolate GOPATH and GOCACHE inside the temp dir (matches container executor)
+        let gopath = temp_dir.path().join("gopath");
+        let gocache = temp_dir.path().join("gocache");
+        fs::create_dir_all(&gopath).context("Failed to create GOPATH dir")?;
+        fs::create_dir_all(&gocache).context("Failed to create GOCACHE dir")?;
+
         // go mod init
         let mut init_cmd = Command::new("go");
         init_cmd
             .args(["mod", "init", "test"])
+            .env("GOPATH", &gopath)
+            .env("GOCACHE", &gocache)
             .current_dir(temp_dir.path());
         let init_output = run_cmd_with_timeout(init_cmd, Duration::from_secs(30)).await?;
         if !init_output.status.success() {
@@ -299,7 +307,11 @@ impl LanguageExecutor for GoExecutor {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             info!("Installing Go dependency: {}", dep);
             let mut get_cmd = Command::new("go");
-            get_cmd.args(["get", dep]).current_dir(temp_dir.path());
+            get_cmd
+                .args(["get", dep])
+                .env("GOPATH", &gopath)
+                .env("GOCACHE", &gocache)
+                .current_dir(temp_dir.path());
             let get_output = run_cmd_with_timeout(get_cmd, Duration::from_secs(120)).await?;
             if !get_output.status.success() {
                 let stderr = String::from_utf8_lossy(&get_output.stderr);
@@ -324,9 +336,13 @@ impl LanguageExecutor for GoExecutor {
         fs::write(&script_path, code).context("Failed to write main.go")?;
 
         let timeout = Duration::from_secs(self.timeout_secs);
+        let gopath = env.temp_dir.path().join("gopath");
+        let gocache = env.temp_dir.path().join("gocache");
         let mut go_cmd = Command::new("go");
         go_cmd
             .args(["run", "main.go"])
+            .env("GOPATH", &gopath)
+            .env("GOCACHE", &gocache)
             .current_dir(env.temp_dir.path());
 
         let result = run_cmd_with_timeout(go_cmd, timeout).await;
@@ -971,6 +987,19 @@ func main() {
             dependencies: vec![],
         };
         assert!(executor.cleanup(&env).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_go_setup_uses_local_gopath() {
+        if !GoExecutor::check_go_available().await {
+            return;
+        }
+        let executor = GoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let go_mod = env.temp_dir.path().join("go.mod");
+        assert!(go_mod.exists());
+        let gopath = env.temp_dir.path().join("gopath");
+        assert!(gopath.exists(), "GOPATH should be created inside temp dir");
     }
 
     // --- NodeExecutor tests ---
