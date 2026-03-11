@@ -179,12 +179,17 @@ dependencies = [
 
         debug!("Created pyproject.toml with dependencies: {:?}", deps);
 
+        // Isolate UV cache inside temp dir (matches Go/Node cache isolation)
+        let uv_cache = temp_dir.path().join("uv-cache");
+        fs::create_dir_all(&uv_cache).context("Failed to create UV cache dir")?;
+
         // Run uv sync to create venv and install dependencies
         info!("Running uv sync to install dependencies...");
         let mut sync_cmd = Command::new("uv");
         sync_cmd
             .arg("sync")
             .arg("--no-dev")
+            .env("UV_CACHE_DIR", &uv_cache)
             .current_dir(temp_dir.path());
 
         let sync_output = run_cmd_with_timeout(
@@ -329,7 +334,7 @@ impl LanguageExecutor for GoExecutor {
             let get_output = run_cmd_with_timeout(get_cmd, Duration::from_secs(120)).await?;
             if !get_output.status.success() {
                 let stderr = String::from_utf8_lossy(&get_output.stderr);
-                bail!("go get {} failed: {}", dep, stderr);
+                warn!("go get {} failed (non-fatal): {}", dep, stderr);
             }
         }
 
@@ -506,12 +511,17 @@ mod tests {
 
     #[test]
     fn test_classify_result_fail() {
-        // Get a real failed ExitStatus from a process
-        let failed_status = std::process::Command::new("sh")
-            .args(["-c", "exit 1"])
-            .output()
-            .unwrap()
-            .status;
+        // Platform-independent failed ExitStatus
+        #[cfg(unix)]
+        let failed_status = {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1 << 8) // exit code 1
+        };
+        #[cfg(windows)]
+        let failed_status = {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1)
+        };
         let output = Output {
             status: failed_status,
             stdout: b"".to_vec(),
@@ -859,6 +869,20 @@ print(f"Click version: {click.__version__}")
         let result = ExecutionResult::Fail(String::new());
         assert!(result.is_fail());
         assert_eq!(result.error_message(), "");
+    }
+
+    #[tokio::test]
+    async fn test_python_setup_uses_local_uv_cache() {
+        if !is_tool_available("uv", "--version").await {
+            return;
+        }
+        let executor = PythonUvExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let uv_cache = env.temp_dir.path().join("uv-cache");
+        assert!(
+            uv_cache.exists(),
+            "UV cache should be created inside temp dir"
+        );
     }
 
     // --- GoExecutor tests ---

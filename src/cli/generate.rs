@@ -43,6 +43,7 @@ pub struct GenerateOptions {
     pub no_parallel: bool,
     pub best_effort: bool,
     pub telemetry: bool,
+    pub no_telemetry: bool,
     pub dry_run: bool,
 }
 
@@ -75,6 +76,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         no_parallel,
         best_effort,
         telemetry,
+        no_telemetry,
         dry_run,
     } = opts;
     let repo_path = Path::new(&path);
@@ -220,9 +222,11 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         warn!("CLI override: security scan disabled");
         config.generation.enable_security_scan = false;
     }
-    // Telemetry CLI override (telemetry is off by default, --telemetry enables it)
+    // Telemetry CLI overrides: --telemetry enables, --no-telemetry disables (escape hatch for config)
     if telemetry {
         config.generation.telemetry = true;
+    } else if no_telemetry {
+        config.generation.telemetry = false;
     }
 
     // Review agent CLI overrides
@@ -1146,6 +1150,18 @@ install_source = "registry"
     fn cleanup_stale_tmp_files_nonexistent_dir() {
         // Should not panic on a missing directory
         cleanup_stale_tmp_files(Path::new("/nonexistent/dir"), Path::new("SKILL.md"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_dry_run_with_no_telemetry() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            no_telemetry: true,
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
