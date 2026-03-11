@@ -146,6 +146,10 @@ enum Commands {
         #[arg(long)]
         best_effort: bool,
 
+        /// Disable generation telemetry logging
+        #[arg(long = "no-telemetry")]
+        no_telemetry: bool,
+
         /// Use mock LLM client for testing
         #[arg(long)]
         dry_run: bool,
@@ -312,6 +316,7 @@ async fn main() -> Result<()> {
             container,
             no_parallel,
             best_effort,
+            no_telemetry,
             dry_run,
         } => {
             cli::generate::run(cli::generate::GenerateOptions {
@@ -343,6 +348,7 @@ async fn main() -> Result<()> {
                 container,
                 no_parallel,
                 best_effort,
+                no_telemetry,
                 dry_run,
             })
             .await?;
@@ -747,6 +753,7 @@ mod tests {
             "--container",
             "--no-parallel",
             "--best-effort",
+            "--no-telemetry",
             "--dry-run",
         ])
         .unwrap();
@@ -775,6 +782,7 @@ mod tests {
                                container,
                                no_parallel,
                                best_effort,
+                               no_telemetry,
                                dry_run| {
             assert_eq!(path, "/tmp/repo");
             assert_eq!(language.unwrap(), "python");
@@ -800,6 +808,7 @@ mod tests {
             assert!(container);
             assert!(no_parallel);
             assert!(best_effort);
+            assert!(no_telemetry);
             assert_eq!(source_path.unwrap(), "/tmp/mylib");
             assert!(dry_run);
         });
@@ -1049,6 +1058,7 @@ mod tests {
                                container,
                                no_parallel,
                                best_effort,
+                               no_telemetry,
                                dry_run| {
             assert!(!no_test);
             assert!(!no_review);
@@ -1056,6 +1066,7 @@ mod tests {
             assert!(!container);
             assert!(!no_parallel);
             assert!(!best_effort);
+            assert!(!no_telemetry);
             assert!(!dry_run);
         });
     }
