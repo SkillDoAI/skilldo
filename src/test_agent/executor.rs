@@ -445,6 +445,10 @@ impl LanguageExecutor for NodeExecutor {
         fs::write(temp_dir.path().join("package.json"), package_json)
             .context("Failed to write package.json")?;
 
+        // Isolate npm cache inside temp dir (matches container executor)
+        let npm_cache = temp_dir.path().join("npm-cache");
+        fs::create_dir_all(&npm_cache).context("Failed to create npm cache dir")?;
+
         // npm install for each dependency
         // No shell quoting needed — Command passes args directly to the process.
         // sanitize_dep_name already rejects shell metacharacters, and `--` prevents
@@ -469,6 +473,7 @@ impl LanguageExecutor for NodeExecutor {
                     "--",
                 ])
                 .args(deps)
+                .env("npm_config_cache", &npm_cache)
                 .current_dir(temp_dir.path());
             let npm_output = run_cmd_with_timeout(npm_cmd, Duration::from_secs(120)).await?;
             if !npm_output.status.success() {
@@ -1105,5 +1110,19 @@ func main() {
             dependencies: vec![],
         };
         assert!(executor.cleanup(&env).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_node_setup_uses_local_npm_cache() {
+        if !NodeExecutor::check_node_available().await {
+            return;
+        }
+        let executor = NodeExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let npm_cache = env.temp_dir.path().join("npm-cache");
+        assert!(
+            npm_cache.exists(),
+            "npm cache should be created inside temp dir"
+        );
     }
 }
