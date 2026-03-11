@@ -3,6 +3,18 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.3.1
+
+- Added `--telemetry` / `--no-telemetry` CLI flags — telemetry is now opt-in (disabled by default), `--no-telemetry` overrides `telemetry = true` in config
+- Added executor isolation: GoExecutor sets `GOPATH`/`GOCACHE`/`GOMODCACHE` to temp dir subdirs; NodeExecutor sets `npm_config_cache` to temp dir; PythonUvExecutor sets `UV_CACHE_DIR` to temp dir — prevents global state pollution during bare-metal test runs
+- Added E2E matrix strategy in CI: Python, Go, and JavaScript e2e tests run in parallel (`fail-fast: false`), split into build + test jobs
+- Added `is_tool_available()` shared helper — replaced 5 duplicated tool-check implementations across executors
+- Added `classify_result()` shared helper — replaced 3 duplicated pass/fail match blocks across executors
+- Added tests for `classify_result`, `calculate_file_priority`, `is_tool_available`, `stdout_and_stderr` combiner
+- Fixed `calculate_file_priority` bug: `__init__.py` inside internal/test directories (e.g., `tests/__init__.py`) now correctly gets priority 100, not priority 0
+- Updated README: bare-metal default, prerequisites table (uv, go, node/npm)
+- DRY executor refactor: consolidated 17 duplicate tests, net −155 lines
+
 ## 0.3.0
 
 - Added full JavaScript/TypeScript ecosystem support — package.json metadata, npm dependency management, `node:24-alpine` container image, bare-metal (`node` + `npm`) validation
