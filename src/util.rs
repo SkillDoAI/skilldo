@@ -388,4 +388,57 @@ mod tests {
             err_msg
         );
     }
+
+    #[test]
+    fn test_calculate_file_priority() {
+        let repo = Path::new("/repo");
+
+        // Priority 0: top-level __init__.py (depth 2)
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/pkg/__init__.py"), repo),
+            0
+        );
+
+        // Priority 10: deeper __init__.py (depth > 2)
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/pkg/sub/__init__.py"), repo),
+            10
+        );
+
+        // Priority 20: public top-level module (depth 2)
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/pkg/core.py"), repo),
+            20
+        );
+
+        // Priority 30: public subpackage module (depth 3)
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/pkg/sub/utils.py"), repo),
+            30
+        );
+
+        // Priority 50: deeper module (depth 4+)
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/a/b/c/deep.py"), repo),
+            50
+        );
+
+        // Priority 100: underscore-prefixed file
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/pkg/_private.py"), repo),
+            100
+        );
+
+        // Priority 100: internal directory
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/pkg/_internal/foo.py"), repo),
+            100
+        );
+
+        // Priority 100: test directory
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/tests/test_main.py"), repo),
+            100
+        );
+    }
 }

@@ -492,6 +492,45 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_result_pass() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"hello".to_vec(),
+            stderr: b"".to_vec(),
+        };
+        // ExitStatus::default() is success on Unix
+        let result = classify_result(Ok(output), 60, "Test", stderr_only).unwrap();
+        assert!(result.is_pass());
+        assert_eq!(result.error_message(), "hello");
+    }
+
+    #[test]
+    fn test_classify_result_timeout() {
+        let err = crate::error::SkillDoError::Timeout(Duration::from_secs(60));
+        let result = classify_result(Err(err.into()), 60, "Test", stderr_only).unwrap();
+        assert!(matches!(result, ExecutionResult::Timeout));
+    }
+
+    #[test]
+    fn test_classify_result_other_error() {
+        let err = anyhow::anyhow!("some other error");
+        let result = classify_result(Err(err), 60, "Test", stderr_only);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_stdout_and_stderr_combiner() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"log output".to_vec(),
+            stderr: b"error detail".to_vec(),
+        };
+        let combined = stdout_and_stderr(&output);
+        assert!(combined.contains("log output"));
+        assert!(combined.contains("error detail"));
+    }
+
+    #[test]
     fn test_execution_result_is_pass() {
         let result = ExecutionResult::Pass("ok".into());
         assert!(result.is_pass());
