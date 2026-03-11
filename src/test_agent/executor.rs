@@ -270,16 +270,18 @@ pub struct GoExecutor {
 
 const GO_PATH_DIR: &str = "gopath";
 const GO_CACHE_DIR: &str = "gocache";
+const GO_MOD_CACHE_DIR: &str = "gomodcache";
 
 impl GoExecutor {
     pub fn new() -> Self {
         Self { timeout_secs: 60 }
     }
 
-    /// Apply isolated GOPATH/GOCACHE env vars to a command.
+    /// Apply isolated GOPATH/GOCACHE/GOMODCACHE env vars to a command.
     fn apply_go_env(cmd: &mut Command, base: &Path) {
         cmd.env("GOPATH", base.join(GO_PATH_DIR))
-            .env("GOCACHE", base.join(GO_CACHE_DIR));
+            .env("GOCACHE", base.join(GO_CACHE_DIR))
+            .env("GOMODCACHE", base.join(GO_MOD_CACHE_DIR));
     }
 
     pub fn with_timeout(mut self, secs: u64) -> Self {
@@ -306,11 +308,13 @@ impl LanguageExecutor for GoExecutor {
         let temp_dir = TempDir::new().context("Failed to create temp directory")?;
         debug!("Created temp directory: {}", temp_dir.path().display());
 
-        // Isolate GOPATH and GOCACHE inside the temp dir (matches container executor)
+        // Isolate GOPATH, GOCACHE, and GOMODCACHE inside the temp dir (matches container executor)
         fs::create_dir_all(temp_dir.path().join(GO_PATH_DIR))
             .context("Failed to create GOPATH dir")?;
         fs::create_dir_all(temp_dir.path().join(GO_CACHE_DIR))
             .context("Failed to create GOCACHE dir")?;
+        fs::create_dir_all(temp_dir.path().join(GO_MOD_CACHE_DIR))
+            .context("Failed to create GOMODCACHE dir")?;
 
         // go mod init
         let mut init_cmd = Command::new("go");
@@ -966,6 +970,11 @@ func main() {
         assert!(go_mod.exists());
         let gopath = env.temp_dir.path().join(GO_PATH_DIR);
         assert!(gopath.exists(), "GOPATH should be created inside temp dir");
+        let gomodcache = env.temp_dir.path().join(GO_MOD_CACHE_DIR);
+        assert!(
+            gomodcache.exists(),
+            "GOMODCACHE should be created inside temp dir"
+        );
     }
 
     // --- NodeExecutor tests ---
