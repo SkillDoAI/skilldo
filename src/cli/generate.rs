@@ -42,7 +42,7 @@ pub struct GenerateOptions {
     pub container: bool,
     pub no_parallel: bool,
     pub best_effort: bool,
-    pub no_telemetry: bool,
+    pub telemetry: bool,
     pub dry_run: bool,
 }
 
@@ -74,7 +74,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         container,
         no_parallel,
         best_effort,
-        no_telemetry,
+        telemetry,
         dry_run,
     } = opts;
     let repo_path = Path::new(&path);
@@ -220,10 +220,9 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         warn!("CLI override: security scan disabled");
         config.generation.enable_security_scan = false;
     }
-    // Telemetry CLI override
-    if no_telemetry {
-        warn!("CLI override: telemetry disabled");
-        config.generation.telemetry = false;
+    // Telemetry CLI override (telemetry is off by default, --telemetry enables it)
+    if telemetry {
+        config.generation.telemetry = true;
     }
 
     // Review agent CLI overrides

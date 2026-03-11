@@ -57,7 +57,7 @@ Resolved: `ExecutionMode::BareMetal` is the default for all languages. `PythonUv
 
 ## ~~Generation Telemetry~~ — Done in v0.3.1
 
-Resolved: `~/.skilldo/runs.csv` logs every generation run. Fields: timestamp, language, library, version, models, retries, passed, duration_secs, skilldo_version. Opt out with `--no-telemetry` or `telemetry = false` in config.
+Resolved: `~/.skilldo/runs.csv` logs generation runs when enabled. Fields: timestamp, language, library, version, models, retries, passed, duration_secs, skilldo_version. Opt in with `--telemetry` or `telemetry = true` in config.
 
 ## Multi-Language Test Agent
 

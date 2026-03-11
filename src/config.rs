@@ -561,8 +561,8 @@ pub struct GenerationConfig {
     #[serde(default)]
     pub version_from: Option<VersionStrategy>,
 
-    /// Append run telemetry to ~/.skilldo/runs.csv (default: true)
-    #[serde(default = "default_true")]
+    /// Append run telemetry to ~/.skilldo/runs.csv (default: false)
+    #[serde(default)]
     pub telemetry: bool,
 
     /// Container configuration for test agent validation
@@ -972,7 +972,7 @@ impl Default for GenerationConfig {
             review_llm: None,
             test_llm: None,
             version_from: None,
-            telemetry: default_true(),
+            telemetry: false,
             container: ContainerConfig::default(),
         }
     }
@@ -1006,7 +1006,7 @@ mod tests {
         assert_eq!(gen.enable_review, default_true());
         assert_eq!(gen.enable_security_scan, default_true());
         assert_eq!(gen.review_max_retries, default_review_max_retries());
-        assert_eq!(gen.telemetry, default_true());
+        assert!(!gen.telemetry);
         assert!(gen.output.is_none());
         assert!(gen.input.is_none());
         assert!(gen.language.is_none());
@@ -1134,7 +1134,7 @@ mod tests {
             review_llm: None,
             test_llm: None,
             version_from: None,
-            telemetry: true,
+            telemetry: false,
             container: ContainerConfig::default(),
         };
         assert_eq!(
