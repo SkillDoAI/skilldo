@@ -4,8 +4,8 @@
 
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::path::PathBuf;
-use std::process::Stdio;
+use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -13,6 +13,64 @@ use tracing::{debug, info, warn};
 
 use super::LanguageExecutor;
 use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
+
+/// Check if a CLI tool is available in PATH.
+pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
+    Command::new(cmd)
+        .arg(arg)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Classify a command execution result into Pass/Fail/Timeout.
+/// `fail_output` extracts the error message from the output on failure.
+fn classify_result(
+    result: Result<Output>,
+    timeout_secs: u64,
+    lang: &str,
+    fail_output: fn(&Output) -> String,
+) -> Result<ExecutionResult> {
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                debug!("{} code execution passed", lang);
+                Ok(ExecutionResult::Pass(stdout))
+            } else {
+                let msg = fail_output(&output);
+                debug!("{} code execution failed", lang);
+                Ok(ExecutionResult::Fail(msg))
+            }
+        }
+        Err(e) => {
+            if crate::error::SkillDoError::is_timeout(&e) {
+                warn!(
+                    "{} code execution timed out after {} seconds",
+                    lang, timeout_secs
+                );
+                Ok(ExecutionResult::Timeout)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Default failure output: stderr only.
+fn stderr_only(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
+/// Node failure output: combine stdout + stderr (console.log goes to stdout).
+fn stdout_and_stderr(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    format!("{stdout}\n{stderr}").trim().to_string()
+}
 
 /// Represents an isolated execution environment
 #[derive(Debug)]
@@ -65,18 +123,6 @@ impl PythonUvExecutor {
         self.timeout_secs = secs;
         self
     }
-
-    /// Check if uv is available in PATH
-    async fn check_uv_available() -> bool {
-        Command::new("uv")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
 }
 
 impl Default for PythonUvExecutor {
@@ -93,8 +139,7 @@ impl LanguageExecutor for PythonUvExecutor {
             deps.len()
         );
 
-        // Check if uv is available
-        if !Self::check_uv_available().await {
+        if !is_tool_available("uv", "--version").await {
             bail!("uv is not installed or not in PATH (install: https://docs.astral.sh/uv/)");
         }
 
@@ -134,12 +179,17 @@ dependencies = [
 
         debug!("Created pyproject.toml with dependencies: {:?}", deps);
 
+        // Isolate UV cache inside temp dir (matches Go/Node cache isolation)
+        let uv_cache = temp_dir.path().join("uv-cache");
+        fs::create_dir_all(&uv_cache).context("Failed to create UV cache dir")?;
+
         // Run uv sync to create venv and install dependencies
         info!("Running uv sync to install dependencies...");
         let mut sync_cmd = Command::new("uv");
         sync_cmd
             .arg("sync")
             .arg("--no-dev")
+            .env("UV_CACHE_DIR", &uv_cache)
             .current_dir(temp_dir.path());
 
         let sync_output = run_cmd_with_timeout(
@@ -200,31 +250,7 @@ dependencies = [
             .current_dir(env.temp_dir.path());
 
         let result = run_cmd_with_timeout(python_cmd, timeout).await;
-
-        match result {
-            Ok(output) => {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    debug!("✓ Code execution passed");
-                    Ok(ExecutionResult::Pass(stdout))
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    debug!("✗ Code execution failed");
-                    Ok(ExecutionResult::Fail(stderr))
-                }
-            }
-            Err(e) => {
-                if crate::error::SkillDoError::is_timeout(&e) {
-                    warn!(
-                        "Code execution timed out after {} seconds",
-                        self.timeout_secs
-                    );
-                    Ok(ExecutionResult::Timeout)
-                } else {
-                    Err(e)
-                }
-            }
-        }
+        classify_result(result, self.timeout_secs, "Python", stderr_only)
     }
 
     async fn cleanup(&self, env: &ExecutionEnv) -> Result<()> {
@@ -242,26 +268,25 @@ pub struct GoExecutor {
     timeout_secs: u64,
 }
 
+const GO_PATH_DIR: &str = "gopath";
+const GO_CACHE_DIR: &str = "gocache";
+const GO_MOD_CACHE_DIR: &str = "gomodcache";
+
 impl GoExecutor {
     pub fn new() -> Self {
         Self { timeout_secs: 60 }
     }
 
+    /// Apply isolated GOPATH/GOCACHE/GOMODCACHE env vars to a command.
+    fn apply_go_env(cmd: &mut Command, base: &Path) {
+        cmd.env("GOPATH", base.join(GO_PATH_DIR))
+            .env("GOCACHE", base.join(GO_CACHE_DIR))
+            .env("GOMODCACHE", base.join(GO_MOD_CACHE_DIR));
+    }
+
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
         self
-    }
-
-    /// Check if go is available in PATH
-    async fn check_go_available() -> bool {
-        Command::new("go")
-            .arg("version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false)
     }
 }
 
@@ -276,18 +301,27 @@ impl LanguageExecutor for GoExecutor {
     async fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
         info!("Setting up Go environment with {} dependencies", deps.len());
 
-        if !Self::check_go_available().await {
+        if !is_tool_available("go", "version").await {
             bail!("go is not installed or not in PATH");
         }
 
         let temp_dir = TempDir::new().context("Failed to create temp directory")?;
         debug!("Created temp directory: {}", temp_dir.path().display());
 
+        // Isolate GOPATH, GOCACHE, and GOMODCACHE inside the temp dir (matches container executor)
+        fs::create_dir_all(temp_dir.path().join(GO_PATH_DIR))
+            .context("Failed to create GOPATH dir")?;
+        fs::create_dir_all(temp_dir.path().join(GO_CACHE_DIR))
+            .context("Failed to create GOCACHE dir")?;
+        fs::create_dir_all(temp_dir.path().join(GO_MOD_CACHE_DIR))
+            .context("Failed to create GOMODCACHE dir")?;
+
         // go mod init
         let mut init_cmd = Command::new("go");
         init_cmd
             .args(["mod", "init", "test"])
             .current_dir(temp_dir.path());
+        Self::apply_go_env(&mut init_cmd, temp_dir.path());
         let init_output = run_cmd_with_timeout(init_cmd, Duration::from_secs(30)).await?;
         if !init_output.status.success() {
             let stderr = String::from_utf8_lossy(&init_output.stderr);
@@ -300,6 +334,7 @@ impl LanguageExecutor for GoExecutor {
             info!("Installing Go dependency: {}", dep);
             let mut get_cmd = Command::new("go");
             get_cmd.args(["get", dep]).current_dir(temp_dir.path());
+            Self::apply_go_env(&mut get_cmd, temp_dir.path());
             let get_output = run_cmd_with_timeout(get_cmd, Duration::from_secs(120)).await?;
             if !get_output.status.success() {
                 let stderr = String::from_utf8_lossy(&get_output.stderr);
@@ -328,33 +363,10 @@ impl LanguageExecutor for GoExecutor {
         go_cmd
             .args(["run", "main.go"])
             .current_dir(env.temp_dir.path());
+        Self::apply_go_env(&mut go_cmd, env.temp_dir.path());
 
         let result = run_cmd_with_timeout(go_cmd, timeout).await;
-
-        match result {
-            Ok(output) => {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    debug!("Go code execution passed");
-                    Ok(ExecutionResult::Pass(stdout))
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    debug!("Go code execution failed");
-                    Ok(ExecutionResult::Fail(stderr))
-                }
-            }
-            Err(e) => {
-                if crate::error::SkillDoError::is_timeout(&e) {
-                    warn!(
-                        "Go code execution timed out after {} seconds",
-                        self.timeout_secs
-                    );
-                    Ok(ExecutionResult::Timeout)
-                } else {
-                    Err(e)
-                }
-            }
-        }
+        classify_result(result, self.timeout_secs, "Go", stderr_only)
     }
 
     async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
@@ -376,30 +388,6 @@ impl NodeExecutor {
         self.timeout_secs = secs;
         self
     }
-
-    /// Check if node is available in PATH
-    async fn check_node_available() -> bool {
-        Command::new("node")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-
-    /// Check if npm is available in PATH
-    async fn check_npm_available() -> bool {
-        Command::new("npm")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
 }
 
 impl Default for NodeExecutor {
@@ -416,7 +404,7 @@ impl LanguageExecutor for NodeExecutor {
             deps.len()
         );
 
-        if !Self::check_node_available().await {
+        if !is_tool_available("node", "--version").await {
             bail!("node is not installed or not in PATH");
         }
 
@@ -429,12 +417,16 @@ impl LanguageExecutor for NodeExecutor {
         fs::write(temp_dir.path().join("package.json"), package_json)
             .context("Failed to write package.json")?;
 
+        // Isolate npm cache inside temp dir (matches container executor)
+        let npm_cache = temp_dir.path().join("npm-cache");
+        fs::create_dir_all(&npm_cache).context("Failed to create npm cache dir")?;
+
         // npm install for each dependency
         // No shell quoting needed — Command passes args directly to the process.
         // sanitize_dep_name already rejects shell metacharacters, and `--` prevents
         // flag injection.
         if !deps.is_empty() {
-            if !Self::check_npm_available().await {
+            if !is_tool_available("npm", "--version").await {
                 bail!("npm is not installed or not in PATH");
             }
             for dep in deps {
@@ -453,6 +445,7 @@ impl LanguageExecutor for NodeExecutor {
                     "--",
                 ])
                 .args(deps)
+                .env("npm_config_cache", &npm_cache)
                 .current_dir(temp_dir.path());
             let npm_output = run_cmd_with_timeout(npm_cmd, Duration::from_secs(120)).await?;
             if !npm_output.status.success() {
@@ -482,35 +475,9 @@ impl LanguageExecutor for NodeExecutor {
         node_cmd.arg("test.js").current_dir(env.temp_dir.path());
 
         let result = run_cmd_with_timeout(node_cmd, timeout).await;
-
-        match result {
-            Ok(output) => {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    debug!("Node.js code execution passed");
-                    Ok(ExecutionResult::Pass(stdout))
-                } else {
-                    // Combine stdout + stderr for retry feedback — console.log()
-                    // output (the LLM's primary diagnostic channel) goes to stdout.
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let combined = format!("{stdout}\n{stderr}").trim().to_string();
-                    debug!("Node.js code execution failed");
-                    Ok(ExecutionResult::Fail(combined))
-                }
-            }
-            Err(e) => {
-                if crate::error::SkillDoError::is_timeout(&e) {
-                    warn!(
-                        "Node.js code execution timed out after {} seconds",
-                        self.timeout_secs
-                    );
-                    Ok(ExecutionResult::Timeout)
-                } else {
-                    Err(e)
-                }
-            }
-        }
+        // Node combines stdout + stderr for retry feedback — console.log()
+        // output (the LLM's primary diagnostic channel) goes to stdout.
+        classify_result(result, self.timeout_secs, "Node.js", stdout_and_stderr)
     }
 
     async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
@@ -523,9 +490,76 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_check_uv_available() {
+    async fn test_is_tool_available() {
         // Just check it doesn't panic - availability depends on system
-        let _ = PythonUvExecutor::check_uv_available().await;
+        let _ = is_tool_available("uv", "--version").await;
+        let _ = is_tool_available("go", "version").await;
+        let _ = is_tool_available("node", "--version").await;
+        let _ = is_tool_available("npm", "--version").await;
+        // Non-existent tool should return false
+        assert!(!is_tool_available("nonexistent-tool-xyz", "--version").await);
+    }
+
+    #[test]
+    fn test_classify_result_pass() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"hello".to_vec(),
+            stderr: b"".to_vec(),
+        };
+        // ExitStatus::default() is success on Unix
+        let result = classify_result(Ok(output), 60, "Test", stderr_only).unwrap();
+        assert!(result.is_pass());
+        assert_eq!(result.error_message(), "hello");
+    }
+
+    #[test]
+    fn test_classify_result_fail() {
+        // Platform-independent failed ExitStatus
+        #[cfg(unix)]
+        let failed_status = {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1 << 8) // exit code 1
+        };
+        #[cfg(windows)]
+        let failed_status = {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1)
+        };
+        let output = Output {
+            status: failed_status,
+            stdout: b"".to_vec(),
+            stderr: b"some error".to_vec(),
+        };
+        let result = classify_result(Ok(output), 60, "Test", stderr_only).unwrap();
+        assert!(result.is_fail());
+        assert_eq!(result.error_message(), "some error");
+    }
+
+    #[test]
+    fn test_classify_result_timeout() {
+        let err = crate::error::SkillDoError::Timeout(Duration::from_secs(60));
+        let result = classify_result(Err(err.into()), 60, "Test", stderr_only).unwrap();
+        assert!(matches!(result, ExecutionResult::Timeout));
+    }
+
+    #[test]
+    fn test_classify_result_other_error() {
+        let err = anyhow::anyhow!("some other error");
+        let result = classify_result(Err(err), 60, "Test", stderr_only);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_stdout_and_stderr_combiner() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"log output".to_vec(),
+            stderr: b"error detail".to_vec(),
+        };
+        let combined = stdout_and_stderr(&output);
+        assert!(combined.contains("log output"));
+        assert!(combined.contains("error detail"));
     }
 
     #[test]
@@ -566,15 +600,15 @@ mod tests {
     }
 
     #[test]
-    fn test_python_uv_executor_default() {
-        let executor = PythonUvExecutor::default();
-        assert_eq!(executor.timeout_secs, 60);
-    }
+    fn test_executor_defaults_and_timeouts() {
+        // All executors default to 60s and support with_timeout
+        assert_eq!(PythonUvExecutor::default().timeout_secs, 60);
+        assert_eq!(GoExecutor::default().timeout_secs, 60);
+        assert_eq!(NodeExecutor::default().timeout_secs, 60);
 
-    #[test]
-    fn test_python_uv_executor_with_timeout() {
-        let executor = PythonUvExecutor::new().with_timeout(30);
-        assert_eq!(executor.timeout_secs, 30);
+        assert_eq!(PythonUvExecutor::new().with_timeout(30).timeout_secs, 30);
+        assert_eq!(GoExecutor::new().with_timeout(120).timeout_secs, 120);
+        assert_eq!(NodeExecutor::new().with_timeout(0).timeout_secs, 0);
     }
 
     #[tokio::test]
@@ -623,16 +657,19 @@ raise ValueError("Test error")
 
     #[tokio::test]
     async fn test_cleanup_is_noop() {
-        // cleanup() just returns Ok — TempDir handles actual cleanup
-        let executor = PythonUvExecutor::new();
-        let temp_dir = TempDir::new().unwrap();
-        let env = ExecutionEnv {
-            temp_dir,
-            interpreter_path: None,
-            container_name: None,
-            dependencies: vec![],
+        // cleanup() just returns Ok for all executors — TempDir handles actual cleanup
+        let make_env = || {
+            let temp_dir = TempDir::new().unwrap();
+            ExecutionEnv {
+                temp_dir,
+                interpreter_path: None,
+                container_name: None,
+                dependencies: vec![],
+            }
         };
-        assert!(executor.cleanup(&env).await.is_ok());
+        assert!(PythonUvExecutor::new().cleanup(&make_env()).await.is_ok());
+        assert!(GoExecutor::new().cleanup(&make_env()).await.is_ok());
+        assert!(NodeExecutor::new().cleanup(&make_env()).await.is_ok());
     }
 
     #[tokio::test]
@@ -778,14 +815,6 @@ print(f"Click version: {click.__version__}")
         assert!(debug_str.contains("None"));
     }
 
-    // --- PythonUvExecutor::new() direct usage ---
-
-    #[test]
-    fn test_python_uv_executor_new_timeout() {
-        let executor = PythonUvExecutor::new();
-        assert_eq!(executor.timeout_secs, 60);
-    }
-
     // --- ExecutionEnv field access ---
 
     #[test]
@@ -830,20 +859,6 @@ print(f"Click version: {click.__version__}")
         );
     }
 
-    // --- with_timeout chaining ---
-
-    #[test]
-    fn test_with_timeout_chained() {
-        let executor = PythonUvExecutor::new().with_timeout(120);
-        assert_eq!(executor.timeout_secs, 120);
-    }
-
-    #[test]
-    fn test_with_timeout_zero() {
-        let executor = PythonUvExecutor::new().with_timeout(0);
-        assert_eq!(executor.timeout_secs, 0);
-    }
-
     // --- error_message with empty strings ---
 
     #[test]
@@ -860,41 +875,25 @@ print(f"Click version: {click.__version__}")
         assert_eq!(result.error_message(), "");
     }
 
+    #[tokio::test]
+    async fn test_python_setup_uses_local_uv_cache() {
+        if !is_tool_available("uv", "--version").await {
+            return;
+        }
+        let executor = PythonUvExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let uv_cache = env.temp_dir.path().join("uv-cache");
+        assert!(
+            uv_cache.exists(),
+            "UV cache should be created inside temp dir"
+        );
+    }
+
     // --- GoExecutor tests ---
 
     #[tokio::test]
-    async fn test_check_go_available() {
-        // Just check it doesn't panic - availability depends on system
-        let _ = GoExecutor::check_go_available().await;
-    }
-
-    #[test]
-    fn test_go_executor_default() {
-        let executor = GoExecutor::default();
-        assert_eq!(executor.timeout_secs, 60);
-    }
-
-    #[test]
-    fn test_go_executor_with_timeout() {
-        let executor = GoExecutor::new().with_timeout(30);
-        assert_eq!(executor.timeout_secs, 30);
-    }
-
-    #[test]
-    fn test_go_executor_with_timeout_chained() {
-        let executor = GoExecutor::new().with_timeout(120);
-        assert_eq!(executor.timeout_secs, 120);
-    }
-
-    #[test]
-    fn test_go_executor_with_timeout_zero() {
-        let executor = GoExecutor::new().with_timeout(0);
-        assert_eq!(executor.timeout_secs, 0);
-    }
-
-    #[tokio::test]
     async fn test_go_setup_environment_no_deps() {
-        if !GoExecutor::check_go_available().await {
+        if !is_tool_available("go", "version").await {
             return; // Skip if go not installed
         }
         let executor = GoExecutor::new();
@@ -905,7 +904,7 @@ print(f"Click version: {click.__version__}")
 
     #[tokio::test]
     async fn test_go_run_simple_code() {
-        if !GoExecutor::check_go_available().await {
+        if !is_tool_available("go", "version").await {
             return;
         }
         let executor = GoExecutor::new();
@@ -929,7 +928,7 @@ func main() {
 
     #[tokio::test]
     async fn test_go_run_failing_code() {
-        if !GoExecutor::check_go_available().await {
+        if !is_tool_available("go", "version").await {
             return;
         }
         let executor = GoExecutor::new();
@@ -950,7 +949,7 @@ func main() {
 
     #[tokio::test]
     async fn test_go_setup_environment_rejects_bad_deps() {
-        if !GoExecutor::check_go_available().await {
+        if !is_tool_available("go", "version").await {
             return;
         }
         let executor = GoExecutor::new();
@@ -961,59 +960,28 @@ func main() {
     }
 
     #[tokio::test]
-    async fn test_go_cleanup_is_noop() {
+    async fn test_go_setup_uses_local_gopath() {
+        if !is_tool_available("go", "version").await {
+            return;
+        }
         let executor = GoExecutor::new();
-        let temp_dir = TempDir::new().unwrap();
-        let env = ExecutionEnv {
-            temp_dir,
-            interpreter_path: None,
-            container_name: None,
-            dependencies: vec![],
-        };
-        assert!(executor.cleanup(&env).await.is_ok());
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let go_mod = env.temp_dir.path().join("go.mod");
+        assert!(go_mod.exists());
+        let gopath = env.temp_dir.path().join(GO_PATH_DIR);
+        assert!(gopath.exists(), "GOPATH should be created inside temp dir");
+        let gomodcache = env.temp_dir.path().join(GO_MOD_CACHE_DIR);
+        assert!(
+            gomodcache.exists(),
+            "GOMODCACHE should be created inside temp dir"
+        );
     }
 
     // --- NodeExecutor tests ---
 
     #[tokio::test]
-    async fn test_check_node_available() {
-        // Just check it doesn't panic - availability depends on system
-        let _ = NodeExecutor::check_node_available().await;
-    }
-
-    #[tokio::test]
-    async fn test_check_npm_available() {
-        // Just check it doesn't panic - availability depends on system
-        let _ = NodeExecutor::check_npm_available().await;
-    }
-
-    #[test]
-    fn test_node_executor_default() {
-        let executor = NodeExecutor::default();
-        assert_eq!(executor.timeout_secs, 60);
-    }
-
-    #[test]
-    fn test_node_executor_with_timeout() {
-        let executor = NodeExecutor::new().with_timeout(30);
-        assert_eq!(executor.timeout_secs, 30);
-    }
-
-    #[test]
-    fn test_node_executor_with_timeout_chained() {
-        let executor = NodeExecutor::new().with_timeout(120);
-        assert_eq!(executor.timeout_secs, 120);
-    }
-
-    #[test]
-    fn test_node_executor_with_timeout_zero() {
-        let executor = NodeExecutor::new().with_timeout(0);
-        assert_eq!(executor.timeout_secs, 0);
-    }
-
-    #[tokio::test]
     async fn test_node_setup_environment_no_deps() {
-        if !NodeExecutor::check_node_available().await {
+        if !is_tool_available("node", "--version").await {
             return; // Skip if node not installed
         }
         let executor = NodeExecutor::new();
@@ -1024,7 +992,7 @@ func main() {
 
     #[tokio::test]
     async fn test_node_run_simple_code() {
-        if !NodeExecutor::check_node_available().await {
+        if !is_tool_available("node", "--version").await {
             return;
         }
         let executor = NodeExecutor::new();
@@ -1041,7 +1009,7 @@ func main() {
 
     #[tokio::test]
     async fn test_node_run_failing_code() {
-        if !NodeExecutor::check_node_available().await {
+        if !is_tool_available("node", "--version").await {
             return;
         }
         let executor = NodeExecutor::new();
@@ -1055,7 +1023,7 @@ func main() {
 
     #[tokio::test]
     async fn test_node_setup_environment_rejects_bad_deps() {
-        if !NodeExecutor::check_node_available().await {
+        if !is_tool_available("node", "--version").await {
             return;
         }
         let executor = NodeExecutor::new();
@@ -1066,15 +1034,16 @@ func main() {
     }
 
     #[tokio::test]
-    async fn test_node_cleanup_is_noop() {
+    async fn test_node_setup_uses_local_npm_cache() {
+        if !is_tool_available("node", "--version").await {
+            return;
+        }
         let executor = NodeExecutor::new();
-        let temp_dir = TempDir::new().unwrap();
-        let env = ExecutionEnv {
-            temp_dir,
-            interpreter_path: None,
-            container_name: None,
-            dependencies: vec![],
-        };
-        assert!(executor.cleanup(&env).await.is_ok());
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let npm_cache = env.temp_dir.path().join("npm-cache");
+        assert!(
+            npm_cache.exists(),
+            "npm cache should be created inside temp dir"
+        );
     }
 }

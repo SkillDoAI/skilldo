@@ -160,25 +160,23 @@ jobs:
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
 
-  e2e:
-    name: e2e smoke test
-    # Only run on main pushes with rust changes to conserve API credits.
-    # Secrets aren't available on fork PRs anyway.
+  e2e-build:
+    name: "e2e: build"
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
     needs: [changes, fmt, clippy, test-cov, integration, audit]
+    outputs:
+      skip: ${{ steps.check-secret.outputs.skip }}
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
       CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
     steps:
       - uses: actions/checkout@v6
-
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ runner.os }}
           cache-all-crates: true
-      - uses: astral-sh/setup-uv@v7
 
       - name: Check API access
         id: check-secret
@@ -194,268 +192,134 @@ jobs:
         if: steps.check-secret.outputs.skip != 'true'
         run: cargo build --release
 
-      - name: Clone Python test library (click)
+      - name: Upload binary
         if: steps.check-secret.outputs.skip != 'true'
-        run: git clone --branch 8.3.1 --depth 1 https://github.com/pallets/click.git /tmp/click
-
-      - name: Generate Python SKILL.md
-        if: steps.check-secret.outputs.skip != 'true'
-        run: |
-          ./target/release/skilldo generate /tmp/click \
-            --provider openai-compatible \
-            --model gpt-oss-120b \
-            --base-url https://api.cerebras.ai/v1 \
-            --max-retries 5 \
-            -o /tmp/click-SKILL.md
-        env:
-          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
-
-      - name: Validate Python output
-        if: steps.check-secret.outputs.skip != 'true'
-        run: |
-          FILE="/tmp/click-SKILL.md"
-          ERRORS=0
-
-          # 1. File exists and is non-empty
-          if [ ! -s "$FILE" ]; then
-            echo "::error::SKILL.md is empty or missing"
-            exit 1
-          fi
-          echo "✓ File exists ($(wc -c < "$FILE") bytes)"
-
-          # 2. Has YAML frontmatter
-          if ! head -1 "$FILE" | grep -q '^---'; then
-            echo "::error::Missing YAML frontmatter (no opening ---)"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "✓ Has YAML frontmatter"
-          fi
-
-          # 3. Required frontmatter fields
-          for field in "name:" "version:" "ecosystem:"; do
-            if ! head -20 "$FILE" | grep -q "$field"; then
-              echo "::error::Missing frontmatter field: $field"
-              ERRORS=$((ERRORS + 1))
-            else
-              echo "✓ Frontmatter has $field"
-            fi
-          done
-
-          # 4. Required sections
-          for section in "## Imports" "## Core Patterns" "## Pitfalls"; do
-            if ! grep -q "$section" "$FILE"; then
-              echo "::error::Missing required section: $section"
-              ERRORS=$((ERRORS + 1))
-            else
-              echo "✓ Has section: $section"
-            fi
-          done
-
-          # 5. No security lint keywords in prose (basic sanity check)
-          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -P '(?<!`)rm -rf /(?!tmp)'; then
-            echo "::error::Security: destructive command found in output"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "✓ No destructive commands in prose"
-          fi
-
-          # 6. Reasonable size (>500 bytes, <500KB)
-          SIZE=$(wc -c < "$FILE")
-          if [ "$SIZE" -lt 500 ]; then
-            echo "::error::SKILL.md suspiciously small ($SIZE bytes)"
-            ERRORS=$((ERRORS + 1))
-          elif [ "$SIZE" -gt 512000 ]; then
-            echo "::error::SKILL.md suspiciously large ($SIZE bytes)"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "✓ Reasonable size ($SIZE bytes)"
-          fi
-
-          if [ "$ERRORS" -gt 0 ]; then
-            echo "::error::E2E validation failed with $ERRORS error(s)"
-            exit 1
-          fi
-          echo ""
-          echo "=== E2E structural validation passed ==="
-
-      - name: Lint Python skill
-        if: steps.check-secret.outputs.skip != 'true'
-        run: ./target/release/skilldo lint /tmp/click-SKILL.md
-
-      - name: Clone Go test library (chi)
-        if: steps.check-secret.outputs.skip != 'true'
-        run: git clone --branch v5.2.1 --depth 1 https://github.com/go-chi/chi.git /tmp/chi
-
-      - name: Generate Go SKILL.md
-        if: steps.check-secret.outputs.skip != 'true'
-        run: |
-          ./target/release/skilldo generate /tmp/chi \
-            --provider openai-compatible \
-            --model gpt-oss-120b \
-            --base-url https://api.cerebras.ai/v1 \
-            --language go \
-            --max-retries 5 \
-            -o /tmp/chi-SKILL.md
-        env:
-          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
-
-      - name: Validate Go output
-        if: steps.check-secret.outputs.skip != 'true'
-        run: |
-          FILE="/tmp/chi-SKILL.md"
-          ERRORS=0
-
-          if [ ! -s "$FILE" ]; then
-            echo "::error::Go SKILL.md is empty or missing"
-            exit 1
-          fi
-          echo "Go: File exists ($(wc -c < "$FILE") bytes)"
-
-          if ! head -1 "$FILE" | grep -q '^---'; then
-            echo "::error::Go: Missing YAML frontmatter"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "Go: Has YAML frontmatter"
-          fi
-
-          for field in "name:" "version:" "ecosystem:"; do
-            if ! head -20 "$FILE" | grep -q "$field"; then
-              echo "::error::Go: Missing frontmatter field: $field"
-              ERRORS=$((ERRORS + 1))
-            else
-              echo "Go: Frontmatter has $field"
-            fi
-          done
-
-          for section in "## Imports" "## Core Patterns" "## Pitfalls"; do
-            if ! grep -q "$section" "$FILE"; then
-              echo "::error::Go: Missing required section: $section"
-              ERRORS=$((ERRORS + 1))
-            else
-              echo "Go: Has section: $section"
-            fi
-          done
-
-          # No security lint keywords in prose (basic sanity check)
-          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -P '(?<!`)rm -rf /(?!tmp)'; then
-            echo "::error::Go: destructive command found in output"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "Go: No destructive commands in prose"
-          fi
-
-          SIZE=$(wc -c < "$FILE")
-          if [ "$SIZE" -lt 500 ]; then
-            echo "::error::Go SKILL.md suspiciously small ($SIZE bytes)"
-            ERRORS=$((ERRORS + 1))
-          elif [ "$SIZE" -gt 512000 ]; then
-            echo "::error::Go SKILL.md suspiciously large ($SIZE bytes)"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "Go: Reasonable size ($SIZE bytes)"
-          fi
-
-          if [ "$ERRORS" -gt 0 ]; then
-            echo "::error::Go E2E validation failed with $ERRORS error(s)"
-            exit 1
-          fi
-          echo ""
-          echo "=== Go E2E structural validation passed ==="
-
-      - name: Lint Go generated skill
-        if: steps.check-secret.outputs.skip != 'true'
-        run: ./target/release/skilldo lint /tmp/chi-SKILL.md
-
-      - name: Clone JS test library (lodash)
-        if: steps.check-secret.outputs.skip != 'true'
-        run: git clone --branch 4.17.21 --depth 1 https://github.com/lodash/lodash.git /tmp/lodash
-
-      - name: Generate JavaScript SKILL.md
-        if: steps.check-secret.outputs.skip != 'true'
-        run: |
-          ./target/release/skilldo generate /tmp/lodash \
-            --provider openai-compatible \
-            --model gpt-oss-120b \
-            --base-url https://api.cerebras.ai/v1 \
-            --language javascript \
-            --max-retries 5 \
-            -o /tmp/lodash-SKILL.md
-        env:
-          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
-
-      - name: Validate JavaScript output
-        if: steps.check-secret.outputs.skip != 'true'
-        run: |
-          FILE="/tmp/lodash-SKILL.md"
-          ERRORS=0
-
-          if [ ! -s "$FILE" ]; then
-            echo "::error::JS SKILL.md is empty or missing"
-            exit 1
-          fi
-          echo "JS: File exists ($(wc -c < "$FILE") bytes)"
-
-          if ! head -1 "$FILE" | grep -q '^---'; then
-            echo "::error::JS: Missing YAML frontmatter"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "JS: Has YAML frontmatter"
-          fi
-
-          for field in "name:" "version:" "ecosystem:"; do
-            if ! head -20 "$FILE" | grep -q "$field"; then
-              echo "::error::JS: Missing frontmatter field: $field"
-              ERRORS=$((ERRORS + 1))
-            else
-              echo "JS: Frontmatter has $field"
-            fi
-          done
-
-          for section in "## Imports" "## Core Patterns" "## Pitfalls"; do
-            if ! grep -q "$section" "$FILE"; then
-              echo "::error::JS: Missing required section: $section"
-              ERRORS=$((ERRORS + 1))
-            else
-              echo "JS: Has section: $section"
-            fi
-          done
-
-          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -P '(?<!`)rm -rf /(?!tmp)'; then
-            echo "::error::JS: destructive command found in output"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "JS: No destructive commands in prose"
-          fi
-
-          SIZE=$(wc -c < "$FILE")
-          if [ "$SIZE" -lt 500 ]; then
-            echo "::error::JS SKILL.md suspiciously small ($SIZE bytes)"
-            ERRORS=$((ERRORS + 1))
-          elif [ "$SIZE" -gt 512000 ]; then
-            echo "::error::JS SKILL.md suspiciously large ($SIZE bytes)"
-            ERRORS=$((ERRORS + 1))
-          else
-            echo "JS: Reasonable size ($SIZE bytes)"
-          fi
-
-          if [ "$ERRORS" -gt 0 ]; then
-            echo "::error::JS E2E validation failed with $ERRORS error(s)"
-            exit 1
-          fi
-          echo ""
-          echo "=== JS E2E structural validation passed ==="
-
-      - name: Lint JavaScript generated skill
-        if: steps.check-secret.outputs.skip != 'true'
-        run: ./target/release/skilldo lint /tmp/lodash-SKILL.md
-
-      - name: Upload generated skills
-        if: steps.check-secret.outputs.skip != 'true' && always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-skills
-          path: |
-            /tmp/click-SKILL.md
-            /tmp/chi-SKILL.md
-            /tmp/lodash-SKILL.md
+          name: skilldo-binary
+          path: target/release/skilldo
+          retention-days: 1
+
+  e2e:
+    name: "e2e: ${{ matrix.lang }}"
+    if: github.event_name == 'push' && needs.changes.outputs.rust == 'true' && needs.e2e-build.outputs.skip != 'true'
+    needs: [changes, e2e-build]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lang: python
+            repo: pallets/click
+            tag: "8.3.1"
+            flag: "--language python"
+          - lang: go
+            repo: go-chi/chi
+            tag: v5.2.1
+            flag: "--language go"
+          - lang: javascript
+            repo: lodash/lodash
+            tag: "4.17.21"
+            flag: "--language javascript"
+    env:
+      CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
+    steps:
+      - uses: astral-sh/setup-uv@v7
+        if: matrix.lang == 'python'
+
+      - name: Download binary
+        uses: actions/download-artifact@v7
+        with:
+          name: skilldo-binary
+          path: bin
+
+      - name: Make binary executable
+        run: chmod +x bin/skilldo
+
+      - name: "Clone ${{ matrix.lang }} test library"
+        run: git clone --branch ${{ matrix.tag }} --depth 1 https://github.com/${{ matrix.repo }}.git /tmp/test-lib
+
+      - name: "Generate ${{ matrix.lang }} SKILL.md"
+        run: |
+          ./bin/skilldo generate /tmp/test-lib \
+            --provider openai-compatible \
+            --model gpt-oss-120b \
+            --base-url https://api.cerebras.ai/v1 \
+            --max-retries 5 \
+            ${{ matrix.flag }} \
+            -o /tmp/test-SKILL.md
+        env:
+          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
+
+      - name: "Validate ${{ matrix.lang }} output"
+        run: |
+          FILE="/tmp/test-SKILL.md"
+          ERRORS=0
+
+          if [ ! -s "$FILE" ]; then
+            echo "::error::${{ matrix.lang }} SKILL.md is empty or missing"
+            exit 1
+          fi
+          echo "${{ matrix.lang }}: File exists ($(wc -c < "$FILE") bytes)"
+
+          if ! head -1 "$FILE" | grep -q '^---'; then
+            echo "::error::${{ matrix.lang }}: Missing YAML frontmatter"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "${{ matrix.lang }}: Has YAML frontmatter"
+          fi
+
+          for field in "name:" "version:" "ecosystem:"; do
+            if ! head -20 "$FILE" | grep -q "$field"; then
+              echo "::error::${{ matrix.lang }}: Missing frontmatter field: $field"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "${{ matrix.lang }}: Frontmatter has $field"
+            fi
+          done
+
+          for section in "## Imports" "## Core Patterns" "## Pitfalls"; do
+            if ! grep -q "$section" "$FILE"; then
+              echo "::error::${{ matrix.lang }}: Missing required section: $section"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "${{ matrix.lang }}: Has section: $section"
+            fi
+          done
+
+          if awk '/^(```|~~~)/{p=!p; next} !p' "$FILE" | grep -P '(?<!`)rm -rf /(?!tmp)'; then
+            echo "::error::${{ matrix.lang }}: destructive command found in output"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "${{ matrix.lang }}: No destructive commands in prose"
+          fi
+
+          SIZE=$(wc -c < "$FILE")
+          if [ "$SIZE" -lt 500 ]; then
+            echo "::error::${{ matrix.lang }} SKILL.md suspiciously small ($SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          elif [ "$SIZE" -gt 512000 ]; then
+            echo "::error::${{ matrix.lang }} SKILL.md suspiciously large ($SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "${{ matrix.lang }}: Reasonable size ($SIZE bytes)"
+          fi
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::${{ matrix.lang }} E2E validation failed with $ERRORS error(s)"
+            exit 1
+          fi
+          echo ""
+          echo "=== ${{ matrix.lang }} E2E structural validation passed ==="
+
+      - name: "Lint ${{ matrix.lang }} generated skill"
+        run: ./bin/skilldo lint /tmp/test-SKILL.md
+
+      - name: Upload generated skill
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: "e2e-skill-${{ matrix.lang }}"
+          path: /tmp/test-SKILL.md
           if-no-files-found: ignore

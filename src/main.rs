@@ -146,6 +146,14 @@ enum Commands {
         #[arg(long)]
         best_effort: bool,
 
+        /// Enable generation telemetry logging to ~/.skilldo/runs.csv
+        #[arg(long)]
+        telemetry: bool,
+
+        /// Disable telemetry (overrides config file telemetry = true)
+        #[arg(long, conflicts_with = "telemetry")]
+        no_telemetry: bool,
+
         /// Use mock LLM client for testing
         #[arg(long)]
         dry_run: bool,
@@ -312,6 +320,8 @@ async fn main() -> Result<()> {
             container,
             no_parallel,
             best_effort,
+            telemetry,
+            no_telemetry,
             dry_run,
         } => {
             cli::generate::run(cli::generate::GenerateOptions {
@@ -343,6 +353,8 @@ async fn main() -> Result<()> {
                 container,
                 no_parallel,
                 best_effort,
+                telemetry,
+                no_telemetry,
                 dry_run,
             })
             .await?;
@@ -747,6 +759,7 @@ mod tests {
             "--container",
             "--no-parallel",
             "--best-effort",
+            "--telemetry",
             "--dry-run",
         ])
         .unwrap();
@@ -775,6 +788,7 @@ mod tests {
                                container,
                                no_parallel,
                                best_effort,
+                               telemetry,
                                dry_run| {
             assert_eq!(path, "/tmp/repo");
             assert_eq!(language.unwrap(), "python");
@@ -800,6 +814,7 @@ mod tests {
             assert!(container);
             assert!(no_parallel);
             assert!(best_effort);
+            assert!(telemetry);
             assert_eq!(source_path.unwrap(), "/tmp/mylib");
             assert!(dry_run);
         });
@@ -1049,6 +1064,8 @@ mod tests {
                                container,
                                no_parallel,
                                best_effort,
+                               telemetry,
+                               no_telemetry,
                                dry_run| {
             assert!(!no_test);
             assert!(!no_review);
@@ -1056,8 +1073,28 @@ mod tests {
             assert!(!container);
             assert!(!no_parallel);
             assert!(!best_effort);
+            assert!(!telemetry);
+            assert!(!no_telemetry);
             assert!(!dry_run);
         });
+    }
+
+    #[test]
+    fn test_parse_generate_no_telemetry() {
+        let cli = Cli::try_parse_from(["skilldo", "generate", "--no-telemetry"]).unwrap();
+        assert_generate!(cli, |telemetry, no_telemetry| {
+            assert!(!telemetry);
+            assert!(no_telemetry);
+        });
+    }
+
+    #[test]
+    fn test_parse_generate_telemetry_and_no_telemetry_conflict() {
+        let result = Cli::try_parse_from(["skilldo", "generate", "--telemetry", "--no-telemetry"]);
+        assert!(
+            result.is_err(),
+            "--telemetry and --no-telemetry should conflict"
+        );
     }
 
     // --- Generate all Option fields default to None ---

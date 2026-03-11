@@ -38,14 +38,7 @@ impl ContainerExecutor {
 
     /// Check if container runtime is available
     async fn check_runtime_available(&self) -> bool {
-        Command::new(&self.config.runtime)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false)
+        super::executor::is_tool_available(&self.config.runtime, "--version").await
     }
 
     /// Generate dependency installation script for JavaScript/TypeScript
