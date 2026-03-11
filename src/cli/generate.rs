@@ -1147,4 +1147,16 @@ install_source = "registry"
         // Should not panic on a missing directory
         cleanup_stale_tmp_files(Path::new("/nonexistent/dir"), Path::new("SKILL.md"));
     }
+
+    #[tokio::test]
+    async fn test_generate_dry_run_with_telemetry() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            telemetry: true,
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(result.is_ok());
+    }
 }

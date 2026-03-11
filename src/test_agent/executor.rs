@@ -505,6 +505,24 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_result_fail() {
+        // Get a real failed ExitStatus from a process
+        let failed_status = std::process::Command::new("sh")
+            .args(["-c", "exit 1"])
+            .output()
+            .unwrap()
+            .status;
+        let output = Output {
+            status: failed_status,
+            stdout: b"".to_vec(),
+            stderr: b"some error".to_vec(),
+        };
+        let result = classify_result(Ok(output), 60, "Test", stderr_only).unwrap();
+        assert!(result.is_fail());
+        assert_eq!(result.error_message(), "some error");
+    }
+
+    #[test]
     fn test_classify_result_timeout() {
         let err = crate::error::SkillDoError::Timeout(Duration::from_secs(60));
         let result = classify_result(Err(err.into()), 60, "Test", stderr_only).unwrap();
