@@ -151,6 +151,11 @@ pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
         )
     });
 
+    // Priority 100: Internal/private files (read last if at all)
+    if is_internal {
+        return 100;
+    }
+
     // Priority 0: Top-level package __init__.py (torch/__init__.py)
     if file_name == "__init__.py" && depth == 2 {
         return 0;
@@ -161,8 +166,8 @@ pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
         return 10;
     }
 
-    // Priority 100: Internal/private files (read last if at all)
-    if file_name.starts_with('_') || is_internal {
+    // Priority 100: Other _-prefixed files
+    if file_name.starts_with('_') {
         return 100;
     }
 
@@ -438,6 +443,20 @@ mod tests {
         // Priority 100: test directory
         assert_eq!(
             calculate_file_priority(Path::new("/repo/tests/test_main.py"), repo),
+            100
+        );
+
+        // Priority 100: __init__.py inside internal/test dirs (not priority 0!)
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/tests/__init__.py"), repo),
+            100
+        );
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/scripts/__init__.py"), repo),
+            100
+        );
+        assert_eq!(
+            calculate_file_priority(Path::new("/repo/benchmarks/sub/__init__.py"), repo),
             100
         );
     }
