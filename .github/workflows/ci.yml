@@ -160,10 +160,48 @@ jobs:
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
 
+  e2e-build:
+    name: "e2e: build"
+    if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
+    needs: [changes, fmt, clippy, test-cov, integration, audit]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    env:
+      CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
+
+      - name: Check API access
+        id: check-secret
+        run: |
+          if [ -z "$CEREBRAS2_API_KEY" ]; then
+            echo "::warning::CEREBRAS2_API_KEY not configured — skipping E2E"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release binary
+        if: steps.check-secret.outputs.skip != 'true'
+        run: cargo build --release
+
+      - name: Upload binary
+        if: steps.check-secret.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: skilldo-binary
+          path: target/release/skilldo
+          retention-days: 1
+
   e2e:
     name: "e2e: ${{ matrix.lang }}"
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
-    needs: [changes, fmt, clippy, test-cov, integration, audit]
+    needs: [changes, e2e-build]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     strategy:
@@ -185,36 +223,23 @@ jobs:
     env:
       CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-${{ runner.os }}
-          cache-all-crates: true
       - uses: astral-sh/setup-uv@v7
 
-      - name: Check API access
-        id: check-secret
-        run: |
-          if [ -z "$CEREBRAS2_API_KEY" ]; then
-            echo "::warning::CEREBRAS2_API_KEY not configured — skipping E2E"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Download binary
+        uses: actions/download-artifact@v7
+        with:
+          name: skilldo-binary
+          path: bin
 
-      - name: Build release binary
-        if: steps.check-secret.outputs.skip != 'true'
-        run: cargo build --release
+      - name: Make binary executable
+        run: chmod +x bin/skilldo
 
       - name: "Clone ${{ matrix.lang }} test library"
-        if: steps.check-secret.outputs.skip != 'true'
         run: git clone --branch ${{ matrix.tag }} --depth 1 https://github.com/${{ matrix.repo }}.git /tmp/test-lib
 
       - name: "Generate ${{ matrix.lang }} SKILL.md"
-        if: steps.check-secret.outputs.skip != 'true'
         run: |
-          ./target/release/skilldo generate /tmp/test-lib \
+          ./bin/skilldo generate /tmp/test-lib \
             --provider openai-compatible \
             --model gpt-oss-120b \
             --base-url https://api.cerebras.ai/v1 \
@@ -225,7 +250,6 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
 
       - name: "Validate ${{ matrix.lang }} output"
-        if: steps.check-secret.outputs.skip != 'true'
         run: |
           FILE="/tmp/test-SKILL.md"
           ERRORS=0
@@ -287,11 +311,10 @@ jobs:
           echo "=== ${{ matrix.lang }} E2E structural validation passed ==="
 
       - name: "Lint ${{ matrix.lang }} generated skill"
-        if: steps.check-secret.outputs.skip != 'true'
-        run: ./target/release/skilldo lint /tmp/test-SKILL.md
+        run: ./bin/skilldo lint /tmp/test-SKILL.md
 
       - name: Upload generated skill
-        if: steps.check-secret.outputs.skip != 'true' && always()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: "e2e-skill-${{ matrix.lang }}"
