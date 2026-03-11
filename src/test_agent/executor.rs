@@ -338,7 +338,7 @@ impl LanguageExecutor for GoExecutor {
             let get_output = run_cmd_with_timeout(get_cmd, Duration::from_secs(120)).await?;
             if !get_output.status.success() {
                 let stderr = String::from_utf8_lossy(&get_output.stderr);
-                warn!("go get {} failed (non-fatal): {}", dep, stderr);
+                bail!("go get {} failed: {}", dep, stderr);
             }
         }
 
