@@ -216,7 +216,8 @@ impl<'a> TestCodeValidator<'a> {
                             // external dependencies. Fall back to BareMetal (CargoExecutor).
                             tracing::warn!(
                                 "Container mode is not yet supported for Rust \
-                                 (external deps require cargo). Falling back to bare metal."
+                                 (external deps require cargo). Falling back to bare metal. \
+                                 Set `execution_mode = \"bare-metal\"` in your config to suppress this warning."
                             );
                             (
                                 Box::new(CargoExecutor::new().with_timeout(config.timeout)),

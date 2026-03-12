@@ -429,7 +429,9 @@ impl LanguageExecutor for CargoExecutor {
             let lines: Vec<String> = deps
                 .iter()
                 .map(|d| {
-                    // Handle "crate_name = version_spec" vs bare "crate_name"
+                    // Handle "crate_name = version_spec" vs bare "crate_name".
+                    // Bare names get `= "*"` — non-reproducible but matches npm's
+                    // approach. Version pinning is a follow-up enhancement.
                     if d.contains('=') {
                         d.to_string()
                     } else {
@@ -494,7 +496,7 @@ edition = "2021"
         let timeout = Duration::from_secs(self.timeout_secs);
         let mut cargo_cmd = Command::new("cargo");
         cargo_cmd
-            .args(["run", "--quiet"])
+            .args(["run", "--quiet", "--offline"])
             .env("CARGO_HOME", &cargo_home)
             .current_dir(env.temp_dir.path());
 
@@ -1281,6 +1283,24 @@ func main() {
         assert!(
             cargo_toml.contains("once_cell = \"*\""),
             "bare dep should get wildcard version"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cargo_setup_no_deps_generates_minimal_toml() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let cargo_toml = std::fs::read_to_string(env.temp_dir.path().join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("[package]"),
+            "should have package section"
+        );
+        assert!(
+            !cargo_toml.contains("[dependencies]"),
+            "no deps means no deps section"
         );
     }
 }

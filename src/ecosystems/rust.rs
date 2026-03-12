@@ -27,14 +27,25 @@ pub fn cargo_toml_field(content: &str, field: &str) -> Option<String> {
                     continue;
                 }
                 let mut rhs = trimmed[eq_pos + 1..].trim();
-                // Strip inline TOML comments (# ...) outside of quotes
-                if let Some(hash) = rhs.find(" #") {
-                    // Only strip if the # is outside quotes
-                    let before = &rhs[..hash];
-                    let quote_count = before.matches('"').count() + before.matches('\'').count();
-                    if quote_count % 2 == 0 {
-                        rhs = rhs[..hash].trim();
+                // Strip inline TOML comments: walk chars tracking quote state
+                // to find the first ` #` outside any quoted string.
+                let mut in_double = false;
+                let mut in_single = false;
+                let mut comment_pos = None;
+                let bytes = rhs.as_bytes();
+                for (i, &b) in bytes.iter().enumerate() {
+                    match b {
+                        b'"' if !in_single => in_double = !in_double,
+                        b'\'' if !in_double => in_single = !in_single,
+                        b'#' if !in_double && !in_single && i > 0 && bytes[i - 1] == b' ' => {
+                            comment_pos = Some(i - 1);
+                            break;
+                        }
+                        _ => {}
                     }
+                }
+                if let Some(pos) = comment_pos {
+                    rhs = rhs[..pos].trim();
                 }
                 let val = rhs.trim_matches('"').trim_matches('\'');
                 if !val.is_empty() {
@@ -1455,6 +1466,16 @@ mod tests {
     }
 
     #[test]
+    fn cargo_toml_field_apostrophe_in_double_quoted_value_with_comment() {
+        // Regression: mixed quote counting must track " and ' separately
+        let content = "[package]\ndescription = \"it's # great\" # comment\n";
+        assert_eq!(
+            cargo_toml_field(content, "description"),
+            Some("it's # great".to_string())
+        );
+    }
+
+    #[test]
     fn get_project_urls_no_name_no_docs_rs() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -1579,5 +1600,141 @@ mod tests {
         let handler = RustHandler::new(root);
         let files = handler.find_source_files().unwrap();
         assert!(files.iter().any(|p| p.ends_with("helpers.rs")));
+    }
+
+    #[test]
+    fn find_examples_with_nested_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let examples = root.join("examples");
+        let sub = examples.join("advanced");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(examples.join("basic.rs"), "fn main() {}\n").unwrap();
+        fs::write(sub.join("demo.rs"), "fn main() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("basic.rs")));
+        assert!(files.iter().any(|p| p.ends_with("demo.rs")));
+    }
+
+    #[test]
+    fn find_test_files_with_test_rs_in_nested_src() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src").join("net");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(src.join("client_test.rs"), "fn test_it() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_test_files().unwrap();
+        assert!(
+            files.iter().any(|p| p.ends_with("client_test.rs")),
+            "should find _test.rs in nested src dirs: {files:?}"
+        );
+    }
+
+    #[test]
+    fn collect_docs_recursive_with_nested_docs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs");
+        let sub = docs.join("api");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(docs.join("guide.md"), "# Guide\n").unwrap();
+        fs::write(sub.join("ref.md"), "# API Ref\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let found = handler.find_docs().unwrap();
+        assert!(found.iter().any(|p| p.ends_with("guide.md")));
+        assert!(found.iter().any(|p| p.ends_with("ref.md")));
+    }
+
+    #[test]
+    fn collect_docs_recursive_skips_vendor_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs");
+        let vendor = docs.join("vendor");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(docs.join("guide.md"), "# Guide\n").unwrap();
+        fs::write(vendor.join("third_party.md"), "# Vendor\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let found = handler.find_docs().unwrap();
+        assert!(found.iter().any(|p| p.ends_with("guide.md")));
+        assert!(
+            !found.iter().any(|p| p.ends_with("third_party.md")),
+            "should skip vendor/ inside docs/"
+        );
+    }
+
+    #[test]
+    fn find_docs_includes_rst_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("doc");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(docs.join("index.rst"), "Title\n=====\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let found = handler.find_docs().unwrap();
+        assert!(found.iter().any(|p| p.ends_with("index.rst")));
+    }
+
+    #[test]
+    fn collect_rs_files_excludes_test_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn x() {}\n").unwrap();
+        fs::write(src.join("lib_test.rs"), "fn test_x() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(
+            !files.iter().any(|p| p.ends_with("lib_test.rs")),
+            "source files should exclude _test.rs"
+        );
+    }
+
+    #[test]
+    fn find_docs_filters_readme_and_changelog_at_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(root.join("README.md"), "# Readme\n").unwrap();
+        fs::write(root.join("CHANGELOG.md"), "# Changes\n").unwrap();
+        fs::write(root.join("CONTRIBUTING.md"), "# Contrib\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let found = handler.find_docs().unwrap();
+        // README and CHANGELOG handled separately; CONTRIBUTING.md should be included
+        assert!(
+            found.iter().any(|p| p.ends_with("CONTRIBUTING.md")),
+            "non-changelog root docs should be found"
+        );
+    }
+
+    #[test]
+    fn get_version_from_inline_commented_cargo_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"my-lib\"\nversion = \"3.2.1\" # stable\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let v = handler.get_version().unwrap();
+        assert_eq!(v, "3.2.1");
     }
 }
