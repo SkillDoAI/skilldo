@@ -378,7 +378,8 @@ impl LanguageParser for PythonParser {
         let pip_re = Regex::new(r"pip\s+install\s+(.+)")?;
         let pkg_start_re = Regex::new(r"^[a-zA-Z]")?;
         for cap in pip_re.captures_iter(imports_content) {
-            let tail = &cap[1];
+            // Strip inline comments: everything after ` #` or leading `#`
+            let tail = cap[1].split(" #").next().unwrap_or(&cap[1]);
             for token in tail.split_whitespace() {
                 // Skip flags (-U, --pre, --no-deps, etc.)
                 if token.starts_with('-') {
@@ -879,6 +880,33 @@ pip install -U scikit-learn>=1.0
         assert!(
             !deps.contains(&"-e".to_string()),
             "leading-hyphen dep should be dropped by sanitize_dep_name"
+        );
+    }
+
+    #[test]
+    fn pip_install_inline_comment_stripped() {
+        let parser = PythonParser;
+        let skill_md = "# Test\n\n## Imports\n\n```bash\npip install requests  # http library\npip install pandas # data analysis framework\n```\n\n## Next\n";
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            deps.contains(&"requests".to_string()),
+            "actual package should be captured"
+        );
+        assert!(
+            deps.contains(&"pandas".to_string()),
+            "actual package should be captured"
+        );
+        assert!(
+            !deps.contains(&"http".to_string()),
+            "inline comment word 'http' should not be a dep, got: {deps:?}"
+        );
+        assert!(
+            !deps.contains(&"library".to_string()),
+            "inline comment word 'library' should not be a dep, got: {deps:?}"
+        );
+        assert!(
+            !deps.contains(&"data".to_string()),
+            "inline comment word 'data' should not be a dep, got: {deps:?}"
         );
     }
 }
