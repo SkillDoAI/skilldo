@@ -1405,6 +1405,25 @@ setup(
     }
 
     #[test]
+    fn test_read_files_smart_budget_smaller_than_header() {
+        // Budget is positive but smaller than the sampled header → hits the
+        // "Not enough budget even for the header" else branch.
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path();
+        let pkg = repo.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+        let file_path = pkg.join("api.py");
+        fs::write(&file_path, "x".repeat(100)).unwrap();
+
+        // Budget of 5 is enough to enter the loop (5 > 0) but too small for any header
+        let result = Collector::read_files_smart(&[file_path], 5, repo).unwrap();
+        assert_eq!(
+            result, "",
+            "budget smaller than header should yield empty result"
+        );
+    }
+
+    #[test]
     fn test_read_files_smart_full_file_read_when_small() {
         // A small file under all budgets should be read fully (not sampled)
         let dir = TempDir::new().unwrap();

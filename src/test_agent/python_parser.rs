@@ -852,6 +852,25 @@ pip install -U scikit-learn>=1.0
     }
 
     #[test]
+    fn dependency_with_invalid_chars_dropped_by_sanitizer() {
+        // Package name that passes pkg_start_re but fails sanitize_dep_name.
+        // The `;` character is not allowed in dep names.
+        let parser = PythonParser;
+        let skill_md =
+            "# Test\n\n## Imports\n\n```bash\npip install foo;bar valid-pkg\n```\n\n## Next\n";
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            !deps.contains(&"foo;bar".to_string()),
+            "dep with invalid chars should be dropped, got: {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&"valid-pkg".to_string()),
+            "valid dep should still be present"
+        );
+    }
+
+    #[test]
     fn dependency_with_leading_hyphen_dropped_by_sanitizer() {
         let parser = PythonParser;
         // Craft a pip install line that the regex captures with a leading-hyphen name

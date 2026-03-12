@@ -493,6 +493,14 @@ if __name__ == '__main__':
     }
 
     #[test]
+    fn test_extract_code_pass2_skips_json_body() {
+        // Untagged block starting with '{' should be skipped in Pass 2.
+        let response = "```\n{\"key\": \"value\"}\n```\n\n```\nimport os\n```";
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert_eq!(code, "import os");
+    }
+
+    #[test]
     fn test_extract_code_only_bash_falls_back_to_raw() {
         // Only bash block, no generic/python block → falls through to raw response.
         let response = "```bash\npip install click\n```";
