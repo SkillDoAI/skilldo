@@ -54,3 +54,77 @@ pub fn frontmatter_field(skill_md: &str, key: &str) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontmatter_field_returns_value() {
+        let md = "name: pandas\nversion: 3.0.0\n";
+        assert_eq!(frontmatter_field(md, "name"), Some("pandas".to_string()));
+        assert_eq!(frontmatter_field(md, "version"), Some("3.0.0".to_string()));
+    }
+
+    #[test]
+    fn frontmatter_field_returns_none_for_missing() {
+        let md = "name: pandas\n";
+        assert_eq!(frontmatter_field(md, "version"), None);
+    }
+
+    #[test]
+    fn frontmatter_field_returns_none_for_empty_value() {
+        let md = "version:\n";
+        assert_eq!(frontmatter_field(md, "version"), None);
+    }
+
+    #[test]
+    fn frontmatter_field_returns_none_for_whitespace_only_value() {
+        let md = "version:   \n";
+        assert_eq!(frontmatter_field(md, "version"), None);
+    }
+
+    #[test]
+    fn frontmatter_field_strips_quotes() {
+        let md = "name: \"pandas\"\n";
+        assert_eq!(frontmatter_field(md, "name"), Some("pandas".to_string()));
+        let md2 = "name: 'pandas'\n";
+        assert_eq!(frontmatter_field(md2, "name"), Some("pandas".to_string()));
+    }
+
+    #[test]
+    fn frontmatter_field_only_scans_first_15_lines() {
+        let mut md = String::new();
+        for _ in 0..20 {
+            md.push_str("filler: stuff\n");
+        }
+        md.push_str("name: hidden\n");
+        assert_eq!(frontmatter_field(&md, "name"), None);
+    }
+
+    #[test]
+    fn extract_section_returns_none_for_missing() {
+        let md = "## Imports\n\nsome content\n";
+        let result = extract_section(md, r"(?m)^##\s+Core\s+Patterns\s*$").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn extract_section_returns_content_up_to_next_section() {
+        let md = "## Core Patterns\n\npattern content\n\n## Imports\n\nimport content\n";
+        let result = extract_section(md, r"(?mi)^##\s+Core\s+Patterns\s*$")
+            .unwrap()
+            .unwrap();
+        assert!(result.contains("pattern content"));
+        assert!(!result.contains("import content"));
+    }
+
+    #[test]
+    fn extract_section_returns_rest_when_no_next_section() {
+        let md = "## Core Patterns\n\nall the rest\n";
+        let result = extract_section(md, r"(?mi)^##\s+Core\s+Patterns\s*$")
+            .unwrap()
+            .unwrap();
+        assert!(result.contains("all the rest"));
+    }
+}

@@ -478,6 +478,101 @@ mod tests {
     }
 
     #[test]
+    fn test_compare_semver_desc_both_non_semver() {
+        // Non-semver tags sort lexicographically descending
+        assert_eq!(
+            compare_semver_desc("latest", "beta"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_semver_desc("beta", "latest"),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_semver_desc("same", "same"),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_compare_semver_desc_non_semver_sorts_after_semver() {
+        assert_eq!(
+            compare_semver_desc("latest", "v1.0.0"),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn test_parse_semver_patch_with_prerelease() {
+        // Prerelease in patch component
+        assert_eq!(parse_semver("v1.5.0-rc1"), Some((1, 5, 0, true)));
+        assert_eq!(parse_semver("1.0.0-alpha.1"), Some((1, 0, 0, true)));
+    }
+
+    #[test]
+    fn test_parse_semver_single_component() {
+        // Only one component — not semver
+        assert_eq!(parse_semver("42"), None);
+        assert_eq!(parse_semver("v1"), None);
+    }
+
+    #[test]
+    fn test_list_tags_mixed_semver_and_non_semver() {
+        let dir = init_test_repo();
+        for tag in &["latest", "v1.0.0", "nightly", "v0.9.0"] {
+            run_git_ok(dir.path(), &["tag", tag]);
+        }
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tags = repo.list_tags_sorted().unwrap();
+        // Semver tags first (descending), then non-semver (descending lexicographic)
+        assert_eq!(tags[0], "v1.0.0");
+        assert_eq!(tags[1], "v0.9.0");
+        // Non-semver sorted lexicographically descending
+        assert!(tags.contains(&"latest".to_string()));
+        assert!(tags.contains(&"nightly".to_string()));
+    }
+
+    #[test]
+    fn test_open_cwd() {
+        // We're running inside a git repo, so open_cwd should succeed
+        let repo = Git2Repo::open_cwd();
+        assert!(repo.is_ok(), "open_cwd failed: {:?}", repo.err());
+    }
+
+    #[test]
+    fn test_describe_tags_tag_with_g_non_hex() {
+        // Tag containing "-g" followed by non-hex chars — exercises the
+        // `after_g.chars().all(is_ascii_hexdigit)` = false branch
+        let dir = init_test_repo();
+        run_git_ok(dir.path(), &["tag", "v1.0-gamma"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        assert_eq!(tag, "v1.0-gamma");
+    }
+
+    #[test]
+    fn test_describe_tags_tag_with_g_hex_no_dash_before() {
+        // Tag like "v1.0-g5" — after_g is hex, but before_g has no dash
+        // Exercises the `before_g.rfind('-') = None` branch
+        let dir = init_test_repo();
+        run_git_ok(dir.path(), &["tag", "v1.0-g5"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        assert_eq!(tag, "v1.0-g5");
+    }
+
+    #[test]
+    fn test_describe_tags_tag_with_g_hex_non_digit_distance() {
+        // Tag like "v1.0-beta-gabc" — after_g is hex, has dash before,
+        // but the distance part ("beta") isn't all digits
+        let dir = init_test_repo();
+        run_git_ok(dir.path(), &["tag", "v1.0-beta-gabc"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        assert_eq!(tag, "v1.0-beta-gabc");
+    }
+
+    #[test]
     #[ignore] // requires network access — flaky in CI and pre-push hooks
     fn test_fetch_tags_real_repo() {
         // Use the actual skilldo repo — it has an origin remote and tags.

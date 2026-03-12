@@ -52,6 +52,88 @@ pub fn compute_code_block_lines(lines: &[&str]) -> Vec<bool> {
     result
 }
 
+/// Find all fenced code blocks in text, returning (tag, body) pairs.
+/// The tag is the lowercase text on the opener line (e.g., "python" in ```python).
+/// Only matches fences at line boundaries (position 0 or after `\n`).
+pub fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
+    let mut blocks = Vec::new();
+    let mut pos = 0;
+    while pos < text.len() {
+        let (fence, start) = match find_next_line_fence(text, pos) {
+            Some(result) => result,
+            None => break,
+        };
+
+        let after = start + fence.len();
+        // Closing fence must also be at a line boundary
+        if let Some(close_offset) = find_closing_fence(text, after, fence) {
+            let raw = &text[after..after + close_offset];
+            let (tag, body) = if let Some(nl) = raw.find('\n') {
+                let tag_part = raw[..nl].trim().to_ascii_lowercase();
+                let body = raw[nl + 1..].trim().to_string();
+                (tag_part, body)
+            } else {
+                (String::new(), raw.trim().to_string())
+            };
+            blocks.push((tag, body));
+            pos = after + close_offset + fence.len();
+        } else {
+            break;
+        }
+    }
+    blocks
+}
+
+/// Find the next fence (``` or ~~~) that starts at a line boundary.
+fn find_next_line_fence(text: &str, from: usize) -> Option<(&str, usize)> {
+    let mut search_pos = from;
+    loop {
+        let backtick = text[search_pos..].find("```").map(|i| search_pos + i);
+        let tilde = text[search_pos..].find("~~~").map(|i| search_pos + i);
+
+        let (fence, candidate) = match (backtick, tilde) {
+            (Some(b), Some(t)) => {
+                if t < b {
+                    ("~~~", t)
+                } else {
+                    ("```", b)
+                }
+            }
+            (Some(b), None) => ("```", b),
+            (None, Some(t)) => ("~~~", t),
+            (None, None) => return None,
+        };
+
+        // Check line-boundary: position 0 or preceded by newline
+        if candidate == 0 || text.as_bytes()[candidate - 1] == b'\n' {
+            return Some((fence, candidate));
+        }
+
+        // Not at line boundary — skip past this occurrence
+        search_pos = candidate + fence.len();
+    }
+}
+
+/// Find the closing fence that matches the opener, at a line boundary.
+fn find_closing_fence(text: &str, from: usize, fence: &str) -> Option<usize> {
+    let mut search_pos = 0;
+    let slice = &text[from..];
+    loop {
+        match slice[search_pos..].find(fence) {
+            Some(offset) => {
+                let abs = search_pos + offset;
+                // Check line-boundary: preceded by newline (closing fences are never at pos 0
+                // of the slice because there's at least the tag/body before them)
+                if abs == 0 || slice.as_bytes()[abs - 1] == b'\n' {
+                    return Some(abs);
+                }
+                search_pos = abs + fence.len();
+            }
+            None => return None,
+        }
+    }
+}
+
 /// A string wrapper that masks its contents in Debug/Display output.
 /// Prevents accidental logging of API keys and other secrets.
 #[derive(Clone)]
@@ -458,6 +540,87 @@ mod tests {
         assert_eq!(
             calculate_file_priority(Path::new("/repo/benchmarks/sub/__init__.py"), repo),
             100
+        );
+    }
+
+    // ========================================================================
+    // find_fenced_blocks
+    // ========================================================================
+
+    #[test]
+    fn test_find_fenced_blocks_basic() {
+        let text = "```python\nimport os\n```";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].0, "python");
+        assert_eq!(blocks[0].1, "import os");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_tilde_fence() {
+        let text = "~~~python\nimport os\n~~~";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].0, "python");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_mixed_tilde_before_backtick() {
+        let text = "~~~json\n{}\n~~~\n\n```python\nimport os\n```";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, "json");
+        assert_eq!(blocks[1].0, "python");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_mixed_backtick_before_tilde() {
+        let text = "```python\nfirst\n```\n\n~~~json\n{}\n~~~";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, "python");
+        assert_eq!(blocks[1].0, "json");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_unclosed_fence() {
+        let text = "```python\nimport os\n";
+        let blocks = find_fenced_blocks(text);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_line_anchored_ignores_mid_line() {
+        // Fences embedded mid-line (e.g., in string literals) should NOT be treated as blocks.
+        let text = "x = \"```python\"\ny = \"```\"";
+        let blocks = find_fenced_blocks(text);
+        assert!(
+            blocks.is_empty(),
+            "mid-line fences should be ignored, got {} block(s)",
+            blocks.len()
+        );
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_line_anchored_ignores_mid_line_tilde() {
+        let text = "x = \"~~~python\"\ny = \"~~~\"";
+        let blocks = find_fenced_blocks(text);
+        assert!(
+            blocks.is_empty(),
+            "mid-line tilde fences should be ignored, got {} block(s)",
+            blocks.len()
+        );
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_closing_must_be_line_anchored() {
+        // Opening fence is at line start, but closing fence is mid-line → no block.
+        let text = "```python\nimport os # ```\nmore code";
+        let blocks = find_fenced_blocks(text);
+        assert!(
+            blocks.is_empty(),
+            "mid-line closing fence should not close block, got {} block(s)",
+            blocks.len()
         );
     }
 }

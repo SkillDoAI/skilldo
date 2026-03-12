@@ -285,7 +285,7 @@ impl LanguageParser for PythonParser {
             };
 
         let pattern_re = Regex::new(r"(?m)^###\s+(.+?)$")?;
-        let code_block_re = Regex::new(r"(?i)```(?:python|py)?\n([\s\S]*?)```")?;
+        let code_block_re = Regex::new(r"(?i)(?:```|~~~)(?:python|py)?\n([\s\S]*?)(?:```|~~~)")?;
 
         let pattern_starts: Vec<(usize, String)> = pattern_re
             .captures_iter(core_patterns_content)
@@ -367,11 +367,33 @@ impl LanguageParser for PythonParser {
             }
         }
 
-        let pip_re = Regex::new(r"pip\s+install\s+([a-zA-Z0-9_-]+)")?;
+        // Parse `pip install` lines: skip flags (tokens starting with -)
+        // and capture full package specs (name + extras + version constraints).
+        // Handles:
+        //   pip install -U scikit-learn → scikit-learn
+        //   pip install Pillow beautifulsoup4 → Pillow, beautifulsoup4
+        //   pip install --pre pydantic → pydantic
+        //   pip install requests[socks]>=2.32 → requests[socks]>=2.32
+        //   pip install "sqlalchemy[asyncio]" → sqlalchemy[asyncio]
+        let pip_re = Regex::new(r"pip\s+install\s+(.+)")?;
+        let pkg_start_re = Regex::new(r"^[a-zA-Z]")?;
         for cap in pip_re.captures_iter(imports_content) {
-            let pkg = cap[1].to_string();
-            if !dependencies.contains(&pkg) {
-                dependencies.push(pkg);
+            // Strip inline comments: everything after ` #` or leading `#`
+            let tail = cap[1].split(" #").next().unwrap_or(&cap[1]);
+            for token in tail.split_whitespace() {
+                // Skip flags (-U, --pre, --no-deps, etc.)
+                if token.starts_with('-') {
+                    continue;
+                }
+                // Strip surrounding quotes
+                let stripped = token.trim_matches(|c| c == '"' || c == '\'');
+                // Must start with a letter (package name)
+                if pkg_start_re.is_match(stripped) {
+                    let pkg = stripped.to_string();
+                    if !dependencies.contains(&pkg) {
+                        dependencies.push(pkg);
+                    }
+                }
             }
         }
 
@@ -606,6 +628,54 @@ mylib.run()
     }
 
     #[test]
+    fn test_extract_patterns_tilde_fence() {
+        let skill_md = r#"
+# Test
+
+## Core Patterns
+
+### Tilde Fence Example
+
+Uses tilde fences.
+
+~~~python
+import mylib
+mylib.run()
+~~~
+
+## Next
+"#;
+        let parser = PythonParser;
+        let patterns = parser.extract_patterns(skill_md).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert!(patterns[0].code.contains("mylib.run()"));
+    }
+
+    #[test]
+    fn test_extract_patterns_tilde_fence_unlabeled() {
+        let skill_md = r#"
+# Test
+
+## Core Patterns
+
+### Unlabeled Tilde
+
+Uses unlabeled tilde fences.
+
+~~~
+import mylib
+mylib.run()
+~~~
+
+## Next
+"#;
+        let parser = PythonParser;
+        let patterns = parser.extract_patterns(skill_md).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert!(patterns[0].code.contains("mylib.run()"));
+    }
+
+    #[test]
     fn test_extract_patterns_section_found_no_blocks_errors() {
         let skill_md = r#"
 # Test
@@ -750,6 +820,58 @@ pip install myspecialpkg
     }
 
     #[test]
+    fn pip_install_preserves_extras_and_version_specs() {
+        let skill_md = r#"
+# Test
+
+## Imports
+
+```bash
+pip install requests[socks]>=2.32 "sqlalchemy[asyncio]"
+pip install -U scikit-learn>=1.0
+```
+
+## Next
+"#;
+        let parser = PythonParser;
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            deps.contains(&"requests[socks]>=2.32".to_string()),
+            "should preserve extras and version spec: got {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&"sqlalchemy[asyncio]".to_string()),
+            "should strip quotes and preserve extras: got {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&"scikit-learn>=1.0".to_string()),
+            "should skip flags and preserve version spec: got {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn dependency_with_invalid_chars_dropped_by_sanitizer() {
+        // Package name that passes pkg_start_re but fails sanitize_dep_name.
+        // The `;` character is not allowed in dep names.
+        let parser = PythonParser;
+        let skill_md =
+            "# Test\n\n## Imports\n\n```bash\npip install foo;bar valid-pkg\n```\n\n## Next\n";
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            !deps.contains(&"foo;bar".to_string()),
+            "dep with invalid chars should be dropped, got: {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&"valid-pkg".to_string()),
+            "valid dep should still be present"
+        );
+    }
+
+    #[test]
     fn dependency_with_leading_hyphen_dropped_by_sanitizer() {
         let parser = PythonParser;
         // Craft a pip install line that the regex captures with a leading-hyphen name
@@ -758,6 +880,33 @@ pip install myspecialpkg
         assert!(
             !deps.contains(&"-e".to_string()),
             "leading-hyphen dep should be dropped by sanitize_dep_name"
+        );
+    }
+
+    #[test]
+    fn pip_install_inline_comment_stripped() {
+        let parser = PythonParser;
+        let skill_md = "# Test\n\n## Imports\n\n```bash\npip install requests  # http library\npip install pandas # data analysis framework\n```\n\n## Next\n";
+        let deps = parser.extract_dependencies(skill_md).unwrap();
+        assert!(
+            deps.contains(&"requests".to_string()),
+            "actual package should be captured"
+        );
+        assert!(
+            deps.contains(&"pandas".to_string()),
+            "actual package should be captured"
+        );
+        assert!(
+            !deps.contains(&"http".to_string()),
+            "inline comment word 'http' should not be a dep, got: {deps:?}"
+        );
+        assert!(
+            !deps.contains(&"library".to_string()),
+            "inline comment word 'library' should not be a dep, got: {deps:?}"
+        );
+        assert!(
+            !deps.contains(&"data".to_string()),
+            "inline comment word 'data' should not be a dep, got: {deps:?}"
         );
     }
 }

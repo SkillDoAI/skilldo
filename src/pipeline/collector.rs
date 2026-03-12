@@ -284,17 +284,25 @@ impl Collector {
 
             match fs::read_to_string(path) {
                 Ok(file_content) => {
-                    let remaining = max_chars - total_chars;
-                    if file_content.len() <= remaining {
-                        content.push_str(&format!("\n\n// File: {}\n", path.display()));
+                    let header = format!("\n\n// File: {}\n", path.display());
+                    let trunc_header = format!("\n\n// File: {} (truncated)\n", path.display());
+                    let remaining = max_chars.saturating_sub(total_chars);
+
+                    // First check: does the full file fit with the normal header?
+                    if remaining >= header.len() + file_content.len() {
+                        content.push_str(&header);
                         content.push_str(&file_content);
-                        total_chars += file_content.len();
-                    } else {
-                        content.push_str(&format!("\n\n// File: {} (truncated)\n", path.display()));
-                        let end = floor_char_boundary(&file_content, remaining);
+                        total_chars += header.len() + file_content.len();
+                    } else if remaining > trunc_header.len() {
+                        // Truncate: use worst-case header, fill remaining with content
+                        let trunc_budget = remaining - trunc_header.len();
+                        let end = floor_char_boundary(&file_content, trunc_budget);
+                        content.push_str(&trunc_header);
                         content.push_str(&file_content[..end]);
                         total_chars = max_chars;
                         break;
+                    } else {
+                        break; // Not enough budget even for the header
                     }
                 }
                 Err(e) => warn!("Cannot read {}: {}", path.display(), e),
@@ -408,9 +416,6 @@ impl Collector {
                         _ => 500,             // Low: Small sample (internals, tests, tools)
                     };
 
-                    let remaining = max_chars - total_chars;
-                    let chars_to_read = file_content.len().min(file_budget).min(remaining);
-
                     let priority_label = match priority {
                         0..=10 => "critical API",
                         11..=30 => "public API",
@@ -418,24 +423,29 @@ impl Collector {
                         _ => "impl",
                     };
 
-                    if chars_to_read == file_content.len() {
-                        content.push_str(&format!(
-                            "\n\n// File: {} ({})\n",
-                            path.display(),
-                            priority_label
-                        ));
+                    let remaining = max_chars.saturating_sub(total_chars);
+                    let header = format!("\n\n// File: {} ({})\n", path.display(), priority_label);
+                    let sampled_header = format!(
+                        "\n\n// File: {} ({}, sampled)\n",
+                        path.display(),
+                        priority_label
+                    );
+                    // Check if the full file fits (with normal header + file_budget cap)
+                    let capped_len = file_content.len().min(file_budget);
+                    if remaining >= header.len() + capped_len && capped_len == file_content.len() {
+                        content.push_str(&header);
                         content.push_str(&file_content);
-                    } else {
-                        content.push_str(&format!(
-                            "\n\n// File: {} ({}, sampled)\n",
-                            path.display(),
-                            priority_label
-                        ));
-                        let end = floor_char_boundary(&file_content, chars_to_read);
+                        total_chars += header.len() + file_content.len();
+                    } else if remaining > sampled_header.len() {
+                        // Sample: use sampled header, read what fits
+                        let sample_budget = (remaining - sampled_header.len()).min(file_budget);
+                        let end = floor_char_boundary(&file_content, sample_budget);
+                        content.push_str(&sampled_header);
                         content.push_str(&file_content[..end]);
+                        total_chars += sampled_header.len() + end;
+                    } else {
+                        break; // Not enough budget even for the header
                     }
-
-                    total_chars += chars_to_read;
                 }
                 Err(e) => warn!("Cannot read {}: {}", path.display(), e),
             }
@@ -924,14 +934,15 @@ setup(
 
     #[test]
     fn test_read_files_exact_budget_fit() {
-        // Arrange: file content exactly equals remaining budget
+        // Arrange: file content exactly equals remaining budget (after header overhead)
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("exact.py");
         let content = "a".repeat(100);
         fs::write(&file_path, &content).unwrap();
 
-        // Act: budget == file size => file fits exactly
-        let result = Collector::read_files(&[file_path], 100).unwrap();
+        // Budget = normal header + content — should fit without truncation
+        let header_len = format!("\n\n// File: {}\n", file_path.display()).len();
+        let result = Collector::read_files(&[file_path], header_len + 100).unwrap();
 
         // Assert: should include the full file (not truncated)
         assert!(
@@ -971,8 +982,10 @@ setup(
         fs::write(&file1, "c".repeat(50)).unwrap();
         fs::write(&file2, "d".repeat(50)).unwrap();
 
-        // Act: budget = 100, file1=50 + file2=50 = exactly 100
-        let result = Collector::read_files(&[file1, file2], 100).unwrap();
+        // Budget must cover both normal headers + both payloads
+        let h1 = format!("\n\n// File: {}\n", file1.display()).len();
+        let h2 = format!("\n\n// File: {}\n", file2.display()).len();
+        let result = Collector::read_files(&[file1, file2], h1 + 50 + h2 + 50).unwrap();
 
         // Assert: both files fit, neither truncated
         assert!(
@@ -1188,8 +1201,9 @@ setup(
         let content = "\u{1F600}".repeat(10); // 40 bytes
         fs::write(&file_path, &content).unwrap();
 
-        // Budget of 10 should truncate mid-emoji territory
-        let result = Collector::read_files(&[file_path], 10).unwrap();
+        // Budget must cover header + a small payload that forces truncation
+        let header_len = format!("\n\n// File: {} (truncated)\n", file_path.display()).len();
+        let result = Collector::read_files(&[file_path], header_len + 10).unwrap();
         // Result should be valid UTF-8 (this would panic if not)
         assert!(!result.is_empty());
         assert!(result.contains("truncated"));
@@ -1216,8 +1230,10 @@ setup(
         fs::write(&f1, "x".repeat(60)).unwrap();
         fs::write(&f2, "y".repeat(100)).unwrap();
 
-        // Budget 80: f1 (60 chars) fits, remaining = 20 for f2 (100 chars) => truncated
-        let result = Collector::read_files(&[f1, f2], 80).unwrap();
+        // Budget covers f1 header + payload + f2 header, but not all of f2's payload
+        let h1 = format!("\n\n// File: {}\n", f1.display()).len();
+        let h2 = format!("\n\n// File: {} (truncated)\n", f2.display()).len();
+        let result = Collector::read_files(&[f1, f2], h1 + 60 + h2 + 20).unwrap();
         assert!(result.contains("b.py (truncated)"));
         assert!(!result.contains(&"y".repeat(100)));
     }
@@ -1386,6 +1402,25 @@ setup(
         let result = Collector::read_files_smart(&[file_path], 0, repo).unwrap();
         // With zero budget, the loop breaks immediately
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_read_files_smart_budget_smaller_than_header() {
+        // Budget is positive but smaller than the sampled header → hits the
+        // "Not enough budget even for the header" else branch.
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path();
+        let pkg = repo.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+        let file_path = pkg.join("api.py");
+        fs::write(&file_path, "x".repeat(100)).unwrap();
+
+        // Budget of 5 is enough to enter the loop (5 > 0) but too small for any header
+        let result = Collector::read_files_smart(&[file_path], 5, repo).unwrap();
+        assert_eq!(
+            result, "",
+            "budget smaller than header should yield empty result"
+        );
     }
 
     #[test]

@@ -109,6 +109,8 @@ jobs:
           shared-key: ci-${{ runner.os }}
           cache-all-crates: true
       - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
       - name: Pull container images
         run: |
           docker pull python:3.11-alpine &
@@ -138,6 +140,8 @@ jobs:
           cache-all-crates: true
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
       - name: Run tests with coverage
         run: |
           cargo llvm-cov --lib --no-report
@@ -227,6 +231,8 @@ jobs:
     steps:
       - uses: astral-sh/setup-uv@v7
         if: matrix.lang == 'python'
+        with:
+          enable-cache: false
 
       - name: Download binary
         uses: actions/download-artifact@v7

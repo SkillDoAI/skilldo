@@ -1234,6 +1234,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_linter_default_trait() {
+        let linter: SkillLinter = Default::default();
+        let issues = linter.lint("---\nname: test\n---\n# Test").unwrap();
+        // Should work identically to SkillLinter::new()
+        // Minimal valid SKILL.md — only "description" is missing, so linter should flag it.
+        assert!(
+            issues.iter().any(|i| i.message.contains("description")),
+            "expected description lint issue, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
     fn test_missing_frontmatter() {
         let linter = SkillLinter::new();
         let content = "# Some content\nNo frontmatter here";

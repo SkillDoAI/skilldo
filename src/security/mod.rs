@@ -635,6 +635,59 @@ print(response.json())
     }
 
     #[test]
+    fn snippet_at_truncates_long_line() {
+        // Line with >120 characters should be truncated to 120
+        let long_line = "x".repeat(200);
+        let content = format!("short\n{}\nend", long_line);
+        let byte_offset = 6; // start of the long line
+        let snippet = snippet_at(&content, byte_offset);
+        assert_eq!(snippet.len(), 120);
+        assert!(snippet.chars().all(|c| c == 'x'));
+    }
+
+    #[test]
+    fn finding_display_format() {
+        let finding = Finding {
+            rule_id: "SD-001".into(),
+            severity: Severity::High,
+            category: Category::UnicodeAttack,
+            message: "test message".into(),
+            line: 42,
+            snippet: "context".into(),
+        };
+        let display = finding.to_string();
+        assert_eq!(
+            display,
+            "[SD-001] high (unicode-attack): test message [line 42]"
+        );
+    }
+
+    #[test]
+    fn score_clamps_at_zero_with_many_criticals() {
+        // 4 critical findings = 4 * 30 = 120 deductions → score should clamp at 0
+        let findings: Vec<Finding> = (0..4)
+            .map(|i| Finding {
+                rule_id: format!("T-{:03}", i),
+                severity: Severity::Critical,
+                category: Category::CodeExecution,
+                message: format!("crit{}", i),
+                line: i + 1,
+                snippet: String::new(),
+            })
+            .collect();
+        let deductions: i32 = findings.iter().map(|f| f.severity.deduction()).sum();
+        let score = (100i32 - deductions).clamp(0, 100) as u8;
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn dedup_findings_empty_vec() {
+        let mut findings: Vec<Finding> = vec![];
+        dedup_findings(&mut findings);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn test_score_with_low_and_info_severities() {
         // Manually build a report with Low and Info findings,
         // then verify the score matches the formula in scan_skill:

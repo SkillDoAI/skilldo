@@ -166,12 +166,20 @@ impl<'a> ReviewAgent<'a> {
             result.introspection_output = Some(introspection_output.clone());
         }
 
-        // In strict mode, degraded introspection fails the review so the user
-        // knows the verdict was based on incomplete data.
-        if self.strict && introspection_degraded {
-            result.passed = false;
+        // Degraded introspection means the verdict is based on textual analysis
+        // only. In strict mode this fails the review; in normal mode it adds a
+        // warning so the pipeline can track it as an unresolved issue.
+        if introspection_degraded {
+            let severity = if self.strict {
+                Severity::Error
+            } else {
+                Severity::Warning
+            };
+            if self.strict {
+                result.passed = false;
+            }
             result.issues.push(ReviewIssue {
-                severity: Severity::Error,
+                severity,
                 category: "introspection".to_string(),
                 complaint:
                     "Container introspection failed — verdict is based on textual analysis only"
@@ -397,21 +405,20 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
 fn extract_json_block(text: &str) -> String {
     let trimmed = text.trim();
 
-    // Try: markdown json fence
-    if let Some(start) = trimmed.find("```json") {
-        if let Some(end) = trimmed[start + 7..].find("```") {
-            return trimmed[start + 7..start + 7 + end].trim().to_string();
-        }
+    // Use shared line-anchored parser to avoid truncation on inner fences
+    let blocks = crate::util::find_fenced_blocks(trimmed);
+
+    // Prefer json-tagged block
+    if let Some((_, body)) = blocks.iter().find(|(tag, _)| tag == "json") {
+        return body.clone();
     }
 
-    // Try: markdown plain fence
-    if let Some(start) = trimmed.find("```") {
-        if let Some(end) = trimmed[start + 3..].find("```") {
-            let inner = trimmed[start + 3..start + 3 + end].trim();
-            if inner.starts_with('{') {
-                return inner.to_string();
-            }
-        }
+    // Fall back to first untagged block that looks like JSON
+    if let Some((_, body)) = blocks
+        .iter()
+        .find(|(tag, body)| tag.is_empty() && body.trim_start().starts_with('{'))
+    {
+        return body.clone();
     }
 
     // Try: find first { and last }
@@ -427,25 +434,69 @@ fn extract_json_block(text: &str) -> String {
 }
 
 /// Extract a Python script from an LLM response that may include markdown fences.
+/// Two-pass: prefer Python-tagged blocks, fall back to untagged/generic blocks.
 fn extract_python_script(response: &str) -> String {
     let trimmed = response.trim();
 
-    // Try: ```python ... ```
-    if let Some(start) = trimmed.find("```python") {
-        if let Some(end) = trimmed[start + 9..].find("```") {
-            return trimmed[start + 9..start + 9 + end].trim().to_string();
+    const PYTHON_TAGS: &[&str] = &["python", "python3", "py"];
+    const NON_PYTHON_TAGS: &[&str] = &[
+        "json",
+        "bash",
+        "sh",
+        "shell",
+        "zsh",
+        "text",
+        "txt",
+        "yaml",
+        "yml",
+        "toml",
+        "sql",
+        "javascript",
+        "js",
+        "typescript",
+        "ts",
+        "go",
+        "rust",
+        "html",
+        "css",
+        "xml",
+    ];
+
+    // Handle unclosed Python fences: strip the opener line and return the rest
+    if let Some(nl) = trimmed.find('\n') {
+        let header = trimmed[..nl].trim();
+        let is_python_opener = PYTHON_TAGS
+            .iter()
+            .any(|tag| header == format!("```{tag}") || header == format!("~~~{tag}"));
+        if is_python_opener {
+            let rest = trimmed[nl + 1..].trim();
+            // If there's a matching close fence, find_fenced_blocks will handle it;
+            // this path only fires when the fence is unclosed.
+            let blocks = crate::util::find_fenced_blocks(trimmed);
+            if blocks.is_empty() && !rest.is_empty() {
+                return rest.to_string();
+            }
         }
     }
 
-    // Try: ``` ... ```
-    if let Some(start) = trimmed.find("```") {
-        if let Some(end) = trimmed[start + 3..].find("```") {
-            let inner = trimmed[start + 3..start + 3 + end].trim();
-            // Skip if it looks like JSON
-            if !inner.starts_with('{') {
-                return inner.to_string();
-            }
+    let blocks = crate::util::find_fenced_blocks(trimmed);
+
+    // Pass 1: prefer Python-tagged blocks
+    for (tag, body) in &blocks {
+        if PYTHON_TAGS.contains(&tag.as_str()) {
+            return body.clone();
         }
+    }
+
+    // Pass 2: fall back to first untagged or unknown block (skip non-Python tags and JSON)
+    for (tag, body) in &blocks {
+        if NON_PYTHON_TAGS.contains(&tag.as_str()) {
+            continue;
+        }
+        if body.starts_with('{') {
+            continue;
+        }
+        return body.clone();
     }
 
     // No fences — return as-is if it looks like Python
@@ -669,6 +720,163 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_json_block_unclosed_json_fence() {
+        // ```json with no closing ``` — falls through to brace search
+        let text = "```json\n{\"a\": 1}\n";
+        let result = extract_json_block(text);
+        assert_eq!(result, r#"{"a": 1}"#);
+    }
+
+    #[test]
+    fn test_extract_json_block_plain_fence_non_json() {
+        // Plain ``` fence with non-JSON content — falls through
+        let text = "```\nhello world\n```";
+        let result = extract_json_block(text);
+        assert_eq!(result, text.trim()); // no braces, returns as-is
+    }
+
+    #[test]
+    fn test_extract_json_block_brace_before_end() {
+        // Edge case: } appears before { (malformed)
+        let text = "} some text {";
+        let result = extract_json_block(text);
+        // find('{') at 12, rfind('}') at 0 → end < start → falls through
+        assert_eq!(result, text.trim());
+    }
+
+    #[test]
+    fn test_extract_json_block_tilde_json_fence() {
+        let text = "~~~json\n{\"passed\": true, \"issues\": []}\n~~~";
+        let result = extract_json_block(text);
+        assert_eq!(result, "{\"passed\": true, \"issues\": []}");
+    }
+
+    #[test]
+    fn test_extract_json_block_tilde_plain_fence() {
+        let text = "~~~\n{\"key\": \"value\"}\n~~~";
+        let result = extract_json_block(text);
+        assert_eq!(result, "{\"key\": \"value\"}");
+    }
+
+    #[test]
+    fn test_extract_python_script_unclosed_python_fence() {
+        // ```python with no closing ``` — strip opener, return body only
+        let text = "```python\nimport os\n";
+        let script = extract_python_script(text);
+        assert_eq!(script, "import os");
+    }
+
+    #[test]
+    fn test_extract_python_script_plain_fence_json_content() {
+        // Plain ``` fence with JSON inside — should be skipped (not Python)
+        let text = "```\n{\"key\": \"value\"}\n```";
+        let script = extract_python_script(text);
+        // inner starts with '{', so it's skipped; falls through to "no fence"
+        // No "import " or "def " or "#" → returns empty
+        assert!(script.is_empty());
+    }
+
+    #[test]
+    fn test_extract_python_script_tilde_fence() {
+        let response = "Here's the script:\n~~~python\nimport json\nprint('ok')\n~~~\n";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import json\nprint('ok')");
+    }
+
+    #[test]
+    fn test_extract_python_script_tilde_plain_fence() {
+        let response = "~~~\nimport os\n~~~";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import os");
+    }
+
+    #[test]
+    fn test_extract_python_script_python3_fence() {
+        let response = "```python3\nimport json\nprint('ok')\n```";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import json\nprint('ok')");
+    }
+
+    #[test]
+    fn test_extract_python_script_py_fence() {
+        let response = "~~~py\nimport os\nprint('done')\n~~~";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import os\nprint('done')");
+    }
+
+    #[test]
+    fn test_extract_python_script_skips_json_tagged_block() {
+        // JSON-tagged block should be skipped; Python block should be extracted.
+        let response =
+            "```json\n{\"key\": \"value\"}\n```\n\n```python\nimport os\nprint('done')\n```";
+        let script = extract_python_script(response);
+        assert!(
+            script.contains("import os"),
+            "should extract Python block, got: {script}"
+        );
+        assert!(
+            !script.contains("\"key\""),
+            "should NOT extract the JSON block"
+        );
+    }
+
+    #[test]
+    fn test_extract_python_script_skips_bash_block() {
+        let response = "```bash\npip install foo\n```\n\n```python\nimport foo\n```";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import foo");
+    }
+
+    #[test]
+    fn test_extract_python_script_pass2_skips_non_python_tags() {
+        // No Python-tagged blocks → Pass 2 must skip bash and pick the untagged block.
+        let response = "```bash\npip install foo\n```\n\n```\nimport foo\nprint('ok')\n```";
+        let script = extract_python_script(response);
+        assert!(
+            script.contains("import foo"),
+            "Pass 2 should skip bash and pick generic block, got: {script}"
+        );
+        assert!(!script.contains("pip install"));
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_tilde_before_backtick() {
+        let text = "~~~json\n{}\n~~~\n\n```python\nimport os\n```";
+        let blocks = crate::util::find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, "json");
+        assert_eq!(blocks[1].0, "python");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_backtick_before_tilde() {
+        // When ``` appears before ~~~ in same text, backtick is parsed first.
+        let text = "```python\nfirst\n```\n\n~~~json\n{}\n~~~";
+        let blocks = crate::util::find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, "python");
+        assert_eq!(blocks[1].0, "json");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_single_line_no_block() {
+        // Single-line ```code``` — closing fence not at line boundary, no block extracted.
+        let text = "```code```";
+        let blocks = crate::util::find_fenced_blocks(text);
+        assert!(
+            blocks.is_empty(),
+            "single-line fence is not valid CommonMark"
+        );
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_unclosed_fence() {
+        let text = "```python\nimport os\n";
+        let blocks = crate::util::find_fenced_blocks(text);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
     fn test_extract_frontmatter_version() {
         let md = "---\nname: numpy\nversion: 2.1.0\nlanguage: python\n---\n# Content";
         assert_eq!(extract_frontmatter_version(md), Some("2.1.0".to_string()));
@@ -818,14 +1026,25 @@ mod tests {
             .expect("review should succeed in advisory mode");
 
         // Advisory mode: passed is determined by the LLM verdict alone.
-        // No introspection issue should be injected.
+        // Introspection degradation adds a warning but does not fail the review.
         assert!(
             r.passed,
             "advisory mode should pass when LLM verdict passes"
         );
+        let intro_issues: Vec<_> = r
+            .issues
+            .iter()
+            .filter(|i| i.category == "introspection")
+            .collect();
         assert!(
-            !r.issues.iter().any(|i| i.category == "introspection"),
-            "advisory mode should not inject introspection issues"
+            !intro_issues.is_empty(),
+            "degraded introspection should produce at least one issue"
+        );
+        assert!(
+            intro_issues
+                .iter()
+                .all(|i| matches!(i.severity, Severity::Warning)),
+            "advisory mode should only add warning-level introspection issues, not errors"
         );
     }
 
@@ -925,27 +1144,39 @@ mod tests {
 
     #[test]
     fn test_advisory_introspection_degraded_unit() {
-        // Unit test: advisory mode should NOT override the verdict.
+        // Unit test: advisory mode adds a warning but does NOT override the verdict.
         let verdict_json = r#"{"passed": true, "issues": []}"#;
         let mut result = parse_review_response(verdict_json, false).unwrap();
 
         let introspection_degraded = true;
         let strict = false;
+        let introspection_output = "INTROSPECTION FAILED: container OOM";
 
-        if strict && introspection_degraded {
-            result.passed = false;
+        // Mirrors the updated review() logic: always add issue on degradation
+        if introspection_degraded {
+            let severity = if strict {
+                Severity::Error
+            } else {
+                Severity::Warning
+            };
+            if strict {
+                result.passed = false;
+            }
             result.issues.push(ReviewIssue {
-                severity: Severity::Warning,
+                severity,
                 category: "introspection".to_string(),
-                complaint: "should not appear".to_string(),
-                evidence: String::new(),
+                complaint:
+                    "Container introspection failed — verdict is based on textual analysis only"
+                        .to_string(),
+                evidence: introspection_output.chars().take(500).collect(),
             });
         }
 
         assert!(result.passed, "advisory mode should not override verdict");
+        assert_eq!(result.issues.len(), 1, "warning issue should be added");
         assert!(
-            result.issues.is_empty(),
-            "no introspection issue should be added"
+            matches!(result.issues[0].severity, Severity::Warning),
+            "advisory mode should add warning, not error"
         );
     }
 
