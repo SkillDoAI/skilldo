@@ -429,14 +429,10 @@ impl LanguageExecutor for CargoExecutor {
             let lines: Vec<String> = deps
                 .iter()
                 .map(|d| {
-                    // Handle "crate_name = version_spec" vs bare "crate_name".
-                    // Bare names get `= "*"` — non-reproducible but matches npm's
-                    // approach. Version pinning is a follow-up enhancement.
-                    if d.contains('=') {
-                        d.to_string()
-                    } else {
-                        format!("{d} = \"*\"")
-                    }
+                    // Deps arrive as bare crate names (sanitize_dep_name rejects
+                    // anything with `=` or spaces). Wildcard `"*"` matches npm's
+                    // approach; version pinning is a follow-up enhancement.
+                    format!("{d} = \"*\"")
                 })
                 .collect();
             format!("\n[dependencies]\n{}\n", lines.join("\n"))
@@ -1303,6 +1299,20 @@ func main() {
         assert!(
             !cargo_toml.contains("[dependencies]"),
             "no deps means no deps section"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cargo_setup_rejects_version_spec_in_dep_name() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let deps = vec!["once_cell = \"1\"".to_string()];
+        let result = executor.setup_environment(&deps).await;
+        assert!(
+            result.is_err(),
+            "deps with '=' should be rejected by sanitize_dep_name"
         );
     }
 }

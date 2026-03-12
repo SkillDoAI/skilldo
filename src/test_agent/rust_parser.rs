@@ -610,6 +610,23 @@ serde = "1.0"
     }
 
     #[test]
+    fn cargo_toml_deps_exit_on_next_section() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```toml\n[dependencies]\ntokio = \"1\"\n\n[dev-dependencies]\nproptest = \"1\"\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"tokio".to_string()),
+            "should find tokio in [dependencies]: {:?}",
+            deps
+        );
+        assert!(
+            !deps.contains(&"proptest".to_string()),
+            "should stop at [dev-dependencies]: {:?}",
+            deps
+        );
+    }
+
+    #[test]
     fn categorize_async_keyword_pattern() {
         assert_eq!(
             RustParser::categorize_pattern("Async Workers", "Run async tasks in background"),

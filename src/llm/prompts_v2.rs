@@ -1708,6 +1708,15 @@ mod tests {
     }
 
     #[test]
+    fn test_language_hints_javascript_returns_empty() {
+        let hints = language_hints(&Language::JavaScript, "extract");
+        assert!(
+            hints.is_empty(),
+            "JavaScript should return empty hints (no JS-specific hints yet)"
+        );
+    }
+
+    #[test]
     fn test_go_map_hints_mention_table_driven() {
         let hints = go_hints("map");
         assert!(

@@ -1488,6 +1488,24 @@ mod tests {
     }
 
     #[test]
+    fn cargo_toml_field_preserves_hash_inside_single_quotes() {
+        let content = "[package]\ndescription = 'has # inside'\n";
+        assert_eq!(
+            cargo_toml_field(content, "description"),
+            Some("has # inside".to_string())
+        );
+    }
+
+    #[test]
+    fn cargo_toml_field_single_quoted_value_with_trailing_comment() {
+        let content = "[package]\nname = 'my-crate' # comment\n";
+        assert_eq!(
+            cargo_toml_field(content, "name"),
+            Some("my-crate".to_string())
+        );
+    }
+
+    #[test]
     fn get_project_urls_no_name_no_docs_rs() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -1919,5 +1937,69 @@ mod tests {
         assert_eq!(parse_version_tag(""), None);
         assert_eq!(parse_version_tag("latest"), None);
         assert_eq!(parse_version_tag("release"), None);
+    }
+
+    #[test]
+    fn get_license_unrecognized_returns_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("LICENSE"),
+            "Custom License v42\n\nDo whatever you want.\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_license().unwrap(), "Custom License v42");
+    }
+
+    #[test]
+    fn find_changelog_finds_plain_changelog() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("CHANGELOG"), "# Changes\n").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let changelog = handler.find_changelog().unwrap();
+        assert!(changelog.ends_with("CHANGELOG"));
+    }
+
+    #[test]
+    fn find_changelog_finds_history_md() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("HISTORY.md"), "# History\n").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let changelog = handler.find_changelog().unwrap();
+        assert!(changelog.ends_with("HISTORY.md"));
+    }
+
+    #[test]
+    fn get_project_urls_includes_documentation_field() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\ndocumentation = \"https://x.docs.io\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            urls.iter()
+                .any(|(k, v)| k == "Documentation" && v == "https://x.docs.io"),
+            "should find explicit documentation URL: {:?}",
+            urls
+        );
+    }
+
+    #[test]
+    fn file_priority_mod_rs_between_lib_and_main() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = RustHandler::new(dir.path());
+        let lib = handler.file_priority(Path::new("src/lib.rs"));
+        let mod_rs = handler.file_priority(Path::new("src/mod.rs"));
+        let main = handler.file_priority(Path::new("src/main.rs"));
+        assert!(lib < mod_rs, "lib.rs should rank above mod.rs");
+        assert!(mod_rs < main, "mod.rs should rank above main.rs");
     }
 }

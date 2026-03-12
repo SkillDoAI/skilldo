@@ -1727,6 +1727,22 @@ setup(
         assert!(data.source_content.contains("#[cfg(test)]"));
     }
 
+    #[tokio::test]
+    async fn test_collect_rust_invalid_package_name_falls_back() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"-invalid\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(src.join("lib.rs"), "pub fn hello() {}\n").unwrap();
+        let c = Collector::new(dir.path(), Language::Rust);
+        let data = c.collect().await.unwrap();
+        assert_eq!(data.package_name, "unknown");
+    }
+
     // -- Go collection tests --
 
     /// Helper: create a minimal Go project structure in a temp dir.
