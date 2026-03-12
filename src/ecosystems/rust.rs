@@ -1467,4 +1467,117 @@ mod tests {
         // No name field means no docs.rs fallback
         assert!(!urls.iter().any(|(_, v)| v.contains("docs.rs")));
     }
+
+    #[test]
+    fn find_test_files_discovers_test_rs_in_src() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn x() {}\n").unwrap();
+        fs::write(src.join("utils_test.rs"), "#[test] fn t() {}\n").unwrap();
+        // Also put one in tests/ dir for the other strategy
+        let tests = root.join("tests");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(tests.join("integration.rs"), "#[test] fn t() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_test_files().unwrap();
+        assert!(
+            files.iter().any(|p| p.ends_with("utils_test.rs")),
+            "should discover *_test.rs files in src"
+        );
+        assert!(
+            files.iter().any(|p| p.ends_with("integration.rs")),
+            "should discover files in tests/ dir"
+        );
+    }
+
+    #[test]
+    fn find_docs_with_nested_docs_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs");
+        let nested = docs.join("guides");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(docs.join("overview.md"), "# Overview\n").unwrap();
+        fs::write(nested.join("quickstart.md"), "# Quickstart\n").unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"t\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_docs().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(
+            names.contains(&"overview.md"),
+            "should find docs in docs/ dir"
+        );
+        assert!(
+            names.contains(&"quickstart.md"),
+            "should find docs in nested docs/ subdir"
+        );
+    }
+
+    #[test]
+    fn collect_rs_files_skips_deep_nesting() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn x() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn find_docs_with_vendor_dir_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Create a docs dir with a vendor subdir that should be skipped
+        let docs = root.join("docs");
+        fs::create_dir_all(docs.join("vendor")).unwrap();
+        fs::write(docs.join("readme.md"), "# Docs\n").unwrap();
+        fs::write(docs.join("vendor").join("third_party.md"), "# Vendor\n").unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"t\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_docs().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"readme.md"));
+        // vendor dir should be excluded by collect_docs_recursive
+        assert!(
+            !names.contains(&"third_party.md"),
+            "vendor dir should be excluded"
+        );
+    }
+
+    #[test]
+    fn find_source_files_in_nested_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        let nested = src.join("utils");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(src.join("lib.rs"), "mod utils;\n").unwrap();
+        fs::write(nested.join("helpers.rs"), "pub fn help() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("helpers.rs")));
+    }
 }

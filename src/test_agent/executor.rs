@@ -1259,4 +1259,27 @@ func main() {
             "CARGO_HOME should be created inside temp dir"
         );
     }
+
+    #[tokio::test]
+    async fn test_cargo_setup_with_deps_generates_cargo_toml() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let deps = vec!["serde".to_string(), "once_cell".to_string()];
+        let env = executor.setup_environment(&deps).await.unwrap();
+        let cargo_toml = std::fs::read_to_string(env.temp_dir.path().join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("[dependencies]"),
+            "should have deps section"
+        );
+        assert!(
+            cargo_toml.contains("serde = \"*\""),
+            "bare dep should get wildcard version"
+        );
+        assert!(
+            cargo_toml.contains("once_cell = \"*\""),
+            "bare dep should get wildcard version"
+        );
+    }
 }

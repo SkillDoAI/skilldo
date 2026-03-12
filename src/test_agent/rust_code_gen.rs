@@ -379,4 +379,31 @@ fn main() {
         assert!(code.contains("fn main()"));
         assert!(!code.contains("~~~"));
     }
+
+    #[test]
+    fn test_extract_code_skips_non_rust_blocks() {
+        // Python block followed by a generic block with Rust code
+        let response =
+            "```python\nprint('hello')\n```\n\n```\nfn main() { println!(\"hi\"); }\n```\n";
+        let code = RustCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains("fn main()"),
+            "should skip python block and use generic: {}",
+            code
+        );
+        assert!(!code.contains("print('hello')"));
+    }
+
+    #[test]
+    fn test_extract_code_skips_json_blocks() {
+        // JSON-looking block (starts with {) followed by Rust code
+        let response =
+            "```\n{\"key\": \"value\"}\n```\n\n```\nfn main() { println!(\"ok\"); }\n```\n";
+        let code = RustCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains("fn main()"),
+            "should skip JSON block: {}",
+            code
+        );
+    }
 }

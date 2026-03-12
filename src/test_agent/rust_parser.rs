@@ -608,4 +608,49 @@ serde = "1.0"
             deps
         );
     }
+
+    #[test]
+    fn categorize_async_keyword_pattern() {
+        assert_eq!(
+            RustParser::categorize_pattern("Async Workers", "Run async tasks in background"),
+            PatternCategory::AsyncPattern
+        );
+    }
+
+    #[test]
+    fn categorize_concurrent_pattern() {
+        assert_eq!(
+            RustParser::categorize_pattern("Thread Pool", "Run concurrent workers"),
+            PatternCategory::AsyncPattern
+        );
+    }
+
+    #[test]
+    fn categorize_other_pattern() {
+        assert_eq!(
+            RustParser::categorize_pattern("Serialization", "Convert data to bytes"),
+            PatternCategory::Other
+        );
+    }
+
+    #[test]
+    fn extract_deps_from_cargo_add_stops_at_special_chars() {
+        let parser = RustParser;
+        // cargo add regex captures only [a-zA-Z_][a-zA-Z0-9_-]*, so special chars
+        // after the crate name are naturally excluded by the regex
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```\ncargo add valid-crate\ncargo add once_cell@1.21\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(deps.contains(&"valid-crate".to_string()));
+        assert!(
+            deps.contains(&"once_cell".to_string()),
+            "should extract crate name before @: {:?}",
+            deps
+        );
+        // The @version part should NOT appear in the dep name
+        assert!(
+            !deps.iter().any(|d| d.contains('@')),
+            "should not include @version: {:?}",
+            deps
+        );
+    }
 }
