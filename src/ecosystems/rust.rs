@@ -20,7 +20,7 @@ pub fn cargo_toml_field(content: &str, field: &str) -> Option<String> {
             in_package = trimmed == "[package]";
             continue;
         }
-        if in_package && trimmed.contains('=') {
+        if in_package {
             if let Some(eq_pos) = trimmed.find('=') {
                 let lhs = trimmed[..eq_pos].trim();
                 if lhs != field {

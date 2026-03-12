@@ -55,61 +55,48 @@ impl<'a> RustCodeGenerator<'a> {
     /// Extract Rust code from markdown code blocks (supports both ``` and ~~~ fences).
     fn extract_code_from_response(response: &str) -> Result<String> {
         let trimmed = response.trim();
+        let blocks = crate::util::find_fenced_blocks(trimmed);
 
-        // Try language-tagged fence first (```rust / ```rs or ~~~rust / ~~~rs)
-        for fence in &["```", "~~~"] {
-            for tag in &["rust", "rs"] {
-                let tagged_fence = format!("{fence}{tag}");
-                if let Some(start) = trimmed.find(&tagged_fence) {
-                    let code_start = start + tagged_fence.len();
-                    let after = &trimmed[code_start..];
-                    let newline_pos = after.find('\n').unwrap_or(0);
-                    let actual_start = code_start + newline_pos;
-                    if let Some(end) = trimmed[actual_start..].find(*fence) {
-                        let code = trimmed[actual_start..actual_start + end].trim();
-                        return Ok(code.to_string());
-                    }
-                }
+        const RUST_TAGS: &[&str] = &["rust", "rs"];
+
+        // Pass 1: prefer Rust-tagged blocks
+        for (tag, body) in &blocks {
+            if RUST_TAGS.contains(&tag.as_str()) {
+                return Ok(body.clone());
             }
         }
 
-        // Try generic ``` or ~~~ code block
-        for fence in &["```", "~~~"] {
-            if let Some(start) = trimmed.find(*fence) {
-                let code_start = start + fence.len();
-                if let Some(end) = trimmed[code_start..].find(*fence) {
-                    let mut code = trimmed[code_start..code_start + end].trim();
-                    // Strip known language tags
-                    if let Some((first_line, rest)) = code.split_once('\n') {
-                        let tag = first_line.trim().to_ascii_lowercase();
-                        const KNOWN_TAGS: &[&str] = &[
-                            "rust",
-                            "rs",
-                            "go",
-                            "golang",
-                            "python",
-                            "py",
-                            "javascript",
-                            "js",
-                            "typescript",
-                            "ts",
-                            "bash",
-                            "sh",
-                            "shell",
-                            "text",
-                            "txt",
-                            "json",
-                            "yaml",
-                            "yml",
-                            "toml",
-                        ];
-                        if KNOWN_TAGS.contains(&tag.as_str()) {
-                            code = rest.trim();
-                        }
-                    }
-                    return Ok(code.to_string());
-                }
+        // Pass 2: fall back to first block that isn't a known non-Rust language
+        const NON_RUST_TAGS: &[&str] = &[
+            "json",
+            "bash",
+            "sh",
+            "shell",
+            "text",
+            "txt",
+            "yaml",
+            "yml",
+            "toml",
+            "sql",
+            "python",
+            "py",
+            "javascript",
+            "js",
+            "typescript",
+            "ts",
+            "go",
+            "html",
+            "css",
+            "xml",
+        ];
+        for (tag, body) in &blocks {
+            if NON_RUST_TAGS.contains(&tag.as_str()) {
+                continue;
             }
+            if body.starts_with('{') {
+                continue;
+            }
+            return Ok(body.clone());
         }
 
         // If no code block found, use the response as-is
