@@ -174,6 +174,8 @@ impl RustHandler {
             }
         }
 
+        docs.sort();
+        docs.dedup();
         info!("Found {} documentation files", docs.len());
         Ok(docs)
     }
