@@ -2288,4 +2288,58 @@ mod tests {
         let v = handler.get_version().unwrap();
         assert_eq!(v, "3.0.0", "should fall back to list_tags_sorted");
     }
+
+    #[test]
+    fn version_falls_back_to_latest_with_non_version_tags() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        // Cargo.toml without a version field
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init", "--no-gpg-sign"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        // Tag with a non-version name (no dots, doesn't start with digit)
+        Command::new("git")
+            .args(["tag", "release-candidate"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        let handler = RustHandler::new(root);
+        // describe_tags returns "release-candidate", parse_version_tag → None
+        // list_tags_sorted returns ["release-candidate"], parse_version_tag → None
+        // fetch_tags on a local-only repo is a no-op
+        // Falls through to "latest"
+        let v = handler.get_version().unwrap();
+        assert_eq!(
+            v, "latest",
+            "non-version tags should fall through to latest"
+        );
+    }
 }
