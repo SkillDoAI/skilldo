@@ -462,6 +462,23 @@ fn extract_python_script(response: &str) -> String {
         "xml",
     ];
 
+    // Handle unclosed Python fences: strip the opener line and return the rest
+    if let Some(nl) = trimmed.find('\n') {
+        let header = trimmed[..nl].trim();
+        let is_python_opener = PYTHON_TAGS
+            .iter()
+            .any(|tag| header == format!("```{tag}") || header == format!("~~~{tag}"));
+        if is_python_opener {
+            let rest = trimmed[nl + 1..].trim();
+            // If there's a matching close fence, find_fenced_blocks will handle it;
+            // this path only fires when the fence is unclosed.
+            let blocks = crate::util::find_fenced_blocks(trimmed);
+            if blocks.is_empty() && !rest.is_empty() {
+                return rest.to_string();
+            }
+        }
+    }
+
     let blocks = crate::util::find_fenced_blocks(trimmed);
 
     // Pass 1: prefer Python-tagged blocks
@@ -743,11 +760,10 @@ mod tests {
 
     #[test]
     fn test_extract_python_script_unclosed_python_fence() {
-        // ```python with no closing ``` — falls through to plain fence
+        // ```python with no closing ``` — strip opener, return body only
         let text = "```python\nimport os\n";
         let script = extract_python_script(text);
-        // Falls through to "no fence" branch, contains "import " → returned as-is
-        assert!(script.contains("import os"));
+        assert_eq!(script, "import os");
     }
 
     #[test]
