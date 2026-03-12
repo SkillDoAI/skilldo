@@ -57,7 +57,17 @@ impl RustParser {
 
     /// Check if a Rust crate name is from the standard library.
     fn is_stdlib_crate(name: &str) -> bool {
-        const STDLIB_CRATES: &[&str] = &["std", "core", "alloc", "proc_macro", "test"];
+        const STDLIB_CRATES: &[&str] = &[
+            "std",
+            "core",
+            "alloc",
+            "proc_macro",
+            "test",
+            // Intra-crate path qualifiers (not external deps)
+            "crate",
+            "self",
+            "super",
+        ];
         STDLIB_CRATES.contains(&name)
     }
 }
@@ -144,14 +154,10 @@ impl LanguageParser for RustParser {
                 in_deps_section = true;
                 continue;
             }
-            // Exit [dependencies] on next section header, blank line, or code fence close
+            // Exit [dependencies] on next section header or code fence close
             if in_deps_section {
                 let t = line.trim();
-                if t.starts_with('[')
-                    || t.is_empty()
-                    || t.starts_with("```")
-                    || t.starts_with("~~~")
-                {
+                if t.starts_with('[') || t.starts_with("```") || t.starts_with("~~~") {
                     in_deps_section = false;
                 } else if let Some(cap) = CARGO_TOML_DEP_RE.captures(line) {
                     let crate_name = cap[1].to_string();
@@ -561,5 +567,45 @@ serde = "1.0"
         let parser = RustParser;
         let skill = "---\nname: test\n---\n";
         assert_eq!(parser.extract_version(skill).unwrap(), None);
+    }
+
+    #[test]
+    fn filters_intra_crate_paths() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```rust\nuse crate::config::Settings;\nuse self::helper;\nuse super::parent;\nuse serde::Deserialize;\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            !deps.iter().any(|d| d == "crate"),
+            "should filter `crate`: {:?}",
+            deps
+        );
+        assert!(
+            !deps.iter().any(|d| d == "self"),
+            "should filter `self`: {:?}",
+            deps
+        );
+        assert!(
+            !deps.iter().any(|d| d == "super"),
+            "should filter `super`: {:?}",
+            deps
+        );
+        assert!(deps.contains(&"serde".to_string()));
+    }
+
+    #[test]
+    fn cargo_toml_deps_with_blank_lines() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```toml\n[dependencies]\ntokio = \"1\"\n\nserde = \"1\"\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"tokio".to_string()),
+            "should find tokio before blank line: {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&"serde".to_string()),
+            "should find serde after blank line: {:?}",
+            deps
+        );
     }
 }

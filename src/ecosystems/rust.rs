@@ -26,10 +26,17 @@ pub fn cargo_toml_field(content: &str, field: &str) -> Option<String> {
                 if lhs != field {
                     continue;
                 }
-                let val = trimmed[eq_pos + 1..]
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('\'');
+                let mut rhs = trimmed[eq_pos + 1..].trim();
+                // Strip inline TOML comments (# ...) outside of quotes
+                if let Some(hash) = rhs.find(" #") {
+                    // Only strip if the # is outside quotes
+                    let before = &rhs[..hash];
+                    let quote_count = before.matches('"').count() + before.matches('\'').count();
+                    if quote_count % 2 == 0 {
+                        rhs = rhs[..hash].trim();
+                    }
+                }
+                let val = rhs.trim_matches('"').trim_matches('\'');
                 if !val.is_empty() {
                     return Some(val.to_string());
                 }
@@ -1423,6 +1430,28 @@ mod tests {
         assert!(files
             .iter()
             .any(|p| p.file_name().is_some_and(|n| n == "api_test.rs")));
+    }
+
+    #[test]
+    fn cargo_toml_field_strips_inline_comment() {
+        let content = "[package]\nname = \"my-crate\" # this is a comment\nversion = \"2.0.0\"\n";
+        assert_eq!(
+            cargo_toml_field(content, "name"),
+            Some("my-crate".to_string())
+        );
+        assert_eq!(
+            cargo_toml_field(content, "version"),
+            Some("2.0.0".to_string())
+        );
+    }
+
+    #[test]
+    fn cargo_toml_field_preserves_hash_inside_quotes() {
+        let content = "[package]\ndescription = \"A # symbol inside\"\n";
+        assert_eq!(
+            cargo_toml_field(content, "description"),
+            Some("A # symbol inside".to_string())
+        );
     }
 
     #[test]

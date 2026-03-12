@@ -16,7 +16,7 @@ pub const RUST_ENV: TestEnv = TestEnv {
     runner: "`cargo run`",
     env_notes: "\
 - Write a standalone `fn main()` program — no test harness available
-- Add dependencies in Cargo.toml `[dependencies]` section at the top of the file as a comment
+- External crates are pre-installed; just `use` them directly
 - Use `eprintln!` and `std::process::exit(1)` for assertion failures",
 };
 
