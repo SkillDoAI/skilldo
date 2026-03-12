@@ -5,7 +5,6 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use rand::RngCore;
 use sha2::{Digest, Sha256};
 
 /// Generate a PKCE code verifier and its S256 challenge.
@@ -15,7 +14,7 @@ use sha2::{Digest, Sha256};
 /// - `challenge`: base64url(SHA-256(verifier))
 pub fn generate_pkce() -> (String, String) {
     let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes);
     let verifier = URL_SAFE_NO_PAD.encode(bytes);
     let challenge = challenge_from_verifier(&verifier);
     (verifier, challenge)
@@ -30,7 +29,7 @@ fn challenge_from_verifier(verifier: &str) -> String {
 /// Generate a random state parameter for CSRF protection.
 pub fn generate_state() -> String {
     let mut bytes = [0u8; 16];
-    rand::rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
