@@ -405,19 +405,26 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
 fn extract_json_block(text: &str) -> String {
     let trimmed = text.trim();
 
-    // Try: markdown json fence
-    if let Some(start) = trimmed.find("```json") {
-        if let Some(end) = trimmed[start + 7..].find("```") {
-            return trimmed[start + 7..start + 7 + end].trim().to_string();
+    // Try: markdown json fence (``` or ~~~)
+    for fence in &["```", "~~~"] {
+        let json_fence = format!("{fence}json");
+        if let Some(start) = trimmed.find(&json_fence) {
+            let after = start + json_fence.len();
+            if let Some(end) = trimmed[after..].find(fence) {
+                return trimmed[after..after + end].trim().to_string();
+            }
         }
     }
 
-    // Try: markdown plain fence
-    if let Some(start) = trimmed.find("```") {
-        if let Some(end) = trimmed[start + 3..].find("```") {
-            let inner = trimmed[start + 3..start + 3 + end].trim();
-            if inner.starts_with('{') {
-                return inner.to_string();
+    // Try: markdown plain fence (``` or ~~~)
+    for fence in &["```", "~~~"] {
+        if let Some(start) = trimmed.find(fence) {
+            let after = start + fence.len();
+            if let Some(end) = trimmed[after..].find(fence) {
+                let inner = trimmed[after..after + end].trim();
+                if inner.starts_with('{') {
+                    return inner.to_string();
+                }
             }
         }
     }
@@ -703,6 +710,20 @@ mod tests {
         let result = extract_json_block(text);
         // find('{') at 12, rfind('}') at 0 → end < start → falls through
         assert_eq!(result, text.trim());
+    }
+
+    #[test]
+    fn test_extract_json_block_tilde_json_fence() {
+        let text = "~~~json\n{\"passed\": true, \"issues\": []}\n~~~";
+        let result = extract_json_block(text);
+        assert_eq!(result, "{\"passed\": true, \"issues\": []}");
+    }
+
+    #[test]
+    fn test_extract_json_block_tilde_plain_fence() {
+        let text = "~~~\n{\"key\": \"value\"}\n~~~";
+        let result = extract_json_block(text);
+        assert_eq!(result, "{\"key\": \"value\"}");
     }
 
     #[test]
