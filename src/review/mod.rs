@@ -470,7 +470,7 @@ fn extract_python_script(response: &str) -> String {
         "xml",
     ];
 
-    let blocks = find_fenced_blocks(trimmed);
+    let blocks = crate::util::find_fenced_blocks(trimmed);
 
     // Pass 1: prefer Python-tagged blocks
     for (tag, body) in &blocks {
@@ -496,47 +496,6 @@ fn extract_python_script(response: &str) -> String {
     }
 
     String::new()
-}
-
-/// Find all fenced code blocks in text, returning (tag, body) pairs.
-/// The tag is the text on the same line as the opening fence (e.g., "python" in ```python).
-fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
-    let mut blocks = Vec::new();
-    let mut pos = 0;
-    while pos < text.len() {
-        let (fence, start) = if let Some(idx) = text[pos..].find("```") {
-            if let Some(tilde_idx) = text[pos..].find("~~~") {
-                if tilde_idx < idx {
-                    ("~~~", pos + tilde_idx)
-                } else {
-                    ("```", pos + idx)
-                }
-            } else {
-                ("```", pos + idx)
-            }
-        } else if let Some(idx) = text[pos..].find("~~~") {
-            ("~~~", pos + idx)
-        } else {
-            break;
-        };
-
-        let after = start + fence.len();
-        if let Some(end) = text[after..].find(fence) {
-            let raw = &text[after..after + end];
-            let (tag, body) = if let Some(nl) = raw.find('\n') {
-                let tag_part = raw[..nl].trim().to_ascii_lowercase();
-                let body = raw[nl + 1..].trim().to_string();
-                (tag_part, body)
-            } else {
-                (String::new(), raw.trim().to_string())
-            };
-            blocks.push((tag, body));
-            pos = after + end + fence.len();
-        } else {
-            break;
-        }
-    }
-    blocks
 }
 
 /// Extract version from SKILL.md YAML frontmatter.
@@ -875,7 +834,7 @@ mod tests {
     #[test]
     fn test_find_fenced_blocks_tilde_before_backtick() {
         let text = "~~~json\n{}\n~~~\n\n```python\nimport os\n```";
-        let blocks = find_fenced_blocks(text);
+        let blocks = crate::util::find_fenced_blocks(text);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].0, "json");
         assert_eq!(blocks[1].0, "python");
@@ -885,25 +844,27 @@ mod tests {
     fn test_find_fenced_blocks_backtick_before_tilde() {
         // When ``` appears before ~~~ in same text, backtick is parsed first.
         let text = "```python\nfirst\n```\n\n~~~json\n{}\n~~~";
-        let blocks = find_fenced_blocks(text);
+        let blocks = crate::util::find_fenced_blocks(text);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].0, "python");
         assert_eq!(blocks[1].0, "json");
     }
 
     #[test]
-    fn test_find_fenced_blocks_single_line_no_newline() {
+    fn test_find_fenced_blocks_single_line_no_block() {
+        // Single-line ```code``` — closing fence not at line boundary, no block extracted.
         let text = "```code```";
-        let blocks = find_fenced_blocks(text);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].0, ""); // no newline → empty tag
-        assert_eq!(blocks[0].1, "code");
+        let blocks = crate::util::find_fenced_blocks(text);
+        assert!(
+            blocks.is_empty(),
+            "single-line fence is not valid CommonMark"
+        );
     }
 
     #[test]
     fn test_find_fenced_blocks_unclosed_fence() {
         let text = "```python\nimport os\n";
-        let blocks = find_fenced_blocks(text);
+        let blocks = crate::util::find_fenced_blocks(text);
         assert!(blocks.is_empty());
     }
 

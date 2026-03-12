@@ -60,7 +60,7 @@ impl<'a> PythonCodeGenerator<'a> {
         const PYTHON_TAGS: &[&str] = &["python", "python3", "py"];
 
         // Collect all fenced blocks with their tags
-        let blocks = Self::find_fenced_blocks(trimmed);
+        let blocks = crate::util::find_fenced_blocks(trimmed);
 
         // Pass 1: prefer Python-tagged blocks
         for (tag, body) in &blocks {
@@ -104,48 +104,6 @@ impl<'a> PythonCodeGenerator<'a> {
 
         // If no code block found, use the response as-is (may be raw code)
         Ok(trimmed.to_string())
-    }
-
-    /// Find all fenced code blocks in text, returning (tag, body) pairs.
-    /// The tag is the text on the same line as the opening fence (e.g., "python" in ```python).
-    fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
-        let mut blocks = Vec::new();
-        let mut pos = 0;
-        while pos < text.len() {
-            let (fence, start) = if let Some(idx) = text[pos..].find("```") {
-                if let Some(tilde_idx) = text[pos..].find("~~~") {
-                    if tilde_idx < idx {
-                        ("~~~", pos + tilde_idx)
-                    } else {
-                        ("```", pos + idx)
-                    }
-                } else {
-                    ("```", pos + idx)
-                }
-            } else if let Some(idx) = text[pos..].find("~~~") {
-                ("~~~", pos + idx)
-            } else {
-                break;
-            };
-
-            let after = start + fence.len();
-            if let Some(end) = text[after..].find(fence) {
-                let raw = &text[after..after + end];
-                // Tag is the text on the opener line (before first newline)
-                let (tag, body) = if let Some(nl) = raw.find('\n') {
-                    let tag_part = raw[..nl].trim().to_ascii_lowercase();
-                    let body = raw[nl + 1..].trim().to_string();
-                    (tag_part, body)
-                } else {
-                    (String::new(), raw.trim().to_string())
-                };
-                blocks.push((tag, body));
-                pos = after + end + fence.len();
-            } else {
-                break;
-            }
-        }
-        blocks
     }
 }
 
@@ -479,27 +437,28 @@ if __name__ == '__main__':
     fn test_find_fenced_blocks_tilde_before_backtick() {
         // When ~~~ appears before ``` in the same text, tilde fence should be parsed first.
         let text = "~~~python\nfirst\n~~~\n\n```python\nsecond\n```";
-        let blocks = PythonCodeGenerator::find_fenced_blocks(text);
+        let blocks = crate::util::find_fenced_blocks(text);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0], ("python".to_string(), "first".to_string()));
         assert_eq!(blocks[1], ("python".to_string(), "second".to_string()));
     }
 
     #[test]
-    fn test_find_fenced_blocks_single_line_no_newline() {
-        // Block with no newline: tag is empty, body is the raw content.
+    fn test_find_fenced_blocks_single_line_no_block() {
+        // Single-line ```code``` — closing fence is not at line boundary, so no block.
         let text = "```code```";
-        let blocks = PythonCodeGenerator::find_fenced_blocks(text);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].0, ""); // no tag (no newline to split on)
-        assert_eq!(blocks[0].1, "code");
+        let blocks = crate::util::find_fenced_blocks(text);
+        assert!(
+            blocks.is_empty(),
+            "single-line fence is not valid CommonMark"
+        );
     }
 
     #[test]
     fn test_find_fenced_blocks_unclosed_fence() {
         // Unclosed fence should not produce a block.
         let text = "```python\nimport os\n";
-        let blocks = PythonCodeGenerator::find_fenced_blocks(text);
+        let blocks = crate::util::find_fenced_blocks(text);
         assert!(blocks.is_empty());
     }
 
@@ -507,7 +466,7 @@ if __name__ == '__main__':
     fn test_find_fenced_blocks_backtick_before_tilde() {
         // When ``` appears before ~~~ in the same text, backtick fence should be parsed first.
         let text = "```python\nfirst\n```\n\n~~~python\nsecond\n~~~";
-        let blocks = PythonCodeGenerator::find_fenced_blocks(text);
+        let blocks = crate::util::find_fenced_blocks(text);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0], ("python".to_string(), "first".to_string()));
         assert_eq!(blocks[1], ("python".to_string(), "second".to_string()));
