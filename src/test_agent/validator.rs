@@ -1488,4 +1488,148 @@ mod tests {
         );
         assert!(feedback.contains("Middleware"));
     }
+
+    // --- Stateful mocks for retry path coverage ---
+
+    /// Executor that returns Fail on the first run_code, then Err on the second.
+    /// Covers the retry-execution-error path (line 402-405).
+    struct FailThenErrorExecutor {
+        call_count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FailThenErrorExecutor {
+        fn new() -> Self {
+            Self {
+                call_count: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LanguageExecutor for FailThenErrorExecutor {
+        async fn setup_environment(&self, _deps: &[String]) -> Result<ExecutionEnv> {
+            let temp_dir = tempfile::TempDir::new()?;
+            Ok(ExecutionEnv {
+                temp_dir,
+                interpreter_path: None,
+                container_name: None,
+                dependencies: vec![],
+            })
+        }
+
+        async fn run_code(&self, _env: &ExecutionEnv, _code: &str) -> Result<ExecutionResult> {
+            let n = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                Ok(ExecutionResult::Fail("first run failed".to_string()))
+            } else {
+                Err(anyhow::anyhow!("container crashed on retry"))
+            }
+        }
+
+        async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Code generator that succeeds on generate_test_code but fails on retry_test_code.
+    /// Covers the retry-code-generation-failure path (lines 409-411).
+    struct RetryFailingCodeGenerator;
+
+    #[async_trait::async_trait]
+    impl LanguageCodeGenerator for RetryFailingCodeGenerator {
+        async fn generate_test_code(&self, _pattern: &CodePattern) -> Result<String> {
+            Ok("print('initial')".to_string())
+        }
+
+        async fn retry_test_code(
+            &self,
+            _pattern: &CodePattern,
+            _previous_code: &str,
+            _error_output: &str,
+        ) -> Result<String> {
+            Err(anyhow::anyhow!("retry generation failed"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_retry_execution_error_falls_through() {
+        let patterns = vec![basic_pattern()];
+        let validator = make_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("print('ok')")),
+            Box::new(FailThenErrorExecutor::new()),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+        );
+        let result = validator.validate("# SKILL.md").await.unwrap();
+        // First run_code returns Fail, retry run_code returns Err → falls through
+        // with the original Fail result
+        assert_eq!(result.passed, 0);
+        assert_eq!(result.failed, 1);
+        assert!(result.test_cases[0].result.is_fail());
+    }
+
+    #[tokio::test]
+    async fn test_validate_retry_code_generation_fails() {
+        let patterns = vec![basic_pattern()];
+        let validator = make_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(RetryFailingCodeGenerator),
+            Box::new(MockExecutor::failing_execution("import error")),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+        );
+        let result = validator.validate("# SKILL.md").await.unwrap();
+        // generate_test_code succeeds, run_code fails, retry_test_code fails
+        // → falls through with original Fail result
+        assert_eq!(result.passed, 0);
+        assert_eq!(result.failed, 1);
+        assert!(result.test_cases[0].result.is_fail());
+    }
+
+    // --- Convenience wrapper coverage ---
+
+    #[test]
+    fn test_new_python_convenience_wrapper() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new_python(&client, config);
+        assert!(validator.is_ok());
+    }
+
+    #[test]
+    fn test_new_python_with_custom_convenience_wrapper() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new_python_with_custom(
+            &client,
+            config,
+            Some("Use pytest style".to_string()),
+        );
+        assert!(validator.is_ok());
+    }
+
+    // --- generate_feedback edge case: failed > 0 but all test_cases pass ---
+
+    #[test]
+    fn test_generate_feedback_no_failing_test_cases_returns_none() {
+        // Contradictory state: failed=1 in counts but all test_cases show Pass.
+        // The filter produces empty failed_tests, hitting the early return at line 83.
+        let result = TestResult {
+            passed: 1,
+            failed: 1,
+            test_cases: vec![TestCase {
+                pattern_name: "Only Pass".to_string(),
+                result: ExecutionResult::Pass("ok".to_string()),
+                generated_code: "code()".to_string(),
+            }],
+        };
+        assert!(result.generate_feedback(&Language::Python).is_none());
+    }
 }

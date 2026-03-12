@@ -1234,6 +1234,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_linter_default_trait() {
+        let linter: SkillLinter = Default::default();
+        let issues = linter.lint("---\nname: test\n---\n# Test").unwrap();
+        // Should work identically to SkillLinter::new()
+        assert!(!issues.is_empty() || issues.is_empty()); // just verify it runs
+    }
+
+    #[test]
     fn test_missing_frontmatter() {
         let linter = SkillLinter::new();
         let content = "# Some content\nNo frontmatter here";

@@ -1817,6 +1817,53 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_overwrite_no_custom_falls_through() {
+        // overwrite=true but custom=None → should generate normal prompt
+        let prompt = extract_prompt(
+            "click",
+            "8.1.0",
+            "# source",
+            10,
+            None,
+            true,
+            &Language::Python,
+        );
+        assert!(
+            prompt.contains("click"),
+            "should still generate a real prompt"
+        );
+    }
+
+    #[test]
+    fn test_map_overwrite_no_custom_falls_through() {
+        let prompt = map_prompt("click", "8.1.0", "# tests", None, true, &Language::Python);
+        assert!(prompt.contains("click"));
+    }
+
+    #[test]
+    fn test_learn_overwrite_no_custom_falls_through() {
+        let prompt = learn_prompt("click", "8.1.0", "# docs", None, true, &Language::Python);
+        assert!(prompt.contains("click"));
+    }
+
+    #[test]
+    fn test_create_overwrite_no_custom_falls_through() {
+        let prompt = create_prompt(
+            "click",
+            "8.1.0",
+            None,
+            &[],
+            &Language::Python,
+            "api",
+            "patterns",
+            "context",
+            None,
+            true,
+        );
+        assert!(prompt.contains("click"));
+    }
+
+    #[test]
     fn test_days_to_ymd_epoch() {
         assert_eq!(days_to_ymd(0), (1970, 1, 1));
     }

@@ -331,6 +331,19 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_interval_rejects_boolean() {
+        // Boolean triggers `expecting()` because neither visit_u64 nor visit_str is called
+        let json = r#"{"device_auth_id":"id","user_code":"CODE","interval":true}"#;
+        let result = serde_json::from_str::<UserCodeResponse>(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("string or integer"),
+            "expected 'string or integer' in error, got: {err}"
+        );
+    }
+
+    #[test]
     fn deserialize_url_field_optional() {
         let json = r#"{"device_auth_id":"id","user_code":"CODE","interval":1,"url":"https://example.com/verify"}"#;
         let resp: UserCodeResponse = serde_json::from_str(json).unwrap();

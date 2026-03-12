@@ -166,12 +166,20 @@ impl<'a> ReviewAgent<'a> {
             result.introspection_output = Some(introspection_output.clone());
         }
 
-        // In strict mode, degraded introspection fails the review so the user
-        // knows the verdict was based on incomplete data.
-        if self.strict && introspection_degraded {
-            result.passed = false;
+        // Degraded introspection means the verdict is based on textual analysis
+        // only. In strict mode this fails the review; in normal mode it adds a
+        // warning so the pipeline can track it as an unresolved issue.
+        if introspection_degraded {
+            let severity = if self.strict {
+                Severity::Error
+            } else {
+                Severity::Warning
+            };
+            if self.strict {
+                result.passed = false;
+            }
             result.issues.push(ReviewIssue {
-                severity: Severity::Error,
+                severity,
                 category: "introspection".to_string(),
                 complaint:
                     "Container introspection failed — verdict is based on textual analysis only"
@@ -430,20 +438,27 @@ fn extract_json_block(text: &str) -> String {
 fn extract_python_script(response: &str) -> String {
     let trimmed = response.trim();
 
-    // Try: ```python ... ```
-    if let Some(start) = trimmed.find("```python") {
-        if let Some(end) = trimmed[start + 9..].find("```") {
-            return trimmed[start + 9..start + 9 + end].trim().to_string();
+    // Try: ```python ... ``` or ~~~python ... ~~~
+    for fence in &["```python", "~~~python"] {
+        if let Some(start) = trimmed.find(fence) {
+            let close = &fence[..3]; // matching closing fence
+            let after = start + fence.len();
+            if let Some(end) = trimmed[after..].find(close) {
+                return trimmed[after..after + end].trim().to_string();
+            }
         }
     }
 
-    // Try: ``` ... ```
-    if let Some(start) = trimmed.find("```") {
-        if let Some(end) = trimmed[start + 3..].find("```") {
-            let inner = trimmed[start + 3..start + 3 + end].trim();
-            // Skip if it looks like JSON
-            if !inner.starts_with('{') {
-                return inner.to_string();
+    // Try: ``` ... ``` or ~~~ ... ~~~
+    for fence in &["```", "~~~"] {
+        if let Some(start) = trimmed.find(fence) {
+            let after = start + fence.len();
+            if let Some(end) = trimmed[after..].find(fence) {
+                let inner = trimmed[after..after + end].trim();
+                // Skip if it looks like JSON
+                if !inner.starts_with('{') {
+                    return inner.to_string();
+                }
             }
         }
     }
@@ -669,6 +684,64 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_json_block_unclosed_json_fence() {
+        // ```json with no closing ``` — falls through to brace search
+        let text = "```json\n{\"a\": 1}\n";
+        let result = extract_json_block(text);
+        assert_eq!(result, r#"{"a": 1}"#);
+    }
+
+    #[test]
+    fn test_extract_json_block_plain_fence_non_json() {
+        // Plain ``` fence with non-JSON content — falls through
+        let text = "```\nhello world\n```";
+        let result = extract_json_block(text);
+        assert_eq!(result, text.trim()); // no braces, returns as-is
+    }
+
+    #[test]
+    fn test_extract_json_block_brace_before_end() {
+        // Edge case: } appears before { (malformed)
+        let text = "} some text {";
+        let result = extract_json_block(text);
+        // find('{') at 12, rfind('}') at 0 → end < start → falls through
+        assert_eq!(result, text.trim());
+    }
+
+    #[test]
+    fn test_extract_python_script_unclosed_python_fence() {
+        // ```python with no closing ``` — falls through to plain fence
+        let text = "```python\nimport os\n";
+        let script = extract_python_script(text);
+        // Falls through to "no fence" branch, contains "import " → returned as-is
+        assert!(script.contains("import os"));
+    }
+
+    #[test]
+    fn test_extract_python_script_plain_fence_json_content() {
+        // Plain ``` fence with JSON inside — should be skipped (not Python)
+        let text = "```\n{\"key\": \"value\"}\n```";
+        let script = extract_python_script(text);
+        // inner starts with '{', so it's skipped; falls through to "no fence"
+        // No "import " or "def " or "#" → returns empty
+        assert!(script.is_empty());
+    }
+
+    #[test]
+    fn test_extract_python_script_tilde_fence() {
+        let response = "Here's the script:\n~~~python\nimport json\nprint('ok')\n~~~\n";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import json\nprint('ok')");
+    }
+
+    #[test]
+    fn test_extract_python_script_tilde_plain_fence() {
+        let response = "~~~\nimport os\n~~~";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import os");
+    }
+
+    #[test]
     fn test_extract_frontmatter_version() {
         let md = "---\nname: numpy\nversion: 2.1.0\nlanguage: python\n---\n# Content";
         assert_eq!(extract_frontmatter_version(md), Some("2.1.0".to_string()));
@@ -818,14 +891,21 @@ mod tests {
             .expect("review should succeed in advisory mode");
 
         // Advisory mode: passed is determined by the LLM verdict alone.
-        // No introspection issue should be injected.
+        // Introspection degradation adds a warning but does not fail the review.
         assert!(
             r.passed,
             "advisory mode should pass when LLM verdict passes"
         );
+        let intro_issues: Vec<_> = r
+            .issues
+            .iter()
+            .filter(|i| i.category == "introspection")
+            .collect();
         assert!(
-            !r.issues.iter().any(|i| i.category == "introspection"),
-            "advisory mode should not inject introspection issues"
+            intro_issues
+                .iter()
+                .all(|i| matches!(i.severity, Severity::Warning)),
+            "advisory mode should only add warning-level introspection issues, not errors"
         );
     }
 
@@ -925,27 +1005,39 @@ mod tests {
 
     #[test]
     fn test_advisory_introspection_degraded_unit() {
-        // Unit test: advisory mode should NOT override the verdict.
+        // Unit test: advisory mode adds a warning but does NOT override the verdict.
         let verdict_json = r#"{"passed": true, "issues": []}"#;
         let mut result = parse_review_response(verdict_json, false).unwrap();
 
         let introspection_degraded = true;
         let strict = false;
+        let introspection_output = "INTROSPECTION FAILED: container OOM";
 
-        if strict && introspection_degraded {
-            result.passed = false;
+        // Mirrors the updated review() logic: always add issue on degradation
+        if introspection_degraded {
+            let severity = if strict {
+                Severity::Error
+            } else {
+                Severity::Warning
+            };
+            if strict {
+                result.passed = false;
+            }
             result.issues.push(ReviewIssue {
-                severity: Severity::Warning,
+                severity,
                 category: "introspection".to_string(),
-                complaint: "should not appear".to_string(),
-                evidence: String::new(),
+                complaint:
+                    "Container introspection failed — verdict is based on textual analysis only"
+                        .to_string(),
+                evidence: introspection_output.chars().take(500).collect(),
             });
         }
 
         assert!(result.passed, "advisory mode should not override verdict");
+        assert_eq!(result.issues.len(), 1, "warning issue should be added");
         assert!(
-            result.issues.is_empty(),
-            "no introspection issue should be added"
+            matches!(result.issues[0].severity, Severity::Warning),
+            "advisory mode should add warning, not error"
         );
     }
 

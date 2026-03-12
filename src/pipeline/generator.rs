@@ -55,25 +55,36 @@ pub struct GenerateOutput {
     pub failure_reason: Option<String>,
 }
 
-/// Strip markdown code fences from output (```markdown ... ``` or ```...```)
+/// Strip markdown code fences from output (``` or ~~~ variants)
 fn strip_markdown_fences(content: &str) -> String {
     let trimmed = content.trim();
 
-    // Count leading backticks
-    let leading = trimmed.chars().take_while(|c| *c == '`').count();
+    // Detect fence character (backtick or tilde)
+    let fence_char = match trimmed.chars().next() {
+        Some('`') => '`',
+        Some('~') => '~',
+        _ => return content.to_string(),
+    };
+
+    // Count leading fence chars
+    let leading = trimmed.chars().take_while(|c| *c == fence_char).count();
     if leading < 3 {
         return content.to_string();
     }
 
-    // Count trailing backticks
-    let trailing = trimmed.chars().rev().take_while(|c| *c == '`').count();
+    // Count trailing fence chars (must match)
+    let trailing = trimmed
+        .chars()
+        .rev()
+        .take_while(|c| *c == fence_char)
+        .count();
     if trailing < 3 {
         return content.to_string();
     }
 
     // Find end of first line (opening fence + optional language tag)
-    let rest_after_backticks = &trimmed[leading..];
-    let first_newline = match rest_after_backticks.find('\n') {
+    let rest_after_fence = &trimmed[leading..];
+    let first_newline = match rest_after_fence.find('\n') {
         Some(pos) => leading + pos,
         None => return content.to_string(),
     };
@@ -676,6 +687,20 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 }
 
                 if result.passed {
+                    // Collect introspection warnings even on pass — degraded
+                    // introspection means the verdict was text-only, not grounded.
+                    let intro_issues: Vec<_> = result
+                        .issues
+                        .into_iter()
+                        .filter(|i| i.category == "introspection")
+                        .collect();
+                    if !intro_issues.is_empty() {
+                        warn!("  ⚠ review: passed with degraded introspection");
+                        for w in &intro_issues {
+                            warn!("  - [{}][{}] {}", w.severity, w.category, w.complaint);
+                        }
+                        unresolved_warnings = intro_issues;
+                    }
                     info!("  ✓ review: passed");
                     break;
                 }
@@ -733,17 +758,28 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 skill_md = strip_markdown_fences(&skill_md);
                 rescan_after_rewrite(&skill_md, self.enable_security_scan, "review fix")?;
 
-                // Single test pass after review rewrite — warn only, don't loop
+                // Single test pass after review rewrite — mark unresolved if broken.
                 if let Some(ref tv) = test_validator {
                     match tv.validate(&skill_md).await {
                         Ok(tr) if !tr.all_passed() && !tr.test_cases.is_empty() => {
-                            warn!(
-                                "  ⚠ review rewrite broke {} test(s) — accepting review fix",
-                                tr.failed
-                            );
+                            warn!("  ⚠ review rewrite broke {} test(s)", tr.failed);
+                            had_unresolved_errors = true;
+                            if failed_stage.is_none() {
+                                failed_stage = Some(FailedStage::Test);
+                                failure_reason = Some(format!(
+                                    "review rewrite broke {}/{} test(s)",
+                                    tr.failed,
+                                    tr.passed + tr.failed
+                                ));
+                            }
                         }
                         Err(e) => {
-                            warn!("  ⚠ post-review test error: {e} — accepting review fix");
+                            warn!("  ⚠ post-review test error: {e}");
+                            had_unresolved_errors = true;
+                            if failed_stage.is_none() {
+                                failed_stage = Some(FailedStage::Test);
+                                failure_reason = Some(format!("post-review test error: {e}"));
+                            }
                         }
                         _ => {}
                     }
@@ -2181,6 +2217,35 @@ testpkg.run()
     }
 
     // ========================================================================
+    // strip_markdown_fences: tilde fence support
+    // ========================================================================
+
+    #[test]
+    fn test_strip_markdown_fences_tilde_with_lang() {
+        let input = "~~~markdown\n# Hello\n~~~";
+        assert_eq!(strip_markdown_fences(input), "# Hello");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_tilde_plain() {
+        let input = "~~~\nsome content\n~~~";
+        assert_eq!(strip_markdown_fences(input), "some content");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_four_tildes() {
+        let input = "~~~~python\nprint('hi')\n~~~~";
+        assert_eq!(strip_markdown_fences(input), "print('hi')");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_tilde_no_closing() {
+        // Only opening tilde fence — should return as-is
+        let input = "~~~python\nprint('hi')";
+        assert_eq!(strip_markdown_fences(input), input);
+    }
+
+    // ========================================================================
     // GenerateOutput: Debug with warnings
     // ========================================================================
 
@@ -2693,5 +2758,256 @@ testpkg.run()
         assert_eq!(FailedStage::Test.to_string(), "test");
         assert_eq!(FailedStage::Review.to_string(), "review");
         assert_eq!(FailedStage::PostLint.to_string(), "post-lint");
+    }
+
+    #[test]
+    fn test_failed_stage_debug() {
+        // Cover Debug derive on FailedStage
+        let stage = FailedStage::Test;
+        let debug_str = format!("{:?}", stage);
+        assert!(debug_str.contains("Test"));
+    }
+
+    // --- Specialized mock clients for exercising failure paths ---
+
+    /// Returns a broken Python syntax error for any prompt.
+    /// Used as the test-stage client to force test code execution failures.
+    struct BrokenTestCodeClient;
+
+    #[async_trait::async_trait]
+    impl LlmClient for BrokenTestCodeClient {
+        async fn complete(&self, _prompt: &str) -> anyhow::Result<String> {
+            Ok("```python\nimport sys; sys.exit(1)\n```".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_test_failure_exercises_retry_and_max_retries() {
+        // Test-stage client returns code that always exits non-zero.
+        // After retry exhaustion, pipeline should report FailedStage::Test.
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test_client(Box::new(BrokenTestCodeClient))
+            .with_test(true)
+            .with_review(false);
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert_eq!(output.failed_stage, Some(FailedStage::Test));
+        assert!(output.has_unresolved_errors);
+        assert!(output.failure_reason.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_generate_test_failure_with_zero_retries() {
+        // max_retries=0: one attempt, no retries.
+        // Test code fails → should hit the "max retries reached" path directly.
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 0)
+            .with_test_client(Box::new(BrokenTestCodeClient))
+            .with_test(true)
+            .with_review(false);
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert_eq!(output.failed_stage, Some(FailedStage::Test));
+        assert!(output.has_unresolved_errors);
+        assert_eq!(output.retries_used, 0);
+    }
+
+    /// Behaves like MockLlmClient but returns a failing review verdict.
+    /// The introspection script prompt gets a normal response; the verdict
+    /// prompt returns issues that the review agent must handle.
+    struct FailingReviewClient;
+
+    #[async_trait::async_trait]
+    impl LlmClient for FailingReviewClient {
+        async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
+            if prompt.contains("quality gate for a generated SKILL.md") {
+                Ok(r#"{"passed": false, "issues": [{"complaint": "Wrong function signature for foo.bar()", "severity": "error", "category": "accuracy", "evidence": "signature is bar(x) not bar()"}]}"#.to_string())
+            } else if prompt.contains("verification script generator") {
+                Ok(r#"```python
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["testpkg"]
+# ///
+import json
+result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
+print(json.dumps(result))
+```"#.to_string())
+            } else {
+                // For extract/map/learn/create prompts, delegate to MockLlmClient
+                MockLlmClient::new().complete(prompt).await
+            }
+        }
+    }
+
+    /// Returns a malformed (unparseable) verdict for review.
+    struct MalformedReviewClient;
+
+    #[async_trait::async_trait]
+    impl LlmClient for MalformedReviewClient {
+        async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
+            if prompt.contains("quality gate for a generated SKILL.md") {
+                Ok("I think this looks fine overall.".to_string())
+            } else {
+                MockLlmClient::new().complete(prompt).await
+            }
+        }
+    }
+
+    /// Returns a review verdict with safety/security errors that trigger bail.
+    struct SafetyReviewClient;
+
+    #[async_trait::async_trait]
+    impl LlmClient for SafetyReviewClient {
+        async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
+            if prompt.contains("quality gate for a generated SKILL.md") {
+                Ok(r#"{"passed": false, "issues": [{"complaint": "Contains dangerous code execution pattern", "severity": "error", "category": "safety", "evidence": "line 42: executes arbitrary user input"}]}"#.to_string())
+            } else {
+                MockLlmClient::new().complete(prompt).await
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_review_failure_exercises_retry_loop() {
+        // Review returns accuracy issues. Pipeline retries the create stage
+        // to fix them, then re-reviews. After max retries, reports unresolved.
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 0)
+            .with_review_client(Box::new(FailingReviewClient))
+            .with_test(false)
+            .with_review(true)
+            .with_skip_introspection(true)
+            .with_review_max_retries(1);
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert_eq!(output.failed_stage, Some(FailedStage::Review));
+        assert!(output.has_unresolved_errors);
+        assert!(output
+            .failure_reason
+            .as_deref()
+            .unwrap()
+            .contains("review issues"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_review_malformed_verdict_retries() {
+        // Review returns unparseable verdict. Pipeline retries, gets same thing.
+        // After max retries, reports malformed verdict as unresolved error.
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 0)
+            .with_review_client(Box::new(MalformedReviewClient))
+            .with_test(false)
+            .with_review(true)
+            .with_skip_introspection(true)
+            .with_review_max_retries(1);
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert_eq!(output.failed_stage, Some(FailedStage::Review));
+        assert!(output.has_unresolved_errors);
+        assert!(output
+            .failure_reason
+            .as_deref()
+            .unwrap()
+            .contains("malformed"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_review_safety_error_bails() {
+        // Review returns a safety/security error → pipeline bails immediately.
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 0)
+            .with_review_client(Box::new(SafetyReviewClient))
+            .with_test(false)
+            .with_review(true)
+            .with_skip_introspection(true)
+            .with_review_max_retries(2);
+
+        let data = make_test_data();
+        let err = gen.generate(&data).await.unwrap_err();
+        assert!(
+            err.to_string().contains("SAFETY"),
+            "should bail with SAFETY error, got: {}",
+            err
+        );
+    }
+
+    /// Client whose create response is a valid SKILL.md where Core Patterns
+    /// has no extractable sub-patterns — triggers the "no testable patterns" path.
+    struct NoPatternsCreateClient;
+
+    #[async_trait::async_trait]
+    impl LlmClient for NoPatternsCreateClient {
+        async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
+            if prompt.contains("creating an agent rules file")
+                || prompt.contains("Here is the current SKILL.md")
+            {
+                // Valid SKILL.md structure but Core Patterns has no ### sub-headings
+                // with code blocks, so the parser extracts 0 patterns.
+                Ok(r#"---
+name: testpkg
+description: A test package
+license: MIT
+metadata:
+  version: "1.0.0"
+  ecosystem: python
+---
+
+## Imports
+
+```python
+import testpkg
+```
+
+## Core Patterns
+
+Use testpkg.main() to run the main function. See API Reference for details.
+
+## Pitfalls
+
+None known.
+
+## API Reference
+
+- **testpkg.main()** - Main entry point
+"#
+                .to_string())
+            } else {
+                MockLlmClient::new().complete(prompt).await
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_test_no_patterns_breaks_early() {
+        // Create agent returns SKILL.md with ## Core Patterns but no ### sub-patterns.
+        // Parser bails with "no code blocks extracted" error.
+        // Generator catches this as a test validation error (line 621-627).
+        let gen = Generator::new(Box::new(NoPatternsCreateClient), 1)
+            .with_test(true)
+            .with_review(false);
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        // Pipeline completes — the test error path sets FailedStage::Test
+        assert_eq!(output.failed_stage, Some(FailedStage::Test));
+        assert!(output.has_unresolved_errors);
+    }
+
+    #[tokio::test]
+    async fn test_generate_review_with_test_revalidation() {
+        // Review finds accuracy issues, creates fix, then re-runs test validation
+        // after the review fix. This exercises the post-review test revalidation
+        // path (lines 738-748).
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 0)
+            .with_review_client(Box::new(FailingReviewClient))
+            .with_test(true)
+            .with_review(true)
+            .with_skip_introspection(true)
+            .with_review_max_retries(2);
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        // Review ultimately fails (FailingReviewClient always returns issues)
+        assert!(output.has_unresolved_errors);
     }
 }

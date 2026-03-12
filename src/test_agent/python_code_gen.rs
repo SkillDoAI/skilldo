@@ -52,36 +52,41 @@ impl<'a> PythonCodeGenerator<'a> {
         build_test_prompt(pattern, &PYTHON_ENV, local_package, custom_instructions)
     }
 
-    /// Extract Python code from markdown code blocks
+    /// Extract Python code from markdown code blocks (supports both ``` and ~~~ fences).
     fn extract_code_from_response(response: &str) -> Result<String> {
         let trimmed = response.trim();
 
-        // Try to extract from ```python code block
-        if let Some(start) = trimmed.find("```python") {
-            let code_start = start + "```python".len();
-            if let Some(end) = trimmed[code_start..].find("```") {
-                let code = trimmed[code_start..code_start + end].trim();
-                return Ok(code.to_string());
+        // Try language-tagged fence first (```python / ~~~python), then generic fence
+        for fence in &["```", "~~~"] {
+            let py_fence = format!("{fence}python");
+            if let Some(start) = trimmed.find(&py_fence) {
+                let code_start = start + py_fence.len();
+                if let Some(end) = trimmed[code_start..].find(*fence) {
+                    let code = trimmed[code_start..code_start + end].trim();
+                    return Ok(code.to_string());
+                }
             }
         }
 
-        // Try generic ``` code block
-        if let Some(start) = trimmed.find("```") {
-            let code_start = start + "```".len();
-            if let Some(end) = trimmed[code_start..].find("```") {
-                let mut code = trimmed[code_start..code_start + end].trim();
-                // Strip known language tags (e.g., "python", "py", "sh")
-                if let Some((first_line, rest)) = code.split_once('\n') {
-                    let tag = first_line.trim().to_ascii_lowercase();
-                    const KNOWN_TAGS: &[&str] = &[
-                        "py", "python", "python3", "bash", "sh", "shell", "zsh", "fish", "text",
-                        "txt", "json", "yaml", "yml", "toml",
-                    ];
-                    if KNOWN_TAGS.contains(&tag.as_str()) {
-                        code = rest.trim();
+        // Try generic fence with tag stripping
+        for fence in &["```", "~~~"] {
+            if let Some(start) = trimmed.find(*fence) {
+                let code_start = start + fence.len();
+                if let Some(end) = trimmed[code_start..].find(*fence) {
+                    let mut code = trimmed[code_start..code_start + end].trim();
+                    // Strip known language tags (e.g., "python", "py", "sh")
+                    if let Some((first_line, rest)) = code.split_once('\n') {
+                        let tag = first_line.trim().to_ascii_lowercase();
+                        const KNOWN_TAGS: &[&str] = &[
+                            "py", "python", "python3", "bash", "sh", "shell", "zsh", "fish",
+                            "text", "txt", "json", "yaml", "yml", "toml",
+                        ];
+                        if KNOWN_TAGS.contains(&tag.as_str()) {
+                            code = rest.trim();
+                        }
                     }
+                    return Ok(code.to_string());
                 }
-                return Ok(code.to_string());
             }
         }
 
@@ -182,6 +187,40 @@ print(sys.version)
         let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
         assert!(code.contains("import sys"));
         assert!(!code.contains("```"));
+    }
+
+    #[test]
+    fn test_extract_code_from_tilde_python_block() {
+        let response = r#"
+Here's the test:
+
+~~~python
+import click
+
+@click.command()
+def hello():
+    print("Hello")
+~~~
+"#;
+
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("import click"));
+        assert!(code.contains("def hello():"));
+        assert!(!code.contains("~~~"));
+    }
+
+    #[test]
+    fn test_extract_code_from_generic_tilde_block() {
+        let response = r#"
+~~~
+import sys
+print(sys.version)
+~~~
+"#;
+
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("import sys"));
+        assert!(!code.contains("~~~"));
     }
 
     #[test]

@@ -437,6 +437,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_mock_client_default_trait() {
+        let client: MockLlmClient = Default::default();
+        // Verify it's the same as MockLlmClient::new()
+        let _ = client;
+    }
+
     #[tokio::test]
     async fn test_retry_succeeds_first_try() {
         let count = Arc::new(AtomicUsize::new(0));

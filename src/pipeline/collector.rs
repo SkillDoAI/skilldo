@@ -284,14 +284,23 @@ impl Collector {
 
             match fs::read_to_string(path) {
                 Ok(file_content) => {
-                    let remaining = max_chars - total_chars;
-                    if file_content.len() <= remaining {
-                        content.push_str(&format!("\n\n// File: {}\n", path.display()));
+                    let header = format!("\n\n// File: {}\n", path.display());
+                    let trunc_header = format!("\n\n// File: {} (truncated)\n", path.display());
+                    // Budget against the longer (truncated) header to avoid overflow
+                    let worst_header_len = header.len().max(trunc_header.len());
+                    let remaining = max_chars.saturating_sub(total_chars);
+                    if remaining <= worst_header_len {
+                        break; // Not enough budget even for the header
+                    }
+                    let payload_budget = remaining - worst_header_len;
+                    if file_content.len() <= payload_budget {
+                        content.push_str(&header);
                         content.push_str(&file_content);
-                        total_chars += file_content.len();
+                        total_chars += header.len() + file_content.len();
                     } else {
-                        content.push_str(&format!("\n\n// File: {} (truncated)\n", path.display()));
-                        let end = floor_char_boundary(&file_content, remaining);
+                        let trunc_budget = remaining.saturating_sub(trunc_header.len());
+                        let end = floor_char_boundary(&file_content, trunc_budget);
+                        content.push_str(&trunc_header);
                         content.push_str(&file_content[..end]);
                         total_chars = max_chars;
                         break;
@@ -408,9 +417,6 @@ impl Collector {
                         _ => 500,             // Low: Small sample (internals, tests, tools)
                     };
 
-                    let remaining = max_chars - total_chars;
-                    let chars_to_read = file_content.len().min(file_budget).min(remaining);
-
                     let priority_label = match priority {
                         0..=10 => "critical API",
                         11..=30 => "public API",
@@ -418,24 +424,31 @@ impl Collector {
                         _ => "impl",
                     };
 
-                    if chars_to_read == file_content.len() {
-                        content.push_str(&format!(
-                            "\n\n// File: {} ({})\n",
-                            path.display(),
-                            priority_label
-                        ));
-                        content.push_str(&file_content);
-                    } else {
-                        content.push_str(&format!(
-                            "\n\n// File: {} ({}, sampled)\n",
-                            path.display(),
-                            priority_label
-                        ));
-                        let end = floor_char_boundary(&file_content, chars_to_read);
-                        content.push_str(&file_content[..end]);
+                    let remaining = max_chars.saturating_sub(total_chars);
+                    let header = format!("\n\n// File: {} ({})\n", path.display(), priority_label);
+                    let sampled_header = format!(
+                        "\n\n// File: {} ({}, sampled)\n",
+                        path.display(),
+                        priority_label
+                    );
+                    // Budget against the longer (sampled) header to avoid overflow
+                    let worst_header_len = header.len().max(sampled_header.len());
+                    if remaining <= worst_header_len {
+                        break; // Not enough budget even for the header
                     }
+                    let payload_budget = (remaining - worst_header_len).min(file_budget);
+                    let chars_to_read = file_content.len().min(payload_budget);
 
-                    total_chars += chars_to_read;
+                    if chars_to_read == file_content.len() {
+                        content.push_str(&header);
+                        content.push_str(&file_content);
+                        total_chars += header.len() + file_content.len();
+                    } else {
+                        let end = floor_char_boundary(&file_content, chars_to_read);
+                        content.push_str(&sampled_header);
+                        content.push_str(&file_content[..end]);
+                        total_chars += sampled_header.len() + end;
+                    }
                 }
                 Err(e) => warn!("Cannot read {}: {}", path.display(), e),
             }
@@ -924,14 +937,17 @@ setup(
 
     #[test]
     fn test_read_files_exact_budget_fit() {
-        // Arrange: file content exactly equals remaining budget
+        // Arrange: file content exactly equals remaining budget (after header overhead)
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("exact.py");
         let content = "a".repeat(100);
         fs::write(&file_path, &content).unwrap();
 
-        // Act: budget == file size => file fits exactly
-        let result = Collector::read_files(&[file_path], 100).unwrap();
+        // Budget against worst-case header (truncated variant) so payload_budget == 100
+        let header = format!("\n\n// File: {}\n", file_path.display());
+        let trunc_header = format!("\n\n// File: {} (truncated)\n", file_path.display());
+        let worst_header_len = header.len().max(trunc_header.len());
+        let result = Collector::read_files(&[file_path], worst_header_len + 100).unwrap();
 
         // Assert: should include the full file (not truncated)
         assert!(
@@ -971,8 +987,14 @@ setup(
         fs::write(&file1, "c".repeat(50)).unwrap();
         fs::write(&file2, "d".repeat(50)).unwrap();
 
-        // Act: budget = 100, file1=50 + file2=50 = exactly 100
-        let result = Collector::read_files(&[file1, file2], 100).unwrap();
+        // Budget must cover worst-case headers + both payloads
+        let h1 = format!("\n\n// File: {}\n", file1.display());
+        let th1 = format!("\n\n// File: {} (truncated)\n", file1.display());
+        let h2 = format!("\n\n// File: {}\n", file2.display());
+        let th2 = format!("\n\n// File: {} (truncated)\n", file2.display());
+        let w1 = h1.len().max(th1.len());
+        let w2 = h2.len().max(th2.len());
+        let result = Collector::read_files(&[file1, file2], w1 + 50 + w2 + 50).unwrap();
 
         // Assert: both files fit, neither truncated
         assert!(
@@ -1188,8 +1210,9 @@ setup(
         let content = "\u{1F600}".repeat(10); // 40 bytes
         fs::write(&file_path, &content).unwrap();
 
-        // Budget of 10 should truncate mid-emoji territory
-        let result = Collector::read_files(&[file_path], 10).unwrap();
+        // Budget must cover header + a small payload that forces truncation
+        let header_len = format!("\n\n// File: {} (truncated)\n", file_path.display()).len();
+        let result = Collector::read_files(&[file_path], header_len + 10).unwrap();
         // Result should be valid UTF-8 (this would panic if not)
         assert!(!result.is_empty());
         assert!(result.contains("truncated"));
@@ -1216,8 +1239,10 @@ setup(
         fs::write(&f1, "x".repeat(60)).unwrap();
         fs::write(&f2, "y".repeat(100)).unwrap();
 
-        // Budget 80: f1 (60 chars) fits, remaining = 20 for f2 (100 chars) => truncated
-        let result = Collector::read_files(&[f1, f2], 80).unwrap();
+        // Budget covers f1 header + payload + f2 header, but not all of f2's payload
+        let h1 = format!("\n\n// File: {}\n", f1.display()).len();
+        let h2 = format!("\n\n// File: {} (truncated)\n", f2.display()).len();
+        let result = Collector::read_files(&[f1, f2], h1 + 60 + h2 + 20).unwrap();
         assert!(result.contains("b.py (truncated)"));
         assert!(!result.contains(&"y".repeat(100)));
     }
