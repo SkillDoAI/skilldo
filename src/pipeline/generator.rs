@@ -2606,6 +2606,43 @@ testpkg.run()
     }
 
     // ========================================================================
+    // Review passes with degraded introspection → unresolved_warnings
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_generate_review_degraded_introspection_surfaces_warnings() {
+        // Introspection script (consumed by Phase A before container fails)
+        // + passing verdict (consumed by Phase B)
+        let review_responses = vec![
+            "```python\nprint('introspect')\n```".to_string(),
+            r#"{"passed": true, "issues": []}"#.to_string(),
+        ];
+
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(true)
+            .with_skip_introspection(false) // attempt introspection — will fail (no container)
+            .with_review_max_retries(0)
+            .with_review_client(Box::new(ScriptedClient::new(review_responses)));
+
+        let data = make_test_data(); // Python language by default
+        let output = gen.generate(&data).await.unwrap();
+
+        // Review passed, but introspection degraded → warning collected
+        assert!(
+            !output.unresolved_warnings.is_empty(),
+            "degraded introspection should produce unresolved warnings"
+        );
+        assert_eq!(output.unresolved_warnings[0].category, "introspection");
+        assert!(matches!(
+            output.unresolved_warnings[0].severity,
+            crate::review::Severity::Warning
+        ));
+        // Run itself is not marked as errored — just warned
+        assert!(!output.has_unresolved_errors);
+    }
+
+    // ========================================================================
     // Review + test both disabled: minimal pipeline path
     // ========================================================================
 
