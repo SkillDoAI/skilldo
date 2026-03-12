@@ -446,4 +446,50 @@ if __name__ == '__main__':
         let result = generator.generate_test_code(&pattern).await;
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_find_fenced_blocks_tilde_before_backtick() {
+        // When ~~~ appears before ``` in the same text, tilde fence should be parsed first.
+        let text = "~~~python\nfirst\n~~~\n\n```python\nsecond\n```";
+        let blocks = PythonCodeGenerator::find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0], ("python".to_string(), "first".to_string()));
+        assert_eq!(blocks[1], ("python".to_string(), "second".to_string()));
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_single_line_no_newline() {
+        // Block with no newline: tag is empty, body is the raw content.
+        let text = "```code```";
+        let blocks = PythonCodeGenerator::find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].0, ""); // no tag (no newline to split on)
+        assert_eq!(blocks[0].1, "code");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_unclosed_fence() {
+        // Unclosed fence should not produce a block.
+        let text = "```python\nimport os\n";
+        let blocks = PythonCodeGenerator::find_fenced_blocks(text);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_backtick_before_tilde() {
+        // When ``` appears before ~~~ in the same text, backtick fence should be parsed first.
+        let text = "```python\nfirst\n```\n\n~~~python\nsecond\n~~~";
+        let blocks = PythonCodeGenerator::find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0], ("python".to_string(), "first".to_string()));
+        assert_eq!(blocks[1], ("python".to_string(), "second".to_string()));
+    }
+
+    #[test]
+    fn test_extract_code_tilde_before_backtick_prefers_python() {
+        // Tilde Python block before backtick bash block: should pick tilde Python.
+        let response = "~~~bash\npip install click\n~~~\n\n```python\nimport click\n```";
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert_eq!(code, "import click");
+    }
 }

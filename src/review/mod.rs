@@ -861,6 +861,53 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_python_script_pass2_skips_non_python_tags() {
+        // No Python-tagged blocks → Pass 2 must skip bash and pick the untagged block.
+        let response = "```bash\npip install foo\n```\n\n```\nimport foo\nprint('ok')\n```";
+        let script = extract_python_script(response);
+        assert!(
+            script.contains("import foo"),
+            "Pass 2 should skip bash and pick generic block, got: {script}"
+        );
+        assert!(!script.contains("pip install"));
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_tilde_before_backtick() {
+        let text = "~~~json\n{}\n~~~\n\n```python\nimport os\n```";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, "json");
+        assert_eq!(blocks[1].0, "python");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_backtick_before_tilde() {
+        // When ``` appears before ~~~ in same text, backtick is parsed first.
+        let text = "```python\nfirst\n```\n\n~~~json\n{}\n~~~";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, "python");
+        assert_eq!(blocks[1].0, "json");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_single_line_no_newline() {
+        let text = "```code```";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].0, ""); // no newline → empty tag
+        assert_eq!(blocks[0].1, "code");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_unclosed_fence() {
+        let text = "```python\nimport os\n";
+        let blocks = find_fenced_blocks(text);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
     fn test_extract_frontmatter_version() {
         let md = "---\nname: numpy\nversion: 2.1.0\nlanguage: python\n---\n# Content";
         assert_eq!(extract_frontmatter_version(md), Some("2.1.0".to_string()));
