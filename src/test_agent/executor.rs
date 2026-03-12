@@ -104,7 +104,7 @@ impl ExecutionResult {
         match self {
             ExecutionResult::Pass(msg) => msg.clone(),
             ExecutionResult::Fail(msg) => msg.clone(),
-            ExecutionResult::Timeout => "Test execution timed out (60 seconds)".to_string(),
+            ExecutionResult::Timeout => "Test execution timed out".to_string(),
         }
     }
 }
@@ -728,7 +728,7 @@ mod tests {
         );
         assert_eq!(
             ExecutionResult::Timeout.error_message(),
-            "Test execution timed out (60 seconds)"
+            "Test execution timed out"
         );
     }
 
@@ -891,10 +891,7 @@ print(f"Click version: {click.__version__}")
         let cloned = original.clone();
         assert!(!cloned.is_pass());
         assert!(!cloned.is_fail());
-        assert_eq!(
-            cloned.error_message(),
-            "Test execution timed out (60 seconds)"
-        );
+        assert_eq!(cloned.error_message(), "Test execution timed out");
     }
 
     // --- Debug derive coverage ---

@@ -309,8 +309,8 @@ impl RustHandler {
                     if !name.ends_with(".rs") {
                         continue;
                     }
-                    // Exclude test files from source collection
-                    if name.ends_with("_test.rs") {
+                    // Exclude test files and build scripts from source collection
+                    if name.ends_with("_test.rs") || name == "build.rs" {
                         continue;
                     }
                     files.push(path);
@@ -1803,6 +1803,23 @@ mod tests {
         assert!(files.iter().any(|p| p.ends_with("lib.rs")));
         assert!(!files.iter().any(|p| p.ends_with("notes.txt")));
         assert!(!files.iter().any(|p| p.ends_with("data.json")));
+    }
+
+    #[test]
+    fn collect_rs_files_excludes_build_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn x() {}\n").unwrap();
+        fs::write(dir.path().join("build.rs"), "fn main() {}\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(
+            !files.iter().any(|p| p.ends_with("build.rs")),
+            "build.rs should be excluded from source collection"
+        );
     }
 
     #[test]
