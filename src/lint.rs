@@ -1238,7 +1238,12 @@ mod tests {
         let linter: SkillLinter = Default::default();
         let issues = linter.lint("---\nname: test\n---\n# Test").unwrap();
         // Should work identically to SkillLinter::new()
-        assert!(!issues.is_empty() || issues.is_empty()); // just verify it runs
+        // Minimal valid SKILL.md — only "description" is missing, so linter should flag it.
+        assert!(
+            issues.iter().any(|i| i.message.contains("description")),
+            "expected description lint issue, got: {:?}",
+            issues
+        );
     }
 
     #[test]

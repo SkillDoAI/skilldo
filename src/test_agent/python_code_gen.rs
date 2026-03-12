@@ -69,8 +69,36 @@ impl<'a> PythonCodeGenerator<'a> {
             }
         }
 
-        // Pass 2: fall back to first block (any tag)
-        if let Some((_tag, body)) = blocks.first() {
+        // Pass 2: fall back to first block that isn't a known non-Python language
+        const NON_PYTHON_TAGS: &[&str] = &[
+            "json",
+            "bash",
+            "sh",
+            "shell",
+            "zsh",
+            "text",
+            "txt",
+            "yaml",
+            "yml",
+            "toml",
+            "sql",
+            "javascript",
+            "js",
+            "typescript",
+            "ts",
+            "go",
+            "rust",
+            "html",
+            "css",
+            "xml",
+        ];
+        for (tag, body) in &blocks {
+            if NON_PYTHON_TAGS.contains(&tag.as_str()) {
+                continue;
+            }
+            if body.starts_with('{') {
+                continue;
+            }
             return Ok(body.clone());
         }
 
@@ -491,5 +519,26 @@ if __name__ == '__main__':
         let response = "~~~bash\npip install click\n~~~\n\n```python\nimport click\n```";
         let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
         assert_eq!(code, "import click");
+    }
+
+    #[test]
+    fn test_extract_code_pass2_skips_non_python_tags() {
+        // No Python-tagged blocks → Pass 2 must skip bash and pick the untagged block.
+        let response = "```bash\npip install foo\n```\n\n```\nimport foo\nprint('ok')\n```";
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains("import foo"),
+            "Pass 2 should skip bash and pick generic block, got: {code}"
+        );
+        assert!(!code.contains("pip install"));
+    }
+
+    #[test]
+    fn test_extract_code_only_bash_falls_back_to_raw() {
+        // Only bash block, no generic/python block → falls through to raw response.
+        let response = "```bash\npip install click\n```";
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        // Raw response is the trimmed input (no extractable Python code)
+        assert_eq!(code, response.trim());
     }
 }
