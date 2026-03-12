@@ -219,8 +219,8 @@ jobs:
             tag: "8.3.1"
             flag: "--language python"
           - lang: go
-            repo: go-chi/chi
-            tag: v5.2.1
+            repo: gorilla/mux
+            tag: v1.8.1
             flag: "--language go"
           - lang: javascript
             repo: lodash/lodash
