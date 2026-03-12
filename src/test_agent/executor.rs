@@ -465,7 +465,8 @@ edition = "2021"
                 .arg("fetch")
                 .env("CARGO_HOME", &cargo_home)
                 .current_dir(temp_dir.path());
-            let fetch_output = run_cmd_with_timeout(fetch_cmd, Duration::from_secs(120)).await?;
+            let fetch_output =
+                run_cmd_with_timeout(fetch_cmd, Duration::from_secs(self.timeout_secs)).await?;
             if !fetch_output.status.success() {
                 let stderr = String::from_utf8_lossy(&fetch_output.stderr);
                 bail!("cargo fetch failed: {}", stderr);

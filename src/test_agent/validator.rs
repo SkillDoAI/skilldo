@@ -205,14 +205,25 @@ impl<'a> TestCodeValidator<'a> {
                 })
             }
             Language::Rust => {
-                let executor: Box<dyn LanguageExecutor> = match execution_mode {
-                    ExecutionMode::BareMetal => {
-                        Box::new(CargoExecutor::new().with_timeout(config.timeout))
-                    }
-                    ExecutionMode::Container => {
-                        Box::new(ContainerExecutor::new(config, Language::Rust))
-                    }
-                };
+                let (executor, execution_mode): (Box<dyn LanguageExecutor>, ExecutionMode) =
+                    match execution_mode {
+                        ExecutionMode::BareMetal => (
+                            Box::new(CargoExecutor::new().with_timeout(config.timeout)),
+                            ExecutionMode::BareMetal,
+                        ),
+                        ExecutionMode::Container => {
+                            // Container mode for Rust uses bare `rustc` which can't resolve
+                            // external dependencies. Fall back to BareMetal (CargoExecutor).
+                            tracing::warn!(
+                                "Container mode is not yet supported for Rust \
+                                 (external deps require cargo). Falling back to bare metal."
+                            );
+                            (
+                                Box::new(CargoExecutor::new().with_timeout(config.timeout)),
+                                ExecutionMode::BareMetal,
+                            )
+                        }
+                    };
                 Ok(Self {
                     language: Language::Rust,
                     parser: Box::new(RustParser),
@@ -1452,6 +1463,20 @@ mod tests {
         let config = ContainerConfig::default();
         let result = TestCodeValidator::new(&Language::Rust, &client, config, None);
         assert!(result.is_ok(), "Rust validator should be constructable");
+    }
+
+    #[test]
+    fn test_new_rust_container_falls_back_to_bare_metal() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            ..ContainerConfig::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Rust, &client, config, None).unwrap();
+        // Container mode should fall back to BareMetal for Rust
+        assert_eq!(validator.execution_mode, ExecutionMode::BareMetal);
     }
 
     #[test]
