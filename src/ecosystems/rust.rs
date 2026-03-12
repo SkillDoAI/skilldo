@@ -1749,4 +1749,175 @@ mod tests {
         let v = handler.get_version().unwrap();
         assert_eq!(v, "3.2.1");
     }
+
+    #[test]
+    fn get_license_workspace_inherited_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nlicense = { workspace = true }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(root);
+        assert!(handler.get_license().is_none());
+    }
+
+    #[test]
+    fn get_version_no_cargo_toml_falls_back() {
+        // No Cargo.toml at all → falls back to "latest"
+        let dir = tempfile::tempdir().unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "latest");
+    }
+
+    #[test]
+    fn collect_rs_files_filters_non_rs_and_txt_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn x() {}\n").unwrap();
+        fs::write(src.join("notes.txt"), "not rust\n").unwrap();
+        fs::write(src.join("data.json"), "{}\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("notes.txt")));
+        assert!(!files.iter().any(|p| p.ends_with("data.json")));
+    }
+
+    #[test]
+    fn collect_rs_files_skips_excluded_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let target = src.join("target");
+        let benches = src.join("benches");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&benches).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn x() {}\n").unwrap();
+        fs::write(target.join("gen.rs"), "// generated\n").unwrap();
+        fs::write(benches.join("bench.rs"), "fn bench() {}\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("gen.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("bench.rs")));
+    }
+
+    #[test]
+    fn find_examples_skips_non_rs_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let examples = root.join("examples");
+        fs::create_dir(&examples).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(examples.join("demo.rs"), "fn main() {}\n").unwrap();
+        fs::write(examples.join("config.toml"), "key = 1\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("demo.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("config.toml")));
+    }
+
+    #[test]
+    fn find_test_files_skips_excluded_dirs_in_test_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        let target = root.join("target");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(src.join("client_test.rs"), "fn test_it() {}\n").unwrap();
+        fs::write(target.join("gen_test.rs"), "fn gen_test() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_test_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("client_test.rs")));
+        assert!(
+            !files.iter().any(|p| p.ends_with("gen_test.rs")),
+            "should skip target/"
+        );
+    }
+
+    #[test]
+    fn collect_docs_skips_non_doc_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs");
+        fs::create_dir(&docs).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(docs.join("guide.md"), "# Guide\n").unwrap();
+        fs::write(docs.join("data.json"), "{}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let found = handler.find_docs().unwrap();
+        assert!(found.iter().any(|p| p.ends_with("guide.md")));
+        assert!(!found.iter().any(|p| p.ends_with("data.json")));
+    }
+
+    #[test]
+    fn version_from_git_tags_with_tagged_repo() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Init a git repo with a tag
+        Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        let src = root.join("src");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn x() {}\n").unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init", "--no-gpg-sign"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["tag", "v2.5.0"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        let handler = RustHandler::new(root);
+        // No version in Cargo.toml, so it falls back to git tags
+        let v = handler.get_version().unwrap();
+        assert_eq!(v, "2.5.0");
+    }
+
+    #[test]
+    fn parse_version_tag_edge_cases() {
+        assert_eq!(
+            parse_version_tag("v0.1.0-rc1"),
+            Some("0.1.0-rc1".to_string())
+        );
+        assert_eq!(parse_version_tag(""), None);
+        assert_eq!(parse_version_tag("latest"), None);
+        assert_eq!(parse_version_tag("release"), None);
+    }
 }

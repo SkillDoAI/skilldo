@@ -653,4 +653,18 @@ serde = "1.0"
             deps
         );
     }
+
+    #[test]
+    fn extract_deps_drops_invalid_names() {
+        let parser = RustParser;
+        // Use a dep that starts with '-' which sanitize_dep_name rejects
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```\nuse serde::Serialize;\nextern crate -badname;\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(deps.contains(&"serde".to_string()));
+        assert!(
+            !deps.iter().any(|d| d.starts_with('-')),
+            "should drop invalid dep names: {:?}",
+            deps
+        );
+    }
 }
