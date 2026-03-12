@@ -494,6 +494,8 @@ edition = "2021"
 
         let cargo_home = env.temp_dir.path().join(CARGO_HOME_DIR);
         let timeout = Duration::from_secs(self.timeout_secs);
+        // --offline: deps already fetched in setup_environment(); skip registry checks.
+        // Safe for zero-dep projects too (no registry access needed).
         let mut cargo_cmd = Command::new("cargo");
         cargo_cmd
             .args(["run", "--quiet", "--offline"])

@@ -103,13 +103,16 @@ impl RustHandler {
         files.dedup();
 
         if files.is_empty() {
-            bail!(
-                "No tests found in {}. Tests are required for generating skills.",
+            // Not fatal for Rust: inline #[cfg(test)] modules are captured
+            // in source_content and are visible to the LLM pipeline.
+            info!(
+                "No standalone test files in {}; inline #[cfg(test)] modules \
+                 in source files will be used instead",
                 self.repo_path.display()
             );
+        } else {
+            info!("Found {} Rust test files", files.len());
         }
-
-        info!("Found {} Rust test files", files.len());
         Ok(files)
     }
 
@@ -740,13 +743,20 @@ mod tests {
     }
 
     #[test]
-    fn find_test_files_no_tests_errors() {
+    fn find_test_files_returns_empty_for_inline_only() {
+        // Projects with only #[cfg(test)] inline modules are valid —
+        // find_test_files returns empty Vec, source_content has the tests.
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src");
         fs::create_dir(&src).unwrap();
-        fs::write(src.join("lib.rs"), "pub fn hello() {}\n").unwrap();
+        fs::write(
+            src.join("lib.rs"),
+            "pub fn hello() {}\n#[cfg(test)] mod tests {}\n",
+        )
+        .unwrap();
         let handler = RustHandler::new(dir.path());
-        assert!(handler.find_test_files().is_err());
+        let files = handler.find_test_files().unwrap();
+        assert!(files.is_empty());
     }
 
     #[test]
