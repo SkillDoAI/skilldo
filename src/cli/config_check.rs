@@ -199,16 +199,29 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
             }
         }
         ExecutionMode::BareMetal => {
-            if check_runtime_available("uv") {
-                results.pass("Bare-metal mode: uv available".to_string());
-            } else if config.generation.enable_test {
+            // Check all language-specific tools so config-check is accurate
+            // regardless of which language will be generated.
+            let tools: &[(&str, &str)] = &[
+                ("uv", "Python"),
+                ("cargo", "Rust"),
+                ("go", "Go"),
+                ("node", "JavaScript"),
+            ];
+            let mut any_found = false;
+            for &(tool, lang) in tools {
+                if check_runtime_available(tool) {
+                    results.pass(format!("Bare-metal mode: {} available ({})", tool, lang));
+                    any_found = true;
+                } else {
+                    results.warn(format!(
+                        "Bare-metal mode: '{}' not found ({} test agent will fail)",
+                        tool, lang
+                    ));
+                }
+            }
+            if !any_found && config.generation.enable_test {
                 results.error(
-                    "Bare-metal mode: 'uv' not found — test agent validation will fail".to_string(),
-                );
-            } else {
-                results.warn(
-                    "Bare-metal mode: 'uv' not found (test agent disabled, so this is OK)"
-                        .to_string(),
+                    "Bare-metal mode: no language tools found (uv/cargo/go/node) — test agent validation will fail".to_string(),
                 );
             }
         }
