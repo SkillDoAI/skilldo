@@ -12,6 +12,8 @@ pub mod js_parser;
 pub mod parser;
 pub mod python_code_gen;
 pub mod python_parser;
+pub mod rust_code_gen;
+pub mod rust_parser;
 pub mod validator;
 
 pub use executor::{ExecutionEnv, ExecutionResult};

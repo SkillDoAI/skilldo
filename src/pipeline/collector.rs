@@ -2,7 +2,7 @@
 //! content from a library's directory tree. Budget-aware: caps each category to
 //! stay within LLM context limits.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -11,6 +11,7 @@ use crate::detector::Language;
 use crate::ecosystems::go::GoHandler;
 use crate::ecosystems::javascript::JsHandler;
 use crate::ecosystems::python::{pyproject_project_field, PythonHandler};
+use crate::ecosystems::rust::RustHandler;
 
 /// Find the largest byte index <= `index` that is a char boundary in `s`.
 fn floor_char_boundary(s: &str, index: usize) -> usize {
@@ -57,10 +58,7 @@ impl Collector {
             Language::Python => self.collect_python().await,
             Language::Go => self.collect_go().await,
             Language::JavaScript => self.collect_javascript().await,
-            _ => bail!(
-                "Support for {:?} not yet implemented. Currently Python, Go, and JavaScript/TypeScript are supported.",
-                self.language
-            ),
+            Language::Rust => self.collect_rust().await,
         }
     }
 
@@ -252,6 +250,71 @@ impl Collector {
         if crate::util::sanitize_dep_name(&package_name).is_err() {
             warn!(
                 "JS package name '{}' contains unexpected characters, using 'unknown'",
+                package_name
+            );
+            package_name = "unknown".to_string();
+        }
+
+        Ok(CollectedData {
+            package_name,
+            version,
+            license,
+            project_urls,
+            language: self.language.clone(),
+            source_file_count: source_paths.len(),
+            examples_content,
+            test_content,
+            docs_content,
+            source_content,
+            changelog_content,
+        })
+    }
+
+    async fn collect_rust(&self) -> Result<CollectedData> {
+        let handler = RustHandler::new(&self.repo_path);
+
+        let example_paths = handler.find_examples()?;
+        let test_paths = handler.find_test_files()?;
+        let doc_paths = handler.find_docs()?;
+        let source_paths = handler.find_source_files()?;
+        let changelog_path = handler.find_changelog();
+        let version = handler.get_version()?;
+        let license = handler.get_license();
+        let project_urls = handler.get_project_urls();
+
+        // Same budget allocation as Python/Go/JS
+        let budget = self.max_source_chars;
+        let examples_budget = budget * 30 / 100;
+        let test_budget = budget * 30 / 100;
+        let docs_budget = budget * 20 / 100;
+        let changelog_budget = budget * 5 / 100;
+
+        let examples_content = Self::read_files(&example_paths, examples_budget)?;
+        let test_content = Self::read_files(&test_paths, test_budget)?;
+        let docs_content = Self::read_files(&doc_paths, docs_budget)?;
+        let changelog_content = if let Some(path) = changelog_path {
+            Self::read_file_limited(&path, changelog_budget)?
+        } else {
+            String::new()
+        };
+
+        let fixed_actual = examples_content.len()
+            + test_content.len()
+            + docs_content.len()
+            + changelog_content.len();
+        let remaining = budget.saturating_sub(fixed_actual);
+        let source_budget = match source_paths.len() {
+            n if n > 2000 => remaining,
+            n if n > 1000 => remaining * 60 / 100,
+            n if n > 300 => remaining * 40 / 100,
+            _ => remaining,
+        };
+        let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
+
+        let mut package_name = handler.get_package_name()?;
+        if crate::util::sanitize_dep_name(&package_name).is_err() {
+            warn!(
+                "Rust crate name '{}' contains unexpected characters, using 'unknown'",
                 package_name
             );
             package_name = "unknown".to_string();
@@ -1157,19 +1220,8 @@ setup(
         assert_eq!(c.max_source_chars, 50_000);
     }
 
-    // -- collect: unsupported language --
-
-    #[tokio::test]
-    async fn test_collect_unsupported_language() {
-        let dir = TempDir::new().unwrap();
-        let c = Collector::new(dir.path(), Language::Rust);
-        let result = c.collect().await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("not yet implemented"));
-    }
+    // All four languages (Python, Go, JavaScript, Rust) are now supported.
+    // No unsupported language test needed.
 
     // -- read_files: additional edge cases --
 
@@ -1595,14 +1647,58 @@ setup(
         assert_ne!(data.package_name, "unknown");
     }
 
+    // -- Rust collection tests --
+
+    /// Helper: create a minimal Rust project structure in a temp dir.
+    fn create_rust_project(dir: &Path) {
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"testlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let src_dir = dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(
+            src_dir.join("lib.rs"),
+            "pub fn hello() -> &'static str { \"hello\" }\n",
+        )
+        .unwrap();
+        let tests_dir = dir.join("tests");
+        fs::create_dir_all(&tests_dir).unwrap();
+        fs::write(
+            tests_dir.join("integration.rs"),
+            "#[test]\nfn it_works() { assert!(true); }\n",
+        )
+        .unwrap();
+        fs::write(dir.join("README.md"), "# testlib\n").unwrap();
+        fs::write(
+            dir.join("LICENSE"),
+            "MIT License\n\nCopyright (c) 2024\n\nPermission is hereby granted, free of charge\n",
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
-    async fn test_collect_rust_unsupported() {
+    async fn test_collect_rust_basic() {
         let dir = TempDir::new().unwrap();
+        create_rust_project(dir.path());
+        let c = Collector::new(dir.path(), Language::Rust);
+        let data = c.collect().await.unwrap();
+        assert_eq!(data.package_name, "testlib");
+        assert_eq!(data.version, "0.1.0");
+        assert_eq!(data.language, Language::Rust);
+        assert!(!data.source_content.is_empty());
+        assert!(!data.test_content.is_empty());
+        assert!(!data.docs_content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_collect_rust_empty_project_fails() {
+        let dir = TempDir::new().unwrap();
+        // No Cargo.toml, no source files
         let c = Collector::new(dir.path(), Language::Rust);
         let result = c.collect().await;
         assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("Rust"));
     }
 
     // -- Go collection tests --

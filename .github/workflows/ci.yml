@@ -226,6 +226,10 @@ jobs:
             repo: lodash/lodash
             tag: "4.17.21"
             flag: "--language javascript"
+          - lang: rust
+            repo: serde-rs/serde
+            tag: v1.0.219
+            flag: "--language rust"
     env:
       CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
     steps:
