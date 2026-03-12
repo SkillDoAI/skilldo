@@ -1393,7 +1393,6 @@ fn rust_hints(stage: &str) -> &'static str {
 \n\nRUST-SPECIFIC HINTS:\n\
 - `tests/` directory and `*_test.rs` files contain integration test patterns\n\
 - `#[derive(...)]` macros and `impl` blocks show common trait usage\n\
-- `#[derive(...)]` shows common trait implementations\n\
 - `impl Trait for Type` blocks define core API contracts\n\
 - Error types implementing `std::error::Error` show the error handling strategy"
         }
@@ -1426,7 +1425,7 @@ fn rust_hints(stage: &str) -> &'static str {
 \n\nRUST-SPECIFIC TEST HINTS:\n\
 - Runs via `cargo run` — write a `fn main()` program\n\
 - Use `eprintln!` and `std::process::exit(1)` for assertion failures\n\
-- Add dependencies as comments: `// Cargo.toml: serde = { version = \"1\", features = [\"derive\"] }`"
+- External crates from the Imports section are pre-installed; just `use` them directly"
         }
         _ => "",
     }
