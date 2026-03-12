@@ -2061,4 +2061,165 @@ mod tests {
         assert!(lib < mod_rs, "lib.rs should rank above mod.rs");
         assert!(mod_rs < main, "mod.rs should rank above main.rs");
     }
+
+    #[test]
+    fn find_test_files_empty_repo_returns_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn x() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_test_files().unwrap();
+        assert!(files.is_empty(), "no test files in this repo");
+    }
+
+    #[test]
+    fn find_test_files_from_tests_dir_with_nested_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let tests = root.join("tests");
+        let sub = tests.join("integration");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(tests.join("smoke.rs"), "fn test_smoke() {}\n").unwrap();
+        fs::write(sub.join("api.rs"), "fn test_api() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_test_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("smoke.rs")));
+        assert!(
+            files.iter().any(|p| p.ends_with("api.rs")),
+            "should recurse into tests/ subdirectories: {files:?}"
+        );
+    }
+
+    #[test]
+    fn find_examples_with_nested_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let examples = root.join("examples");
+        let sub = examples.join("advanced");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(examples.join("basic.rs"), "fn main() {}\n").unwrap();
+        fs::write(sub.join("complex.rs"), "fn main() {}\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("basic.rs")));
+        assert!(
+            files.iter().any(|p| p.ends_with("complex.rs")),
+            "should recurse into examples/ subdirs: {files:?}"
+        );
+    }
+
+    #[test]
+    fn get_license_no_license_anywhere_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_license().is_none());
+    }
+
+    #[test]
+    fn collect_rs_files_with_nested_src_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        let models = src.join("models");
+        fs::create_dir_all(&models).unwrap();
+        fs::write(src.join("lib.rs"), "pub mod models;\n").unwrap();
+        fs::write(models.join("user.rs"), "pub struct User;\n").unwrap();
+        fs::write(models.join("post.rs"), "pub struct Post;\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(files.iter().any(|p| p.ends_with("user.rs")));
+        assert!(files.iter().any(|p| p.ends_with("post.rs")));
+    }
+
+    #[test]
+    fn find_docs_root_md_files_included() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(root.join("CONTRIBUTING.md"), "# Contributing\n").unwrap();
+        fs::write(root.join("SECURITY.md"), "# Security\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let found = handler.find_docs().unwrap();
+        assert!(found.iter().any(|p| p.ends_with("CONTRIBUTING.md")));
+        assert!(found.iter().any(|p| p.ends_with("SECURITY.md")));
+    }
+
+    #[test]
+    fn version_from_git_tags_with_commit_after_tag() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "first", "--no-gpg-sign"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["tag", "v1.0.0"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        // Make a second commit so HEAD is ahead of the tag
+        fs::write(root.join("README.md"), "# X\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "second", "--no-gpg-sign"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        let handler = RustHandler::new(root);
+        // describe_tags may include "-N-gHASH" suffix; list_tags_sorted
+        // gives the clean tag. Either way we should get 1.0.0.
+        let v = handler.get_version().unwrap();
+        assert!(
+            v.starts_with("1.0.0"),
+            "should find version from git tags: {v}"
+        );
+    }
 }
