@@ -1391,8 +1391,8 @@ fn rust_hints(stage: &str) -> &'static str {
         "map" => {
             "\
 \n\nRUST-SPECIFIC HINTS:\n\
-- `#[test]` functions in source files show unit test patterns\n\
-- `tests/` directory contains integration tests\n\
+- `tests/` directory and `*_test.rs` files contain integration test patterns\n\
+- `#[derive(...)]` macros and `impl` blocks show common trait usage\n\
 - `#[derive(...)]` shows common trait implementations\n\
 - `impl Trait for Type` blocks define core API contracts\n\
 - Error types implementing `std::error::Error` show the error handling strategy"

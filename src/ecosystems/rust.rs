@@ -17,7 +17,11 @@ pub fn cargo_toml_field(content: &str, field: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
-            in_package = trimmed == "[package]";
+            // Strip inline comments on section headers: `[package] # metadata`
+            let header = trimmed
+                .split_once('#')
+                .map_or(trimmed, |(before, _)| before.trim());
+            in_package = header == "[package]";
             continue;
         }
         if in_package {
@@ -269,19 +273,25 @@ impl RustHandler {
             return urls;
         };
 
-        if let Some(repo) = cargo_toml_field(&content, "repository") {
+        // Helper: skip workspace-inherited placeholders like `{ workspace = true }`
+        let explicit_url = |field: &str| -> Option<String> {
+            cargo_toml_field(&content, field)
+                .filter(|v| !v.contains("workspace") && !v.contains('{'))
+        };
+
+        if let Some(repo) = explicit_url("repository") {
             urls.push(("Repository".into(), repo));
         }
-        if let Some(homepage) = cargo_toml_field(&content, "homepage") {
+        if let Some(homepage) = explicit_url("homepage") {
             urls.push(("Homepage".into(), homepage));
         }
-        if let Some(docs) = cargo_toml_field(&content, "documentation") {
+        if let Some(docs) = explicit_url("documentation") {
             urls.push(("Documentation".into(), docs));
         }
 
         // If no documentation URL but we have a crate name, add docs.rs
         if !urls.iter().any(|(k, _)| k == "Documentation") {
-            if let Some(name) = cargo_toml_field(&content, "name") {
+            if let Some(name) = explicit_url("name") {
                 urls.push(("Documentation".into(), format!("https://docs.rs/{name}")));
             }
         }
@@ -1068,6 +1078,38 @@ mod tests {
         assert_eq!(
             cargo_toml_field(content, "version"),
             Some("3.2.1".to_string())
+        );
+    }
+
+    #[test]
+    fn cargo_toml_field_handles_commented_section_header() {
+        let content = "[package] # metadata\nname = \"test\"\nversion = \"1.0.0\"\n";
+        assert_eq!(
+            cargo_toml_field(content, "name"),
+            Some("test".to_string()),
+            "[package] with inline comment should still match"
+        );
+    }
+
+    #[test]
+    fn get_project_urls_skips_workspace_inherited() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nrepository = { workspace = true }\nhomepage = { workspace = true }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            !urls.iter().any(|(k, _)| k == "Repository"),
+            "workspace-inherited repository should be skipped: {:?}",
+            urls
+        );
+        assert!(
+            !urls.iter().any(|(k, _)| k == "Homepage"),
+            "workspace-inherited homepage should be skipped: {:?}",
+            urls
         );
     }
 

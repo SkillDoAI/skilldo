@@ -1300,16 +1300,17 @@ func main() {
     }
 
     #[tokio::test]
-    async fn test_cargo_setup_rejects_version_spec_in_dep_name() {
+    async fn test_cargo_setup_rejects_quoted_cargo_toml_snippet() {
         if !is_tool_available("cargo", "--version").await {
             return;
         }
         let executor = CargoExecutor::new();
+        // This is a Cargo.toml snippet with spaces/quotes, not a bare crate name
         let deps = vec!["once_cell = \"1\"".to_string()];
         let result = executor.setup_environment(&deps).await;
         assert!(
             result.is_err(),
-            "deps with '=' should be rejected by sanitize_dep_name"
+            "quoted Cargo.toml snippets should be rejected by sanitize_dep_name"
         );
     }
 }
