@@ -2222,4 +2222,70 @@ mod tests {
             "should find version from git tags: {v}"
         );
     }
+
+    #[test]
+    fn version_from_git_tags_list_tags_fallback() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create repo and tag on main branch
+        Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "tagged", "--no-gpg-sign"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["tag", "v3.0.0"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        // Create an orphan branch (no shared history with tagged commit).
+        // describe_tags will fail because no tag is reachable from HEAD,
+        // but list_tags_sorted will find v3.0.0.
+        Command::new("git")
+            .args(["checkout", "--orphan", "orphan"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        fs::write(root.join("README.md"), "# orphan\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "orphan commit", "--no-gpg-sign"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        let handler = RustHandler::new(root);
+        let v = handler.get_version().unwrap();
+        assert_eq!(v, "3.0.0", "should fall back to list_tags_sorted");
+    }
 }
