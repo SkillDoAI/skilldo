@@ -128,21 +128,38 @@ async fn test_collect_javascript_minimal() {
 }
 
 #[tokio::test]
-async fn test_collect_rust_not_yet_supported() {
+async fn test_collect_rust_minimal() {
     let tmp = TempDir::new().unwrap();
-    fs::write(tmp.path().join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+    let root = tmp.path();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"testcrate\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let src = root.join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(
+        src.join("lib.rs"),
+        "pub fn hello() -> &'static str { \"hi\" }\n",
+    )
+    .unwrap();
+    let tests = root.join("tests");
+    fs::create_dir(&tests).unwrap();
+    fs::write(
+        tests.join("basic.rs"),
+        "#[test] fn t() { assert!(true); }\n",
+    )
+    .unwrap();
 
-    let language = detect_language(tmp.path()).unwrap();
+    let language = detect_language(root).unwrap();
     assert_eq!(language, Language::Rust);
 
-    let collector = Collector::new(tmp.path(), language);
-    let result = collector.collect().await;
+    let collector = Collector::new(root, language);
+    let data = collector.collect().await.unwrap();
 
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("not yet implemented"));
+    assert_eq!(data.package_name, "testcrate");
+    assert_eq!(data.version, "0.1.0");
+    assert!(!data.source_content.is_empty());
 }
 
 #[tokio::test]
