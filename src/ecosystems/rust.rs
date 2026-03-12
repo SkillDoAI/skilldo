@@ -1370,4 +1370,72 @@ mod tests {
             "mod.rs should have higher priority than main.rs"
         );
     }
+
+    // ── Extra coverage tests ─────────────────────────────────────────
+
+    #[test]
+    fn cargo_toml_field_returns_none_for_empty_value() {
+        let content = "[package]\nname = \"\"\nversion = \"1.0.0\"\n";
+        assert_eq!(cargo_toml_field(content, "name"), None);
+    }
+
+    #[test]
+    fn get_license_workspace_inherited_no_file_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nlicense = { workspace = true }\n",
+        )
+        .unwrap();
+        // No LICENSE file at all
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_license().is_none());
+    }
+
+    #[test]
+    fn find_docs_with_non_md_root_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("README.md"), "# Readme\n").unwrap();
+        fs::write(root.join("build.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"t\"\n").unwrap();
+
+        let handler = RustHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        let names: Vec<&str> = docs
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"README.md"));
+        assert!(!names.contains(&"build.rs"), "should not include .rs files");
+    }
+
+    #[test]
+    fn find_test_files_in_nested_tests_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("tests").join("integration");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("api_test.rs"), "#[test] fn t() {}\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_test_files().unwrap();
+        assert!(files
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "api_test.rs")));
+    }
+
+    #[test]
+    fn get_project_urls_no_name_no_docs_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        // No name field means no docs.rs fallback
+        assert!(!urls.iter().any(|(_, v)| v.contains("docs.rs")));
+    }
 }
