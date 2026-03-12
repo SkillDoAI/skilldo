@@ -286,24 +286,23 @@ impl Collector {
                 Ok(file_content) => {
                     let header = format!("\n\n// File: {}\n", path.display());
                     let trunc_header = format!("\n\n// File: {} (truncated)\n", path.display());
-                    // Budget against the longer (truncated) header to avoid overflow
-                    let worst_header_len = header.len().max(trunc_header.len());
                     let remaining = max_chars.saturating_sub(total_chars);
-                    if remaining <= worst_header_len {
-                        break; // Not enough budget even for the header
-                    }
-                    let payload_budget = remaining - worst_header_len;
-                    if file_content.len() <= payload_budget {
+
+                    // First check: does the full file fit with the normal header?
+                    if remaining >= header.len() + file_content.len() {
                         content.push_str(&header);
                         content.push_str(&file_content);
                         total_chars += header.len() + file_content.len();
-                    } else {
-                        let trunc_budget = remaining.saturating_sub(trunc_header.len());
+                    } else if remaining > trunc_header.len() {
+                        // Truncate: use worst-case header, fill remaining with content
+                        let trunc_budget = remaining - trunc_header.len();
                         let end = floor_char_boundary(&file_content, trunc_budget);
                         content.push_str(&trunc_header);
                         content.push_str(&file_content[..end]);
                         total_chars = max_chars;
                         break;
+                    } else {
+                        break; // Not enough budget even for the header
                     }
                 }
                 Err(e) => warn!("Cannot read {}: {}", path.display(), e),
@@ -431,23 +430,21 @@ impl Collector {
                         path.display(),
                         priority_label
                     );
-                    // Budget against the longer (sampled) header to avoid overflow
-                    let worst_header_len = header.len().max(sampled_header.len());
-                    if remaining <= worst_header_len {
-                        break; // Not enough budget even for the header
-                    }
-                    let payload_budget = (remaining - worst_header_len).min(file_budget);
-                    let chars_to_read = file_content.len().min(payload_budget);
-
-                    if chars_to_read == file_content.len() {
+                    // Check if the full file fits (with normal header + file_budget cap)
+                    let capped_len = file_content.len().min(file_budget);
+                    if remaining >= header.len() + capped_len && capped_len == file_content.len() {
                         content.push_str(&header);
                         content.push_str(&file_content);
                         total_chars += header.len() + file_content.len();
-                    } else {
-                        let end = floor_char_boundary(&file_content, chars_to_read);
+                    } else if remaining > sampled_header.len() {
+                        // Sample: use sampled header, read what fits
+                        let sample_budget = (remaining - sampled_header.len()).min(file_budget);
+                        let end = floor_char_boundary(&file_content, sample_budget);
                         content.push_str(&sampled_header);
                         content.push_str(&file_content[..end]);
                         total_chars += sampled_header.len() + end;
+                    } else {
+                        break; // Not enough budget even for the header
                     }
                 }
                 Err(e) => warn!("Cannot read {}: {}", path.display(), e),
@@ -943,11 +940,9 @@ setup(
         let content = "a".repeat(100);
         fs::write(&file_path, &content).unwrap();
 
-        // Budget against worst-case header (truncated variant) so payload_budget == 100
-        let header = format!("\n\n// File: {}\n", file_path.display());
-        let trunc_header = format!("\n\n// File: {} (truncated)\n", file_path.display());
-        let worst_header_len = header.len().max(trunc_header.len());
-        let result = Collector::read_files(&[file_path], worst_header_len + 100).unwrap();
+        // Budget = normal header + content — should fit without truncation
+        let header_len = format!("\n\n// File: {}\n", file_path.display()).len();
+        let result = Collector::read_files(&[file_path], header_len + 100).unwrap();
 
         // Assert: should include the full file (not truncated)
         assert!(
@@ -987,14 +982,10 @@ setup(
         fs::write(&file1, "c".repeat(50)).unwrap();
         fs::write(&file2, "d".repeat(50)).unwrap();
 
-        // Budget must cover worst-case headers + both payloads
-        let h1 = format!("\n\n// File: {}\n", file1.display());
-        let th1 = format!("\n\n// File: {} (truncated)\n", file1.display());
-        let h2 = format!("\n\n// File: {}\n", file2.display());
-        let th2 = format!("\n\n// File: {} (truncated)\n", file2.display());
-        let w1 = h1.len().max(th1.len());
-        let w2 = h2.len().max(th2.len());
-        let result = Collector::read_files(&[file1, file2], w1 + 50 + w2 + 50).unwrap();
+        // Budget must cover both normal headers + both payloads
+        let h1 = format!("\n\n// File: {}\n", file1.display()).len();
+        let h2 = format!("\n\n// File: {}\n", file2.display()).len();
+        let result = Collector::read_files(&[file1, file2], h1 + 50 + h2 + 50).unwrap();
 
         // Assert: both files fit, neither truncated
         assert!(

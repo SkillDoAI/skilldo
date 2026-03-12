@@ -56,25 +56,13 @@ impl<'a> PythonCodeGenerator<'a> {
     fn extract_code_from_response(response: &str) -> Result<String> {
         let trimmed = response.trim();
 
-        // Try language-tagged fence first (```python / ~~~python), then generic fence
-        for fence in &["```", "~~~"] {
-            let py_fence = format!("{fence}python");
-            if let Some(start) = trimmed.find(&py_fence) {
-                let code_start = start + py_fence.len();
-                if let Some(end) = trimmed[code_start..].find(*fence) {
-                    let code = trimmed[code_start..code_start + end].trim();
-                    return Ok(code.to_string());
-                }
-            }
-        }
-
-        // Try generic fence with tag stripping
+        // Try fenced code blocks (``` or ~~~) with language tag stripping
         for fence in &["```", "~~~"] {
             if let Some(start) = trimmed.find(*fence) {
                 let code_start = start + fence.len();
                 if let Some(end) = trimmed[code_start..].find(*fence) {
                     let mut code = trimmed[code_start..code_start + end].trim();
-                    // Strip known language tags (e.g., "python", "py", "sh")
+                    // Strip known language tags on first line
                     if let Some((first_line, rest)) = code.split_once('\n') {
                         let tag = first_line.trim().to_ascii_lowercase();
                         const KNOWN_TAGS: &[&str] = &[
@@ -207,6 +195,14 @@ def hello():
         assert!(code.contains("import click"));
         assert!(code.contains("def hello():"));
         assert!(!code.contains("~~~"));
+    }
+
+    #[test]
+    fn test_extract_code_from_python3_fence() {
+        let response = "```python3\nimport json\nprint('ok')\n```";
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert_eq!(code, "import json\nprint('ok')");
+        assert!(!code.contains("python3"), "python3 tag should be stripped");
     }
 
     #[test]

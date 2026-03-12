@@ -78,7 +78,7 @@ fn strip_markdown_fences(content: &str) -> String {
         .rev()
         .take_while(|c| *c == fence_char)
         .count();
-    if trailing < 3 {
+    if trailing < leading {
         return content.to_string();
     }
 
@@ -2242,6 +2242,13 @@ testpkg.run()
     fn test_strip_markdown_fences_tilde_no_closing() {
         // Only opening tilde fence — should return as-is
         let input = "~~~python\nprint('hi')";
+        assert_eq!(strip_markdown_fences(input), input);
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_mismatched_length() {
+        // 4-char opener with 3-char closer — should return as-is
+        let input = "````markdown\n# Hello\n```";
         assert_eq!(strip_markdown_fences(input), input);
     }
 

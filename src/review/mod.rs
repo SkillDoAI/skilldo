@@ -438,26 +438,23 @@ fn extract_json_block(text: &str) -> String {
 fn extract_python_script(response: &str) -> String {
     let trimmed = response.trim();
 
-    // Try: ```python ... ``` or ~~~python ... ~~~
-    for fence in &["```python", "~~~python"] {
-        if let Some(start) = trimmed.find(fence) {
-            let close = &fence[..3]; // matching closing fence
-            let after = start + fence.len();
-            if let Some(end) = trimmed[after..].find(close) {
-                return trimmed[after..after + end].trim().to_string();
-            }
-        }
-    }
-
-    // Try: ``` ... ``` or ~~~ ... ~~~
+    // Try fenced code blocks: ```python ... ``` or ~~~python ... ~~~
+    // Also handles python3, py, and other tags via first-line stripping.
     for fence in &["```", "~~~"] {
         if let Some(start) = trimmed.find(fence) {
             let after = start + fence.len();
             if let Some(end) = trimmed[after..].find(fence) {
-                let inner = trimmed[after..after + end].trim();
-                // Skip if it looks like JSON
-                if !inner.starts_with('{') {
-                    return inner.to_string();
+                let block = trimmed[after..after + end].trim();
+                // Strip language tag on first line (python, python3, py, etc.)
+                if let Some((first_line, rest)) = block.split_once('\n') {
+                    let tag = first_line.trim().to_ascii_lowercase();
+                    if tag == "python" || tag == "python3" || tag == "py" {
+                        return rest.trim().to_string();
+                    }
+                }
+                // No recognized tag — skip if JSON
+                if !block.starts_with('{') {
+                    return block.to_string();
                 }
             }
         }
@@ -742,6 +739,20 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_python_script_python3_fence() {
+        let response = "```python3\nimport json\nprint('ok')\n```";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import json\nprint('ok')");
+    }
+
+    #[test]
+    fn test_extract_python_script_py_fence() {
+        let response = "~~~py\nimport os\nprint('done')\n~~~";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import os\nprint('done')");
+    }
+
+    #[test]
     fn test_extract_frontmatter_version() {
         let md = "---\nname: numpy\nversion: 2.1.0\nlanguage: python\n---\n# Content";
         assert_eq!(extract_frontmatter_version(md), Some("2.1.0".to_string()));
@@ -901,6 +912,10 @@ mod tests {
             .iter()
             .filter(|i| i.category == "introspection")
             .collect();
+        assert!(
+            !intro_issues.is_empty(),
+            "degraded introspection should produce at least one issue"
+        );
         assert!(
             intro_issues
                 .iter()
