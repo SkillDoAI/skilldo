@@ -405,28 +405,20 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
 fn extract_json_block(text: &str) -> String {
     let trimmed = text.trim();
 
-    // Try: markdown json fence (``` or ~~~)
-    for fence in &["```", "~~~"] {
-        let json_fence = format!("{fence}json");
-        if let Some(start) = trimmed.find(&json_fence) {
-            let after = start + json_fence.len();
-            if let Some(end) = trimmed[after..].find(fence) {
-                return trimmed[after..after + end].trim().to_string();
-            }
-        }
+    // Use shared line-anchored parser to avoid truncation on inner fences
+    let blocks = crate::util::find_fenced_blocks(trimmed);
+
+    // Prefer json-tagged block
+    if let Some((_, body)) = blocks.iter().find(|(tag, _)| tag == "json") {
+        return body.clone();
     }
 
-    // Try: markdown plain fence (``` or ~~~)
-    for fence in &["```", "~~~"] {
-        if let Some(start) = trimmed.find(fence) {
-            let after = start + fence.len();
-            if let Some(end) = trimmed[after..].find(fence) {
-                let inner = trimmed[after..after + end].trim();
-                if inner.starts_with('{') {
-                    return inner.to_string();
-                }
-            }
-        }
+    // Fall back to first untagged block that looks like JSON
+    if let Some((_, body)) = blocks
+        .iter()
+        .find(|(tag, body)| tag.is_empty() && body.trim_start().starts_with('{'))
+    {
+        return body.clone();
     }
 
     // Try: find first { and last }
