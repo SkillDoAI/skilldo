@@ -53,33 +53,71 @@ impl<'a> PythonCodeGenerator<'a> {
     }
 
     /// Extract Python code from markdown code blocks (supports both ``` and ~~~ fences).
+    /// Two-pass strategy: prefer Python-tagged blocks, fall back to first generic block.
     fn extract_code_from_response(response: &str) -> Result<String> {
         let trimmed = response.trim();
 
-        // Try fenced code blocks (``` or ~~~) with language tag stripping
-        for fence in &["```", "~~~"] {
-            if let Some(start) = trimmed.find(*fence) {
-                let code_start = start + fence.len();
-                if let Some(end) = trimmed[code_start..].find(*fence) {
-                    let mut code = trimmed[code_start..code_start + end].trim();
-                    // Strip known language tags on first line
-                    if let Some((first_line, rest)) = code.split_once('\n') {
-                        let tag = first_line.trim().to_ascii_lowercase();
-                        const KNOWN_TAGS: &[&str] = &[
-                            "py", "python", "python3", "bash", "sh", "shell", "zsh", "fish",
-                            "text", "txt", "json", "yaml", "yml", "toml",
-                        ];
-                        if KNOWN_TAGS.contains(&tag.as_str()) {
-                            code = rest.trim();
-                        }
-                    }
-                    return Ok(code.to_string());
-                }
+        const PYTHON_TAGS: &[&str] = &["python", "python3", "py"];
+
+        // Collect all fenced blocks with their tags
+        let blocks = Self::find_fenced_blocks(trimmed);
+
+        // Pass 1: prefer Python-tagged blocks
+        for (tag, body) in &blocks {
+            if PYTHON_TAGS.contains(&tag.as_str()) {
+                return Ok(body.clone());
             }
+        }
+
+        // Pass 2: fall back to first block (any tag)
+        if let Some((_tag, body)) = blocks.first() {
+            return Ok(body.clone());
         }
 
         // If no code block found, use the response as-is (may be raw code)
         Ok(trimmed.to_string())
+    }
+
+    /// Find all fenced code blocks in text, returning (tag, body) pairs.
+    /// The tag is the text on the same line as the opening fence (e.g., "python" in ```python).
+    fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
+        let mut blocks = Vec::new();
+        let mut pos = 0;
+        while pos < text.len() {
+            let (fence, start) = if let Some(idx) = text[pos..].find("```") {
+                if let Some(tilde_idx) = text[pos..].find("~~~") {
+                    if tilde_idx < idx {
+                        ("~~~", pos + tilde_idx)
+                    } else {
+                        ("```", pos + idx)
+                    }
+                } else {
+                    ("```", pos + idx)
+                }
+            } else if let Some(idx) = text[pos..].find("~~~") {
+                ("~~~", pos + idx)
+            } else {
+                break;
+            };
+
+            let after = start + fence.len();
+            if let Some(end) = text[after..].find(fence) {
+                let raw = &text[after..after + end];
+                // Tag is the text on the opener line (before first newline)
+                let (tag, body) = if let Some(nl) = raw.find('\n') {
+                    let tag_part = raw[..nl].trim().to_ascii_lowercase();
+                    let body = raw[nl + 1..].trim().to_string();
+                    (tag_part, body)
+                } else {
+                    (String::new(), raw.trim().to_string())
+                };
+                blocks.push((tag, body));
+                pos = after + end + fence.len();
+            } else {
+                break;
+            }
+        }
+        blocks
     }
 }
 
@@ -228,6 +266,40 @@ print(os.getcwd())
 
         let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
         assert!(code.contains("import os"));
+    }
+
+    #[test]
+    fn test_extract_code_prefers_python_tagged_over_bash() {
+        // LLM response with bash block first, then Python block.
+        // Pass 1 should find the Python block; bash should be skipped.
+        let response = r#"First install:
+
+```bash
+pip install click
+```
+
+Then run:
+
+```python
+import click
+
+@click.command()
+def hello():
+    click.echo("Hello")
+
+if __name__ == '__main__':
+    hello()
+```
+"#;
+        let code = PythonCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains("import click"),
+            "should extract the Python block, got: {code}"
+        );
+        assert!(
+            !code.contains("pip install"),
+            "should NOT extract the bash block"
+        );
     }
 
     fn sample_pattern() -> CodePattern {

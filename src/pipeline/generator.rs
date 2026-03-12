@@ -687,19 +687,21 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 }
 
                 if result.passed {
-                    // Collect introspection warnings even on pass — degraded
-                    // introspection means the verdict was text-only, not grounded.
-                    let intro_issues: Vec<_> = result
+                    // Collect all non-error issues on pass (introspection warnings,
+                    // advisory accuracy/safety notes, etc.) so callers can track them.
+                    let pass_warnings: Vec<_> = result
                         .issues
                         .into_iter()
-                        .filter(|i| i.category == "introspection")
+                        .filter(|i| !matches!(i.severity, Severity::Error))
                         .collect();
-                    if !intro_issues.is_empty() {
-                        warn!("  ⚠ review: passed with degraded introspection");
-                        for w in &intro_issues {
+                    if !pass_warnings.is_empty() {
+                        if pass_warnings.iter().any(|i| i.category == "introspection") {
+                            warn!("  ⚠ review: passed with degraded introspection");
+                        }
+                        for w in &pass_warnings {
                             warn!("  - [{}][{}] {}", w.severity, w.category, w.complaint);
                         }
-                        unresolved_warnings = intro_issues;
+                        unresolved_warnings = pass_warnings;
                     }
                     info!("  ✓ review: passed");
                     break;

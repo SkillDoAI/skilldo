@@ -442,29 +442,52 @@ fn extract_json_block(text: &str) -> String {
 }
 
 /// Extract a Python script from an LLM response that may include markdown fences.
+/// Two-pass: prefer Python-tagged blocks, fall back to untagged/generic blocks.
 fn extract_python_script(response: &str) -> String {
     let trimmed = response.trim();
 
-    // Try fenced code blocks: ```python ... ``` or ~~~python ... ~~~
-    // Also handles python3, py, and other tags via first-line stripping.
-    for fence in &["```", "~~~"] {
-        if let Some(start) = trimmed.find(fence) {
-            let after = start + fence.len();
-            if let Some(end) = trimmed[after..].find(fence) {
-                let block = trimmed[after..after + end].trim();
-                // Strip language tag on first line (python, python3, py, etc.)
-                if let Some((first_line, rest)) = block.split_once('\n') {
-                    let tag = first_line.trim().to_ascii_lowercase();
-                    if tag == "python" || tag == "python3" || tag == "py" {
-                        return rest.trim().to_string();
-                    }
-                }
-                // No recognized tag — skip if JSON
-                if !block.starts_with('{') {
-                    return block.to_string();
-                }
-            }
+    const PYTHON_TAGS: &[&str] = &["python", "python3", "py"];
+    const NON_PYTHON_TAGS: &[&str] = &[
+        "json",
+        "bash",
+        "sh",
+        "shell",
+        "zsh",
+        "text",
+        "txt",
+        "yaml",
+        "yml",
+        "toml",
+        "sql",
+        "javascript",
+        "js",
+        "typescript",
+        "ts",
+        "go",
+        "rust",
+        "html",
+        "css",
+        "xml",
+    ];
+
+    let blocks = find_fenced_blocks(trimmed);
+
+    // Pass 1: prefer Python-tagged blocks
+    for (tag, body) in &blocks {
+        if PYTHON_TAGS.contains(&tag.as_str()) {
+            return body.clone();
         }
+    }
+
+    // Pass 2: fall back to first untagged or unknown block (skip non-Python tags and JSON)
+    for (tag, body) in &blocks {
+        if NON_PYTHON_TAGS.contains(&tag.as_str()) {
+            continue;
+        }
+        if body.starts_with('{') {
+            continue;
+        }
+        return body.clone();
     }
 
     // No fences — return as-is if it looks like Python
@@ -473,6 +496,47 @@ fn extract_python_script(response: &str) -> String {
     }
 
     String::new()
+}
+
+/// Find all fenced code blocks in text, returning (tag, body) pairs.
+/// The tag is the text on the same line as the opening fence (e.g., "python" in ```python).
+fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
+    let mut blocks = Vec::new();
+    let mut pos = 0;
+    while pos < text.len() {
+        let (fence, start) = if let Some(idx) = text[pos..].find("```") {
+            if let Some(tilde_idx) = text[pos..].find("~~~") {
+                if tilde_idx < idx {
+                    ("~~~", pos + tilde_idx)
+                } else {
+                    ("```", pos + idx)
+                }
+            } else {
+                ("```", pos + idx)
+            }
+        } else if let Some(idx) = text[pos..].find("~~~") {
+            ("~~~", pos + idx)
+        } else {
+            break;
+        };
+
+        let after = start + fence.len();
+        if let Some(end) = text[after..].find(fence) {
+            let raw = &text[after..after + end];
+            let (tag, body) = if let Some(nl) = raw.find('\n') {
+                let tag_part = raw[..nl].trim().to_ascii_lowercase();
+                let body = raw[nl + 1..].trim().to_string();
+                (tag_part, body)
+            } else {
+                (String::new(), raw.trim().to_string())
+            };
+            blocks.push((tag, body));
+            pos = after + end + fence.len();
+        } else {
+            break;
+        }
+    }
+    blocks
 }
 
 /// Extract version from SKILL.md YAML frontmatter.
@@ -771,6 +835,29 @@ mod tests {
         let response = "~~~py\nimport os\nprint('done')\n~~~";
         let script = extract_python_script(response);
         assert_eq!(script, "import os\nprint('done')");
+    }
+
+    #[test]
+    fn test_extract_python_script_skips_json_tagged_block() {
+        // JSON-tagged block should be skipped; Python block should be extracted.
+        let response =
+            "```json\n{\"key\": \"value\"}\n```\n\n```python\nimport os\nprint('done')\n```";
+        let script = extract_python_script(response);
+        assert!(
+            script.contains("import os"),
+            "should extract Python block, got: {script}"
+        );
+        assert!(
+            !script.contains("\"key\""),
+            "should NOT extract the JSON block"
+        );
+    }
+
+    #[test]
+    fn test_extract_python_script_skips_bash_block() {
+        let response = "```bash\npip install foo\n```\n\n```python\nimport foo\n```";
+        let script = extract_python_script(response);
+        assert_eq!(script, "import foo");
     }
 
     #[test]
