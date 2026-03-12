@@ -383,7 +383,7 @@ const CARGO_HOME_DIR: &str = "cargo-home";
 
 impl CargoExecutor {
     pub fn new() -> Self {
-        Self { timeout_secs: 60 }
+        Self { timeout_secs: 120 }
     }
 
     pub fn with_timeout(mut self, secs: u64) -> Self {
@@ -733,11 +733,11 @@ mod tests {
 
     #[test]
     fn test_executor_defaults_and_timeouts() {
-        // All executors default to 60s and support with_timeout
+        // Python/Go/Node default to 60s, Cargo defaults to 120s (compilation takes longer)
         assert_eq!(PythonUvExecutor::default().timeout_secs, 60);
         assert_eq!(GoExecutor::default().timeout_secs, 60);
         assert_eq!(NodeExecutor::default().timeout_secs, 60);
-        assert_eq!(CargoExecutor::default().timeout_secs, 60);
+        assert_eq!(CargoExecutor::default().timeout_secs, 120);
 
         assert_eq!(PythonUvExecutor::new().with_timeout(30).timeout_secs, 30);
         assert_eq!(GoExecutor::new().with_timeout(120).timeout_secs, 120);

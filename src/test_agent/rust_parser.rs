@@ -144,9 +144,14 @@ impl LanguageParser for RustParser {
                 in_deps_section = true;
                 continue;
             }
-            // Exit [dependencies] on next section header or blank line after entries
+            // Exit [dependencies] on next section header, blank line, or code fence close
             if in_deps_section {
-                if line.trim().starts_with('[') || line.trim().is_empty() {
+                let t = line.trim();
+                if t.starts_with('[')
+                    || t.is_empty()
+                    || t.starts_with("```")
+                    || t.starts_with("~~~")
+                {
                     in_deps_section = false;
                 } else if let Some(cap) = CARGO_TOML_DEP_RE.captures(line) {
                     let crate_name = cap[1].to_string();
