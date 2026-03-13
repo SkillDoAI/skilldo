@@ -15,6 +15,9 @@ use crate::util::sanitize_dep_name;
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
 static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:rust|rs)?\r?\n([\s\S]*?)(?:```|~~~)").unwrap());
+/// Rust-tagged only — used to prefer ```rust blocks over untagged ones in extract_patterns.
+static RUST_CODE_BLOCK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:rust|rs)\r?\n([\s\S]*?)(?:```|~~~)").unwrap());
 static USE_IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?m)^use\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+as\s+[a-zA-Z_][a-zA-Z0-9_]*)?(?:::|;)")
         .unwrap()
@@ -116,7 +119,11 @@ impl LanguageParser for RustParser {
                 .trim()
                 .to_string();
 
-            if let Some(code_cap) = CODE_BLOCK_RE.captures(pattern_section) {
+            // Prefer rust-tagged blocks (```rust) over untagged (```)
+            let code_cap_opt = RUST_CODE_BLOCK_RE
+                .captures(pattern_section)
+                .or_else(|| CODE_BLOCK_RE.captures(pattern_section));
+            if let Some(code_cap) = code_cap_opt {
                 let code = code_cap[1].trim().to_string();
                 let category = Self::categorize_pattern(pattern_name, &description);
 
@@ -704,6 +711,34 @@ serde = "1.0"
             !deps.iter().any(|d| d.starts_with('-')),
             "invalid syntax should be skipped by regex: {:?}",
             deps
+        );
+    }
+
+    #[test]
+    fn extract_patterns_prefers_rust_tagged_block() {
+        let parser = RustParser;
+        let skill = r#"---
+name: test
+---
+
+## Core Patterns
+
+### ✅ Example
+```toml
+[dependencies]
+serde = "1"
+```
+
+```rust
+fn main() { println!("hello"); }
+```
+"#;
+        let patterns = parser.extract_patterns(skill).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert!(
+            patterns[0].code.contains("fn main()"),
+            "should prefer rust-tagged block over toml block: {}",
+            patterns[0].code
         );
     }
 
