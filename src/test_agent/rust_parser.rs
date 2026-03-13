@@ -187,7 +187,7 @@ impl LanguageParser for RustParser {
         // `cargo add` commands
         for cap in CARGO_ADD_RE.captures_iter(imports_content) {
             let crate_name = cap[1].to_string();
-            if !dependencies.contains(&crate_name) {
+            if !Self::is_stdlib_crate(&crate_name) && !dependencies.contains(&crate_name) {
                 dependencies.push(crate_name);
             }
         }
@@ -386,6 +386,20 @@ match serde_json::from_str::<Point>(data) {
             "expected tokio from cargo add, got: {:?}",
             deps
         );
+    }
+
+    #[test]
+    fn cargo_add_skips_stdlib_crates() {
+        let parser = RustParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add std\ncargo add serde\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            !deps.contains(&"std".to_string()),
+            "stdlib crates should be excluded from cargo add: {:?}",
+            deps
+        );
+        assert!(deps.contains(&"serde".to_string()));
     }
 
     #[test]

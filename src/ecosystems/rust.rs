@@ -85,9 +85,17 @@ impl RustHandler {
     // ── File discovery ──────────────────────────────────────────────────
 
     /// Find all Rust source files (excluding tests, target, benches, examples).
+    /// Prefers `src/` when it exists to avoid picking up root-level .rs files
+    /// (build scripts, workspace shims, etc.).
     pub fn find_source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
-        self.collect_rs_files(&self.repo_path, &mut files, 0)?;
+        let src_dir = self.repo_path.join("src");
+        let start = if src_dir.is_dir() {
+            &src_dir
+        } else {
+            &self.repo_path
+        };
+        self.collect_rs_files(start, &mut files, 0)?;
 
         if files.is_empty() {
             bail!("No Rust source files found in {}", self.repo_path.display());
@@ -244,17 +252,36 @@ impl RustHandler {
 
     /// Extract license from Cargo.toml `license` field, then fall back to LICENSE file.
     pub fn get_license(&self) -> Option<String> {
-        // Strategy 1: Cargo.toml license field
         let cargo_toml = self.repo_path.join("Cargo.toml");
-        if let Ok(content) = fs::read_to_string(&cargo_toml) {
-            if let Some(license) = cargo_toml_field(&content, "license") {
+        let cargo_content = fs::read_to_string(&cargo_toml).ok();
+
+        // Strategy 1: Cargo.toml license field
+        if let Some(ref content) = cargo_content {
+            if let Some(license) = cargo_toml_field(content, "license") {
                 if !Self::is_workspace_placeholder(&license) {
                     return Some(license);
                 }
             }
         }
 
-        // Strategy 2: LICENSE file classification
+        // Strategy 2: Cargo.toml `license-file` field
+        if let Some(ref content) = cargo_content {
+            if let Some(license_file) = cargo_toml_field(content, "license-file") {
+                let path = self.repo_path.join(&license_file);
+                if let Ok(file_content) = fs::read_to_string(&path) {
+                    if let Some(license) = classify_license(&file_content) {
+                        return Some(license);
+                    }
+                    // Fallback: first non-empty line
+                    return file_content
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .map(String::from);
+                }
+            }
+        }
+
+        // Strategy 3: LICENSE file classification
         for name in LICENSE_FILENAMES {
             let path = self.repo_path.join(name);
             if let Ok(content) = fs::read_to_string(&path) {
@@ -2366,6 +2393,361 @@ mod tests {
         assert_eq!(
             v, "latest",
             "non-version tags should fall through to latest"
+        );
+    }
+
+    // ── Coverage: license-file support ─────────────────────────────────
+
+    #[test]
+    fn get_license_from_license_file_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nlicense-file = \"COPYING\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("COPYING"), "MIT License\n\nCopyright...").unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+
+        let handler = RustHandler::new(root);
+        assert_eq!(handler.get_license().unwrap(), "MIT");
+    }
+
+    #[test]
+    fn get_license_file_fallback_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nlicense-file = \"LICENSE.custom\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("LICENSE.custom"),
+            "Custom License v42\nDetails...",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+
+        let handler = RustHandler::new(root);
+        assert_eq!(handler.get_license().unwrap(), "Custom License v42");
+    }
+
+    #[test]
+    fn get_license_file_missing_falls_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nlicense-file = \"NONEXISTENT\"\n",
+        )
+        .unwrap();
+        // No LICENSE files either
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+
+        let handler = RustHandler::new(root);
+        assert!(handler.get_license().is_none());
+    }
+
+    // ── Coverage: find_source_files prefers src/ ───────────────────────
+
+    #[test]
+    fn find_source_files_prefers_src_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        // Root-level .rs file (should be excluded when src/ exists)
+        fs::write(root.join("build_helper.rs"), "fn helper() {}").unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "pub fn main() {}").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(
+            !files
+                .iter()
+                .any(|p| p.file_name().unwrap() == "build_helper.rs"),
+            "root-level .rs should be excluded when src/ exists: {:?}",
+            files
+        );
+        assert!(files.iter().any(|p| p.file_name().unwrap() == "lib.rs"));
+    }
+
+    #[test]
+    fn find_source_files_falls_back_to_root_without_src() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        // No src/ dir, just root .rs files
+        fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.file_name().unwrap() == "main.rs"));
+    }
+
+    // ── Coverage: collect_test_rs_files ─────────────────────────────────
+
+    #[test]
+    fn find_test_files_includes_test_rs_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+        // *_test.rs file in src/
+        fs::write(root.join("src").join("parser_test.rs"), "#[test] fn t() {}").unwrap();
+
+        let handler = RustHandler::new(root);
+        let test_files = handler.find_test_files().unwrap();
+        assert!(
+            test_files
+                .iter()
+                .any(|p| p.file_name().unwrap() == "parser_test.rs"),
+            "should find *_test.rs files: {:?}",
+            test_files
+        );
+    }
+
+    #[test]
+    fn find_test_files_skips_target_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+        // target/ should be skipped
+        fs::create_dir_all(root.join("target").join("debug")).unwrap();
+        fs::write(
+            root.join("target").join("debug").join("something_test.rs"),
+            "",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let test_files = handler.find_test_files().unwrap();
+        assert!(
+            !test_files
+                .iter()
+                .any(|p| p.to_str().unwrap().contains("target")),
+            "should skip target/: {:?}",
+            test_files
+        );
+    }
+
+    #[test]
+    fn find_test_files_recurses_into_nested_tests_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+        // Nested test dirs: tests/helpers/ with a .rs file
+        fs::create_dir_all(root.join("tests").join("helpers")).unwrap();
+        fs::write(root.join("tests").join("smoke.rs"), "#[test] fn s() {}").unwrap();
+        fs::write(
+            root.join("tests").join("helpers").join("common.rs"),
+            "pub fn setup() {}",
+        )
+        .unwrap();
+        // Also a non-.rs file to ensure filtering works
+        fs::write(root.join("tests").join("data.json"), "{}").unwrap();
+
+        let handler = RustHandler::new(root);
+        let test_files = handler.find_test_files().unwrap();
+        assert!(test_files
+            .iter()
+            .any(|p| p.file_name().unwrap() == "smoke.rs"));
+        assert!(
+            test_files
+                .iter()
+                .any(|p| p.file_name().unwrap() == "common.rs"),
+            "should recurse into tests/helpers/: {:?}",
+            test_files
+        );
+        assert!(
+            !test_files
+                .iter()
+                .any(|p| p.file_name().unwrap() == "data.json"),
+            "should only include .rs files: {:?}",
+            test_files
+        );
+    }
+
+    // ── Coverage: collect_docs_recursive ────────────────────────────────
+
+    #[test]
+    fn find_docs_includes_docs_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+        fs::write(root.join("README.md"), "# Hello").unwrap();
+        fs::create_dir_all(root.join("docs").join("guides")).unwrap();
+        fs::write(root.join("docs").join("intro.md"), "# Intro").unwrap();
+        fs::write(root.join("docs").join("guides").join("setup.rst"), "Setup").unwrap();
+
+        let handler = RustHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert!(
+            docs.iter().any(|p| p.file_name().unwrap() == "intro.md"),
+            "should find docs/intro.md: {:?}",
+            docs
+        );
+        assert!(
+            docs.iter().any(|p| p.file_name().unwrap() == "setup.rst"),
+            "should find nested .rst files: {:?}",
+            docs
+        );
+    }
+
+    #[test]
+    fn find_docs_skips_hidden_and_vendor_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+        // docs/ with hidden subdir and vendor subdir
+        fs::create_dir_all(root.join("docs").join(".hidden")).unwrap();
+        fs::write(root.join("docs").join(".hidden").join("secret.md"), "").unwrap();
+        fs::create_dir_all(root.join("docs").join("vendor")).unwrap();
+        fs::write(root.join("docs").join("vendor").join("third.md"), "").unwrap();
+        fs::write(root.join("docs").join("real.md"), "# Real").unwrap();
+
+        let handler = RustHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert!(
+            !docs.iter().any(|p| p.to_str().unwrap().contains(".hidden")),
+            "should skip hidden dirs: {:?}",
+            docs
+        );
+        assert!(
+            !docs.iter().any(|p| p.to_str().unwrap().contains("vendor")),
+            "should skip vendor dirs: {:?}",
+            docs
+        );
+        assert!(docs.iter().any(|p| p.file_name().unwrap() == "real.md"));
+    }
+
+    // ── Coverage: no standalone test files log ─────────────────────────
+
+    #[test]
+    fn find_test_files_returns_empty_without_tests_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "pub fn f() {}").unwrap();
+        // No tests/ dir, no *_test.rs files
+
+        let handler = RustHandler::new(root);
+        let test_files = handler.find_test_files().unwrap();
+        assert!(
+            test_files.is_empty(),
+            "should be empty when no test files exist"
+        );
+    }
+
+    // ── Coverage: depth limit on collect_rs_files ──────────────────────
+
+    #[test]
+    fn collect_rs_files_respects_max_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Create nested dirs deeper than MAX_DEPTH (20)
+        let mut deep = root.join("src");
+        fs::create_dir(&deep).unwrap();
+        for i in 0..22 {
+            deep = deep.join(format!("d{i}"));
+            fs::create_dir(&deep).unwrap();
+        }
+        fs::write(deep.join("deep.rs"), "fn deep() {}").unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("src").join("lib.rs"), "pub fn f() {}").unwrap();
+
+        let handler = RustHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(
+            !files.iter().any(|p| p.file_name().unwrap() == "deep.rs"),
+            "should not descend past MAX_DEPTH: {:?}",
+            files
+        );
+    }
+
+    // ── Coverage: root-level .md files in find_docs ────────────────────
+
+    #[test]
+    fn find_docs_includes_root_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+        fs::write(root.join("README.md"), "# Readme").unwrap();
+        fs::write(root.join("CONTRIBUTING.md"), "# Contributing").unwrap();
+        // CHANGELOG should be excluded
+        fs::write(root.join("CHANGELOG.md"), "# Changelog").unwrap();
+
+        let handler = RustHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert!(
+            docs.iter()
+                .any(|p| p.file_name().unwrap() == "CONTRIBUTING.md"),
+            "should include root .md files: {:?}",
+            docs
+        );
+        assert!(
+            !docs
+                .iter()
+                .any(|p| p.file_name().unwrap() == "CHANGELOG.md"),
+            "should exclude CHANGELOG.md: {:?}",
+            docs
         );
     }
 }
