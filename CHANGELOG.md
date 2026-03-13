@@ -9,7 +9,7 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Added `review_degraded` field to `ReviewResult`, `GenerateOutput`, and `RunRecord` — propagates degraded introspection status through to telemetry CSV and structured log output
 - Structured log status now three-valued: "errors" / "degraded" / "ok" (was binary "errors" / "ok") — CI consumers can distinguish grounded vs advisory reviews
 - Added tests for review degraded propagation, telemetry CSV formatting, auth token error handling, factory API key edge cases, security boundary helpers
-- Coverage: 1840 tests, 97.8%+ line coverage
+- Coverage: 1848 tests, 97.8%+ line coverage
 
 ## 0.4.0
 

@@ -438,4 +438,20 @@ mod tests {
             "delete_tokens should succeed even if no file exists"
         );
     }
+
+    #[test]
+    fn token_path_rejects_empty_name() {
+        assert!(token_path("").is_err());
+    }
+
+    #[test]
+    fn token_path_rejects_dotdot() {
+        assert!(token_path("..").is_err());
+    }
+
+    #[test]
+    fn token_path_produces_json_extension() {
+        let path = token_path("my-provider").unwrap();
+        assert!(path.to_str().unwrap().ends_with("my-provider.json"));
+    }
 }

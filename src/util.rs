@@ -623,4 +623,14 @@ mod tests {
             blocks.len()
         );
     }
+
+    #[test]
+    fn test_find_fenced_blocks_empty_block_no_newline() {
+        // Adjacent opening+closing fences with no content or newline between them
+        let text = "``````";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].0, "");
+        assert_eq!(blocks[0].1, "");
+    }
 }
