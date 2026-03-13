@@ -544,7 +544,6 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             duration_secs: duration.as_secs_f64(),
             timestamp: crate::telemetry::iso8601_now(),
             skilldo_version: env!("CARGO_PKG_VERSION").to_string(),
-            review_degraded: output_result.review_degraded,
         };
         if let Err(e) = crate::telemetry::append_run(&record, None) {
             tracing::warn!("Failed to write telemetry: {}", e);
@@ -556,8 +555,6 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     let lint_issues = issues.len();
     let status = if output_result.has_unresolved_errors {
         "errors"
-    } else if output_result.review_degraded {
-        "degraded"
     } else {
         "ok"
     };

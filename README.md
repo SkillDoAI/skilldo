@@ -91,7 +91,7 @@ Skilldo is more powerful than the quick start above suggests. Dive deeper:
 - **[Languages](docs/languages.md)** — Supported ecosystems, test validation details, how to add a new language
 - **[Telemetry](docs/telemetry.md)** — What we log, what we don't, schema details, how to query your data
 - **[Best Practices](docs/best-practices.md)** — SKILL.md authoring guidelines and quality tips
-- **[SKILL.md](docs/SKILL.md)** — Agent skill for the skilldo CLI itself (use with Claude, Copilot, Codex)
+- **[SKILL.md](SKILL.md)** — Agent skill for the skilldo CLI itself (use with Claude, Copilot, Codex)
 
 ## Example Output
 

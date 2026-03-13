@@ -53,8 +53,6 @@ pub struct GenerateOutput {
     pub failed_stage: Option<FailedStage>,
     /// Error summary for the failure (e.g., "3/5 tests failed after 3 retries").
     pub failure_reason: Option<String>,
-    /// True when review ran without container introspection (advisory only).
-    pub review_degraded: bool,
 }
 
 /// Strip markdown code fences from output (``` or ~~~ variants)
@@ -152,7 +150,6 @@ pub struct Generator {
     enable_test: bool,
     test_mode: ValidationMode,
     enable_review: bool,
-    skip_introspection: bool,
     enable_security_scan: bool,
     review_max_retries: usize,
     container_config: ContainerConfig,
@@ -176,7 +173,6 @@ impl Generator {
             enable_test: true,                   // Default to enabled
             test_mode: ValidationMode::Thorough, // Default to thorough mode
             enable_review: true,                 // Default to enabled
-            skip_introspection: false,           // Default to enabled
             enable_security_scan: true,          // Default to enabled
             review_max_retries: crate::config::default_review_max_retries(),
             container_config: ContainerConfig::default(),
@@ -248,13 +244,6 @@ impl Generator {
 
     pub fn with_review(mut self, enabled: bool) -> Self {
         self.enable_review = enabled;
-        self
-    }
-
-    /// Skip container-based introspection in review (useful for testing without a runtime).
-    #[allow(dead_code)]
-    pub fn with_skip_introspection(mut self, skip: bool) -> Self {
-        self.skip_introspection = skip;
         self
     }
 
@@ -655,14 +644,11 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
 
         // Review: accuracy + safety validation
         let mut unresolved_warnings: Vec<ReviewIssue> = Vec::new();
-        let mut review_degraded = false;
         if self.enable_review {
             let review_agent = ReviewAgent::new(
                 self.get_client("review"),
-                self.container_config.clone(),
                 self.prompts_config.review_custom.clone(),
-            )
-            .with_skip_introspection(self.skip_introspection);
+            );
 
             let mut last_review_attempt = 0;
             for review_attempt in 0..=self.review_max_retries {
@@ -677,9 +663,6 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     .review(&skill_md, &data.package_name, &data.language)
                     .await?;
 
-                // Preserve degraded state before any control flow (malformed → continue/break)
-                review_degraded = review_degraded || result.degraded;
-
                 if result.malformed {
                     if review_attempt < self.review_max_retries {
                         warn!("  ⚠ review: malformed verdict, retrying");
@@ -693,17 +676,14 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 }
 
                 if result.passed {
-                    // Collect all non-error issues on pass (introspection warnings,
-                    // advisory accuracy/safety notes, etc.) so callers can track them.
+                    // Collect all non-error issues on pass (advisory accuracy/safety
+                    // notes, etc.) so callers can track them.
                     let pass_warnings: Vec<_> = result
                         .issues
                         .into_iter()
                         .filter(|i| !matches!(i.severity, Severity::Error))
                         .collect();
                     if !pass_warnings.is_empty() {
-                        if pass_warnings.iter().any(|i| i.category == "introspection") {
-                            warn!("  ⚠ review: passed with degraded introspection");
-                        }
                         for w in &pass_warnings {
                             warn!("  - [{}][{}] {}", w.severity, w.category, w.complaint);
                         }
@@ -850,7 +830,6 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             review_retries_used,
             failed_stage,
             failure_reason,
-            review_degraded,
         })
     }
 }
@@ -1178,9 +1157,7 @@ mod tests {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_review(false);
         assert!(!gen.enable_review);
 
-        let gen2 = Generator::new(Box::new(MockLlmClient::new()), 3)
-            .with_review(true)
-            .with_skip_introspection(true);
+        let gen2 = Generator::new(Box::new(MockLlmClient::new()), 3).with_review(true);
         assert!(gen2.enable_review);
     }
 
@@ -1322,7 +1299,6 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
-            review_degraded: false,
         };
         assert_eq!(output.skill_md, "# Test SKILL.md");
         assert!(output.unresolved_warnings.is_empty());
@@ -1346,7 +1322,6 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
-            review_degraded: false,
         };
         assert_eq!(output.unresolved_warnings.len(), 1);
         assert_eq!(
@@ -1371,7 +1346,6 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
-            review_degraded: false,
         };
         // GenerateOutput derives Debug, ensure it doesn't panic
         let debug_str = format!("{:?}", output);
@@ -1582,7 +1556,6 @@ mod tests {
             .with_test(true)
             .with_test_mode(ValidationMode::Adaptive)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_container_config(ContainerConfig::default())
             .with_parallel_extraction(false)
@@ -1875,7 +1848,7 @@ testpkg.run()
     #[tokio::test]
     async fn test_generate_review_fail_then_pass() {
         // Review client: first verdict fails, second passes.
-        // With skip_introspection, only verdict LLM calls happen (no introspect scripts).
+        // Review is LLM-verdict-only (no introspection).
         let review_responses = vec![
             // First review cycle: verdict - FAIL
             r#"{"passed": false, "issues": [{"severity": "error", "category": "accuracy", "complaint": "Wrong version in frontmatter", "evidence": "expected 1.0.0, got unknown"}]}"#.to_string(),
@@ -1886,7 +1859,6 @@ testpkg.run()
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -1910,7 +1882,7 @@ testpkg.run()
         let fail_verdict = r#"{"passed": false, "issues": [{"severity": "error", "category": "accuracy", "complaint": "Wrong version number", "evidence": "pip says 2.0"}, {"severity": "warning", "category": "accuracy", "complaint": "Stale version number", "evidence": "pip says 2.0"}]}"#;
 
         // 2 retries = 3 review attempts (0, 1, 2)
-        // With skip_introspection, only verdict calls happen (no introspect script)
+        // Review is LLM-verdict-only (no introspection)
         let mut review_responses = Vec::new();
         for _ in 0..3 {
             review_responses.push(fail_verdict.to_string());
@@ -1919,7 +1891,6 @@ testpkg.run()
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(2)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -1991,7 +1962,6 @@ testpkg.run()
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(0);
 
         let mut data = make_test_data();
@@ -2088,7 +2058,6 @@ testpkg.run()
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(0)
             .with_existing_skill("# Old SKILL.md content".to_string());
 
@@ -2284,7 +2253,6 @@ testpkg.run()
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
-            review_degraded: false,
         };
         let debug_str = format!("{:?}", output);
         assert!(debug_str.contains("GenerateOutput"));
@@ -2580,13 +2548,12 @@ testpkg.run()
             {"severity": "error", "category": "accuracy", "complaint": "Wrong version", "evidence": "expected 2.0"},
             {"severity": "warning", "category": "safety", "complaint": "Suspicious code pattern", "evidence": "line 10"}
         ]}"#;
-        // 0 retries = 1 attempt; introspection skipped so only verdict calls happen
+        // 0 retries = 1 attempt; only verdict calls happen
         let review_responses = vec![fail_verdict.to_string()];
 
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(0)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -2615,7 +2582,6 @@ testpkg.run()
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(3)
             .with_review_client(Box::new(ScriptedClient::new(review_responses)));
 
@@ -2623,43 +2589,6 @@ testpkg.run()
         let output = gen.generate(&data).await.unwrap();
 
         assert!(output.unresolved_warnings.is_empty());
-    }
-
-    // ========================================================================
-    // Review passes with degraded introspection → unresolved_warnings
-    // ========================================================================
-
-    #[tokio::test]
-    async fn test_generate_review_degraded_introspection_surfaces_warnings() {
-        // Introspection script (consumed by Phase A before container fails)
-        // + passing verdict (consumed by Phase B)
-        let review_responses = vec![
-            "```python\nprint('introspect')\n```".to_string(),
-            r#"{"passed": true, "issues": []}"#.to_string(),
-        ];
-
-        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
-            .with_test(false)
-            .with_review(true)
-            .with_skip_introspection(false) // attempt introspection — will fail (no container)
-            .with_review_max_retries(0)
-            .with_review_client(Box::new(ScriptedClient::new(review_responses)));
-
-        let data = make_test_data(); // Python language by default
-        let output = gen.generate(&data).await.unwrap();
-
-        // Review passed, but introspection degraded → warning collected
-        assert!(
-            !output.unresolved_warnings.is_empty(),
-            "degraded introspection should produce unresolved warnings"
-        );
-        assert_eq!(output.unresolved_warnings[0].category, "introspection");
-        assert!(matches!(
-            output.unresolved_warnings[0].severity,
-            crate::review::Severity::Warning
-        ));
-        // Run itself is not marked as errored — just warned
-        assert!(!output.has_unresolved_errors);
     }
 
     // ========================================================================
@@ -2871,8 +2800,6 @@ testpkg.run()
     }
 
     /// Behaves like MockLlmClient but returns a failing review verdict.
-    /// The introspection script prompt gets a normal response; the verdict
-    /// prompt returns issues that the review agent must handle.
     struct FailingReviewClient;
 
     #[async_trait::async_trait]
@@ -2880,16 +2807,6 @@ testpkg.run()
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
             if prompt.contains("quality gate for a generated SKILL.md") {
                 Ok(r#"{"passed": false, "issues": [{"complaint": "Wrong function signature for foo.bar()", "severity": "error", "category": "accuracy", "evidence": "signature is bar(x) not bar()"}]}"#.to_string())
-            } else if prompt.contains("verification script generator") {
-                Ok(r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["testpkg"]
-# ///
-import json
-result = {"version_installed": "1.0.0", "version_expected": "1.0.0", "imports": [], "signatures": [], "dates": []}
-print(json.dumps(result))
-```"#.to_string())
             } else {
                 // For extract/map/learn/create prompts, delegate to MockLlmClient
                 MockLlmClient::new().complete(prompt).await
@@ -2933,7 +2850,6 @@ print(json.dumps(result))
             .with_review_client(Box::new(FailingReviewClient))
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(1);
 
         let data = make_test_data();
@@ -2955,7 +2871,6 @@ print(json.dumps(result))
             .with_review_client(Box::new(MalformedReviewClient))
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(1);
 
         let data = make_test_data();
@@ -2976,7 +2891,6 @@ print(json.dumps(result))
             .with_review_client(Box::new(SafetyReviewClient))
             .with_test(false)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(2);
 
         let data = make_test_data();
@@ -3059,7 +2973,6 @@ None known.
             .with_review_client(Box::new(FailingReviewClient))
             .with_test(true)
             .with_review(true)
-            .with_skip_introspection(true)
             .with_review_max_retries(2);
 
         let data = make_test_data();

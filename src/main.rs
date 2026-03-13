@@ -194,10 +194,6 @@ enum Commands {
         #[arg(long)]
         timeout: Option<u64>,
 
-        /// Skip container introspection (LLM-only review)
-        #[arg(long)]
-        no_container: bool,
-
         /// Use mock LLM client for testing
         #[arg(long)]
         dry_run: bool,
@@ -373,19 +369,10 @@ async fn main() -> Result<()> {
             base_url,
             runtime,
             timeout,
-            no_container,
             dry_run,
         } => {
             cli::review::run(
-                path,
-                config,
-                model,
-                provider,
-                base_url,
-                runtime,
-                timeout,
-                no_container,
-                dry_run,
+                path, config, model, provider, base_url, runtime, timeout, dry_run,
             )
             .await?;
         }
@@ -424,7 +411,7 @@ async fn main() -> Result<()> {
             println!("{response}");
         }
         Commands::Skill => {
-            print!("{}", include_str!("../docs/SKILL.md"));
+            print!("{}", include_str!("../SKILL.md"));
         }
     }
 
@@ -934,7 +921,6 @@ mod tests {
                              base_url,
                              runtime,
                              timeout,
-                             no_container,
                              dry_run| {
             assert_eq!(path, "SKILL.md");
             assert!(config.is_none());
@@ -943,7 +929,6 @@ mod tests {
             assert!(base_url.is_none());
             assert!(runtime.is_none());
             assert!(timeout.is_none());
-            assert!(!no_container);
             assert!(!dry_run);
         });
     }
@@ -972,7 +957,6 @@ mod tests {
             "podman",
             "--timeout",
             "120",
-            "--no-container",
             "--dry-run",
         ])
         .unwrap();
@@ -983,7 +967,6 @@ mod tests {
                              base_url,
                              runtime,
                              timeout,
-                             no_container,
                              dry_run| {
             assert_eq!(path, "test.md");
             assert_eq!(config.unwrap(), "my.toml");
@@ -992,7 +975,6 @@ mod tests {
             assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
             assert_eq!(runtime.unwrap(), "podman");
             assert_eq!(timeout.unwrap(), 120);
-            assert!(no_container);
             assert!(dry_run);
         });
     }
@@ -1190,22 +1172,6 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "review", "s.md", "--model", "gpt-5"]).unwrap();
         assert_review!(cli, |model| {
             assert_eq!(model.unwrap(), "gpt-5");
-        });
-    }
-
-    #[test]
-    fn test_parse_review_no_container_only() {
-        let cli = Cli::try_parse_from(["skilldo", "review", "s.md", "--no-container"]).unwrap();
-        assert_review!(cli, |no_container| {
-            assert!(no_container);
-        });
-    }
-
-    #[test]
-    fn test_parse_review_no_container_default() {
-        let cli = Cli::try_parse_from(["skilldo", "review", "s.md"]).unwrap();
-        assert_review!(cli, |no_container| {
-            assert!(!no_container);
         });
     }
 

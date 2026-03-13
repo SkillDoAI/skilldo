@@ -18,7 +18,6 @@ pub async fn run(
     base_url_override: Option<String>,
     runtime_override: Option<String>,
     timeout_override: Option<u64>,
-    no_container: bool,
     dry_run: bool,
 ) -> Result<()> {
     let file = Path::new(&path);
@@ -86,13 +85,8 @@ pub async fn run(
         )
     })?;
 
-    let review_agent = ReviewAgent::new(
-        client.as_ref(),
-        config.generation.container.clone(),
-        config.prompts.review_custom.clone(),
-    )
-    .with_strict(true)
-    .with_skip_introspection(no_container);
+    let review_agent =
+        ReviewAgent::new(client.as_ref(), config.prompts.review_custom.clone()).with_strict(true);
 
     let result = review_agent.review(&skill_md, pkg, &lang).await?;
 
@@ -208,7 +202,6 @@ mod tests {
             None,
             None,
             false,
-            false,
         )
         .await;
         assert!(result.is_err());
@@ -217,7 +210,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_dry_run() {
-        // Create a temp SKILL.md
         let dir = tempfile::TempDir::new().unwrap();
         let skill_path = dir.path().join("SKILL.md");
         std::fs::write(
@@ -234,37 +226,10 @@ mod tests {
             None,
             None,
             None,
-            true, // no_container: no container runtime in test env
             true, // dry_run
         )
         .await;
-        // Mock client returns passed=true, so this should succeed
         assert!(result.is_ok(), "dry run review failed: {:?}", result.err());
-    }
-
-    #[tokio::test]
-    async fn test_run_dry_run_no_container() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let skill_path = dir.path().join("SKILL.md");
-        std::fs::write(
-            &skill_path,
-            "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test\n",
-        )
-        .unwrap();
-
-        let result = run(
-            skill_path.to_str().unwrap().to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            true, // no_container
-            true,
-        )
-        .await;
-        assert!(result.is_ok());
     }
 
     // --- Coverage: path is not a file (line 28-29) ---
@@ -280,14 +245,13 @@ mod tests {
             None,
             None,
             false,
-            false,
         )
         .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a file"));
     }
 
-    // --- Coverage: CLI overrides (lines 39, 42, 45, 48, 51) ---
+    // --- Coverage: CLI overrides ---
     #[tokio::test]
     async fn test_run_dry_run_with_all_overrides() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -301,13 +265,12 @@ mod tests {
         let result = run(
             skill_path.to_str().unwrap().to_string(),
             None,
-            Some("override-model".to_string()), // model_override
-            Some("openai-compatible".to_string()), // provider_override
-            Some("http://localhost:9999".to_string()), // base_url_override
-            Some("podman".to_string()),         // runtime_override
-            Some(120),                          // timeout_override
-            true,                               // no_container: no container runtime in test env
-            true,                               // dry_run
+            Some("override-model".to_string()),
+            Some("openai-compatible".to_string()),
+            Some("http://localhost:9999".to_string()),
+            Some("podman".to_string()),
+            Some(120),
+            true, // dry_run
         )
         .await;
         assert!(
@@ -317,7 +280,7 @@ mod tests {
         );
     }
 
-    // --- Coverage: frontmatter with unclosed --- (line 119) ---
+    // --- Coverage: frontmatter with unclosed --- ---
     #[test]
     fn test_extract_frontmatter_meta_unclosed() {
         let md = "---\nname: arrow\nversion: 1.4.0\necosystem: python\n";
@@ -338,7 +301,6 @@ mod tests {
     // --- Coverage: language fallback not taken when ecosystem already set ---
     #[test]
     fn test_extract_frontmatter_meta_language_not_taken_when_ecosystem_set() {
-        // ecosystem is set first; language: should be ignored
         let md = "---\nname: test\necosystem: rust\nlanguage: python\n---\n# Content";
         let (name, lang) = extract_frontmatter_meta(md);
         assert_eq!(name.unwrap(), "test");
@@ -348,7 +310,6 @@ mod tests {
     // --- Coverage: metadata-nested frontmatter (normalizer canonical format) ---
     #[test]
     fn test_extract_frontmatter_meta_nested_metadata() {
-        // This is the exact format create_frontmatter() in normalizer.rs produces
         let md = "---\nname: arrow\ndescription: python library\nlicense: MIT\nmetadata:\n  version: \"1.4.0\"\n  ecosystem: python\n  generated-by: skilldo/claude-sonnet-4-6\n---\n\n# Content";
         let (name, lang) = extract_frontmatter_meta(md);
         assert_eq!(name.unwrap(), "arrow");
@@ -373,7 +334,6 @@ mod tests {
         assert_eq!(lang.unwrap(), "python");
     }
 
-    // --- Coverage: empty language value with non-empty name ---
     #[test]
     fn test_extract_frontmatter_meta_empty_language_only() {
         let md = "---\nname: testpkg\nlanguage: \n---\n# Content";
@@ -382,7 +342,6 @@ mod tests {
         assert!(lang.is_none());
     }
 
-    // --- Coverage: language field used when ecosystem is empty ---
     #[test]
     fn test_extract_frontmatter_meta_empty_ecosystem_uses_language() {
         let md = "---\nname: testpkg\necosystem: \nlanguage: python\n---\n# Content";
@@ -391,7 +350,6 @@ mod tests {
         assert_eq!(lang.unwrap(), "python");
     }
 
-    // --- Coverage: frontmatter with only name: empty ---
     #[test]
     fn test_extract_frontmatter_meta_empty_name() {
         let md = "---\nname: \necosystem: python\n---\n# Content";
@@ -400,7 +358,6 @@ mod tests {
         assert_eq!(lang.unwrap(), "python");
     }
 
-    // --- Coverage: CLI overrides (model only, provider only) ---
     #[tokio::test]
     async fn test_run_dry_run_with_model_only() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -419,7 +376,6 @@ mod tests {
             None,
             None,
             None,
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
@@ -444,7 +400,6 @@ mod tests {
             None,
             None,
             None,
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
@@ -469,7 +424,6 @@ mod tests {
             None,
             Some("podman".to_string()),
             None,
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
@@ -494,7 +448,6 @@ mod tests {
             None,
             None,
             Some(120),
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
@@ -519,14 +472,12 @@ mod tests {
             Some("http://localhost:11434/v1".to_string()),
             None,
             None,
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
         assert!(result.is_ok());
     }
 
-    // --- Coverage: review_llm config takes precedence over main llm ---
     #[tokio::test]
     async fn test_run_dry_run_with_review_llm_config() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -565,7 +516,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
@@ -576,7 +526,6 @@ base_url = "http://localhost:11434/v1"
         );
     }
 
-    // --- Coverage: no name in frontmatter -> defaults to "unknown" package ---
     #[tokio::test]
     async fn test_run_dry_run_missing_name_in_frontmatter() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -595,14 +544,12 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
         assert!(result.is_ok());
     }
 
-    // --- Coverage: no frontmatter errors with missing ecosystem ---
     #[tokio::test]
     async fn test_run_dry_run_no_frontmatter_errors() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -617,7 +564,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
@@ -628,7 +574,6 @@ base_url = "http://localhost:11434/v1"
             .contains("Cannot determine ecosystem"));
     }
 
-    // --- Coverage: language field only (no ecosystem) triggers fallback ---
     #[tokio::test]
     async fn test_run_dry_run_language_field_fallback() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -647,19 +592,16 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            true, // no_container: no container runtime in test env
             true,
         )
         .await;
         assert!(result.is_ok());
     }
 
-    // --- Coverage: dry run with metadata-nested frontmatter (normalizer canonical format) ---
     #[tokio::test]
     async fn test_run_dry_run_metadata_nested_frontmatter() {
         let dir = tempfile::TempDir::new().unwrap();
         let skill_path = dir.path().join("SKILL.md");
-        // Exact format produced by normalizer.rs create_frontmatter()
         std::fs::write(
             &skill_path,
             "---\nname: arrow\ndescription: python library\nlicense: MIT\nmetadata:\n  version: \"1.4.0\"\n  ecosystem: python\n  generated-by: skilldo/claude-sonnet-4-6\n---\n\n# Content\n",
@@ -674,8 +616,7 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            true, // no_container
-            true, // dry_run
+            true,
         )
         .await;
         assert!(
@@ -692,8 +633,6 @@ base_url = "http://localhost:11434/v1"
         let result = ReviewResult {
             passed: true,
             malformed: false,
-            introspection_output: None,
-            degraded: false,
             issues: vec![ReviewIssue {
                 severity: Severity::Warning,
                 category: "consistency".to_string(),
