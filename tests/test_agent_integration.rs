@@ -636,10 +636,7 @@ async fn test_execution_result_error_message_for_timeout() {
     use skilldo::test_agent::executor::ExecutionResult;
 
     let result = ExecutionResult::Timeout;
-    assert_eq!(
-        result.error_message(),
-        "Test execution timed out (60 seconds)"
-    );
+    assert_eq!(result.error_message(), "Test execution timed out");
     assert!(!result.is_fail());
 }
 

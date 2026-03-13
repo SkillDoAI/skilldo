@@ -1267,6 +1267,7 @@ pub fn language_hints(language: &Language, stage: &str) -> &'static str {
     match language {
         Language::Python => python_hints(stage),
         Language::Go => go_hints(stage),
+        Language::Rust => rust_hints(stage),
         _ => "",
     }
 }
@@ -1372,6 +1373,59 @@ fn go_hints(stage: &str) -> &'static str {
 \n\nGO-SPECIFIC TEST HINTS:\n\
 - Runs via `go run main.go` — write `package main` with `func main()`\n\
 - Use `log.Fatal`/`log.Fatalf` for assertion failures (no testing.T available)"
+        }
+        _ => "",
+    }
+}
+
+fn rust_hints(stage: &str) -> &'static str {
+    match stage {
+        "extract" => {
+            "\
+\n\nRUST-SPECIFIC HINTS:\n\
+- `pub` items define the public API — prioritize these over `pub(crate)` or private items\n\
+- `Cargo.toml` defines version, features, and dependencies\n\
+- `lib.rs` re-exports are the primary API surface\n\
+- Trait definitions and their implementations are the core abstraction layer"
+        }
+        "map" => {
+            "\
+\n\nRUST-SPECIFIC HINTS:\n\
+- `tests/` directory and `*_test.rs` files contain integration test patterns\n\
+- `#[derive(...)]` macros and `impl` blocks show common trait usage\n\
+- `impl Trait for Type` blocks define core API contracts\n\
+- Error types implementing `std::error::Error` show the error handling strategy"
+        }
+        "learn" => {
+            "\
+\n\nRUST-SPECIFIC HINTS:\n\
+- `//!` and `///` doc comments are the documentation system (rendered by rustdoc)\n\
+- `# Examples` sections in doc comments are runnable doctests\n\
+- Feature flags (`#[cfg(feature = \"...\")]`) indicate optional functionality\n\
+- `unsafe` blocks indicate low-level or FFI code — note safety invariants"
+        }
+        "create" => {
+            "\
+\n\nRUST-SPECIFIC HINTS:\n\
+- Use Rust import conventions: `use crate_name::module::Type;`\n\
+- Always show error handling with `Result<T, E>` and the `?` operator\n\
+- Use `fn main() -> Result<(), Box<dyn std::error::Error>>` in runnable examples\n\
+- Follow Rust conventions: snake_case functions, CamelCase types, SCREAMING_SNAKE_CASE constants"
+        }
+        "review_verdict" => {
+            "\
+\n\nRUST-SPECIFIC GUIDANCE:\n\
+- Elided lifetimes are idiomatic — don't flag missing lifetime annotations\n\
+- `impl Trait` vs explicit generic bounds are stylistic, not errors\n\
+- `unwrap()` in examples is acceptable for clarity; production code would use `?`\n\
+- `clone()` to avoid borrow issues in examples is fine"
+        }
+        "test" => {
+            "\
+\n\nRUST-SPECIFIC TEST HINTS:\n\
+- Runs via `cargo run` — write a `fn main()` program\n\
+- Use `eprintln!` and `std::process::exit(1)` for assertion failures\n\
+- External crates from the Imports section are pre-installed; just `use` them directly"
         }
         _ => "",
     }
@@ -1590,6 +1644,75 @@ mod tests {
     fn test_go_hints_unknown_stage_returns_empty() {
         let hints = go_hints("nonexistent_stage");
         assert!(hints.is_empty(), "Unknown stage should return empty hints");
+    }
+
+    #[test]
+    fn test_rust_hints_all_stages_non_empty() {
+        for stage in &[
+            "extract",
+            "map",
+            "learn",
+            "create",
+            "review_verdict",
+            "test",
+        ] {
+            let hints = rust_hints(stage);
+            assert!(
+                !hints.is_empty(),
+                "Rust hints for stage '{stage}' should be non-empty"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rust_hints_unknown_stage_returns_empty() {
+        let hints = rust_hints("nonexistent_stage");
+        assert!(hints.is_empty(), "Unknown stage should return empty hints");
+    }
+
+    #[test]
+    fn test_rust_extract_hints_mention_pub() {
+        let hints = rust_hints("extract");
+        assert!(
+            hints.contains("pub"),
+            "extract hints should mention pub items"
+        );
+    }
+
+    #[test]
+    fn test_rust_create_hints_mention_result() {
+        let hints = rust_hints("create");
+        assert!(
+            hints.contains("Result"),
+            "create hints should mention Result type"
+        );
+    }
+
+    #[test]
+    fn test_rust_test_hints_mention_cargo_run() {
+        let hints = rust_hints("test");
+        assert!(
+            hints.contains("cargo run"),
+            "test hints should mention cargo run"
+        );
+    }
+
+    #[test]
+    fn test_language_hints_dispatches_rust() {
+        let hints = language_hints(&Language::Rust, "extract");
+        assert!(
+            !hints.is_empty(),
+            "Rust hints should be non-empty via language_hints"
+        );
+    }
+
+    #[test]
+    fn test_language_hints_javascript_returns_empty() {
+        let hints = language_hints(&Language::JavaScript, "extract");
+        assert!(
+            hints.is_empty(),
+            "JavaScript should return empty hints (no JS-specific hints yet)"
+        );
     }
 
     #[test]

@@ -226,6 +226,10 @@ jobs:
             repo: lodash/lodash
             tag: "4.17.21"
             flag: "--language javascript"
+          - lang: rust
+            repo: matklad/once_cell
+            tag: v1.21.3
+            flag: "--language rust"
     env:
       CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
     steps:

@@ -104,7 +104,7 @@ impl ExecutionResult {
         match self {
             ExecutionResult::Pass(msg) => msg.clone(),
             ExecutionResult::Fail(msg) => msg.clone(),
-            ExecutionResult::Timeout => "Test execution timed out (60 seconds)".to_string(),
+            ExecutionResult::Timeout => "Test execution timed out".to_string(),
         }
     }
 }
@@ -374,6 +374,139 @@ impl LanguageExecutor for GoExecutor {
     }
 }
 
+/// Cargo executor — runs `cargo run` in a temp directory with Cargo.toml deps
+pub struct CargoExecutor {
+    timeout_secs: u64,
+}
+
+const CARGO_HOME_DIR: &str = "cargo-home";
+
+impl CargoExecutor {
+    pub fn new() -> Self {
+        Self { timeout_secs: 120 }
+    }
+
+    pub fn with_timeout(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self
+    }
+}
+
+impl Default for CargoExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageExecutor for CargoExecutor {
+    async fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
+        info!(
+            "Setting up Rust/Cargo environment with {} dependencies",
+            deps.len()
+        );
+
+        if !is_tool_available("cargo", "--version").await {
+            bail!("cargo is not installed or not in PATH");
+        }
+
+        let temp_dir = TempDir::new().context("Failed to create temp directory")?;
+        debug!("Created temp directory: {}", temp_dir.path().display());
+
+        // Isolate CARGO_HOME inside temp dir
+        let cargo_home = temp_dir.path().join(CARGO_HOME_DIR);
+        fs::create_dir_all(&cargo_home).context("Failed to create CARGO_HOME dir")?;
+
+        // Validate dependency names
+        for dep in deps {
+            sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+        }
+
+        // Build Cargo.toml with dependencies
+        let deps_section = if deps.is_empty() {
+            String::new()
+        } else {
+            let lines: Vec<String> = deps
+                .iter()
+                .map(|d| {
+                    // Deps arrive as bare crate names (sanitize_dep_name rejects
+                    // anything with `=` or spaces). Wildcard `"*"` matches npm's
+                    // approach; version pinning is a follow-up enhancement.
+                    format!("{d} = \"*\"")
+                })
+                .collect();
+            format!("\n[dependencies]\n{}\n", lines.join("\n"))
+        };
+
+        let cargo_toml = format!(
+            r#"[package]
+name = "skilldo-test"
+version = "0.1.0"
+edition = "2021"
+{deps_section}"#
+        );
+
+        fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml)
+            .context("Failed to write Cargo.toml")?;
+
+        // Create src directory with placeholder main.rs
+        let src_dir = temp_dir.path().join("src");
+        fs::create_dir_all(&src_dir).context("Failed to create src dir")?;
+        fs::write(src_dir.join("main.rs"), "fn main() {}\n")
+            .context("Failed to write placeholder main.rs")?;
+
+        // cargo fetch to download dependencies (optional, cargo run will also do it)
+        if !deps.is_empty() {
+            info!("Fetching Rust dependencies...");
+            let mut fetch_cmd = Command::new("cargo");
+            fetch_cmd
+                .arg("fetch")
+                .env("CARGO_HOME", &cargo_home)
+                .current_dir(temp_dir.path());
+            let fetch_output =
+                run_cmd_with_timeout(fetch_cmd, Duration::from_secs(self.timeout_secs)).await?;
+            if !fetch_output.status.success() {
+                let stderr = String::from_utf8_lossy(&fetch_output.stderr);
+                bail!("cargo fetch failed: {}", stderr);
+            }
+        }
+
+        info!("Rust/Cargo environment setup complete");
+
+        Ok(ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: deps.to_vec(),
+        })
+    }
+
+    async fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
+        debug!("Running Rust code ({} bytes)", code.len());
+
+        let src_dir = env.temp_dir.path().join("src");
+        let script_path = src_dir.join("main.rs");
+        fs::write(&script_path, code).context("Failed to write main.rs")?;
+
+        let cargo_home = env.temp_dir.path().join(CARGO_HOME_DIR);
+        let timeout = Duration::from_secs(self.timeout_secs);
+        // --offline: deps already fetched in setup_environment(); skip registry checks.
+        // Safe for zero-dep projects too (no registry access needed).
+        let mut cargo_cmd = Command::new("cargo");
+        cargo_cmd
+            .args(["run", "--quiet", "--offline"])
+            .env("CARGO_HOME", &cargo_home)
+            .current_dir(env.temp_dir.path());
+
+        let result = run_cmd_with_timeout(cargo_cmd, timeout).await;
+        classify_result(result, self.timeout_secs, "Rust", stderr_only)
+    }
+
+    async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Node.js executor — runs `node test.js` in a temp directory with `npm install`
 pub struct NodeExecutor {
     timeout_secs: u64,
@@ -595,20 +728,22 @@ mod tests {
         );
         assert_eq!(
             ExecutionResult::Timeout.error_message(),
-            "Test execution timed out (60 seconds)"
+            "Test execution timed out"
         );
     }
 
     #[test]
     fn test_executor_defaults_and_timeouts() {
-        // All executors default to 60s and support with_timeout
+        // Python/Go/Node default to 60s, Cargo defaults to 120s (compilation takes longer)
         assert_eq!(PythonUvExecutor::default().timeout_secs, 60);
         assert_eq!(GoExecutor::default().timeout_secs, 60);
         assert_eq!(NodeExecutor::default().timeout_secs, 60);
+        assert_eq!(CargoExecutor::default().timeout_secs, 120);
 
         assert_eq!(PythonUvExecutor::new().with_timeout(30).timeout_secs, 30);
         assert_eq!(GoExecutor::new().with_timeout(120).timeout_secs, 120);
         assert_eq!(NodeExecutor::new().with_timeout(0).timeout_secs, 0);
+        assert_eq!(CargoExecutor::new().with_timeout(90).timeout_secs, 90);
     }
 
     #[tokio::test]
@@ -670,6 +805,7 @@ raise ValueError("Test error")
         assert!(PythonUvExecutor::new().cleanup(&make_env()).await.is_ok());
         assert!(GoExecutor::new().cleanup(&make_env()).await.is_ok());
         assert!(NodeExecutor::new().cleanup(&make_env()).await.is_ok());
+        assert!(CargoExecutor::new().cleanup(&make_env()).await.is_ok());
     }
 
     #[tokio::test]
@@ -755,10 +891,7 @@ print(f"Click version: {click.__version__}")
         let cloned = original.clone();
         assert!(!cloned.is_pass());
         assert!(!cloned.is_fail());
-        assert_eq!(
-            cloned.error_message(),
-            "Test execution timed out (60 seconds)"
-        );
+        assert_eq!(cloned.error_message(), "Test execution timed out");
     }
 
     // --- Debug derive coverage ---
@@ -1044,6 +1177,140 @@ func main() {
         assert!(
             npm_cache.exists(),
             "npm cache should be created inside temp dir"
+        );
+    }
+
+    // --- CargoExecutor tests ---
+
+    #[tokio::test]
+    async fn test_cargo_setup_environment_no_deps() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        assert!(env.temp_dir.path().exists());
+        assert!(env.temp_dir.path().join("Cargo.toml").exists());
+        assert!(env.temp_dir.path().join("src").join("main.rs").exists());
+    }
+
+    #[tokio::test]
+    async fn test_cargo_run_simple_code() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"fn main() {
+    println!("Hello from Rust test");
+}
+"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_pass());
+        if let ExecutionResult::Pass(output) = result {
+            assert!(output.contains("Hello from Rust test"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cargo_run_failing_code() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"fn main() {
+    eprintln!("Test failure");
+    std::process::exit(1);
+}
+"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
+    }
+
+    #[tokio::test]
+    async fn test_cargo_setup_environment_rejects_bad_deps() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let result = executor
+            .setup_environment(&["valid-pkg; rm -rf /".to_string()])
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cargo_setup_uses_local_cargo_home() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let cargo_home = env.temp_dir.path().join(CARGO_HOME_DIR);
+        assert!(
+            cargo_home.exists(),
+            "CARGO_HOME should be created inside temp dir"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cargo_setup_with_deps_generates_cargo_toml() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let deps = vec!["serde".to_string(), "once_cell".to_string()];
+        let env = executor.setup_environment(&deps).await.unwrap();
+        let cargo_toml = std::fs::read_to_string(env.temp_dir.path().join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("[dependencies]"),
+            "should have deps section"
+        );
+        assert!(
+            cargo_toml.contains("serde = \"*\""),
+            "bare dep should get wildcard version"
+        );
+        assert!(
+            cargo_toml.contains("once_cell = \"*\""),
+            "bare dep should get wildcard version"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cargo_setup_no_deps_generates_minimal_toml() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let cargo_toml = std::fs::read_to_string(env.temp_dir.path().join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("[package]"),
+            "should have package section"
+        );
+        assert!(
+            !cargo_toml.contains("[dependencies]"),
+            "no deps means no deps section"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cargo_setup_rejects_quoted_cargo_toml_snippet() {
+        if !is_tool_available("cargo", "--version").await {
+            return;
+        }
+        let executor = CargoExecutor::new();
+        // This is a Cargo.toml snippet with spaces/quotes, not a bare crate name
+        let deps = vec!["once_cell = \"1\"".to_string()];
+        let result = executor.setup_environment(&deps).await;
+        assert!(
+            result.is_err(),
+            "quoted Cargo.toml snippets should be rejected by sanitize_dep_name"
         );
     }
 }

@@ -6,13 +6,15 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
-use super::executor::{ExecutionResult, GoExecutor, NodeExecutor, PythonUvExecutor};
+use super::executor::{CargoExecutor, ExecutionResult, GoExecutor, NodeExecutor, PythonUvExecutor};
 use super::go_code_gen::GoCodeGenerator;
 use super::go_parser::GoParser;
 use super::js_code_gen::JsCodeGenerator;
 use super::js_parser::JsParser;
 use super::python_code_gen::PythonCodeGenerator;
 use super::python_parser::PythonParser;
+use super::rust_code_gen::RustCodeGenerator;
+use super::rust_parser::RustParser;
 use super::{CodePattern, LanguageCodeGenerator, LanguageExecutor, LanguageParser};
 use crate::config::{ContainerConfig, ExecutionMode, InstallSource};
 use crate::detector::Language;
@@ -202,7 +204,40 @@ impl<'a> TestCodeValidator<'a> {
                     install_source,
                 })
             }
-            _ => anyhow::bail!("Test agent not yet supported for {}", language.as_str()),
+            Language::Rust => {
+                let (executor, execution_mode): (Box<dyn LanguageExecutor>, ExecutionMode) =
+                    match execution_mode {
+                        ExecutionMode::BareMetal => (
+                            Box::new(CargoExecutor::new().with_timeout(config.timeout)),
+                            ExecutionMode::BareMetal,
+                        ),
+                        ExecutionMode::Container => {
+                            // Container mode for Rust uses bare `rustc` which can't resolve
+                            // external dependencies. Fall back to BareMetal (CargoExecutor).
+                            tracing::warn!(
+                                "Container mode is not yet supported for Rust \
+                                 (external deps require cargo). Falling back to bare metal. \
+                                 Set `execution_mode = \"bare-metal\"` in your config to suppress this warning."
+                            );
+                            (
+                                Box::new(CargoExecutor::new().with_timeout(config.timeout)),
+                                ExecutionMode::BareMetal,
+                            )
+                        }
+                    };
+                Ok(Self {
+                    language: Language::Rust,
+                    parser: Box::new(RustParser),
+                    code_generator: Box::new(
+                        RustCodeGenerator::new(llm_client)
+                            .with_custom_instructions(custom_instructions),
+                    ),
+                    executor,
+                    execution_mode,
+                    mode: ValidationMode::default(),
+                    install_source,
+                })
+            }
         }
     }
 
@@ -1422,15 +1457,27 @@ mod tests {
     }
 
     #[test]
-    fn test_new_unsupported_language_errors() {
+    fn test_new_rust_creates_validator() {
         use crate::llm::client::MockLlmClient;
 
         let client = MockLlmClient;
         let config = ContainerConfig::default();
         let result = TestCodeValidator::new(&Language::Rust, &client, config, None);
-        assert!(result.is_err());
-        let msg = format!("{}", result.err().unwrap());
-        assert!(msg.contains("not yet supported"));
+        assert!(result.is_ok(), "Rust validator should be constructable");
+    }
+
+    #[test]
+    fn test_new_rust_container_falls_back_to_bare_metal() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            ..ContainerConfig::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Rust, &client, config, None).unwrap();
+        // Container mode should fall back to BareMetal for Rust
+        assert_eq!(validator.execution_mode, ExecutionMode::BareMetal);
     }
 
     #[test]

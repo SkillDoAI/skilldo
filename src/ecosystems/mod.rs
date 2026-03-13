@@ -1,6 +1,7 @@
 pub mod go;
 pub mod javascript;
 pub mod python;
+pub mod rust;
 
 /// Common license file names found at the root of open-source repositories.
 pub(crate) const LICENSE_FILENAMES: &[&str] =
