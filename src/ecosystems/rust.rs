@@ -267,6 +267,15 @@ impl RustHandler {
         // Strategy 2: Cargo.toml `license-file` field
         if let Some(ref content) = cargo_content {
             if let Some(license_file) = cargo_toml_field(content, "license-file") {
+                // Guard against path traversal (absolute paths or ".." segments)
+                let lf = std::path::Path::new(&license_file);
+                if lf.is_absolute()
+                    || lf
+                        .components()
+                        .any(|c| c == std::path::Component::ParentDir)
+                {
+                    return None;
+                }
                 let path = self.repo_path.join(&license_file);
                 if let Ok(file_content) = fs::read_to_string(&path) {
                     if let Some(license) = classify_license(&file_content) {
@@ -2446,6 +2455,38 @@ mod tests {
         )
         .unwrap();
         // No LICENSE files either
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+
+        let handler = RustHandler::new(root);
+        assert!(handler.get_license().is_none());
+    }
+
+    #[test]
+    fn get_license_file_rejects_path_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nlicense-file = \"../../../etc/passwd\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "").unwrap();
+
+        let handler = RustHandler::new(root);
+        assert!(handler.get_license().is_none());
+    }
+
+    #[test]
+    fn get_license_file_rejects_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nlicense-file = \"/etc/passwd\"\n",
+        )
+        .unwrap();
         fs::create_dir(root.join("src")).unwrap();
         fs::write(root.join("src").join("lib.rs"), "").unwrap();
 

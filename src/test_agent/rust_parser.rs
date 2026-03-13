@@ -14,11 +14,17 @@ use crate::util::sanitize_dep_name;
 // Cached regexes for pattern/dependency extraction
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
 static CODE_BLOCK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:rust|rs)?\n([\s\S]*?)(?:```|~~~)").unwrap());
-static USE_IMPORT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^use\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:::|;)").unwrap());
-static EXTERN_CRATE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:rust|rs)?\r?\n([\s\S]*?)(?:```|~~~)").unwrap());
+static USE_IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?m)^use\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+as\s+[a-zA-Z_][a-zA-Z0-9_]*)?(?:::|;)")
+        .unwrap()
+});
+static EXTERN_CRATE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?m)^extern\s+crate\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+as\s+[a-zA-Z_][a-zA-Z0-9_]*)?\s*;",
+    )
+    .unwrap()
+});
 static CARGO_ADD_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"cargo\s+add\s+([a-zA-Z_][a-zA-Z0-9_\-]*)").unwrap());
 static CARGO_TOML_DEP_RE: Lazy<Regex> =
@@ -149,8 +155,9 @@ impl LanguageParser for RustParser {
         let mut in_deps_section = false;
 
         for line in imports_content.lines() {
-            // Check for [dependencies] header
-            if line.trim() == "[dependencies]" {
+            // Check for [dependencies] header (strip inline comments first)
+            let effective = line.trim().split('#').next().unwrap_or("").trim();
+            if effective == "[dependencies]" {
                 in_deps_section = true;
                 continue;
             }
@@ -696,6 +703,52 @@ serde = "1.0"
         assert!(
             !deps.iter().any(|d| d.starts_with('-')),
             "invalid syntax should be skipped by regex: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn code_block_matches_crlf_line_endings() {
+        let parser = RustParser;
+        let skill = "---\r\nname: test\r\n---\r\n\r\n## Core Patterns\r\n\r\n### \u{2705} Hello\r\n```rust\r\nfn main() {}\r\n```\r\n";
+        let patterns = parser.extract_patterns(skill).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert!(patterns[0].code.contains("fn main()"));
+    }
+
+    #[test]
+    fn aliased_use_import_extracts_crate_name() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```rust\nuse serde_json as json;\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"serde_json".to_string()),
+            "aliased import should extract the real crate name: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn aliased_extern_crate_extracts_crate_name() {
+        let parser = RustParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```rust\nextern crate rand as rng;\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"rand".to_string()),
+            "aliased extern crate should extract the real crate name: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn dependencies_header_with_inline_comment() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```toml\n[dependencies] # runtime deps\ntokio = { version = \"1\", features = [\"full\"] }\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"tokio".to_string()),
+            "should parse deps under [dependencies] with inline comment: {:?}",
             deps
         );
     }
