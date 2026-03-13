@@ -74,6 +74,14 @@ impl RustHandler {
         }
     }
 
+    /// Check if a Cargo.toml field value is a workspace-inherited placeholder
+    /// like `{ workspace = true }`. More precise than substring matching on
+    /// "workspace" which could false-positive on URLs containing the word.
+    fn is_workspace_placeholder(value: &str) -> bool {
+        let t = value.trim();
+        t.starts_with('{') && t.contains("workspace") && t.contains("true")
+    }
+
     // ── File discovery ──────────────────────────────────────────────────
 
     /// Find all Rust source files (excluding tests, target, benches, examples).
@@ -220,8 +228,7 @@ impl RustHandler {
         if let Ok(content) = fs::read_to_string(&cargo_toml) {
             if let Some(version) = cargo_toml_field(&content, "version") {
                 // Reject workspace-inherited versions like { workspace = true }
-                if !version.contains("workspace") && !version.contains('{') && version.contains('.')
-                {
+                if !Self::is_workspace_placeholder(&version) && version.contains('.') {
                     return Ok(version);
                 }
             }
@@ -241,7 +248,7 @@ impl RustHandler {
         let cargo_toml = self.repo_path.join("Cargo.toml");
         if let Ok(content) = fs::read_to_string(&cargo_toml) {
             if let Some(license) = cargo_toml_field(&content, "license") {
-                if !license.contains('{') && !license.contains("workspace") {
+                if !Self::is_workspace_placeholder(&license) {
                     return Some(license);
                 }
             }
@@ -275,8 +282,7 @@ impl RustHandler {
 
         // Helper: skip workspace-inherited placeholders like `{ workspace = true }`
         let explicit_url = |field: &str| -> Option<String> {
-            cargo_toml_field(&content, field)
-                .filter(|v| !v.contains("workspace") && !v.contains('{'))
+            cargo_toml_field(&content, field).filter(|v| !Self::is_workspace_placeholder(v))
         };
 
         if let Some(repo) = explicit_url("repository") {
@@ -934,6 +940,26 @@ mod tests {
         .unwrap();
         let handler = RustHandler::new(dir.path());
         assert_eq!(handler.get_version().unwrap(), "latest");
+    }
+
+    #[test]
+    fn is_workspace_placeholder_detection() {
+        // True positives: workspace-inherited values
+        assert!(RustHandler::is_workspace_placeholder(
+            "{ workspace = true }"
+        ));
+        assert!(RustHandler::is_workspace_placeholder("{workspace = true}"));
+        assert!(RustHandler::is_workspace_placeholder(
+            "  { workspace = true }  "
+        ));
+
+        // True negatives: real values that happen to contain "workspace"
+        assert!(!RustHandler::is_workspace_placeholder(
+            "https://github.com/my-workspace/repo"
+        ));
+        assert!(!RustHandler::is_workspace_placeholder("MIT"));
+        assert!(!RustHandler::is_workspace_placeholder("1.2.3"));
+        assert!(!RustHandler::is_workspace_placeholder(""));
     }
 
     #[test]

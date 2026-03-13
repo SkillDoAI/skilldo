@@ -212,9 +212,9 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
                 if check_runtime_available(tool) {
                     results.pass(format!("Bare-metal mode: {} available ({})", tool, lang));
                     any_found = true;
-                } else {
+                } else if config.generation.enable_test {
                     results.warn(format!(
-                        "Bare-metal mode: '{}' not found ({} test agent will fail)",
+                        "Bare-metal mode: '{}' not found ({} test agent may fail)",
                         tool, lang
                     ));
                 }
