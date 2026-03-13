@@ -29,6 +29,10 @@ pub struct ReviewResult {
     /// Raw introspection output (JSON from container). Passed to create agent
     /// on review failure so it can see actual signatures, not just complaints.
     pub introspection_output: Option<String>,
+    /// True when container introspection was unavailable (non-Python, container
+    /// error). The verdict is based on textual analysis only. Propagated to
+    /// telemetry so CI consumers can distinguish grounded vs advisory reviews.
+    pub degraded: bool,
 }
 
 impl Default for ReviewResult {
@@ -38,6 +42,7 @@ impl Default for ReviewResult {
             issues: Vec::new(),
             malformed: false,
             introspection_output: None,
+            degraded: false,
         }
     }
 }
@@ -169,6 +174,7 @@ impl<'a> ReviewAgent<'a> {
         // Degraded introspection means the verdict is based on textual analysis
         // only. In strict mode this fails the review; in normal mode it adds a
         // warning so the pipeline can track it as an unresolved issue.
+        result.degraded = introspection_degraded;
         if introspection_degraded {
             let severity = if self.strict {
                 Severity::Error
@@ -398,6 +404,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         issues,
         malformed: false,
         introspection_output: None,
+        degraded: false,
     })
 }
 
@@ -633,6 +640,7 @@ mod tests {
             passed: false,
             malformed: false,
             introspection_output: None,
+            degraded: false,
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "accuracy".to_string(),
@@ -655,6 +663,7 @@ mod tests {
             passed: false,
             malformed: false,
             introspection_output: None,
+            degraded: false,
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "safety".to_string(),
@@ -931,6 +940,7 @@ mod tests {
             passed: false,
             malformed: false,
             introspection_output: None,
+            degraded: false,
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Error,
@@ -1120,6 +1130,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            degraded: false,
             introspection_output: Some(r#"{"example": "```python\nprint('hi')\n```"}"#.to_string()),
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
@@ -1178,6 +1189,22 @@ mod tests {
             matches!(result.issues[0].severity, Severity::Warning),
             "advisory mode should add warning, not error"
         );
+    }
+
+    #[test]
+    fn test_review_result_degraded_flag_defaults_false() {
+        let result = ReviewResult::default();
+        assert!(
+            !result.degraded,
+            "default ReviewResult should not be degraded"
+        );
+    }
+
+    #[test]
+    fn test_parse_review_response_sets_degraded_false() {
+        let json = r#"{"passed": true, "issues": []}"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(!result.degraded, "parsed result should start non-degraded");
     }
 
     #[test]

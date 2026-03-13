@@ -693,6 +693,7 @@ base_url = "http://localhost:11434/v1"
             passed: true,
             malformed: false,
             introspection_output: None,
+            degraded: false,
             issues: vec![ReviewIssue {
                 severity: Severity::Warning,
                 category: "consistency".to_string(),

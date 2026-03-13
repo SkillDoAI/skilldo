@@ -53,6 +53,8 @@ pub struct GenerateOutput {
     pub failed_stage: Option<FailedStage>,
     /// Error summary for the failure (e.g., "3/5 tests failed after 3 retries").
     pub failure_reason: Option<String>,
+    /// True when review ran without container introspection (advisory only).
+    pub review_degraded: bool,
 }
 
 /// Strip markdown code fences from output (``` or ~~~ variants)
@@ -653,6 +655,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
 
         // Review: accuracy + safety validation
         let mut unresolved_warnings: Vec<ReviewIssue> = Vec::new();
+        let mut review_degraded = false;
         if self.enable_review {
             let review_agent = ReviewAgent::new(
                 self.get_client("review"),
@@ -685,6 +688,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     failure_reason = Some("malformed verdict after all retries".to_string());
                     break;
                 }
+
+                review_degraded = review_degraded || result.degraded;
 
                 if result.passed {
                     // Collect all non-error issues on pass (introspection warnings,
@@ -844,6 +849,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             review_retries_used,
             failed_stage,
             failure_reason,
+            review_degraded,
         })
     }
 }
@@ -1315,6 +1321,7 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
+            review_degraded: false,
         };
         assert_eq!(output.skill_md, "# Test SKILL.md");
         assert!(output.unresolved_warnings.is_empty());
@@ -1338,6 +1345,7 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
+            review_degraded: false,
         };
         assert_eq!(output.unresolved_warnings.len(), 1);
         assert_eq!(
@@ -1362,6 +1370,7 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
+            review_degraded: false,
         };
         // GenerateOutput derives Debug, ensure it doesn't panic
         let debug_str = format!("{:?}", output);
@@ -2274,6 +2283,7 @@ testpkg.run()
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
+            review_degraded: false,
         };
         let debug_str = format!("{:?}", output);
         assert!(debug_str.contains("GenerateOutput"));

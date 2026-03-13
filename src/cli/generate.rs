@@ -198,6 +198,19 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         config.generation.container.source_path = Some(abs_path.to_string_lossy().to_string());
     }
 
+    // Local-install/local-mount is only implemented for Python. Other languages
+    // silently do nothing useful, so fail early with a clear message.
+    if config.generation.container.install_source != InstallSource::Registry
+        && !matches!(detected_language, Language::Python)
+    {
+        anyhow::bail!(
+            "install_source '{}' is only supported for Python. \
+             For {}, use the default registry install.",
+            config.generation.container.install_source,
+            detected_language.as_str()
+        );
+    }
+
     // Test agent model/provider CLI overrides (skip if test agent is disabled)
     if config.generation.enable_test
         && (test_model_override.is_some() || test_provider_override.is_some())
@@ -529,6 +542,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             duration_secs: duration.as_secs_f64(),
             timestamp: crate::telemetry::iso8601_now(),
             skilldo_version: env!("CARGO_PKG_VERSION").to_string(),
+            review_degraded: output_result.review_degraded,
         };
         if let Err(e) = crate::telemetry::append_run(&record, None) {
             tracing::warn!("Failed to write telemetry: {}", e);
@@ -540,6 +554,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     let lint_issues = issues.len();
     let status = if output_result.has_unresolved_errors {
         "errors"
+    } else if output_result.review_degraded {
+        "degraded"
     } else {
         "ok"
     };

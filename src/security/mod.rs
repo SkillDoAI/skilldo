@@ -749,4 +749,42 @@ print(response.json())
         assert_eq!(report.count_by_severity(Severity::High), 0);
         assert_eq!(report.count_by_severity(Severity::Critical), 0);
     }
+
+    #[test]
+    fn to_char_boundary_four_byte_emoji() {
+        // Cover the backtracking loop with a 4-byte emoji character
+        let s = "hello\u{1F389}world"; // 🎉 is 4 bytes at position 5
+                                       // Mid-emoji offsets (6, 7, 8) should all clamp back to 5
+        assert_eq!(to_char_boundary(s, 6), 5);
+        assert_eq!(to_char_boundary(s, 7), 5);
+        assert_eq!(to_char_boundary(s, 8), 5);
+        // Start of emoji is a valid boundary
+        assert_eq!(to_char_boundary(s, 5), 5);
+        // After emoji (byte 9) is valid
+        assert_eq!(to_char_boundary(s, 9), 9);
+    }
+
+    #[test]
+    fn line_number_at_end_of_content() {
+        let content = "line1\nline2\nline3";
+        // Byte offset past end should still return last line
+        assert_eq!(line_number(content, content.len()), 3);
+        assert_eq!(line_number(content, content.len() + 10), 3);
+    }
+
+    #[test]
+    fn scan_report_not_passed_on_high_severity() {
+        let report = ScanReport {
+            findings: vec![Finding {
+                rule_id: "T-001".into(),
+                severity: Severity::High,
+                category: Category::CodeExecution,
+                message: "High severity finding".into(),
+                line: 1,
+                snippet: String::new(),
+            }],
+            score: 85,
+        };
+        assert!(!report.passed(), "High severity finding should fail");
+    }
 }

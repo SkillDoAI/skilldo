@@ -503,4 +503,41 @@ mod tests {
             "Should reject whitespace-only cli_command: {err}"
         );
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_client_api_key_env_none_string() {
+        // Cover line 86: api_key_env = "none" treated as empty key
+        let config = make_llm_config(Provider::OpenAICompatible, Some("none"), None);
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_ok(), "api_key_env='none' should be accepted");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_client_api_key_env_empty_string() {
+        // Cover line 86: empty api_key_env treated as no-key-needed
+        let config = make_llm_config(Provider::OpenAICompatible, Some(""), None);
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_ok(), "empty api_key_env should be accepted");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_chatgpt_client_with_extra_body_warns() {
+        // Cover lines 131-132: extra_body set for ChatGPT triggers a warning
+        env::set_var("SKILLDO_TEST_FACTORY_CHATGPT_EB", "test_key");
+        let mut config = make_llm_config(
+            Provider::ChatGPT,
+            Some("SKILLDO_TEST_FACTORY_CHATGPT_EB"),
+            None,
+        );
+        config.extra_body.insert(
+            "custom_field".to_string(),
+            serde_json::Value::String("value".to_string()),
+        );
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(result.is_ok());
+        env::remove_var("SKILLDO_TEST_FACTORY_CHATGPT_EB");
+    }
 }

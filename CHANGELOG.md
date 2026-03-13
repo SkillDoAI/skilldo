@@ -3,6 +3,37 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.4.1
+
+- Added hard-error guard for `install_source = "local-install"` / `"local-mount"` on non-Python languages — previously silently did nothing useful, now fails early with a clear error message
+- Added `review_degraded` field to `ReviewResult`, `GenerateOutput`, and `RunRecord` — propagates degraded introspection status through to telemetry CSV and structured log output
+- Structured log status now three-valued: "errors" / "degraded" / "ok" (was binary "errors" / "ok") — CI consumers can distinguish grounded vs advisory reviews
+- Added tests for review degraded propagation, telemetry CSV formatting, auth token error handling, factory API key edge cases, security boundary helpers
+- Coverage: 1840 tests, 97.8%+ line coverage
+
+## 0.4.0
+
+- Added full Rust/Cargo ecosystem support across all 6 pipeline stages (extract → map → learn → create → review → test)
+- Added `RustHandler`: source file discovery with `lib.rs` > `mod.rs` > `main.rs` priority, `Cargo.toml` metadata extraction, workspace-inherited field rejection
+- Added `RustParser`: dependency extraction from `use crate::`, `extern crate`, `cargo add`, and `[dependencies]` TOML sections with stdlib filtering
+- Added `RustCodeGenerator`: standalone `fn main()` programs using shared `find_fenced_blocks()` utility
+- Added `CargoExecutor`: bare-metal executor with isolated `CARGO_HOME` in temp dir
+- Added `rust_hints()`: stage-specific prompt guidance for all 6 pipeline stages
+- Added Rust e2e matrix entry in CI (matklad/once_cell v1.21.3)
+- Added path traversal guard on `license-file` in Rust Cargo.toml parsing
+- Fixed Rust parser: CRLF-safe code block regex, aliased import extraction, inline TOML comment handling
+- Fixed Go e2e: switched from `go-chi/chi` to `gorilla/mux` for stable CI
+- 117 new tests, 1825 lib tests passing, 97%+ coverage
+
+## 0.3.2
+
+- Fixed degraded review introspection: now surfaces as `unresolved_warnings` even when review passes — no longer silently swallowed as a clean pass
+- Fixed post-review test failure: marks run as unresolved instead of silently accepting broken rewrites
+- Fixed collector budget accounting: uses worst-case header length to prevent overflow
+- Added tilde fence (`~~~`) support in `strip_markdown_fences` and `extract_python_script`
+- Added pip install extras/version spec preservation (`requests[socks]>=2.32`, `"sqlalchemy[asyncio]"`)
+- Coverage: 1594 tests, 97.03% line coverage
+
 ## 0.3.1
 
 - Added `--telemetry` / `--no-telemetry` CLI flags — telemetry is now opt-in (disabled by default), `--no-telemetry` overrides `telemetry = true` in config

@@ -411,4 +411,31 @@ mod tests {
 
         delete_tokens(name).unwrap();
     }
+
+    #[test]
+    fn load_tokens_returns_error_on_invalid_json() {
+        let name = "test-oauth-invalid-json";
+        let path = token_path(name).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).ok();
+        std::fs::write(&path, "{not valid json}").unwrap();
+
+        let result = load_tokens(name);
+        assert!(result.is_err(), "Invalid JSON should produce an error");
+        let err = result.err().unwrap().to_string();
+        assert!(
+            err.contains("Failed to parse token file"),
+            "Error should mention parsing: {err}"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn delete_tokens_succeeds_when_no_file() {
+        let result = delete_tokens("test-oauth-nonexistent-provider");
+        assert!(
+            result.is_ok(),
+            "delete_tokens should succeed even if no file exists"
+        );
+    }
 }
