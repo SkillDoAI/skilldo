@@ -145,12 +145,38 @@ pub fn append_run(record: &RunRecord, path: Option<PathBuf>) -> std::io::Result<
         .append(true)
         .open(&csv_path)?;
 
-    let needs_header = file.metadata()?.len() == 0;
-    if needs_header {
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
         writeln!(file, "{}", RunRecord::csv_header())?;
     }
     writeln!(file, "{}", record.to_csv_row())?;
 
+    // Migrate stale header: if the first line doesn't match the current header,
+    // prepend the correct header. Old rows get extra trailing empty fields on
+    // parse, which is harmless for append-only telemetry.
+    if file_len > 0 {
+        drop(file);
+        migrate_header_if_stale(&csv_path)?;
+    }
+
+    Ok(())
+}
+
+/// If the CSV header doesn't match the current schema, replace the first line.
+fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
+    let content = fs::read_to_string(path)?;
+    let expected = RunRecord::csv_header();
+    if let Some(first_line) = content.lines().next() {
+        if first_line != expected {
+            let rest: String = content.lines().skip(1).collect::<Vec<_>>().join("\n");
+            let new_content = if rest.is_empty() {
+                format!("{expected}\n")
+            } else {
+                format!("{expected}\n{rest}\n")
+            };
+            fs::write(path, new_content)?;
+        }
+    }
     Ok(())
 }
 
@@ -344,5 +370,49 @@ mod tests {
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2); // header + 1 row
         assert!(lines[0].starts_with("language,"));
+    }
+
+    #[test]
+    fn test_append_run_migrates_stale_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+
+        // Write an old header (missing review_degraded column)
+        let old_header = "language,library,library_version,provider,model,test_provider,test_model,review_provider,review_model,max_retries,retries_used,review_retries_used,passed,failed_stage,failure_reason,duration_secs,timestamp,skilldo_version";
+        let old_row = "python,fastapi,0.115.0,anthropic,claude,,,,,3,0,0,true,,,1.0,2024-01-01T00:00:00Z,0.1.8";
+        fs::write(&csv_path, format!("{old_header}\n{old_row}\n")).unwrap();
+
+        // Append a new record — should migrate the header
+        let record = sample_record();
+        append_run(&record, Some(csv_path.clone())).unwrap();
+
+        let content = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3, "header + old row + new row");
+        assert!(
+            lines[0].ends_with(",review_degraded"),
+            "header should be migrated to include review_degraded"
+        );
+        // Old data row is preserved
+        assert!(lines[1].starts_with("python,fastapi,"));
+    }
+
+    #[test]
+    fn test_migrate_header_noop_when_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+
+        let record = sample_record();
+        append_run(&record, Some(csv_path.clone())).unwrap();
+
+        let before = fs::read_to_string(&csv_path).unwrap();
+
+        // Append again — header should not change
+        append_run(&record, Some(csv_path.clone())).unwrap();
+
+        let after = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = after.lines().collect();
+        assert_eq!(lines.len(), 3); // header + 2 rows
+        assert_eq!(lines[0], before.lines().next().unwrap());
     }
 }

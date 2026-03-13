@@ -1424,6 +1424,43 @@ setup(
         assert_eq!(name, "no-val-proj");
     }
 
+    // -- detect_package_name: setup.py name= without any quote char --
+
+    #[test]
+    fn test_detect_package_name_setup_py_no_quote_after_equals() {
+        // setup.py has name=some_value with no quote characters at all.
+        // This skips the quote-finding branch and falls back to dir name.
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("noquote-proj");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("setup.py"), "setup(\n    name=some_value,\n)\n").unwrap();
+
+        let name = Collector::detect_package_name(&base).unwrap();
+        // No quote found after '=', so setup.py strategy is skipped entirely
+        assert_eq!(name, "noquote-proj");
+    }
+
+    #[test]
+    fn test_detect_package_name_setup_py_name_without_equals() {
+        // setup.py has "name" on a line but no '=' after it (e.g. comment).
+        // This exercises the inner find("=") failing.
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("noeq-proj");
+        fs::create_dir_all(&base).unwrap();
+        // The line contains "name=" via the outer check, but we construct
+        // a line where the name is in a comment with no valid extraction
+        fs::write(
+            base.join("setup.py"),
+            "# name=something\nsetup(\n    version=\"1.0\",\n)\n",
+        )
+        .unwrap();
+
+        let name = Collector::detect_package_name(&base).unwrap();
+        // The comment line triggers the name= check, but name extraction
+        // doesn't find a proper quoted value, so falls back to dirname
+        assert_eq!(name, "noeq-proj");
+    }
+
     // -- read_files_smart: additional edge cases --
 
     #[test]

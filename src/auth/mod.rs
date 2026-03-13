@@ -419,6 +419,15 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).ok();
         std::fs::write(&path, "{not valid json}").unwrap();
 
+        // Cleanup guard — runs even if assertions panic
+        struct Cleanup<'a>(&'a str);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                delete_tokens(self.0).ok();
+            }
+        }
+        let _cleanup = Cleanup(name);
+
         let result = load_tokens(name);
         assert!(result.is_err(), "Invalid JSON should produce an error");
         let err = result.err().unwrap().to_string();
@@ -426,8 +435,6 @@ mod tests {
             err.contains("Failed to parse token file"),
             "Error should mention parsing: {err}"
         );
-
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]

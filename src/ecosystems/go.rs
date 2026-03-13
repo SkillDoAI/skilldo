@@ -1906,4 +1906,113 @@ mod tests {
             Some("github.com/acme/lib".to_string())
         );
     }
+
+    // ── strip_go_major_suffix edge cases ─────────────────────────────
+
+    #[test]
+    fn strip_major_suffix_no_slash() {
+        // Module path with no slash at all (single segment)
+        assert_eq!(strip_go_major_suffix("mymodule"), "mymodule");
+    }
+
+    #[test]
+    fn strip_major_suffix_v0_kept() {
+        // v0 is not a semantic-import suffix (< 2)
+        assert_eq!(
+            strip_go_major_suffix("github.com/org/repo/v0"),
+            "github.com/org/repo/v0"
+        );
+    }
+
+    // ── parse_module_path edge cases ─────────────────────────────────
+
+    #[test]
+    fn parse_module_path_empty_after_module() {
+        // "module" keyword with nothing after it (just whitespace)
+        assert_eq!(parse_module_path("module \n\ngo 1.21\n"), None);
+    }
+
+    // ── extract_version_constant edge cases ──────────────────────────
+
+    #[test]
+    fn extract_version_constant_rejects_zero_zero_zero() {
+        assert_eq!(
+            extract_version_constant("const Version = \"0.0.0\"\n"),
+            None,
+            "0.0.0 should be rejected as a dev placeholder"
+        );
+    }
+
+    // ── is_dev_placeholder edge cases ────────────────────────────────
+
+    #[test]
+    fn is_dev_placeholder_case_insensitive() {
+        assert!(is_dev_placeholder("DEV"));
+        assert!(is_dev_placeholder("Development"));
+        assert!(is_dev_placeholder("UNKNOWN"));
+        assert!(is_dev_placeholder("V0.0.0"));
+    }
+
+    // ── find_test_files with nested packages ─────────────────────────
+
+    #[test]
+    fn find_test_files_finds_nested_package_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir_all(root.join("internal").join("util")).unwrap();
+        fs::write(
+            root.join("internal").join("util").join("helper_test.go"),
+            "package util\n",
+        )
+        .unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_test_files().unwrap();
+        assert!(files
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "helper_test.go")));
+    }
+
+    // ── find_docs with rst files ─────────────────────────────────────
+
+    #[test]
+    fn find_docs_includes_rst_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir(root.join("docs")).unwrap();
+        fs::write(root.join("docs").join("guide.rst"), "Guide\n=====\n").unwrap();
+
+        let handler = GoHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert!(docs
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "guide.rst")));
+    }
+
+    // ── get_license unclassified with blank leading lines ────────────
+
+    #[test]
+    fn get_license_empty_file_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("LICENSE"), "").unwrap();
+        let handler = GoHandler::new(dir.path());
+        // Empty file has no non-empty lines → None
+        assert!(handler.get_license().is_none());
+    }
+
+    // ── parse_version_tag additional edge cases ──────────────────────
+
+    #[test]
+    fn parse_version_tag_no_dot_returns_none() {
+        // "42" starts with digit but has no dot
+        assert_eq!(parse_version_tag("42"), None);
+    }
+
+    #[test]
+    fn parse_version_tag_starts_with_non_digit() {
+        // "release.1.0" starts with 'r' (not a digit) after stripping v
+        assert_eq!(parse_version_tag("release.1.0"), None);
+    }
 }

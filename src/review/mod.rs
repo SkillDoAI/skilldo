@@ -29,8 +29,9 @@ pub struct ReviewResult {
     /// Raw introspection output (JSON from container). Passed to create agent
     /// on review failure so it can see actual signatures, not just complaints.
     pub introspection_output: Option<String>,
-    /// True when container introspection was unavailable (non-Python, container
-    /// error). The verdict is based on textual analysis only. Propagated to
+    /// True when Python container introspection was expected but unavailable
+    /// (e.g., container/runtime/script failure). False when introspection is
+    /// intentionally skipped or not applicable (non-Python). Propagated to
     /// telemetry so CI consumers can distinguish grounded vs advisory reviews.
     pub degraded: bool,
 }

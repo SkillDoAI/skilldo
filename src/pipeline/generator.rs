@@ -3066,4 +3066,102 @@ None known.
         // Review ultimately fails (FailingReviewClient always returns issues)
         assert!(output.has_unresolved_errors);
     }
+
+    // ========================================================================
+    // strip_markdown_fences: leading < 3 fence chars (returns content as-is)
+    // ========================================================================
+
+    #[test]
+    fn test_strip_markdown_fences_two_backticks_returns_as_is() {
+        // Two leading backticks is not a valid fence (need >= 3)
+        let input = "``not a fence\ncontent\n``";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_one_backtick_returns_as_is() {
+        let input = "`inline code`";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_two_tildes_returns_as_is() {
+        // Two tildes is not a valid fence
+        let input = "~~strikethrough~~";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, input);
+    }
+
+    // ========================================================================
+    // bail_on_security_lint: direct unit tests
+    // ========================================================================
+
+    #[test]
+    fn test_bail_on_security_lint_with_security_error() {
+        let issues = vec![crate::lint::LintIssue {
+            severity: Severity::Error,
+            category: "security".to_string(),
+            message: "Reverse shell detected".to_string(),
+            suggestion: None,
+        }];
+        let result = bail_on_security_lint(&issues);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("SECURITY"));
+        assert!(err.contains("Reverse shell detected"));
+    }
+
+    #[test]
+    fn test_bail_on_security_lint_with_multiple_security_errors() {
+        let issues = vec![
+            crate::lint::LintIssue {
+                severity: Severity::Error,
+                category: "Security".to_string(),
+                message: "Credential harvesting".to_string(),
+                suggestion: None,
+            },
+            crate::lint::LintIssue {
+                severity: Severity::Error,
+                category: "SECURITY".to_string(),
+                message: "Prompt injection".to_string(),
+                suggestion: None,
+            },
+        ];
+        let result = bail_on_security_lint(&issues);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Credential harvesting"));
+        assert!(err.contains("Prompt injection"));
+    }
+
+    #[test]
+    fn test_bail_on_security_lint_with_non_security_error_passes() {
+        // Non-security errors should not trigger bail
+        let issues = vec![crate::lint::LintIssue {
+            severity: Severity::Error,
+            category: "format".to_string(),
+            message: "Missing section".to_string(),
+            suggestion: None,
+        }];
+        assert!(bail_on_security_lint(&issues).is_ok());
+    }
+
+    #[test]
+    fn test_bail_on_security_lint_with_security_warning_passes() {
+        // Security warnings (not errors) should not trigger bail
+        let issues = vec![crate::lint::LintIssue {
+            severity: Severity::Warning,
+            category: "security".to_string(),
+            message: "Suspicious pattern".to_string(),
+            suggestion: None,
+        }];
+        assert!(bail_on_security_lint(&issues).is_ok());
+    }
+
+    #[test]
+    fn test_bail_on_security_lint_empty_issues_passes() {
+        assert!(bail_on_security_lint(&[]).is_ok());
+    }
 }
