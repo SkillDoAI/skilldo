@@ -233,6 +233,9 @@ enum Commands {
         #[arg(long)]
         config: String,
     },
+
+    /// Print the embedded SKILL.md for the skilldo CLI
+    Skill,
 }
 
 #[derive(Subcommand)]
@@ -419,6 +422,9 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             println!("{response}");
+        }
+        Commands::Skill => {
+            print!("{}", include_str!("../docs/SKILL.md"));
         }
     }
 
