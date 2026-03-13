@@ -162,6 +162,14 @@ pub fn append_run(record: &RunRecord, path: Option<PathBuf>) -> std::io::Result<
     Ok(())
 }
 
+/// Write `data` to `path` atomically: write to a sibling temp file, then rename.
+/// Prevents data loss if the process is killed mid-write.
+fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, data)?;
+    fs::rename(&tmp, path)
+}
+
 /// If the CSV header doesn't match the current schema, replace the first line.
 fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
     let content = fs::read_to_string(path)?;
@@ -174,7 +182,7 @@ fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
             } else {
                 format!("{expected}\n{rest}\n")
             };
-            fs::write(path, new_content)?;
+            write_atomic(path, new_content.as_bytes())?;
         }
     }
     Ok(())
@@ -395,6 +403,17 @@ mod tests {
         );
         // Old data row is preserved
         assert!(lines[1].starts_with("python,fastapi,"));
+    }
+
+    #[test]
+    fn test_write_atomic_replaces_file_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atomic.txt");
+        fs::write(&path, "original").unwrap();
+        write_atomic(&path, b"replaced").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "replaced");
+        // Temp file should not linger
+        assert!(!dir.path().join("atomic.tmp").exists());
     }
 
     #[test]
