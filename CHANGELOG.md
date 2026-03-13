@@ -10,8 +10,10 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Structured log status now three-valued: "errors" / "degraded" / "ok" (was binary "errors" / "ok") — CI consumers can distinguish grounded vs advisory reviews
 - Added tests for review degraded propagation, telemetry CSV formatting, auth token error handling, factory API key edge cases, security boundary helpers
 - Added `migrate_header_if_stale` for CSV telemetry — transparently upgrades old `runs.csv` headers when new columns are added (e.g., `review_degraded`)
+- Added atomic write for CSV header migration — prevents data loss if process killed mid-write
 - Fixed install-source guard to skip when test agent is disabled (`--no-test` / `enable_test = false`)
-- Coverage: 1894 tests, 97.9%+ line coverage
+- Fixed `review_degraded` accumulation order in review loop — degraded state preserved on malformed verdict retries
+- Coverage: 1895 tests, 97.9%+ line coverage
 
 ## 0.4.0
 
