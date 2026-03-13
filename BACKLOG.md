@@ -386,3 +386,29 @@ Items resolved in v0.1.6. Kept for audit trail — do not re-report.
 - **Case-insensitive safety/security matching** — review bail uses `eq_ignore_ascii_case`
 - **Introspection JSON validation** — uses `serde_json::from_str` instead of brace-checking
 - **YAML frontmatter disambiguation** — tightened heuristic (lowercase-only keys, >= 2 matches)
+
+## Codex Audit Findings (v0.4.0, 2026-03-13)
+
+### P1: local-install/local-mount is Python-only
+
+`install_source = "local-install"` / `"local-mount"` auto-switches to container mode for all languages, but only the Python container path actually uses `/src` as the library under test. JS/Go just mount the repo without installing/linking, Rust downgrades container mode back to bare metal. Users selecting local-source validation for non-Python get a run that doesn't actually validate against the local package.
+
+**Evidence**: `src/cli/generate.rs:161`, `src/test_agent/container_executor.rs:229,240,274,290`, `src/test_agent/validator.rs:207,349`, `src/test_agent/executor.rs:425`
+
+**Minimal fix**: Hard-error on local-install/local-mount for non-Python languages (quick win for v0.4.1), or implement real language-specific local wiring (npm workspace link, Go replace directives, Rust path dependencies).
+
+### P1: Rust dependency ingestion drops feature/version metadata
+
+The Rust parser only captures bare crate names from `cargo add` and `[dependencies]` entries; `CargoExecutor` rewrites every dependency as `crate = "*"`. Features, version pins, renames, and multi-crate tails are discarded. Feature-gated crates like `tokio` are common — a SKILL that documents `cargo add tokio --features full` gets tested with default tokio only, producing false failures.
+
+**Evidence**: `src/test_agent/rust_parser.rs:22,24,187,382,670`, `src/test_agent/executor.rs:425,435`
+
+**Minimal fix**: Preserve structured Rust dependency specs (version, features, renames) and render proper `Cargo.toml` entries instead of collapsing to wildcard bare-name deps. Target: v0.5.0.
+
+### P2: Degraded review introspection counted as success in telemetry
+
+The generator stores pass-time review warnings (including degraded introspection) in `unresolved_warnings` but doesn't set `has_unresolved_errors`. CLI promotes the final output, telemetry records `passed: true`, structured run status is "ok". Humans see the warning on stdout, but CI/bots/telemetry consumers can't distinguish a grounded review from a text-only advisory pass.
+
+**Evidence**: `src/review/mod.rs:169`, `src/pipeline/generator.rs:689`, `src/cli/generate.rs:479,497,526,541`
+
+**Minimal fix**: Give degraded review its own non-success status/telemetry field, or promote to `has_unresolved_errors` unless caller explicitly opts into advisory behavior.

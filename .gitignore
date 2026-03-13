@@ -19,6 +19,9 @@ dev/configs/
 !dev/configs/batch/claude-sonnet.toml
 !dev/configs/batch/gpt41.toml
 
+# Local-only docs (not published)
+BACKLOG.md
+
 # Dev artifacts
 dev/bad-outputs/
 
