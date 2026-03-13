@@ -677,6 +677,9 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     .review(&skill_md, &data.package_name, &data.language)
                     .await?;
 
+                // Preserve degraded state before any control flow (malformed → continue/break)
+                review_degraded = review_degraded || result.degraded;
+
                 if result.malformed {
                     if review_attempt < self.review_max_retries {
                         warn!("  ⚠ review: malformed verdict, retrying");
@@ -688,8 +691,6 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     failure_reason = Some("malformed verdict after all retries".to_string());
                     break;
                 }
-
-                review_degraded = review_degraded || result.degraded;
 
                 if result.passed {
                     // Collect all non-error issues on pass (introspection warnings,

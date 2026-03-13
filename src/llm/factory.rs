@@ -524,8 +524,8 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_create_chatgpt_client_with_extra_body_warns() {
-        // Cover lines 131-132: extra_body set for ChatGPT triggers a warning
+    async fn test_create_chatgpt_client_with_extra_body_succeeds() {
+        // Cover lines 131-132: extra_body set for ChatGPT triggers a warning (logged, not asserted)
         env::set_var("SKILLDO_TEST_FACTORY_CHATGPT_EB", "test_key");
         let mut config = make_llm_config(
             Provider::ChatGPT,
