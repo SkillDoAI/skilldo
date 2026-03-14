@@ -118,18 +118,38 @@ impl JavaHandler {
         if pom.is_file() {
             if let Ok(content) = fs::read_to_string(&pom) {
                 if let Some(name) = parse_pom_artifact_id(&content) {
-                    return Ok(name);
+                    // Strip -parent suffix for parent POMs (the real artifact is a submodule)
+                    let cleaned = name.strip_suffix("-parent").unwrap_or(&name);
+                    if !cleaned.is_empty() {
+                        return Ok(cleaned.to_string());
+                    }
                 }
             }
         }
 
-        // Try build.gradle / build.gradle.kts
+        // Try build.gradle / build.gradle.kts (quoted string values only)
         for gradle_name in &["build.gradle", "build.gradle.kts"] {
             let gradle = self.repo_path.join(gradle_name);
             if gradle.is_file() {
                 if let Ok(content) = fs::read_to_string(&gradle) {
                     if let Some(name) = parse_gradle_group(&content) {
                         return Ok(name);
+                    }
+                }
+            }
+        }
+
+        // Try settings.gradle for rootProject.name
+        for settings_name in &["settings.gradle", "settings.gradle.kts"] {
+            let settings = self.repo_path.join(settings_name);
+            if settings.is_file() {
+                if let Ok(content) = fs::read_to_string(&settings) {
+                    if let Some(name) = parse_settings_gradle_name(&content) {
+                        // Strip -root suffix (common convention)
+                        let cleaned = name.strip_suffix("-root").unwrap_or(&name);
+                        if !cleaned.is_empty() {
+                            return Ok(cleaned.to_string());
+                        }
                     }
                 }
             }
@@ -421,11 +441,32 @@ fn parse_pom_scm_url(content: &str) -> Option<String> {
 }
 
 /// Extract `group` from build.gradle.
+/// Only accepts quoted string values — skips constants like `JavaBasePlugin.DOCUMENTATION_GROUP`.
 fn parse_gradle_group(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         // group = 'com.example' or group = "com.example"
         if trimmed.starts_with("group") {
+            let rhs = trimmed.split_once('=')?.1.trim();
+            // Must be a quoted string (single or double quotes)
+            if (rhs.starts_with('\'') && rhs.ends_with('\''))
+                || (rhs.starts_with('"') && rhs.ends_with('"'))
+            {
+                let name = &rhs[1..rhs.len() - 1];
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract `rootProject.name` from settings.gradle as a fallback package name.
+fn parse_settings_gradle_name(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("rootProject.name") {
             let rhs = trimmed.split_once('=')?.1.trim();
             let name = rhs.trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace());
             if !name.is_empty() {
@@ -684,6 +725,62 @@ dependencies {
         make_gradle_project(&tmp);
         let handler = JavaHandler::new(tmp.path());
         assert_eq!(handler.get_version().unwrap(), "2.0.0");
+    }
+
+    #[test]
+    fn get_package_name_strips_parent_suffix() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>guava-parent</artifactId></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_package_name().unwrap(), "guava");
+    }
+
+    #[test]
+    fn get_package_name_gradle_skips_constants() {
+        let tmp = TempDir::new().unwrap();
+        // group = JavaBasePlugin.DOCUMENTATION_GROUP is not a quoted string
+        fs::write(
+            tmp.path().join("build.gradle"),
+            "group = JavaBasePlugin.DOCUMENTATION_GROUP\nversion = '1.0'",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle"),
+            "rootProject.name = 'retrofit-root'",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        // Should fall through to settings.gradle and strip -root
+        assert_eq!(handler.get_package_name().unwrap(), "retrofit");
+    }
+
+    #[test]
+    fn get_package_name_settings_gradle() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("build.gradle"), "apply plugin: 'java'").unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle"),
+            "rootProject.name = 'my-cool-lib'",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_package_name().unwrap(), "my-cool-lib");
+    }
+
+    #[test]
+    fn parse_settings_gradle_name_basic() {
+        assert_eq!(
+            parse_settings_gradle_name("rootProject.name = 'my-lib'"),
+            Some("my-lib".to_string())
+        );
+        assert_eq!(
+            parse_settings_gradle_name("rootProject.name = \"my-lib\""),
+            Some("my-lib".to_string())
+        );
     }
 
     // ── Parsing unit tests ──
