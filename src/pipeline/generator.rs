@@ -651,6 +651,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             );
 
             let mut last_review_attempt = 0;
+            let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {
                 last_review_attempt = review_attempt;
                 info!(
@@ -688,6 +689,20 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                         unresolved_warnings = pass_warnings;
                     }
                     info!("  ✓ review: passed");
+                    // Clear errors from earlier review attempts — but only if
+                    // the most recent post-rewrite tests also passed. Don't
+                    // mask a real test failure just because review is happy.
+                    if had_unresolved_errors
+                        && last_review_tests_passed
+                        && matches!(
+                            failed_stage,
+                            Some(FailedStage::Review) | Some(FailedStage::Test)
+                        )
+                    {
+                        had_unresolved_errors = false;
+                        failed_stage = None;
+                        failure_reason = None;
+                    }
                     break;
                 }
 
@@ -745,10 +760,12 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 rescan_after_rewrite(&skill_md, self.enable_security_scan, "review fix")?;
 
                 // Single test pass after review rewrite — mark unresolved if broken.
+                last_review_tests_passed = true;
                 if let Some(ref tv) = test_validator {
                     match tv.validate(&skill_md).await {
                         Ok(tr) if !tr.all_passed() && !tr.test_cases.is_empty() => {
                             warn!("  ⚠ review rewrite broke {} test(s)", tr.failed);
+                            last_review_tests_passed = false;
                             had_unresolved_errors = true;
                             if failed_stage.is_none() {
                                 failed_stage = Some(FailedStage::Test);
@@ -761,6 +778,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                         }
                         Err(e) => {
                             warn!("  ⚠ post-review test error: {e}");
+                            last_review_tests_passed = false;
                             had_unresolved_errors = true;
                             if failed_stage.is_none() {
                                 failed_stage = Some(FailedStage::Test);
@@ -2826,6 +2844,40 @@ testpkg.run()
         }
     }
 
+    /// Review client that fails on first attempt, then passes on subsequent attempts.
+    /// Exercises the sticky error clearing path.
+    struct FailThenPassReviewClient {
+        call_count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FailThenPassReviewClient {
+        fn new() -> Self {
+            Self {
+                call_count: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for FailThenPassReviewClient {
+        async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
+            if prompt.contains("quality gate for a generated SKILL.md") {
+                let n = self
+                    .call_count
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    // First review: fail with accuracy issue
+                    Ok(r#"{"passed": false, "issues": [{"complaint": "Wrong signature", "severity": "error", "category": "accuracy", "evidence": "expected bar(x)"}]}"#.to_string())
+                } else {
+                    // Subsequent reviews: pass
+                    Ok(r#"{"passed": true, "issues": []}"#.to_string())
+                }
+            } else {
+                MockLlmClient::new().complete(prompt).await
+            }
+        }
+    }
+
     /// Returns a review verdict with safety/security errors that trigger bail.
     struct SafetyReviewClient;
 
@@ -2859,6 +2911,28 @@ testpkg.run()
             .as_deref()
             .unwrap()
             .contains("review issues"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_review_fail_then_pass_clears_errors() {
+        // Review fails on first attempt (accuracy issue), then passes on
+        // second attempt. The sticky error from the first attempt should be
+        // cleared because tests are skipped (--no-test) and review passed.
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 0)
+            .with_review_client(Box::new(FailThenPassReviewClient::new()))
+            .with_test(false)
+            .with_review(true)
+            .with_review_max_retries(3);
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        // Review ultimately passed — errors should be cleared
+        assert!(
+            !output.has_unresolved_errors,
+            "errors should be cleared when review passes after earlier failure"
+        );
+        assert_eq!(output.failed_stage, None);
+        assert_eq!(output.failure_reason, None);
     }
 
     #[tokio::test]

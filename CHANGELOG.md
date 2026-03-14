@@ -16,7 +16,10 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Implemented custom Debug for TokenSet and OAuthEndpoint — redacts secrets in log output
 - Hardened error handling: descriptive retry fallback, client_id validation, readable HTTP error bodies
 - Set 0o700 permissions on `~/.skilldo/` telemetry directory
-- Coverage: 1909 tests, ~97.5% line coverage
+- Fixed sticky `has_unresolved_errors` — review loop now clears error state when final review+test cycle succeeds after earlier failures. Fixes false exit-1 on successful generation runs.
+- Fixed CSV header migration to respect RFC 4180 quoting and per-row column counting
+- OAuth scope merging — `group_by_oauth_app` now unions scopes across all endpoints sharing the same app
+- Coverage: 1913 tests, ~97.5% line coverage
 
 ## 0.4.1
 
