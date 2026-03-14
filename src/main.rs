@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 mod auth;
 mod changelog;
@@ -23,6 +24,7 @@ mod util;
 #[command(
     about = concat!("Skilldo — Generate agent rules files for your libraries — v", env!("CARGO_PKG_VERSION")),
     long_about = None,
+    after_help = "Use 'skilldo help <command>' or 'skilldo <command> --help' for detailed usage.",
 )]
 struct Cli {
     /// Suppress informational output (only show warnings and errors)
@@ -197,6 +199,12 @@ enum Commands {
         action: ConfigAction,
     },
 
+    /// Manage OAuth authentication for LLM providers
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+
     /// Show the prompts that will be sent to the LLM
     ShowPrompts {
         /// Language/ecosystem: python, go
@@ -208,10 +216,14 @@ enum Commands {
         stage: Option<String>,
     },
 
-    /// Manage OAuth authentication for LLM providers
-    Auth {
-        #[command(subcommand)]
-        action: AuthAction,
+    /// Print the embedded SKILL.md for the skilldo CLI
+    Skill,
+
+    /// Generate shell completion scripts
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 
     /// Quick LLM auth smoke test (requires --config)
@@ -221,9 +233,6 @@ enum Commands {
         #[arg(long)]
         config: String,
     },
-
-    /// Print the embedded SKILL.md for the skilldo CLI
-    Skill,
 }
 
 #[derive(Subcommand)]
@@ -399,6 +408,14 @@ async fn main() -> Result<()> {
         }
         Commands::Skill => {
             print!("{}", include_str!("../SKILL.md"));
+        }
+        Commands::Completion { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "skilldo",
+                &mut std::io::stdout(),
+            );
         }
     }
 
