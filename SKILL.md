@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires an LLM API key (Anthropic, OpenAI, Gemini, or OpenAI-compatible). Optional container runtime (docker/podman) for test validation.
 metadata:
   author: SkillDoAI
-  version: "0.4.1"
+  version: "0.4.2"
 ---
 
 # Skilldo CLI
@@ -130,7 +130,6 @@ LLM-powered review of an existing SKILL.md for accuracy and safety.
 
 Key flags:
 - `--config <PATH>` — config with LLM settings
-- `--no-container` — skip container introspection (LLM-only review)
 
 ### `skilldo config <PATH>`
 Validate a config file for correctness.

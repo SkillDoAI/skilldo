@@ -17,10 +17,9 @@ Each run appends one row to `~/.skilldo/runs.csv` with these fields:
 | passed | true | Whether generation succeeded |
 | retries | 2 | Number of retry attempts |
 | duration_secs | 180 | Total generation time |
-| skilldo_version | 0.4.1 | Skilldo binary version |
+| skilldo_version | 0.4.2 | Skilldo binary version |
 | failure_stage | test | Which stage failed (if any) |
 | failure_reason | test_timeout | Failure detail |
-| review_degraded | false | Whether review ran in degraded mode |
 | timestamp | 2026-03-13T20:00:00Z | ISO 8601 timestamp |
 
 ## What We Don't Log
@@ -71,13 +70,4 @@ grep ',false,' ~/.skilldo/runs.csv
 
 ## Schema Migration
 
-When skilldo adds new columns (e.g., `review_degraded` in v0.4.1), the CSV header is automatically updated on the next run. Existing data rows are preserved — new columns appear empty for old rows. The migration uses atomic writes to prevent data loss.
-
-## Review Degraded
-
-The `review_degraded` field indicates whether the review agent ran with full container introspection (grounded) or LLM-only (advisory):
-
-- `false` — Review was fully grounded (Python with successful introspection) or introspection was not applicable (non-Python)
-- `true` — Python introspection was expected but failed (container/runtime/script error). The review verdict is advisory, not verified against the actual package.
-
-CI consumers can use this field to distinguish high-confidence reviews from advisory ones.
+When skilldo adds or removes columns, the CSV header is automatically updated on the next run. Existing data rows are preserved — new columns appear empty for old rows. The migration uses atomic writes to prevent data loss.

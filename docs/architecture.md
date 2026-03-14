@@ -46,14 +46,11 @@ The Create → Review → Test loop is sequential:
 
 Both Review and Test can be disabled (`--no-review`, `--no-test`) for faster iterations.
 
-## Review Agent: Two-Phase Pipeline
+## Review Agent
 
-The review agent runs a two-phase verification:
+The review agent evaluates the SKILL.md for accuracy and safety using an LLM verdict. It checks for incorrect API signatures, wrong version numbers, hallucinated features, and security issues (prompt injection, destructive commands, credential leaks).
 
-1. **Phase A: Container Introspection** — Installs the library in a container and runs a generated script to verify claims (function signatures, version numbers, module structure) against the actual package. Currently implemented for Python (`pip show`, `inspect.signature()`). Go, JavaScript, and Rust introspection is planned — those languages currently skip to Phase B. (Note: this is separate from the Test stage, which runs in containers for all languages.)
-2. **Phase B: LLM Verdict** — Evaluates accuracy and safety based on introspection results (when available) plus the SKILL.md content itself.
-
-When container introspection is expected but fails (runtime unavailable, script error), the review proceeds in "degraded" mode — the LLM verdict is advisory rather than grounded. This is tracked in telemetry (`review_degraded` field) so CI consumers can distinguish the two.
+If the review fails, error feedback is sent back to the Create stage for regeneration.
 
 ## Security Scanner
 
