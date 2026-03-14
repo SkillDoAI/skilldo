@@ -3,6 +3,21 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.4.2
+
+- Removed review introspection (Phase A) — the test agent's feedback loop already validates correctness, making container introspection redundant. Simplifies the review agent to LLM-verdict-only for all languages. (-1042 lines)
+- Removed `--no-container` flag from `skilldo review` (no longer needed)
+- Removed `review_degraded` from telemetry CSV schema (no introspection = no degraded state)
+- Removed `--runtime` and `--timeout` flags from `skilldo review` (were only used by introspection)
+- Added `skilldo skill` command — prints the embedded SKILL.md for AI assistants
+- Added `skilldo completion <shell>` — generates shell completions for bash, zsh, fish, elvish, powershell
+- Added `docs/` directory — architecture, configuration, authentication, languages, telemetry, best-practices
+- Slimmed README to sales pitch + quick start + links to docs
+- Implemented custom Debug for TokenSet and OAuthEndpoint — redacts secrets in log output
+- Hardened error handling: descriptive retry fallback, client_id validation, readable HTTP error bodies
+- Set 0o700 permissions on `~/.skilldo/` telemetry directory
+- Coverage: 1909 tests, ~97.5% line coverage
+
 ## 0.4.1
 
 - Added hard-error guard for `install_source = "local-install"` / `"local-mount"` on non-Python languages — previously silently did nothing useful, now fails early with a clear error message

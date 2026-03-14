@@ -98,7 +98,10 @@ impl LlmClient for AnthropicClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             bail!("Anthropic API error {}: {}", status, error_text);
         }
 
@@ -273,7 +276,10 @@ impl LlmClient for OpenAIClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             bail!("OpenAI API error {}: {}", status, error_text);
         }
 
@@ -413,7 +419,10 @@ impl LlmClient for GeminiClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             bail!("Gemini API error {}: {}", status, error_text);
         }
 
@@ -567,11 +576,11 @@ impl LlmClient for ChatGPTClient {
             let body = response
                 .text()
                 .await
-                .context("Failed to read error response")?;
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             bail!(
                 "Responses API error {} {}: {}",
                 status.as_u16(),
-                status.canonical_reason().unwrap_or(""),
+                status.canonical_reason().unwrap_or("Unknown Status"),
                 body
             );
         }

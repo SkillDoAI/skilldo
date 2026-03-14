@@ -544,7 +544,6 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             duration_secs: duration.as_secs_f64(),
             timestamp: crate::telemetry::iso8601_now(),
             skilldo_version: env!("CARGO_PKG_VERSION").to_string(),
-            review_degraded: output_result.review_degraded,
         };
         if let Err(e) = crate::telemetry::append_run(&record, None) {
             tracing::warn!("Failed to write telemetry: {}", e);
@@ -556,8 +555,6 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     let lint_issues = issues.len();
     let status = if output_result.has_unresolved_errors {
         "errors"
-    } else if output_result.review_degraded {
-        "degraded"
     } else {
         "ok"
     };
@@ -1234,5 +1231,134 @@ install_source = "registry"
         })
         .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_container_flag() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            container: true,
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(result.is_ok(), "container flag failed: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_container_and_runtime_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            container: true,
+            runtime_override: Some("docker".to_string()),
+            best_effort: true,
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "container+runtime override failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_provider_auto_disables_parallel() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = repo.path().join("skilldo.toml");
+        fs::write(
+            &config_path,
+            r#"
+[llm]
+provider = "cli"
+model = "gemini-2.5-pro"
+command = "echo"
+
+[generation]
+max_retries = 0
+max_source_tokens = 50000
+parallel_extraction = true
+"#,
+        )
+        .unwrap();
+        let result = run(GenerateOptions {
+            config_path: Some(config_path.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "CLI provider auto-disable parallel failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_review_model_override_enabled() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            review_model_override: Some("gpt-5.2".to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "review_model_override with review enabled failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_review_provider_override_enabled() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            review_provider_override: Some("openai".to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "review_provider_override with review enabled failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_review_model_and_provider_override_enabled() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            review_model_override: Some("gpt-5.2".to_string()),
+            review_provider_override: Some("openai".to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "review model+provider override failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_no_review_with_review_overrides_warns() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            no_review: true,
+            review_model_override: Some("gpt-5.2".to_string()),
+            review_provider_override: Some("openai".to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "no_review with review overrides failed: {:?}",
+            result.err()
+        );
     }
 }

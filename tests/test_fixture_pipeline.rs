@@ -5,7 +5,7 @@
 //! captured data, replace the JSON files in tests/fixtures/.
 //!
 //! Each fixture file contains responses for all pipeline stages:
-//! extract, map, learn, create, review_introspect, review_verdict.
+//! extract, map, learn, create, review_verdict.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -238,7 +238,6 @@ async fn test_fixture_pipeline_with_review_pass() {
     let generator = Generator::new(Box::new(client), 3)
         .with_test(false)
         .with_review(true)
-        .with_skip_introspection(true)
         .with_review_max_retries(2);
 
     let data = fastapi_collected_data();
@@ -258,7 +257,6 @@ async fn test_fixture_pipeline_review_fail_then_pass() {
     let generator = Generator::new(Box::new(client), 3)
         .with_test(false)
         .with_review(true)
-        .with_skip_introspection(true)
         .with_review_max_retries(3);
 
     let data = fastapi_collected_data();
@@ -280,7 +278,6 @@ async fn test_fixture_pipeline_review_exhausted() {
     let generator = Generator::new(Box::new(client), 3)
         .with_test(false)
         .with_review(true)
-        .with_skip_introspection(true)
         .with_review_max_retries(1);
 
     let data = fastapi_collected_data();
@@ -479,10 +476,6 @@ fn test_fixture_loads_and_has_required_stages() {
     assert!(
         fixture.responses.contains_key("create"),
         "should have create stage"
-    );
-    assert!(
-        fixture.responses.contains_key("review_introspect"),
-        "should have review_introspect stage"
     );
     assert!(
         fixture.responses.contains_key("review_verdict_pass"),

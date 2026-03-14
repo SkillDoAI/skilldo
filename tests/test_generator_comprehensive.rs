@@ -907,7 +907,7 @@ async fn test_security_violations_not_forgiven_even_with_zero_retries() {
 // Tests: Review Pipeline
 // ============================================================================
 
-/// Mock client that handles review agent prompts (Phase A + Phase B).
+/// Mock client that handles review agent prompts (verdict).
 /// Supports configurable review pass/fail behavior.
 struct ReviewMockClient {
     review_call_count: Arc<Mutex<usize>>,
@@ -956,20 +956,7 @@ impl LlmClient for ReviewMockClient {
             return Ok(valid_skill_content("Reviewed SKILL.md"));
         }
 
-        // Review Phase A: introspection script
-        if prompt.contains("verification script generator") {
-            return Ok(r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["test_package"]
-# ///
-import json
-print(json.dumps({"version": "1.0.0", "imports": [], "signatures": []}))
-```"#
-                .to_string());
-        }
-
-        // Review Phase B: verdict
+        // Review verdict
         if prompt.contains("quality gate for a generated SKILL.md") {
             let mut count = self.review_call_count.lock().unwrap();
             let current = *count;
@@ -990,7 +977,6 @@ async fn test_review_enabled_passes_first_try() {
     let client = ReviewMockClient::always_pass();
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
-        .with_skip_introspection(true)
         .with_review_max_retries(2);
 
     let data = create_test_data();
@@ -1004,7 +990,6 @@ async fn test_review_enabled_fails_then_passes() {
     let client = ReviewMockClient::pass_on_review(1); // fail first, pass second
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
-        .with_skip_introspection(true)
         .with_review_max_retries(2);
 
     let data = create_test_data();
@@ -1018,7 +1003,6 @@ async fn test_review_max_retries_returns_unresolved_warnings() {
     let client = ReviewMockClient::always_fail();
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
-        .with_skip_introspection(true)
         .with_review_max_retries(1);
 
     let data = create_test_data();
@@ -1047,9 +1031,9 @@ async fn test_review_disabled_skips_review() {
 }
 
 #[tokio::test]
-async fn test_review_non_python_skips_introspection() {
+async fn test_review_non_python_language() {
     let client = ReviewMockClient::always_pass();
-    // No skip_introspection — language-based logic should skip for non-Python
+    // Review runs for all languages
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
         .with_review_max_retries(0);
@@ -1058,6 +1042,6 @@ async fn test_review_non_python_skips_introspection() {
     data.language = Language::Rust;
     let output = generator.generate(&data).await.unwrap();
     assert!(output.skill_md.contains("---"));
-    // Should still pass — review runs LLM-only verdict without introspection
+    // Should still pass — review runs LLM-only verdict
     assert!(output.unresolved_warnings.is_empty());
 }

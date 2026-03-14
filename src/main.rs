@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 mod auth;
 mod changelog;
@@ -23,6 +24,7 @@ mod util;
 #[command(
     about = concat!("Skilldo — Generate agent rules files for your libraries — v", env!("CARGO_PKG_VERSION")),
     long_about = None,
+    after_help = "Use 'skilldo help <command>' or 'skilldo <command> --help' for detailed usage.",
 )]
 struct Cli {
     /// Suppress informational output (only show warnings and errors)
@@ -186,18 +188,6 @@ enum Commands {
         #[arg(long)]
         base_url: Option<String>,
 
-        /// Container runtime: docker or podman
-        #[arg(long)]
-        runtime: Option<String>,
-
-        /// Container execution timeout in seconds
-        #[arg(long)]
-        timeout: Option<u64>,
-
-        /// Skip container introspection (LLM-only review)
-        #[arg(long)]
-        no_container: bool,
-
         /// Use mock LLM client for testing
         #[arg(long)]
         dry_run: bool,
@@ -207,6 +197,12 @@ enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+
+    /// Manage OAuth authentication for LLM providers
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
     },
 
     /// Show the prompts that will be sent to the LLM
@@ -220,10 +216,14 @@ enum Commands {
         stage: Option<String>,
     },
 
-    /// Manage OAuth authentication for LLM providers
-    Auth {
-        #[command(subcommand)]
-        action: AuthAction,
+    /// Print the embedded SKILL.md for the skilldo CLI
+    Skill,
+
+    /// Generate shell completion scripts
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 
     /// Quick LLM auth smoke test (requires --config)
@@ -368,23 +368,9 @@ async fn main() -> Result<()> {
             model,
             provider,
             base_url,
-            runtime,
-            timeout,
-            no_container,
             dry_run,
         } => {
-            cli::review::run(
-                path,
-                config,
-                model,
-                provider,
-                base_url,
-                runtime,
-                timeout,
-                no_container,
-                dry_run,
-            )
-            .await?;
+            cli::review::run(path, config, model, provider, base_url, dry_run).await?;
         }
         Commands::Config { action } => match action {
             ConfigAction::Check { config, strict } => {
@@ -419,6 +405,17 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             println!("{response}");
+        }
+        Commands::Skill => {
+            print!("{}", include_str!("../SKILL.md"));
+        }
+        Commands::Completion { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "skilldo",
+                &mut std::io::stdout(),
+            );
         }
     }
 
@@ -921,23 +918,12 @@ mod tests {
     #[test]
     fn test_parse_review() {
         let cli = Cli::try_parse_from(["skilldo", "review", "SKILL.md"]).unwrap();
-        assert_review!(cli, |path,
-                             config,
-                             model,
-                             provider,
-                             base_url,
-                             runtime,
-                             timeout,
-                             no_container,
-                             dry_run| {
+        assert_review!(cli, |path, config, model, provider, base_url, dry_run| {
             assert_eq!(path, "SKILL.md");
             assert!(config.is_none());
             assert!(model.is_none());
             assert!(provider.is_none());
             assert!(base_url.is_none());
-            assert!(runtime.is_none());
-            assert!(timeout.is_none());
-            assert!(!no_container);
             assert!(!dry_run);
         });
     }
@@ -962,31 +948,15 @@ mod tests {
             "openai-compatible",
             "--base-url",
             "http://localhost:11434/v1",
-            "--runtime",
-            "podman",
-            "--timeout",
-            "120",
-            "--no-container",
             "--dry-run",
         ])
         .unwrap();
-        assert_review!(cli, |path,
-                             config,
-                             model,
-                             provider,
-                             base_url,
-                             runtime,
-                             timeout,
-                             no_container,
-                             dry_run| {
+        assert_review!(cli, |path, config, model, provider, base_url, dry_run| {
             assert_eq!(path, "test.md");
             assert_eq!(config.unwrap(), "my.toml");
             assert_eq!(model.unwrap(), "codestral:latest");
             assert_eq!(provider.unwrap(), "openai-compatible");
             assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
-            assert_eq!(runtime.unwrap(), "podman");
-            assert_eq!(timeout.unwrap(), 120);
-            assert!(no_container);
             assert!(dry_run);
         });
     }
@@ -1155,12 +1125,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_parse_review_invalid_timeout_type() {
-        let result = Cli::try_parse_from(["skilldo", "review", "x.md", "--timeout", "not-num"]);
-        assert!(result.is_err());
-    }
-
     // --- Config without subaction ---
 
     #[test]
@@ -1184,22 +1148,6 @@ mod tests {
         let cli = Cli::try_parse_from(["skilldo", "review", "s.md", "--model", "gpt-5"]).unwrap();
         assert_review!(cli, |model| {
             assert_eq!(model.unwrap(), "gpt-5");
-        });
-    }
-
-    #[test]
-    fn test_parse_review_no_container_only() {
-        let cli = Cli::try_parse_from(["skilldo", "review", "s.md", "--no-container"]).unwrap();
-        assert_review!(cli, |no_container| {
-            assert!(no_container);
-        });
-    }
-
-    #[test]
-    fn test_parse_review_no_container_default() {
-        let cli = Cli::try_parse_from(["skilldo", "review", "s.md"]).unwrap();
-        assert_review!(cli, |no_container| {
-            assert!(!no_container);
         });
     }
 
@@ -1287,26 +1235,6 @@ mod tests {
         assert_review!(cli, |provider, base_url| {
             assert_eq!(provider.unwrap(), "openai-compatible");
             assert_eq!(base_url.unwrap(), "http://localhost:8080/v1");
-        });
-    }
-
-    // --- Review with runtime and timeout ---
-
-    #[test]
-    fn test_parse_review_runtime_timeout() {
-        let cli = Cli::try_parse_from([
-            "skilldo",
-            "review",
-            "s.md",
-            "--runtime",
-            "podman",
-            "--timeout",
-            "60",
-        ])
-        .unwrap();
-        assert_review!(cli, |runtime, timeout| {
-            assert_eq!(runtime.unwrap(), "podman");
-            assert_eq!(timeout.unwrap(), 60);
         });
     }
 
@@ -1447,6 +1375,29 @@ mod tests {
             panic!("Expected HelloWorld command");
         };
         assert_eq!(config, "test.toml".to_string());
+    }
+
+    #[test]
+    fn test_parse_skill_command() {
+        let cli = Cli::try_parse_from(["skilldo", "skill"]).unwrap();
+        assert!(matches!(cli.command, Commands::Skill));
+    }
+
+    #[test]
+    fn test_parse_completion_command() {
+        let cli = Cli::try_parse_from(["skilldo", "completion", "zsh"]).unwrap();
+        assert!(matches!(cli.command, Commands::Completion { .. }));
+        if let Commands::Completion { shell } = cli.command {
+            assert_eq!(shell, Shell::Zsh);
+        }
+    }
+
+    #[test]
+    fn test_parse_completion_bash() {
+        let cli = Cli::try_parse_from(["skilldo", "completion", "bash"]).unwrap();
+        if let Commands::Completion { shell } = cli.command {
+            assert_eq!(shell, Shell::Bash);
+        }
     }
 
     #[test]

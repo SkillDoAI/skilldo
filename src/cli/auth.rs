@@ -513,4 +513,339 @@ provider_name = "{provider_name}"
         assert!(auth::load_tokens(provider).unwrap().is_none());
         std::env::remove_var(env_var);
     }
+
+    #[test]
+    #[serial]
+    fn collect_all_endpoints_from_map_llm() {
+        let mut config = Config::default();
+        config.llm.oauth_auth_url = Some("https://auth.example.com/authorize".to_string());
+        config.llm.oauth_token_url = Some("https://auth.example.com/token".to_string());
+        config.llm.oauth_client_id_env = Some("SKILLDO_TEST_MAP_CID".to_string());
+        config.llm.provider_name = Some("global-map".to_string());
+
+        std::env::set_var("SKILLDO_TEST_MAP_CID", "map-client");
+
+        let mut map_llm = config.llm.clone();
+        map_llm.provider_name = Some("map-provider".to_string());
+        config.generation.map_llm = Some(map_llm);
+
+        let endpoints = collect_all_endpoints(&config).unwrap();
+        assert_eq!(endpoints.len(), 2);
+        let names: Vec<_> = endpoints.iter().map(|e| e.provider_name.as_str()).collect();
+        assert!(names.contains(&"global-map"));
+        assert!(names.contains(&"map-provider"));
+
+        std::env::remove_var("SKILLDO_TEST_MAP_CID");
+    }
+
+    #[test]
+    #[serial]
+    fn collect_all_endpoints_from_learn_and_create_llm() {
+        let mut config = Config::default();
+        config.llm.oauth_auth_url = Some("https://auth.example.com/authorize".to_string());
+        config.llm.oauth_token_url = Some("https://auth.example.com/token".to_string());
+        config.llm.oauth_client_id_env = Some("SKILLDO_TEST_LC_CID".to_string());
+        config.llm.provider_name = Some("global-lc".to_string());
+
+        std::env::set_var("SKILLDO_TEST_LC_CID", "lc-client");
+
+        let mut learn_llm = config.llm.clone();
+        learn_llm.provider_name = Some("learn-provider".to_string());
+        config.generation.learn_llm = Some(learn_llm);
+
+        let mut create_llm = config.llm.clone();
+        create_llm.provider_name = Some("create-provider".to_string());
+        config.generation.create_llm = Some(create_llm);
+
+        let endpoints = collect_all_endpoints(&config).unwrap();
+        assert_eq!(endpoints.len(), 3);
+        let names: Vec<_> = endpoints.iter().map(|e| e.provider_name.as_str()).collect();
+        assert!(names.contains(&"global-lc"));
+        assert!(names.contains(&"learn-provider"));
+        assert!(names.contains(&"create-provider"));
+
+        std::env::remove_var("SKILLDO_TEST_LC_CID");
+    }
+
+    #[test]
+    #[serial]
+    fn collect_all_endpoints_from_review_llm() {
+        let mut config = Config::default();
+        config.llm.oauth_auth_url = Some("https://auth.example.com/authorize".to_string());
+        config.llm.oauth_token_url = Some("https://auth.example.com/token".to_string());
+        config.llm.oauth_client_id_env = Some("SKILLDO_TEST_REV_CID".to_string());
+        config.llm.provider_name = Some("global-rev".to_string());
+
+        std::env::set_var("SKILLDO_TEST_REV_CID", "rev-client");
+
+        let mut review_llm = config.llm.clone();
+        review_llm.provider_name = Some("review-provider".to_string());
+        config.generation.review_llm = Some(review_llm);
+
+        let endpoints = collect_all_endpoints(&config).unwrap();
+        assert_eq!(endpoints.len(), 2);
+        let names: Vec<_> = endpoints.iter().map(|e| e.provider_name.as_str()).collect();
+        assert!(names.contains(&"global-rev"));
+        assert!(names.contains(&"review-provider"));
+
+        std::env::remove_var("SKILLDO_TEST_REV_CID");
+    }
+
+    #[test]
+    fn group_by_oauth_app_separates_distinct_apps() {
+        let endpoints = vec![
+            OAuthEndpoint {
+                auth_url: "https://auth1.example.com/authorize".to_string(),
+                token_url: "https://auth1.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "cid1".to_string(),
+                client_secret: None,
+                provider_name: "provider-x".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth2.example.com/authorize".to_string(),
+                token_url: "https://auth2.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "cid2".to_string(),
+                client_secret: None,
+                provider_name: "provider-y".to_string(),
+            },
+        ];
+        let groups = group_by_oauth_app(&endpoints);
+        assert_eq!(groups.len(), 2);
+        // Each group has exactly 1 provider name
+        assert_eq!(groups[0].1.len(), 1);
+        assert_eq!(groups[1].1.len(), 1);
+    }
+
+    #[test]
+    fn group_by_oauth_app_groups_same_token_url_and_client_id() {
+        let endpoints = vec![
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "alpha".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: Some("secret".to_string()),
+                provider_name: "beta".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "gamma".to_string(),
+            },
+        ];
+        let groups = group_by_oauth_app(&endpoints);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].1.len(), 3);
+    }
+
+    #[test]
+    fn group_by_oauth_app_empty_input() {
+        let endpoints: Vec<OAuthEndpoint> = vec![];
+        let groups = group_by_oauth_app(&endpoints);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn group_by_oauth_app_results_sorted_by_provider_name() {
+        let endpoints = vec![
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "cid-z".to_string(),
+                client_secret: None,
+                provider_name: "z-provider".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "cid-a".to_string(),
+                client_secret: None,
+                provider_name: "a-provider".to_string(),
+            },
+        ];
+        let groups = group_by_oauth_app(&endpoints);
+        assert_eq!(groups.len(), 2);
+        // Results should be sorted by provider_name
+        assert_eq!(groups[0].0.provider_name, "a-provider");
+        assert_eq!(groups[1].0.provider_name, "z-provider");
+    }
+
+    #[test]
+    #[serial]
+    fn status_with_multiple_providers_shows_all() {
+        let providers = [
+            ("test-multi-status-valid", u64::MAX, "valid-at"),
+            ("test-multi-status-expired", 0, "expired-at"),
+        ];
+        let env_var = "SKILLDO_TEST_MULTI_STATUS";
+        std::env::set_var(env_var, "client-id");
+
+        for (name, expires_at, access_token) in &providers {
+            let tokens = auth::TokenSet {
+                access_token: access_token.to_string(),
+                refresh_token: "rt".to_string(),
+                expires_at: *expires_at,
+            };
+            auth::save_tokens(name, &tokens).unwrap();
+        }
+
+        // Create config with two different provider names
+        let dir = std::env::temp_dir().join("skilldo-test-multi-status");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("skilldo.toml");
+        std::fs::write(
+            &path,
+            format!(
+                r#"
+[llm]
+provider = "openai"
+model = "gpt-4o"
+oauth_auth_url = "https://auth.example.com/authorize"
+oauth_token_url = "https://auth.example.com/token"
+oauth_client_id_env = "{env_var}"
+provider_name = "test-multi-status-valid"
+
+[generation.extract_llm]
+provider = "openai"
+model = "gpt-4o"
+oauth_auth_url = "https://auth2.example.com/authorize"
+oauth_token_url = "https://auth2.example.com/token"
+oauth_client_id_env = "{env_var}"
+provider_name = "test-multi-status-expired"
+"#
+            ),
+        )
+        .unwrap();
+
+        let result = status(Some(path.to_str().unwrap().to_string()));
+        assert!(result.is_ok());
+
+        for (name, _, _) in &providers {
+            auth::delete_tokens(name).unwrap();
+        }
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
+    fn status_with_invalid_config_path_errors() {
+        let result = status(Some(
+            "/tmp/nonexistent-skilldo-config-12345.toml".to_string(),
+        ));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn logout_with_invalid_config_path_errors() {
+        let result = logout(Some(
+            "/tmp/nonexistent-skilldo-config-12345.toml".to_string(),
+        ));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn login_with_invalid_config_path_errors() {
+        let result = tokio::runtime::Runtime::new().unwrap().block_on(login(Some(
+            "/tmp/nonexistent-skilldo-config-12345.toml".to_string(),
+        )));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn collect_all_endpoints_skips_non_oauth_stages() {
+        let mut config = Config::default();
+        // Global LLM has no OAuth
+        config.llm.provider_name = Some("no-oauth-global".to_string());
+
+        // extract_llm has OAuth
+        let mut extract_llm = config.llm.clone();
+        extract_llm.oauth_auth_url = Some("https://auth.example.com/authorize".to_string());
+        extract_llm.oauth_token_url = Some("https://auth.example.com/token".to_string());
+        extract_llm.oauth_client_id_env = Some("SKILLDO_TEST_SKIP_CID".to_string());
+        extract_llm.provider_name = Some("oauth-extract".to_string());
+        config.generation.extract_llm = Some(extract_llm);
+
+        // map_llm has no OAuth
+        let mut map_llm = config.llm.clone();
+        map_llm.provider_name = Some("no-oauth-map".to_string());
+        config.generation.map_llm = Some(map_llm);
+
+        std::env::set_var("SKILLDO_TEST_SKIP_CID", "skip-client");
+        let endpoints = collect_all_endpoints(&config).unwrap();
+        // Only extract_llm has OAuth, so only 1 endpoint
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].provider_name, "oauth-extract");
+        std::env::remove_var("SKILLDO_TEST_SKIP_CID");
+    }
+
+    #[test]
+    #[serial]
+    fn logout_with_multiple_providers_deletes_all() {
+        let providers = ["test-multi-logout-a", "test-multi-logout-b"];
+        let env_var = "SKILLDO_TEST_MULTI_LOGOUT";
+        std::env::set_var(env_var, "client-id");
+
+        for name in &providers {
+            let tokens = auth::TokenSet {
+                access_token: "at".to_string(),
+                refresh_token: "rt".to_string(),
+                expires_at: u64::MAX,
+            };
+            auth::save_tokens(name, &tokens).unwrap();
+        }
+
+        let dir = std::env::temp_dir().join("skilldo-test-multi-logout");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("skilldo.toml");
+        std::fs::write(
+            &path,
+            format!(
+                r#"
+[llm]
+provider = "openai"
+model = "gpt-4o"
+oauth_auth_url = "https://auth.example.com/authorize"
+oauth_token_url = "https://auth.example.com/token"
+oauth_client_id_env = "{env_var}"
+provider_name = "test-multi-logout-a"
+
+[generation.extract_llm]
+provider = "openai"
+model = "gpt-4o"
+oauth_auth_url = "https://auth2.example.com/authorize"
+oauth_token_url = "https://auth2.example.com/token"
+oauth_client_id_env = "{env_var}"
+provider_name = "test-multi-logout-b"
+"#
+            ),
+        )
+        .unwrap();
+
+        let result = logout(Some(path.to_str().unwrap().to_string()));
+        assert!(result.is_ok());
+
+        for name in &providers {
+            assert!(
+                auth::load_tokens(name).unwrap().is_none(),
+                "token for {} should have been deleted",
+                name
+            );
+        }
+        std::env::remove_var(env_var);
+    }
 }

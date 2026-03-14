@@ -28,6 +28,7 @@ sha2 = "0.10"
 rand = "0.10"
 open = "5"
 libgit2-sys = { version = "0.18", features = ["vendored"] }
+clap_complete = "4"
 
 [dev-dependencies]
 mockito = "1"

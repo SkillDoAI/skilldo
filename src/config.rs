@@ -411,7 +411,7 @@ impl LlmConfig {
                 creds
                     .as_ref()
                     .map(|c| c.client_id.clone())
-                    .filter(|id| !id.is_empty())
+                    .filter(|id| !id.trim().is_empty())
             })
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -459,7 +459,11 @@ impl LlmConfig {
             .unwrap_or(&value);
 
         Ok(Some(CredentialsJson {
-            client_id: inner["client_id"].as_str().unwrap_or_default().to_string(),
+            client_id: inner["client_id"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("missing client_id in credentials JSON"))?
+                .to_string(),
             client_secret: inner["client_secret"].as_str().map(|s| s.to_string()),
             auth_uri: inner["auth_uri"].as_str().map(|s| s.to_string()),
             token_uri: inner["token_uri"].as_str().map(|s| s.to_string()),
