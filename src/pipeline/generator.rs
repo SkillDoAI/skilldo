@@ -651,7 +651,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             );
 
             let mut last_review_attempt = 0;
-            let mut last_review_tests_passed = true;
+            let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {
                 last_review_attempt = review_attempt;
                 info!(
