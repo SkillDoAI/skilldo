@@ -1007,4 +1007,647 @@ dependencies {
             Some("https://github.com/foo/bar.git".to_string())
         );
     }
+
+    // ── find_docs: README variants and docs/ directory ──
+
+    #[test]
+    fn find_docs_readme_rst() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("README.rst"), "Title\n=====").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].to_str().unwrap().contains("README.rst"));
+    }
+
+    #[test]
+    fn find_docs_readme_txt() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("README.txt"), "Hello").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].to_str().unwrap().contains("README.txt"));
+    }
+
+    #[test]
+    fn find_docs_readme_no_extension() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("README"), "Hello").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].to_str().unwrap().contains("README"));
+    }
+
+    #[test]
+    fn find_docs_with_docs_directory() {
+        let tmp = TempDir::new().unwrap();
+        let docs_dir = tmp.path().join("docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+        fs::write(docs_dir.join("guide.md"), "# Guide").unwrap();
+        fs::write(docs_dir.join("api.rst"), "API docs").unwrap();
+        fs::write(docs_dir.join("notes.txt"), "Notes").unwrap();
+        fs::write(docs_dir.join("manual.adoc"), "= Manual").unwrap();
+        // Non-doc file should be excluded
+        fs::write(docs_dir.join("build.xml"), "<project/>").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert_eq!(docs.len(), 4);
+    }
+
+    #[test]
+    fn find_docs_with_doc_directory() {
+        let tmp = TempDir::new().unwrap();
+        let doc_dir = tmp.path().join("doc");
+        fs::create_dir_all(&doc_dir).unwrap();
+        fs::write(doc_dir.join("overview.md"), "# Overview").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert_eq!(docs.len(), 1);
+    }
+
+    #[test]
+    fn find_docs_recursive_nested_subdirs() {
+        let tmp = TempDir::new().unwrap();
+        let nested = tmp.path().join("docs/sub/deep");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("deep.md"), "# Deep").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].to_str().unwrap().contains("deep.md"));
+    }
+
+    #[test]
+    fn find_docs_readme_takes_priority_over_later_variants() {
+        // When README.md exists, don't also add README.rst
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("README.md"), "# Main").unwrap();
+        fs::write(tmp.path().join("README.rst"), "Fallback").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].to_str().unwrap().contains("README.md"));
+    }
+
+    // ── get_package_name: edge cases ──
+
+    #[test]
+    fn get_package_name_parent_only_empty_after_strip() {
+        // artifactId is exactly "-parent" -> stripped to empty -> fallback to dir name
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>-parent</artifactId></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let name = handler.get_package_name().unwrap();
+        // Falls through to directory name fallback
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn get_package_name_gradle_kts() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("build.gradle.kts"),
+            "group = \"io.ktor\"\nversion = \"2.3.0\"",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_package_name().unwrap(), "io.ktor");
+    }
+
+    #[test]
+    fn get_package_name_settings_gradle_kts() {
+        let tmp = TempDir::new().unwrap();
+        // No pom.xml, no build.gradle group
+        fs::write(
+            tmp.path().join("build.gradle.kts"),
+            "plugins { id(\"java\") }",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle.kts"),
+            "rootProject.name = \"my-kts-lib\"",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_package_name().unwrap(), "my-kts-lib");
+    }
+
+    #[test]
+    fn get_package_name_settings_gradle_kts_strips_root() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle.kts"),
+            "rootProject.name = \"myapp-root\"",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_package_name().unwrap(), "myapp");
+    }
+
+    #[test]
+    fn get_package_name_fallback_to_dir_name() {
+        let tmp = TempDir::new().unwrap();
+        // No pom.xml, no build.gradle, no settings.gradle
+        let handler = JavaHandler::new(tmp.path());
+        let name = handler.get_package_name().unwrap();
+        // Should be the temp dir's directory name (non-empty)
+        assert!(!name.is_empty());
+        assert_ne!(name, "unknown");
+    }
+
+    #[test]
+    fn get_package_name_pom_no_artifact_id() {
+        // pom.xml exists but has no artifactId — fall through to gradle/settings/dir
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><modelVersion>4.0.0</modelVersion></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let name = handler.get_package_name().unwrap();
+        // Falls to directory name
+        assert!(!name.is_empty());
+    }
+
+    // ── get_version: handler-level paths ──
+
+    #[test]
+    fn get_version_from_pom_via_handler() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><version>5.1.0</version></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_version().unwrap(), "5.1.0");
+    }
+
+    #[test]
+    fn get_version_from_gradle_kts() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("build.gradle.kts"), "version = \"3.5.0\"").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_version().unwrap(), "3.5.0");
+    }
+
+    #[test]
+    fn get_version_pom_no_version_falls_through_to_gradle() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>foo</artifactId></project>",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("build.gradle"), "version = '7.0.0'").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_version().unwrap(), "7.0.0");
+    }
+
+    // ── get_license: handler-level paths ──
+
+    #[test]
+    fn get_license_from_pom_via_handler() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><licenses><license><name>GPL-3.0</name></license></licenses></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_license(), Some("GPL-3.0".to_string()));
+    }
+
+    #[test]
+    fn get_license_pom_no_licenses_falls_to_file() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>foo</artifactId></project>",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("LICENSE"), "Apache License\nVersion 2.0").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_license(), Some("Apache-2.0".to_string()));
+    }
+
+    #[test]
+    fn get_license_file_unrecognized_returns_first_line() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("LICENSE"),
+            "Custom Corporate License v1.0\n\nAll rights reserved.",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(
+            handler.get_license(),
+            Some("Custom Corporate License v1.0".to_string())
+        );
+    }
+
+    #[test]
+    fn get_license_file_blank_lines_only_returns_none_style() {
+        // LICENSE file with only whitespace lines — first non-empty line is None
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("LICENSE"), "   \n  \n  ").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        // classify_license returns None, and no non-empty line -> returns None
+        assert_eq!(handler.get_license(), None);
+    }
+
+    #[test]
+    fn get_license_none_when_no_files() {
+        let tmp = TempDir::new().unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_license(), None);
+    }
+
+    // ── get_project_urls: handler-level ──
+
+    #[test]
+    fn get_project_urls_no_pom() {
+        let tmp = TempDir::new().unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert!(handler.get_project_urls().is_empty());
+    }
+
+    #[test]
+    fn get_project_urls_pom_with_url_and_scm() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            r#"<project>
+    <url>https://example.com</url>
+    <scm><url>https://github.com/example/lib</url></scm>
+</project>"#,
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let urls = handler.get_project_urls();
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0].0, "Homepage");
+        assert_eq!(urls[1].0, "Source");
+    }
+
+    #[test]
+    fn get_project_urls_pom_no_urls() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>foo</artifactId></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert!(handler.get_project_urls().is_empty());
+    }
+
+    // ── File discovery: nested examples ──
+
+    #[test]
+    fn find_examples_with_nested_subdirs() {
+        let tmp = TempDir::new().unwrap();
+        let nested = tmp.path().join("examples/advanced");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(tmp.path().join("examples/Simple.java"), "class Simple {}").unwrap();
+        fs::write(nested.join("Advanced.java"), "class Advanced {}").unwrap();
+        // Non-java file should be ignored
+        fs::write(tmp.path().join("examples/README.md"), "# Examples").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let examples = handler.find_examples().unwrap();
+        assert_eq!(examples.len(), 2);
+    }
+
+    #[test]
+    fn find_examples_sample_dir() {
+        let tmp = TempDir::new().unwrap();
+        let sample_dir = tmp.path().join("sample");
+        fs::create_dir_all(&sample_dir).unwrap();
+        fs::write(sample_dir.join("Demo.java"), "class Demo {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let examples = handler.find_examples().unwrap();
+        assert_eq!(examples.len(), 1);
+    }
+
+    #[test]
+    fn find_examples_samples_dir() {
+        let tmp = TempDir::new().unwrap();
+        let samples_dir = tmp.path().join("samples");
+        fs::create_dir_all(&samples_dir).unwrap();
+        fs::write(samples_dir.join("Demo.java"), "class Demo {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let examples = handler.find_examples().unwrap();
+        assert_eq!(examples.len(), 1);
+    }
+
+    #[test]
+    fn find_examples_skips_build_output_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let ex_dir = tmp.path().join("examples");
+        fs::create_dir_all(ex_dir.join("target")).unwrap();
+        fs::write(ex_dir.join("target/Generated.java"), "class Generated {}").unwrap();
+        fs::write(ex_dir.join("Example.java"), "class Example {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let examples = handler.find_examples().unwrap();
+        assert_eq!(examples.len(), 1);
+        assert!(examples[0].to_str().unwrap().contains("Example.java"));
+    }
+
+    // ── File classification: test file naming patterns ──
+
+    #[test]
+    fn find_test_files_tests_suffix() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src/main/java");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("AppTests.java"), "class AppTests {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let tests = handler.find_test_files().unwrap();
+        assert_eq!(tests.len(), 1);
+        assert!(tests[0].to_str().unwrap().contains("AppTests.java"));
+    }
+
+    #[test]
+    fn find_test_files_test_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src/main/java");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("TestApp.java"), "class TestApp {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let tests = handler.find_test_files().unwrap();
+        assert_eq!(tests.len(), 1);
+        assert!(tests[0].to_str().unwrap().contains("TestApp.java"));
+    }
+
+    #[test]
+    fn find_source_files_excludes_test_named_files() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src/main/java");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("App.java"), "class App {}").unwrap();
+        fs::write(src.join("AppTest.java"), "class AppTest {}").unwrap();
+        fs::write(src.join("TestHelper.java"), "class TestHelper {}").unwrap();
+        fs::write(src.join("AppTests.java"), "class AppTests {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let files = handler.find_source_files().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_str().unwrap().contains("App.java"));
+    }
+
+    // ── Skipped directories ──
+
+    #[test]
+    fn find_source_files_skips_ide_and_vcs_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src/main/java");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("App.java"), "class App {}").unwrap();
+
+        // Create files in various skip dirs
+        for dir_name in &[".git", ".idea", ".gradle", ".mvn", "build", "out", "bin"] {
+            let skip = tmp.path().join(dir_name);
+            fs::create_dir_all(&skip).unwrap();
+            fs::write(skip.join("Bad.java"), "class Bad {}").unwrap();
+        }
+
+        let handler = JavaHandler::new(tmp.path());
+        let files = handler.find_source_files().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_str().unwrap().contains("App.java"));
+    }
+
+    // ── Changelog variants ──
+
+    #[test]
+    fn find_changelog_changes_md() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("CHANGES.md"), "# Changes").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let cl = handler.find_changelog();
+        assert!(cl.is_some());
+        assert!(cl.unwrap().to_str().unwrap().contains("CHANGES.md"));
+    }
+
+    #[test]
+    fn find_changelog_changes_no_ext() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("CHANGES"), "changes").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert!(handler.find_changelog().is_some());
+    }
+
+    #[test]
+    fn find_changelog_history_md() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("HISTORY.md"), "# History").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert!(handler.find_changelog().is_some());
+    }
+
+    // ── Parsing edge cases ──
+
+    #[test]
+    fn parse_gradle_group_empty_quotes() {
+        // group = '' — empty after stripping quotes
+        assert_eq!(parse_gradle_group("group = ''"), None);
+        assert_eq!(parse_gradle_group("group = \"\""), None);
+    }
+
+    #[test]
+    fn parse_gradle_group_no_equals() {
+        // "group" appears but no '=' on line
+        assert_eq!(parse_gradle_group("grouping stuff"), None);
+    }
+
+    #[test]
+    fn parse_settings_gradle_name_empty() {
+        assert_eq!(parse_settings_gradle_name("rootProject.name = ''"), None);
+    }
+
+    #[test]
+    fn parse_settings_gradle_name_no_match() {
+        assert_eq!(parse_settings_gradle_name("include ':submodule'"), None);
+    }
+
+    #[test]
+    fn parse_gradle_version_no_version() {
+        assert_eq!(parse_gradle_version("apply plugin: 'java'"), None);
+    }
+
+    #[test]
+    fn parse_gradle_version_empty_value() {
+        assert_eq!(parse_gradle_version("version = ''"), None);
+    }
+
+    #[test]
+    fn parse_gradle_version_double_quotes() {
+        assert_eq!(
+            parse_gradle_version("version = \"4.0.0\""),
+            Some("4.0.0".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_pom_dependencies_duplicate_dedup() {
+        let pom = r#"<dependencies>
+    <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+    </dependency>
+</dependencies>"#;
+        let deps = parse_pom_dependencies(pom);
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0], "org.slf4j:slf4j-api");
+    }
+
+    #[test]
+    fn parse_pom_dependencies_unclosed_dependency() {
+        // <dependency> without closing tag — should break out
+        let pom =
+            "<dependencies><dependency><groupId>org.test</groupId><artifactId>lib</artifactId>";
+        let deps = parse_pom_dependencies(pom);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn parse_pom_dependencies_missing_group_or_artifact() {
+        let pom = r#"<dependencies>
+    <dependency>
+        <groupId>org.test</groupId>
+    </dependency>
+</dependencies>"#;
+        let deps = parse_pom_dependencies(pom);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn parse_gradle_dependencies_compile_keyword() {
+        let content = "compile 'old.dep:lib:1.0'";
+        let deps = parse_gradle_dependencies(content);
+        assert_eq!(deps, vec!["old.dep:lib:1.0"]);
+    }
+
+    #[test]
+    fn parse_gradle_dependencies_no_colon_skipped() {
+        // A bare string without ':' is not a maven coordinate
+        let content = "implementation 'justAString'";
+        let deps = parse_gradle_dependencies(content);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn parse_gradle_dependencies_dedup() {
+        let content = "implementation 'a:b:1'\nimplementation 'a:b:1'";
+        let deps = parse_gradle_dependencies(content);
+        assert_eq!(deps.len(), 1);
+    }
+
+    #[test]
+    fn parse_pom_artifact_id_no_deps_section() {
+        // No <dependencies> tag — search entire region after parent
+        let pom = "<project><artifactId>simple</artifactId></project>";
+        assert_eq!(parse_pom_artifact_id(pom), Some("simple".to_string()));
+    }
+
+    #[test]
+    fn parse_pom_version_no_deps_section() {
+        let pom = "<project><version>9.0</version></project>";
+        assert_eq!(parse_pom_version(pom), Some("9.0".to_string()));
+    }
+
+    #[test]
+    fn parse_pom_url_before_build() {
+        // <url> should be found even when <build> exists but <dependencies> doesn't
+        let pom = "<project><url>https://foo.com</url><build/></project>";
+        assert_eq!(parse_pom_url(pom), Some("https://foo.com".to_string()));
+    }
+
+    #[test]
+    fn parse_pom_url_no_url() {
+        let pom = "<project><artifactId>foo</artifactId></project>";
+        assert_eq!(parse_pom_url(pom), None);
+    }
+
+    #[test]
+    fn parse_pom_scm_url_no_scm() {
+        let pom = "<project><artifactId>foo</artifactId></project>";
+        assert_eq!(parse_pom_scm_url(pom), None);
+    }
+
+    #[test]
+    fn parse_pom_license_no_licenses() {
+        let pom = "<project><artifactId>foo</artifactId></project>";
+        assert_eq!(parse_pom_license(pom), None);
+    }
+
+    #[test]
+    fn extract_xml_tag_missing() {
+        assert_eq!(extract_xml_tag("<foo>bar</foo>", "baz"), None);
+    }
+
+    // ── Non-.java files mixed in source tree ──
+
+    #[test]
+    fn find_source_files_ignores_non_java() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src/main/java");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("App.java"), "class App {}").unwrap();
+        fs::write(src.join("config.xml"), "<config/>").unwrap();
+        fs::write(src.join("data.json"), "{}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let files = handler.find_source_files().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_str().unwrap().contains("App.java"));
+    }
+
+    // ── Empty docs dir (no files) ──
+
+    #[test]
+    fn find_docs_empty_docs_dir() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert!(docs.is_empty());
+    }
+
+    // ── get_package_name: settings.gradle.kts with empty name after strip ──
+
+    #[test]
+    fn get_package_name_settings_kts_root_only() {
+        // rootProject.name = "-root" -> stripped to empty -> fallback to dir name
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle.kts"),
+            "rootProject.name = \"-root\"",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let name = handler.get_package_name().unwrap();
+        assert!(!name.is_empty());
+    }
 }
