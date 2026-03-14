@@ -174,13 +174,30 @@ fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// If the CSV header doesn't match the current schema, replace the first line.
+/// If the CSV header doesn't match the current schema, replace the first line
+/// and normalize data rows to match the new column count.
 fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
     let content = fs::read_to_string(path)?;
     let expected = RunRecord::csv_header();
     if let Some(first_line) = content.lines().next() {
         if first_line != expected {
-            let rest: String = content.lines().skip(1).collect::<Vec<_>>().join("\n");
+            let expected_cols = expected.matches(',').count() + 1;
+            let old_cols = first_line.matches(',').count() + 1;
+            // Normalize data rows: trim or pad to match new column count
+            let rest: String = content
+                .lines()
+                .skip(1)
+                .map(|line| {
+                    let fields: Vec<&str> = line.splitn(old_cols, ',').collect();
+                    if fields.len() > expected_cols {
+                        // Old rows have extra columns — trim to new width
+                        fields[..expected_cols].join(",")
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
             let new_content = if rest.is_empty() {
                 format!("{expected}\n")
             } else {
@@ -382,8 +399,18 @@ mod tests {
             lines[0].ends_with(",skilldo_version"),
             "header should be migrated to current schema"
         );
-        // Old data row is preserved
+        // Old data row is preserved but trimmed to new column count
         assert!(lines[1].starts_with("python,fastapi,"));
+        let old_row_cols = lines[1].matches(',').count() + 1;
+        let header_cols = lines[0].matches(',').count() + 1;
+        assert_eq!(
+            old_row_cols, header_cols,
+            "migrated row should have same column count as header"
+        );
+        assert!(
+            !lines[1].contains("false"),
+            "old review_degraded column should be stripped"
+        );
     }
 
     #[test]
