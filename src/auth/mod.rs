@@ -651,6 +651,24 @@ mod tests {
     }
 
     #[test]
+    fn oauth_endpoint_debug_redacts_with_no_secret() {
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://auth.example.com".to_string(),
+            token_url: "https://token.example.com".to_string(),
+            scopes: "openid".to_string(),
+            client_id: "secret-client-id".to_string(),
+            client_secret: None,
+            provider_name: "no-secret".to_string(),
+        };
+        let debug = format!("{:?}", endpoint);
+        assert!(debug.contains("OAuthEndpoint"));
+        assert!(debug.contains("no-secret"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(debug.contains("None"));
+        assert!(!debug.contains("secret-client-id"));
+    }
+
+    #[test]
     fn oauth_endpoint_clone() {
         let endpoint = OAuthEndpoint {
             auth_url: "https://auth.example.com".to_string(),
