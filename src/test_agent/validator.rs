@@ -6,9 +6,13 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
-use super::executor::{CargoExecutor, ExecutionResult, GoExecutor, NodeExecutor, PythonUvExecutor};
+use super::executor::{
+    CargoExecutor, ExecutionResult, GoExecutor, JavaExecutor, NodeExecutor, PythonUvExecutor,
+};
 use super::go_code_gen::GoCodeGenerator;
 use super::go_parser::GoParser;
+use super::java_code_gen::JavaCodeGenerator;
+use super::java_parser::JavaParser;
 use super::js_code_gen::JsCodeGenerator;
 use super::js_parser::JsParser;
 use super::python_code_gen::PythonCodeGenerator;
@@ -230,6 +234,40 @@ impl<'a> TestCodeValidator<'a> {
                     parser: Box::new(RustParser),
                     code_generator: Box::new(
                         RustCodeGenerator::new(llm_client)
+                            .with_custom_instructions(custom_instructions),
+                    ),
+                    executor,
+                    execution_mode,
+                    mode: ValidationMode::default(),
+                    install_source,
+                })
+            }
+            Language::Java => {
+                let (executor, execution_mode): (Box<dyn LanguageExecutor>, ExecutionMode) =
+                    match execution_mode {
+                        ExecutionMode::BareMetal => (
+                            Box::new(JavaExecutor::new().with_timeout(config.timeout)),
+                            ExecutionMode::BareMetal,
+                        ),
+                        ExecutionMode::Container => {
+                            // Container mode for Java uses bare javac which can't resolve
+                            // external dependencies. Fall back to BareMetal (JavaExecutor).
+                            tracing::warn!(
+                                "Container mode is not yet fully supported for Java \
+                                 (external deps require Maven). Falling back to bare metal. \
+                                 Set `execution_mode = \"bare-metal\"` in your config to suppress this warning."
+                            );
+                            (
+                                Box::new(JavaExecutor::new().with_timeout(config.timeout)),
+                                ExecutionMode::BareMetal,
+                            )
+                        }
+                    };
+                Ok(Self {
+                    language: Language::Java,
+                    parser: Box::new(JavaParser),
+                    code_generator: Box::new(
+                        JavaCodeGenerator::new(llm_client)
                             .with_custom_instructions(custom_instructions),
                     ),
                     executor,

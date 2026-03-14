@@ -33,6 +33,7 @@ impl ContainerExecutor {
             Language::JavaScript => &self.config.javascript_image,
             Language::Rust => &self.config.rust_image,
             Language::Go => &self.config.go_image,
+            Language::Java => &self.config.java_image,
         }
     }
 
@@ -89,6 +90,7 @@ impl ContainerExecutor {
             Language::JavaScript => "node test.js",
             Language::Rust => "rustc main.rs -o main && ./main",
             Language::Go => "go run main.go",
+            Language::Java => "javac Main.java && java Main",
             Language::Python => {
                 bail!("generate_container_script should not be called for Python")
             }
@@ -160,6 +162,7 @@ impl LanguageExecutor for ContainerExecutor {
             Language::JavaScript => "test.js",
             Language::Rust => "main.rs",
             Language::Go => "main.go",
+            Language::Java => "Main.java",
         };
 
         let code_path = env.temp_dir.path().join(code_file);
@@ -420,6 +423,7 @@ mod tests {
             javascript_image: "node:18-alpine".to_string(),
             rust_image: "rust:1.70-alpine".to_string(),
             go_image: "golang:1.20-alpine".to_string(),
+            java_image: "maven:3-eclipse-temurin-21-alpine".to_string(),
             timeout: 60,
             cleanup: true,
             install_source: InstallSource::Registry,
@@ -456,6 +460,7 @@ mod tests {
             javascript_image: "node:18-alpine".to_string(),
             rust_image: "rust:1.70-alpine".to_string(),
             go_image: "golang:1.20-alpine".to_string(),
+            java_image: "maven:3-eclipse-temurin-21-alpine".to_string(),
             timeout: 60,
             cleanup: true,
             install_source: InstallSource::Registry,
@@ -491,6 +496,12 @@ mod tests {
                 "golang:1.20-alpine",
                 "main.go",
                 "package main",
+            ),
+            (
+                Language::Java,
+                "maven:3-eclipse-temurin-21-alpine",
+                "Main.java",
+                "public class Main { public static void main(String[] args) {} }",
             ),
         ]
     }

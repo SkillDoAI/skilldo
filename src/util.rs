@@ -196,7 +196,7 @@ pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
     for ch in dep.chars() {
         match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' => {}
-            '-' | '_' | '.' | '/' | '[' | ']' | ',' | '@' => {}
+            '-' | '_' | '.' | '/' | '[' | ']' | ',' | '@' | ':' => {}
             '>' | '<' | '=' | '!' | '~' | '^' => {} // version constraints
             _ => {
                 return Err(format!(

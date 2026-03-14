@@ -9,6 +9,7 @@ use tracing::{info, warn};
 
 use crate::detector::Language;
 use crate::ecosystems::go::GoHandler;
+use crate::ecosystems::java::JavaHandler;
 use crate::ecosystems::javascript::JsHandler;
 use crate::ecosystems::python::{pyproject_project_field, PythonHandler};
 use crate::ecosystems::rust::RustHandler;
@@ -59,6 +60,7 @@ impl Collector {
             Language::Go => self.collect_go().await,
             Language::JavaScript => self.collect_javascript().await,
             Language::Rust => self.collect_rust().await,
+            Language::Java => self.collect_java().await,
         }
     }
 
@@ -315,6 +317,71 @@ impl Collector {
         if crate::util::sanitize_dep_name(&package_name).is_err() {
             warn!(
                 "Rust crate name '{}' contains unexpected characters, using 'unknown'",
+                package_name
+            );
+            package_name = "unknown".to_string();
+        }
+
+        Ok(CollectedData {
+            package_name,
+            version,
+            license,
+            project_urls,
+            language: self.language.clone(),
+            source_file_count: source_paths.len(),
+            examples_content,
+            test_content,
+            docs_content,
+            source_content,
+            changelog_content,
+        })
+    }
+
+    async fn collect_java(&self) -> Result<CollectedData> {
+        let handler = JavaHandler::new(&self.repo_path);
+
+        let example_paths = handler.find_examples()?;
+        let test_paths = handler.find_test_files()?;
+        let doc_paths = handler.find_docs()?;
+        let source_paths = handler.find_source_files()?;
+        let changelog_path = handler.find_changelog();
+        let version = handler.get_version()?;
+        let license = handler.get_license();
+        let project_urls = handler.get_project_urls();
+
+        // Same budget allocation as Python/Go/JS/Rust
+        let budget = self.max_source_chars;
+        let examples_budget = budget * 30 / 100;
+        let test_budget = budget * 30 / 100;
+        let docs_budget = budget * 20 / 100;
+        let changelog_budget = budget * 5 / 100;
+
+        let examples_content = Self::read_files(&example_paths, examples_budget)?;
+        let test_content = Self::read_files(&test_paths, test_budget)?;
+        let docs_content = Self::read_files(&doc_paths, docs_budget)?;
+        let changelog_content = if let Some(path) = changelog_path {
+            Self::read_file_limited(&path, changelog_budget)?
+        } else {
+            String::new()
+        };
+
+        let fixed_actual = examples_content.len()
+            + test_content.len()
+            + docs_content.len()
+            + changelog_content.len();
+        let remaining = budget.saturating_sub(fixed_actual);
+        let source_budget = match source_paths.len() {
+            n if n > 2000 => remaining,
+            n if n > 1000 => remaining * 60 / 100,
+            n if n > 300 => remaining * 40 / 100,
+            _ => remaining,
+        };
+        let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
+
+        let mut package_name = handler.get_package_name()?;
+        if crate::util::sanitize_dep_name(&package_name).is_err() {
+            warn!(
+                "Java package name '{}' contains unexpected characters, using 'unknown'",
                 package_name
             );
             package_name = "unknown".to_string();
