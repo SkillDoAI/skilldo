@@ -155,9 +155,7 @@ pub fn append_run(record: &RunRecord, path: Option<PathBuf>) -> std::io::Result<
     }
     writeln!(file, "{}", record.to_csv_row())?;
 
-    // Migrate stale header: if the first line doesn't match the current header,
-    // prepend the correct header. Old rows get extra trailing empty fields on
-    // parse, which is harmless for append-only telemetry.
+    // Migrate stale header and trim old rows to match current schema width.
     if file_len > 0 {
         drop(file);
         migrate_header_if_stale(&csv_path)?;
@@ -182,17 +180,17 @@ fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
     if let Some(first_line) = content.lines().next() {
         if first_line != expected {
             let expected_cols = expected.matches(',').count() + 1;
-            let old_cols = first_line.matches(',').count() + 1;
-            // Normalize data rows: trim trailing columns to match new width.
+            // Normalize each row based on its own column count — avoids
+            // over-trimming new-schema rows that were appended before migration.
             // Uses rfind(',') instead of split to avoid breaking quoted fields
             // that contain commas (e.g., failure_reason = "foo, bar").
-            let cols_to_trim = old_cols.saturating_sub(expected_cols);
             let rest: String = content
                 .lines()
                 .skip(1)
                 .map(|line| {
                     let mut trimmed = line;
-                    for _ in 0..cols_to_trim {
+                    let line_cols = trimmed.matches(',').count() + 1;
+                    for _ in 0..line_cols.saturating_sub(expected_cols) {
                         if let Some(pos) = trimmed.rfind(',') {
                             trimmed = &trimmed[..pos];
                         }
@@ -408,11 +406,21 @@ mod tests {
         let header_cols = lines[0].matches(',').count() + 1;
         assert_eq!(
             old_row_cols, header_cols,
-            "migrated row should have same column count as header"
+            "old row should have same column count as header"
         );
         assert!(
             !lines[1].contains("false"),
             "old review_degraded column should be stripped"
+        );
+        // New row (appended with current schema) must NOT be over-trimmed
+        let new_row_cols = lines[2].matches(',').count() + 1;
+        assert_eq!(
+            new_row_cols, header_cols,
+            "new row should have same column count as header (not over-trimmed)"
+        );
+        assert!(
+            lines[2].ends_with(",0.1.9"),
+            "new row should still have skilldo_version as last field"
         );
     }
 
