@@ -1084,4 +1084,209 @@ mod tests {
         fs::write(root.join("src/index.js"), "code\n").unwrap();
         assert!(!JsHandler::is_test_file(&root.join("src/index.js"), root));
     }
+
+    // ── Coverage: detect_license with no LICENSE file ────────────────
+
+    #[test]
+    fn test_detect_license_no_package_json_no_license() {
+        // No package.json at all, no LICENSE file
+        let dir = tempfile::tempdir().unwrap();
+        let handler = JsHandler::new(dir.path());
+        assert!(handler.detect_license().is_none());
+    }
+
+    // ── Coverage: file_priority additional paths ─────────────────────
+
+    #[test]
+    fn test_file_priority_main_js() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let handler = JsHandler::new(root);
+        // main.js should get priority 0
+        assert_eq!(handler.file_priority(&root.join("main.js")), 0);
+        // index.ts should also get priority 0
+        assert_eq!(handler.file_priority(&root.join("index.ts")), 0);
+    }
+
+    #[test]
+    fn test_file_priority_src_dir_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let handler = JsHandler::new(root);
+        // Files in src/ get priority 1
+        assert_eq!(handler.file_priority(&root.join("src").join("utils.ts")), 1);
+        // Files in lib/ get priority 1
+        assert_eq!(handler.file_priority(&root.join("lib").join("core.js")), 1);
+    }
+
+    #[test]
+    fn test_file_priority_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let handler = JsHandler::new(root);
+        // Files not in src/lib and not index/main get priority 2
+        assert_eq!(handler.file_priority(&root.join("utils.ts")), 2);
+    }
+
+    // ── Coverage: find_docs edge cases ───────────────────────────────
+
+    #[test]
+    fn test_find_docs_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = JsHandler::new(dir.path());
+        let docs = handler.find_docs().unwrap();
+        assert!(docs.is_empty());
+    }
+
+    #[test]
+    fn test_find_docs_readme_only_no_docs_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("Readme.md"), "# Hello\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert_eq!(docs.len(), 1);
+    }
+
+    // ── Coverage: find_examples empty ────────────────────────────────
+
+    #[test]
+    fn test_find_examples_no_dirs_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = JsHandler::new(dir.path());
+        let examples = handler.find_examples().unwrap();
+        assert!(examples.is_empty());
+    }
+
+    // ── Coverage: find_source_files with ESM variants ────────────────
+
+    #[test]
+    fn test_find_source_files_esm_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("index.mjs"), "export default {};\n").unwrap();
+        fs::write(root.join("config.cjs"), "module.exports = {};\n").unwrap();
+        fs::write(root.join("types.mts"), "export type Foo = {};\n").unwrap();
+        fs::write(root.join("types.cts"), "export type Bar = {};\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"index.mjs"));
+        assert!(names.contains(&"config.cjs"));
+        assert!(names.contains(&"types.mts"));
+        assert!(names.contains(&"types.cts"));
+    }
+
+    // ── Coverage: find_source_files excludes .d.mts and .d.cts ──────
+
+    #[test]
+    fn test_find_source_files_excludes_declaration_mts_cts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("index.ts"), "export {};\n").unwrap();
+        fs::write(root.join("types.d.mts"), "declare const x: number;\n").unwrap();
+        fs::write(root.join("types.d.cts"), "declare const y: number;\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"index.ts"));
+        assert!(!names.contains(&"types.d.mts"));
+        assert!(!names.contains(&"types.d.cts"));
+    }
+
+    // ── Coverage: find_changelog with alternate names ────────────────
+
+    #[test]
+    fn test_find_changelog_changes_md() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("CHANGES.md"), "# Changes\n").unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        let changelog = handler.find_changelog();
+        assert!(changelog.is_some());
+        assert!(changelog.unwrap().ends_with("CHANGES.md"));
+    }
+
+    #[test]
+    fn test_find_changelog_history_md() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("HISTORY.md"), "# History\n").unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        let changelog = handler.find_changelog();
+        assert!(changelog.is_some());
+        assert!(changelog.unwrap().ends_with("HISTORY.md"));
+    }
+
+    #[test]
+    fn test_find_changelog_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = JsHandler::new(dir.path());
+        assert!(handler.find_changelog().is_none());
+    }
+
+    // ── Coverage: collect_docs_recursive with .rst files ─────────────
+
+    #[test]
+    fn test_find_docs_rst_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("docs")).unwrap();
+        fs::write(root.join("docs").join("guide.rst"), "Guide\n=====\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert!(docs
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "guide.rst")));
+    }
+
+    // ── Coverage: collect_all_js_in_dir with .min. files ─────────────
+
+    #[test]
+    fn test_find_examples_excludes_min_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("examples")).unwrap();
+        fs::write(root.join("examples").join("demo.js"), "console.log();\n").unwrap();
+        fs::write(
+            root.join("examples").join("bundle.min.js"),
+            "!function(){}\n",
+        )
+        .unwrap();
+
+        let handler = JsHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"demo.js"));
+        assert!(
+            !names.contains(&"bundle.min.js"),
+            "should exclude .min. files from examples"
+        );
+    }
+
+    // ── Coverage: is_test_file with no filename ──────────────────────
+
+    #[test]
+    fn test_is_test_file_with_plain_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // A regular file in the root is not a test file
+        assert!(!JsHandler::is_test_file(&root.join("app.js"), root));
+    }
 }

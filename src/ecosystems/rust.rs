@@ -2772,8 +2772,10 @@ mod tests {
         fs::write(root.join("src").join("lib.rs"), "").unwrap();
         fs::write(root.join("README.md"), "# Readme").unwrap();
         fs::write(root.join("CONTRIBUTING.md"), "# Contributing").unwrap();
-        // CHANGELOG should be excluded
+        // CHANGELOG, CHANGES, HISTORY should be excluded
         fs::write(root.join("CHANGELOG.md"), "# Changelog").unwrap();
+        fs::write(root.join("CHANGES.md"), "# Changes").unwrap();
+        fs::write(root.join("HISTORY.md"), "# History").unwrap();
 
         let handler = RustHandler::new(root);
         let docs = handler.find_docs().unwrap();
@@ -2781,6 +2783,16 @@ mod tests {
             docs.iter()
                 .any(|p| p.file_name().unwrap() == "CONTRIBUTING.md"),
             "should include root .md files: {:?}",
+            docs
+        );
+        assert!(
+            !docs.iter().any(|p| p.file_name().unwrap() == "CHANGES.md"),
+            "should exclude CHANGES.md: {:?}",
+            docs
+        );
+        assert!(
+            !docs.iter().any(|p| p.file_name().unwrap() == "HISTORY.md"),
+            "should exclude HISTORY.md: {:?}",
             docs
         );
         assert!(

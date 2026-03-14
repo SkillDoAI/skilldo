@@ -53,6 +53,8 @@ pub struct GenerateOutput {
     pub failed_stage: Option<FailedStage>,
     /// Error summary for the failure (e.g., "3/5 tests failed after 3 retries").
     pub failure_reason: Option<String>,
+    /// True when review ran without container introspection (advisory only).
+    pub review_degraded: bool,
 }
 
 /// Strip markdown code fences from output (``` or ~~~ variants)
@@ -653,6 +655,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
 
         // Review: accuracy + safety validation
         let mut unresolved_warnings: Vec<ReviewIssue> = Vec::new();
+        let mut review_degraded = false;
         if self.enable_review {
             let review_agent = ReviewAgent::new(
                 self.get_client("review"),
@@ -673,6 +676,9 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 let result = review_agent
                     .review(&skill_md, &data.package_name, &data.language)
                     .await?;
+
+                // Preserve degraded state before any control flow (malformed → continue/break)
+                review_degraded = review_degraded || result.degraded;
 
                 if result.malformed {
                     if review_attempt < self.review_max_retries {
@@ -844,6 +850,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             review_retries_used,
             failed_stage,
             failure_reason,
+            review_degraded,
         })
     }
 }
@@ -1315,6 +1322,7 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
+            review_degraded: false,
         };
         assert_eq!(output.skill_md, "# Test SKILL.md");
         assert!(output.unresolved_warnings.is_empty());
@@ -1338,6 +1346,7 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
+            review_degraded: false,
         };
         assert_eq!(output.unresolved_warnings.len(), 1);
         assert_eq!(
@@ -1362,6 +1371,7 @@ mod tests {
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
+            review_degraded: false,
         };
         // GenerateOutput derives Debug, ensure it doesn't panic
         let debug_str = format!("{:?}", output);
@@ -2274,6 +2284,7 @@ testpkg.run()
             review_retries_used: 0,
             failed_stage: None,
             failure_reason: None,
+            review_degraded: false,
         };
         let debug_str = format!("{:?}", output);
         assert!(debug_str.contains("GenerateOutput"));
@@ -3055,5 +3066,103 @@ None known.
         let output = gen.generate(&data).await.unwrap();
         // Review ultimately fails (FailingReviewClient always returns issues)
         assert!(output.has_unresolved_errors);
+    }
+
+    // ========================================================================
+    // strip_markdown_fences: leading < 3 fence chars (returns content as-is)
+    // ========================================================================
+
+    #[test]
+    fn test_strip_markdown_fences_two_backticks_returns_as_is() {
+        // Two leading backticks is not a valid fence (need >= 3)
+        let input = "``not a fence\ncontent\n``";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_one_backtick_returns_as_is() {
+        let input = "`inline code`";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_two_tildes_returns_as_is() {
+        // Two tildes is not a valid fence
+        let input = "~~strikethrough~~";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, input);
+    }
+
+    // ========================================================================
+    // bail_on_security_lint: direct unit tests
+    // ========================================================================
+
+    #[test]
+    fn test_bail_on_security_lint_with_security_error() {
+        let issues = vec![crate::lint::LintIssue {
+            severity: Severity::Error,
+            category: "security".to_string(),
+            message: "Reverse shell detected".to_string(),
+            suggestion: None,
+        }];
+        let result = bail_on_security_lint(&issues);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("SECURITY"));
+        assert!(err.contains("Reverse shell detected"));
+    }
+
+    #[test]
+    fn test_bail_on_security_lint_with_multiple_security_errors() {
+        let issues = vec![
+            crate::lint::LintIssue {
+                severity: Severity::Error,
+                category: "Security".to_string(),
+                message: "Credential harvesting".to_string(),
+                suggestion: None,
+            },
+            crate::lint::LintIssue {
+                severity: Severity::Error,
+                category: "SECURITY".to_string(),
+                message: "Prompt injection".to_string(),
+                suggestion: None,
+            },
+        ];
+        let result = bail_on_security_lint(&issues);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Credential harvesting"));
+        assert!(err.contains("Prompt injection"));
+    }
+
+    #[test]
+    fn test_bail_on_security_lint_with_non_security_error_passes() {
+        // Non-security errors should not trigger bail
+        let issues = vec![crate::lint::LintIssue {
+            severity: Severity::Error,
+            category: "format".to_string(),
+            message: "Missing section".to_string(),
+            suggestion: None,
+        }];
+        assert!(bail_on_security_lint(&issues).is_ok());
+    }
+
+    #[test]
+    fn test_bail_on_security_lint_with_security_warning_passes() {
+        // Security warnings (not errors) should not trigger bail
+        let issues = vec![crate::lint::LintIssue {
+            severity: Severity::Warning,
+            category: "security".to_string(),
+            message: "Suspicious pattern".to_string(),
+            suggestion: None,
+        }];
+        assert!(bail_on_security_lint(&issues).is_ok());
+    }
+
+    #[test]
+    fn test_bail_on_security_lint_empty_issues_passes() {
+        assert!(bail_on_security_lint(&[]).is_ok());
     }
 }

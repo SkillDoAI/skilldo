@@ -2228,4 +2228,46 @@ model = "claude-sonnet-4-6"
         assert!(result.is_none(), "Empty env var should return None");
         std::env::remove_var("SKILLDO_TEST_EMPTY_VAR");
     }
+
+    #[test]
+    #[serial]
+    fn test_load_credentials_json_empty_env_exercises_early_return() {
+        std::env::set_var("SKILLDO_TEST_CREDS_LOAD_EMPTY2", "");
+
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_LOAD_EMPTY2".to_string());
+
+        let result = llm.load_credentials_json().unwrap();
+        assert!(result.is_none(), "Empty env var should return None");
+
+        std::env::remove_var("SKILLDO_TEST_CREDS_LOAD_EMPTY2");
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_credentials_json_unset_env_returns_none() {
+        std::env::remove_var("SKILLDO_TEST_CREDS_UNSET_VAR");
+
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_UNSET_VAR".to_string());
+
+        let result = llm.load_credentials_json().unwrap();
+        assert!(result.is_none(), "Unset env var should return None");
+    }
+
+    #[test]
+    fn test_try_load_from_path_returns_none_for_missing() {
+        let result = Config::try_load_from_path("/nonexistent/path/skilldo.toml").unwrap();
+        assert!(result.is_none(), "Missing file should return None");
+    }
+
+    #[test]
+    fn test_try_load_from_path_errors_on_invalid_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "this is not valid toml {{{{").unwrap();
+
+        let result = Config::try_load_from_path(&path);
+        assert!(result.is_err(), "Invalid TOML should produce an error");
+    }
 }

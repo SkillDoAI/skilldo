@@ -198,6 +198,21 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         config.generation.container.source_path = Some(abs_path.to_string_lossy().to_string());
     }
 
+    // Local-install/local-mount is only implemented for Python. Other languages
+    // silently do nothing useful, so fail early with a clear message.
+    // Skip when test agent is disabled — install_source only affects tests.
+    if config.generation.enable_test
+        && config.generation.container.install_source != InstallSource::Registry
+        && !matches!(detected_language, Language::Python)
+    {
+        anyhow::bail!(
+            "install_source '{}' is only supported for Python. \
+             For {}, use the default registry install.",
+            config.generation.container.install_source,
+            detected_language.as_str()
+        );
+    }
+
     // Test agent model/provider CLI overrides (skip if test agent is disabled)
     if config.generation.enable_test
         && (test_model_override.is_some() || test_provider_override.is_some())
@@ -529,6 +544,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             duration_secs: duration.as_secs_f64(),
             timestamp: crate::telemetry::iso8601_now(),
             skilldo_version: env!("CARGO_PKG_VERSION").to_string(),
+            review_degraded: output_result.review_degraded,
         };
         if let Err(e) = crate::telemetry::append_run(&record, None) {
             tracing::warn!("Failed to write telemetry: {}", e);
@@ -540,6 +556,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     let lint_issues = issues.len();
     let status = if output_result.has_unresolved_errors {
         "errors"
+    } else if output_result.review_degraded {
+        "degraded"
     } else {
         "ok"
     };
@@ -839,6 +857,48 @@ setup(name="testpkg", version="1.0.0")
             "install_source_override failed: {:?}",
             result.err()
         );
+    }
+
+    #[tokio::test]
+    async fn test_run_rejects_local_install_for_non_python() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            language: Some("go".to_string()),
+            install_source_override: Some("local-install".to_string()),
+            dry_run: true,
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(result.is_err(), "non-Python local-install should fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("install_source"),
+            "error should mention install_source: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_allows_local_install_non_python_when_no_test() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            language: Some("go".to_string()),
+            install_source_override: Some("local-mount".to_string()),
+            no_test: true,
+            dry_run: true,
+            best_effort: true,
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        // May fail for other reasons (no Go files in test repo), but should NOT
+        // fail with the install_source guard — that's what we're testing.
+        if let Err(e) = &result {
+            assert!(
+                !e.to_string().contains("install_source"),
+                "install_source guard should be skipped with --no-test: {e}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -27,6 +27,8 @@ pub struct RunRecord {
     pub duration_secs: f64,
     pub timestamp: String,
     pub skilldo_version: String,
+    /// True when review ran without container introspection (textual analysis only).
+    pub review_degraded: bool,
 }
 
 impl RunRecord {
@@ -51,13 +53,14 @@ impl RunRecord {
             format!("{:.1}", self.duration_secs),
             csv_escape(&self.timestamp),
             csv_escape(&self.skilldo_version),
+            self.review_degraded.to_string(),
         ];
         fields.join(",")
     }
 
     /// CSV header line (no trailing newline).
     pub fn csv_header() -> &'static str {
-        "language,library,library_version,provider,model,test_provider,test_model,review_provider,review_model,max_retries,retries_used,review_retries_used,passed,failed_stage,failure_reason,duration_secs,timestamp,skilldo_version"
+        "language,library,library_version,provider,model,test_provider,test_model,review_provider,review_model,max_retries,retries_used,review_retries_used,passed,failed_stage,failure_reason,duration_secs,timestamp,skilldo_version,review_degraded"
     }
 }
 
@@ -142,12 +145,46 @@ pub fn append_run(record: &RunRecord, path: Option<PathBuf>) -> std::io::Result<
         .append(true)
         .open(&csv_path)?;
 
-    let needs_header = file.metadata()?.len() == 0;
-    if needs_header {
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
         writeln!(file, "{}", RunRecord::csv_header())?;
     }
     writeln!(file, "{}", record.to_csv_row())?;
 
+    // Migrate stale header: if the first line doesn't match the current header,
+    // prepend the correct header. Old rows get extra trailing empty fields on
+    // parse, which is harmless for append-only telemetry.
+    if file_len > 0 {
+        drop(file);
+        migrate_header_if_stale(&csv_path)?;
+    }
+
+    Ok(())
+}
+
+/// Write `data` to `path` atomically: write to a sibling temp file, then rename.
+/// Prevents data loss if the process is killed mid-write.
+fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, data)?;
+    fs::rename(&tmp, path)
+}
+
+/// If the CSV header doesn't match the current schema, replace the first line.
+fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
+    let content = fs::read_to_string(path)?;
+    let expected = RunRecord::csv_header();
+    if let Some(first_line) = content.lines().next() {
+        if first_line != expected {
+            let rest: String = content.lines().skip(1).collect::<Vec<_>>().join("\n");
+            let new_content = if rest.is_empty() {
+                format!("{expected}\n")
+            } else {
+                format!("{expected}\n{rest}\n")
+            };
+            write_atomic(path, new_content.as_bytes())?;
+        }
+    }
     Ok(())
 }
 
@@ -175,6 +212,7 @@ mod tests {
             duration_secs: 198.3,
             timestamp: "2026-03-02T20:30:00-08:00".to_string(),
             skilldo_version: "0.1.9".to_string(),
+            review_degraded: false,
         }
     }
 
@@ -185,7 +223,7 @@ mod tests {
         // Assert on known prefixes/suffixes to avoid fragile split on commas
         assert!(row.starts_with("python,fastapi,0.115.0,anthropic,"));
         assert!(row.contains(",true,")); // passed field
-        assert!(row.ends_with(",0.1.9"));
+        assert!(row.ends_with(",0.1.9,false"));
     }
 
     #[test]
@@ -295,6 +333,28 @@ mod tests {
     }
 
     #[test]
+    fn test_review_degraded_appears_in_csv_row() {
+        let record = RunRecord {
+            review_degraded: true,
+            ..sample_record()
+        };
+        let row = record.to_csv_row();
+        assert!(
+            row.ends_with(",true"),
+            "review_degraded=true should be last CSV field"
+        );
+    }
+
+    #[test]
+    fn test_review_degraded_column_in_header() {
+        let header = RunRecord::csv_header();
+        assert!(
+            header.ends_with(",review_degraded"),
+            "review_degraded should be last header column"
+        );
+    }
+
+    #[test]
     fn test_default_path_creates_dir_and_file() {
         // Use a tempdir to avoid polluting the real ~/.skilldo/runs.csv
         let dir = tempfile::tempdir().unwrap();
@@ -318,5 +378,60 @@ mod tests {
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2); // header + 1 row
         assert!(lines[0].starts_with("language,"));
+    }
+
+    #[test]
+    fn test_append_run_migrates_stale_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+
+        // Write an old header (missing review_degraded column)
+        let old_header = "language,library,library_version,provider,model,test_provider,test_model,review_provider,review_model,max_retries,retries_used,review_retries_used,passed,failed_stage,failure_reason,duration_secs,timestamp,skilldo_version";
+        let old_row = "python,fastapi,0.115.0,anthropic,claude,,,,,3,0,0,true,,,1.0,2024-01-01T00:00:00Z,0.1.8";
+        fs::write(&csv_path, format!("{old_header}\n{old_row}\n")).unwrap();
+
+        // Append a new record — should migrate the header
+        let record = sample_record();
+        append_run(&record, Some(csv_path.clone())).unwrap();
+
+        let content = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3, "header + old row + new row");
+        assert!(
+            lines[0].ends_with(",review_degraded"),
+            "header should be migrated to include review_degraded"
+        );
+        // Old data row is preserved
+        assert!(lines[1].starts_with("python,fastapi,"));
+    }
+
+    #[test]
+    fn test_write_atomic_replaces_file_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atomic.txt");
+        fs::write(&path, "original").unwrap();
+        write_atomic(&path, b"replaced").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "replaced");
+        // Temp file should not linger
+        assert!(!dir.path().join("atomic.tmp").exists());
+    }
+
+    #[test]
+    fn test_migrate_header_noop_when_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+
+        let record = sample_record();
+        append_run(&record, Some(csv_path.clone())).unwrap();
+
+        let before = fs::read_to_string(&csv_path).unwrap();
+
+        // Append again — header should not change
+        append_run(&record, Some(csv_path.clone())).unwrap();
+
+        let after = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = after.lines().collect();
+        assert_eq!(lines.len(), 3); // header + 2 rows
+        assert_eq!(lines[0], before.lines().next().unwrap());
     }
 }

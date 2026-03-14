@@ -2029,4 +2029,108 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert!(files[0].file_name().unwrap().to_str().unwrap() == "core.py");
     }
+
+    // -- pyproject_project_field: direct edge cases --
+
+    #[test]
+    fn test_pyproject_project_field_empty_value_returns_none() {
+        // An explicitly empty value (after quote trimming) should return None
+        let content = "[project]\nname = \"\"\n";
+        assert_eq!(pyproject_project_field(content, "name"), None);
+    }
+
+    #[test]
+    fn test_pyproject_project_field_not_in_project_section() {
+        // Field under a different section should not be found
+        let content = "[tool.poetry]\nname = \"poetry-name\"\n";
+        assert_eq!(pyproject_project_field(content, "name"), None);
+    }
+
+    // -- get_license: setup.py edge cases for empty license values --
+
+    #[test]
+    fn test_get_license_setup_py_no_equals_skipped() {
+        // A setup.py line with "license" but no '=' should be skipped
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("setup.py"),
+            "# this mentions license but has no assignment\nprint('license')\n",
+        )
+        .unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        assert_eq!(handler.get_license(), None);
+    }
+
+    // -- get_project_urls: setup.py closing brace on same line as project_urls --
+
+    #[test]
+    fn test_get_project_urls_setup_py_closing_brace_same_line() {
+        // project_urls={} — opening and closing brace on same line
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("setup.py"),
+            "setup(\n    project_urls={},\n)\n",
+        )
+        .unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(urls.is_empty());
+    }
+
+    // -- find_test_files: conftest.py pattern --
+
+    #[test]
+    fn test_find_test_files_conftest() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("conftest.py"), "# conftest").unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let files = handler.find_test_files().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("conftest.py"));
+    }
+
+    // -- is_test_filename edge cases --
+
+    #[test]
+    fn test_is_test_filename_patterns() {
+        assert!(is_test_filename("test_core.py"));
+        assert!(is_test_filename("tests_helpers.py"));
+        assert!(is_test_filename("core_test.py"));
+        assert!(is_test_filename("conftest.py"));
+        assert!(!is_test_filename("core.py"));
+        assert!(!is_test_filename("testutils.py"));
+        assert!(!is_test_filename("contest.py"));
+    }
+
+    // -- collect_py_files: depth limit --
+
+    #[test]
+    fn test_collect_py_files_depth_limit() {
+        let dir = TempDir::new().unwrap();
+        // Create a directory structure deeper than MAX_DEPTH (20)
+        let mut deepest = dir.path().to_path_buf();
+        for i in 0..22 {
+            deepest = deepest.join(format!("d{}", i));
+        }
+        fs::create_dir_all(&deepest).unwrap();
+        fs::write(deepest.join("deep.py"), "# deep").unwrap();
+        fs::write(dir.path().join("shallow.py"), "# shallow").unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let mut files = Vec::new();
+        handler.collect_py_files(dir.path(), &mut files).unwrap();
+
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"shallow.py"));
+        assert!(
+            !names.contains(&"deep.py"),
+            "should not find files beyond MAX_DEPTH"
+        );
+    }
 }

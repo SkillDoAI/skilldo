@@ -411,4 +411,54 @@ mod tests {
 
         delete_tokens(name).unwrap();
     }
+
+    #[test]
+    fn load_tokens_returns_error_on_invalid_json() {
+        let name = "test-oauth-invalid-json";
+        let path = token_path(name).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).ok();
+        std::fs::write(&path, "{not valid json}").unwrap();
+
+        // Cleanup guard — runs even if assertions panic
+        struct Cleanup<'a>(&'a str);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                delete_tokens(self.0).ok();
+            }
+        }
+        let _cleanup = Cleanup(name);
+
+        let result = load_tokens(name);
+        assert!(result.is_err(), "Invalid JSON should produce an error");
+        let err = result.err().unwrap().to_string();
+        assert!(
+            err.contains("Failed to parse token file"),
+            "Error should mention parsing: {err}"
+        );
+    }
+
+    #[test]
+    fn delete_tokens_succeeds_when_no_file() {
+        let result = delete_tokens("test-oauth-nonexistent-provider");
+        assert!(
+            result.is_ok(),
+            "delete_tokens should succeed even if no file exists"
+        );
+    }
+
+    #[test]
+    fn token_path_rejects_empty_name() {
+        assert!(token_path("").is_err());
+    }
+
+    #[test]
+    fn token_path_rejects_dotdot() {
+        assert!(token_path("..").is_err());
+    }
+
+    #[test]
+    fn token_path_produces_json_extension() {
+        let path = token_path("my-provider").unwrap();
+        assert!(path.to_str().unwrap().ends_with("my-provider.json"));
+    }
 }
