@@ -688,6 +688,18 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                         unresolved_warnings = pass_warnings;
                     }
                     info!("  ✓ review: passed");
+                    // Clear errors from earlier review attempts — the final
+                    // review+test cycle succeeded, so prior failures are resolved.
+                    if had_unresolved_errors
+                        && matches!(
+                            failed_stage,
+                            Some(FailedStage::Review) | Some(FailedStage::Test)
+                        )
+                    {
+                        had_unresolved_errors = false;
+                        failed_stage = None;
+                        failure_reason = None;
+                    }
                     break;
                 }
 
