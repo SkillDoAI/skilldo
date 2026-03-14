@@ -56,8 +56,8 @@ model = "claude-sonnet-4-6"
 api_key_env = "ANTHROPIC_API_KEY"  # env var name containing the key
 
 [generation]
-telemetry = true                # log runs to ~/.skilldo/runs.csv
 max_retries = 5                 # retry on lint/test failures
+# telemetry = true              # opt-in: log runs to ~/.skilldo/runs.csv
 ```
 
 ### Per-stage model overrides

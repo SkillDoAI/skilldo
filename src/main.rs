@@ -1384,6 +1384,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_completion_command() {
+        let cli = Cli::try_parse_from(["skilldo", "completion", "zsh"]).unwrap();
+        assert!(matches!(cli.command, Commands::Completion { .. }));
+        if let Commands::Completion { shell } = cli.command {
+            assert_eq!(shell, Shell::Zsh);
+        }
+    }
+
+    #[test]
+    fn test_parse_completion_bash() {
+        let cli = Cli::try_parse_from(["skilldo", "completion", "bash"]).unwrap();
+        if let Commands::Completion { shell } = cli.command {
+            assert_eq!(shell, Shell::Bash);
+        }
+    }
+
+    #[test]
     fn test_hello_world_is_hidden() {
         use clap::CommandFactory;
         let cmd = Cli::command();
