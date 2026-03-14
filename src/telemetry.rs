@@ -172,6 +172,20 @@ fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// Count CSV columns respecting RFC 4180 quoting (commas inside quotes don't count).
+fn count_csv_cols(line: &str) -> usize {
+    let mut cols = 1;
+    let mut in_quotes = false;
+    for ch in line.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => cols += 1,
+            _ => {}
+        }
+    }
+    cols
+}
+
 /// If the CSV header doesn't match the current schema, replace the first line
 /// and normalize data rows to match the new column count.
 fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
@@ -182,14 +196,14 @@ fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
             let expected_cols = expected.matches(',').count() + 1;
             // Normalize each row based on its own column count — avoids
             // over-trimming new-schema rows that were appended before migration.
-            // Uses rfind(',') instead of split to avoid breaking quoted fields
-            // that contain commas (e.g., failure_reason = "foo, bar").
+            // Uses rfind(',') to trim from the right (safe for quoted fields).
+            // count_csv_cols respects RFC 4180 quoting for accurate column counting.
             let rest: String = content
                 .lines()
                 .skip(1)
                 .map(|line| {
                     let mut trimmed = line;
-                    let line_cols = trimmed.matches(',').count() + 1;
+                    let line_cols = count_csv_cols(trimmed);
                     for _ in 0..line_cols.saturating_sub(expected_cols) {
                         if let Some(pos) = trimmed.rfind(',') {
                             trimmed = &trimmed[..pos];
@@ -421,6 +435,53 @@ mod tests {
         assert!(
             lines[2].ends_with(",0.1.9"),
             "new row should still have skilldo_version as last field"
+        );
+    }
+
+    #[test]
+    fn test_count_csv_cols_simple() {
+        assert_eq!(count_csv_cols("a,b,c"), 3);
+        assert_eq!(count_csv_cols("one"), 1);
+        assert_eq!(count_csv_cols(""), 1);
+    }
+
+    #[test]
+    fn test_count_csv_cols_with_quoted_commas() {
+        // Commas inside quotes don't count as separators
+        assert_eq!(count_csv_cols(r#"a,"foo, bar",c"#), 3);
+        assert_eq!(count_csv_cols(r#""a,b,c",d"#), 2);
+        assert_eq!(count_csv_cols(r#"a,"b,c,d",e,"f,g""#), 4);
+    }
+
+    #[test]
+    fn test_migrate_handles_quoted_commas_in_failure_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+
+        // Old header with review_degraded (19 cols in v0.4.1)
+        let old_header = "language,library,library_version,provider,model,test_provider,test_model,review_provider,review_model,max_retries,retries_used,review_retries_used,passed,failed_stage,failure_reason,duration_secs,timestamp,skilldo_version,review_degraded";
+        // Row with a quoted comma in failure_reason — should NOT confuse column counting
+        let old_row = r#"python,fastapi,0.115.0,anthropic,claude,,,,,3,0,0,false,test,"test_foo, test_bar failed",1.0,2024-01-01T00:00:00Z,0.1.8,false"#;
+        fs::write(&csv_path, format!("{old_header}\n{old_row}\n")).unwrap();
+
+        let record = sample_record();
+        append_run(&record, Some(csv_path.clone())).unwrap();
+
+        let content = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3, "header + old row + new row");
+
+        let header_cols = count_csv_cols(lines[0]);
+        let old_row_cols = count_csv_cols(lines[1]);
+        let new_row_cols = count_csv_cols(lines[2]);
+
+        assert_eq!(header_cols, 18, "header should be current schema");
+        assert_eq!(old_row_cols, 18, "old row should be trimmed to 18 cols");
+        assert_eq!(new_row_cols, 18, "new row should not be over-trimmed");
+        // Verify the quoted failure_reason survived intact
+        assert!(
+            lines[1].contains(r#""test_foo, test_bar failed""#),
+            "quoted failure_reason should be preserved"
         );
     }
 
