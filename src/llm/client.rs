@@ -79,7 +79,7 @@ impl LlmClient for RetryClient {
             }
         }
 
-        Err(last_error.unwrap())
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("retry exhausted with no captured error")))
     }
 }
 

@@ -98,7 +98,10 @@ impl LlmClient for AnthropicClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             bail!("Anthropic API error {}: {}", status, error_text);
         }
 
@@ -273,7 +276,10 @@ impl LlmClient for OpenAIClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             bail!("OpenAI API error {}: {}", status, error_text);
         }
 
@@ -413,7 +419,10 @@ impl LlmClient for GeminiClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             bail!("Gemini API error {}: {}", status, error_text);
         }
 

@@ -133,6 +133,11 @@ pub fn append_run(record: &RunRecord, path: Option<PathBuf>) -> std::io::Result<
             })?;
             let dir = home.join(".skilldo");
             fs::create_dir_all(&dir)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+            }
             dir.join("runs.csv")
         }
     };
