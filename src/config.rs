@@ -601,6 +601,10 @@ pub struct ContainerConfig {
     #[serde(default = "default_go_image")]
     pub go_image: String,
 
+    /// Container image for Java (default: "maven:3-eclipse-temurin-21-alpine")
+    #[serde(default = "default_java_image")]
+    pub java_image: String,
+
     /// Cleanup containers after execution (default: true)
     #[serde(default = "default_true")]
     pub cleanup: bool,
@@ -635,6 +639,7 @@ impl Default for ContainerConfig {
             javascript_image: default_node_image(),
             rust_image: default_rust_image(),
             go_image: default_go_image(),
+            java_image: default_java_image(),
             cleanup: true,
             timeout: 60,
             install_source: InstallSource::default(),
@@ -678,6 +683,10 @@ fn default_rust_image() -> String {
 
 fn default_go_image() -> String {
     "golang:1.25-alpine".to_string()
+}
+
+fn default_java_image() -> String {
+    "maven:3-eclipse-temurin-21-alpine".to_string()
 }
 
 fn default_timeout() -> u64 {

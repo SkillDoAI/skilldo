@@ -1173,6 +1173,7 @@ pub fn language_hints(language: &Language, stage: &str) -> &'static str {
         Language::Python => python_hints(stage),
         Language::Go => go_hints(stage),
         Language::Rust => rust_hints(stage),
+        Language::Java => java_hints(stage),
         _ => "",
     }
 }
@@ -1331,6 +1332,59 @@ fn rust_hints(stage: &str) -> &'static str {
 - Runs via `cargo run` — write a `fn main()` program\n\
 - Use `eprintln!` and `std::process::exit(1)` for assertion failures\n\
 - External crates from the Imports section are pre-installed; just `use` them directly"
+        }
+        _ => "",
+    }
+}
+
+fn java_hints(stage: &str) -> &'static str {
+    match stage {
+        "extract" => {
+            "\
+\n\nJAVA-SPECIFIC HINTS:\n\
+- `public` classes and methods define the public API surface\n\
+- `pom.xml` or `build.gradle` define version, dependencies, and build configuration\n\
+- Interface types and abstract classes define API contracts\n\
+- Annotations like `@Override`, `@Deprecated` indicate API lifecycle"
+        }
+        "map" => {
+            "\
+\n\nJAVA-SPECIFIC HINTS:\n\
+- JUnit tests (`@Test`, `@ParameterizedTest`) show common usage patterns\n\
+- Spring annotations (`@Autowired`, `@Bean`, `@Configuration`) indicate dependency injection\n\
+- Builder patterns and fluent APIs are common Java idioms\n\
+- `throws` declarations in method signatures show error handling contracts"
+        }
+        "learn" => {
+            "\
+\n\nJAVA-SPECIFIC HINTS:\n\
+- Javadoc comments (`/** ... */`) are the documentation system\n\
+- `@param`, `@return`, `@throws` tags document method contracts\n\
+- `@since` tags indicate version history\n\
+- `package-info.java` files contain package-level documentation"
+        }
+        "create" => {
+            "\
+\n\nJAVA-SPECIFIC HINTS:\n\
+- Use Java import conventions: `import com.example.ClassName;`\n\
+- Always show try-catch blocks for checked exceptions\n\
+- Use `public class Main` with `public static void main(String[] args)` in runnable examples\n\
+- Follow Java conventions: camelCase methods, PascalCase classes, UPPER_SNAKE_CASE constants"
+        }
+        "review_verdict" => {
+            "\
+\n\nJAVA-SPECIFIC GUIDANCE:\n\
+- Diamond operator (`<>`) inference is idiomatic since Java 7\n\
+- `var` local variable inference is acceptable since Java 10\n\
+- Checked vs unchecked exception differences are not errors in documentation\n\
+- Lombok annotations (`@Data`, `@Builder`) are widely used and acceptable"
+        }
+        "test" => {
+            "\
+\n\nJAVA-SPECIFIC TEST HINTS:\n\
+- Runs via `javac Main.java && java Main` — write a `public class Main` with `public static void main`\n\
+- Use `System.exit(1)` for assertion failures (no JUnit runner available)\n\
+- Standard library classes (java.*, javax.*) are always available without imports"
         }
         _ => "",
     }

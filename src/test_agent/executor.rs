@@ -618,6 +618,180 @@ impl LanguageExecutor for NodeExecutor {
     }
 }
 
+/// Java executor — compiles with `javac` and runs with `java`.
+/// For projects with Maven dependencies, creates a minimal pom.xml and uses
+/// `mvn dependency:copy-dependencies` if mvn is available.
+pub struct JavaExecutor {
+    timeout_secs: u64,
+}
+
+const MAVEN_REPO_DIR: &str = "m2-repo";
+
+impl JavaExecutor {
+    pub fn new() -> Self {
+        Self { timeout_secs: 120 }
+    }
+
+    pub fn with_timeout(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self
+    }
+}
+
+impl Default for JavaExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageExecutor for JavaExecutor {
+    async fn setup_environment(&self, deps: &[String]) -> Result<ExecutionEnv> {
+        info!(
+            "Setting up Java environment with {} dependencies",
+            deps.len()
+        );
+
+        if !is_tool_available("javac", "-version").await {
+            bail!("javac is not installed or not in PATH (install a JDK)");
+        }
+
+        let temp_dir = TempDir::new().context("Failed to create temp directory")?;
+        debug!("Created temp directory: {}", temp_dir.path().display());
+
+        // Isolate Maven local repo inside temp dir
+        let m2_repo = temp_dir.path().join(MAVEN_REPO_DIR);
+        fs::create_dir_all(&m2_repo).context("Failed to create Maven repo dir")?;
+
+        // If there are dependencies and mvn is available, create pom.xml and fetch them
+        if !deps.is_empty() && is_tool_available("mvn", "--version").await {
+            for dep in deps {
+                sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+            }
+
+            let deps_xml: Vec<String> = deps
+                .iter()
+                .filter_map(|d| {
+                    // Parse Maven coordinates: group:artifact:version
+                    let parts: Vec<&str> = d.splitn(3, ':').collect();
+                    if parts.len() >= 2 {
+                        let group = parts[0];
+                        let artifact = parts[1];
+                        let version = parts.get(2).unwrap_or(&"LATEST");
+                        Some(format!(
+                            "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>\n            <version>{version}</version>\n        </dependency>"
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if !deps_xml.is_empty() {
+                let pom = format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>skilldo</groupId>
+    <artifactId>test</artifactId>
+    <version>0.1.0</version>
+    <dependencies>
+{}
+    </dependencies>
+</project>"#,
+                    deps_xml.join("\n")
+                );
+
+                fs::write(temp_dir.path().join("pom.xml"), pom)
+                    .context("Failed to write pom.xml")?;
+
+                info!("Fetching Java dependencies with Maven...");
+                let deps_dir = temp_dir.path().join("deps");
+                fs::create_dir_all(&deps_dir)?;
+
+                let mut mvn_cmd = Command::new("mvn");
+                mvn_cmd
+                    .args([
+                        "dependency:copy-dependencies",
+                        &format!("-DoutputDirectory={}", deps_dir.display()),
+                        &format!("-Dmaven.repo.local={}", m2_repo.display()),
+                        "-q",
+                    ])
+                    .current_dir(temp_dir.path());
+
+                let mvn_output =
+                    run_cmd_with_timeout(mvn_cmd, Duration::from_secs(self.timeout_secs)).await?;
+                if !mvn_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&mvn_output.stderr);
+                    warn!("mvn dependency:copy-dependencies failed: {}", stderr);
+                    // Continue without deps — javac will fail if they're actually needed
+                }
+            }
+        }
+
+        info!("Java environment setup complete");
+
+        Ok(ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: deps.to_vec(),
+        })
+    }
+
+    async fn run_code(&self, env: &ExecutionEnv, code: &str) -> Result<ExecutionResult> {
+        debug!("Running Java code ({} bytes)", code.len());
+
+        let script_path = env.temp_dir.path().join("Main.java");
+        fs::write(&script_path, code).context("Failed to write Main.java")?;
+
+        let timeout = Duration::from_secs(self.timeout_secs);
+
+        // Build classpath: include deps/ if it exists
+        let deps_dir = env.temp_dir.path().join("deps");
+        let classpath = if deps_dir.is_dir() {
+            format!("{}/*:.", deps_dir.display())
+        } else {
+            ".".to_string()
+        };
+
+        // Compile
+        let mut javac_cmd = Command::new("javac");
+        javac_cmd
+            .args(["-cp", &classpath, "Main.java"])
+            .current_dir(env.temp_dir.path());
+
+        let compile_result = run_cmd_with_timeout(javac_cmd, timeout).await;
+        match compile_result {
+            Ok(output) if !output.status.success() => {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                debug!("Java compilation failed");
+                return Ok(ExecutionResult::Fail(stderr));
+            }
+            Err(e) => {
+                if crate::error::SkillDoError::is_timeout(&e) {
+                    return Ok(ExecutionResult::Timeout);
+                }
+                return Err(e);
+            }
+            _ => {}
+        }
+
+        // Run
+        let mut java_cmd = Command::new("java");
+        java_cmd
+            .args(["-cp", &classpath, "Main"])
+            .current_dir(env.temp_dir.path());
+
+        let result = run_cmd_with_timeout(java_cmd, timeout).await;
+        classify_result(result, self.timeout_secs, "Java", stderr_only)
+    }
+
+    async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,16 +908,18 @@ mod tests {
 
     #[test]
     fn test_executor_defaults_and_timeouts() {
-        // Python/Go/Node default to 60s, Cargo defaults to 120s (compilation takes longer)
+        // Python/Go/Node default to 60s, Cargo/Java defaults to 120s (compilation takes longer)
         assert_eq!(PythonUvExecutor::default().timeout_secs, 60);
         assert_eq!(GoExecutor::default().timeout_secs, 60);
         assert_eq!(NodeExecutor::default().timeout_secs, 60);
         assert_eq!(CargoExecutor::default().timeout_secs, 120);
+        assert_eq!(JavaExecutor::default().timeout_secs, 120);
 
         assert_eq!(PythonUvExecutor::new().with_timeout(30).timeout_secs, 30);
         assert_eq!(GoExecutor::new().with_timeout(120).timeout_secs, 120);
         assert_eq!(NodeExecutor::new().with_timeout(0).timeout_secs, 0);
         assert_eq!(CargoExecutor::new().with_timeout(90).timeout_secs, 90);
+        assert_eq!(JavaExecutor::new().with_timeout(90).timeout_secs, 90);
     }
 
     #[tokio::test]
@@ -806,6 +982,7 @@ raise ValueError("Test error")
         assert!(GoExecutor::new().cleanup(&make_env()).await.is_ok());
         assert!(NodeExecutor::new().cleanup(&make_env()).await.is_ok());
         assert!(CargoExecutor::new().cleanup(&make_env()).await.is_ok());
+        assert!(JavaExecutor::new().cleanup(&make_env()).await.is_ok());
     }
 
     #[tokio::test]
@@ -1312,5 +1489,79 @@ func main() {
             result.is_err(),
             "quoted Cargo.toml snippets should be rejected by sanitize_dep_name"
         );
+    }
+
+    // --- JavaExecutor tests ---
+
+    #[tokio::test]
+    async fn test_java_setup_environment_no_deps() {
+        if !is_tool_available("javac", "-version").await {
+            return; // Skip if JDK not installed
+        }
+        let executor = JavaExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        assert!(env.temp_dir.path().exists());
+        let m2 = env.temp_dir.path().join(MAVEN_REPO_DIR);
+        assert!(m2.exists(), "Maven repo dir should be created");
+    }
+
+    #[tokio::test]
+    async fn test_java_run_simple_code() {
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"public class Main {
+    public static void main(String[] args) {
+        System.out.println("Hello from Java test");
+    }
+}
+"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_pass());
+        if let ExecutionResult::Pass(output) = result {
+            assert!(output.contains("Hello from Java test"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_java_run_failing_code() {
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"public class Main {
+    public static void main(String[] args) {
+        System.exit(1);
+    }
+}
+"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
+    }
+
+    #[tokio::test]
+    async fn test_java_run_compilation_failure() {
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        let code = r#"public class Main {
+    public static void main(String[] args) {
+        this is not valid java
+    }
+}
+"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
     }
 }
