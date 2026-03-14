@@ -228,7 +228,7 @@ mod tests {
             true, // dry_run
         )
         .await;
-        assert!(result.is_ok(), "dry run review failed: {:?}", result.err());
+        result.unwrap();
     }
 
     // --- Coverage: path is not a file (line 28-29) ---
@@ -272,11 +272,7 @@ mod tests {
             true, // dry_run
         )
         .await;
-        assert!(
-            result.is_ok(),
-            "dry run with overrides failed: {:?}",
-            result.err()
-        );
+        result.unwrap();
     }
 
     // --- Coverage: frontmatter with unclosed --- ---
@@ -518,11 +514,7 @@ base_url = "http://localhost:11434/v1"
             true,
         )
         .await;
-        assert!(
-            result.is_ok(),
-            "review_llm config failed: {:?}",
-            result.err()
-        );
+        result.unwrap();
     }
 
     #[tokio::test]
@@ -618,11 +610,7 @@ base_url = "http://localhost:11434/v1"
             true,
         )
         .await;
-        assert!(
-            result.is_ok(),
-            "metadata-nested frontmatter failed: {:?}",
-            result.err()
-        );
+        result.unwrap();
     }
 
     #[test]
@@ -645,5 +633,304 @@ base_url = "http://localhost:11434/v1"
 
         // Verify the count resolves to the expected literal
         assert_eq!(result.issues.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_unsupported_ecosystem_errors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            "---\nname: testpkg\nversion: 1.0.0\necosystem: cobol\n---\n# Test\n",
+        )
+        .unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Unsupported ecosystem"),
+            "should mention unsupported ecosystem: {err}"
+        );
+        assert!(
+            err.contains("cobol"),
+            "should mention the bad ecosystem name: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_only_name_no_ecosystem_errors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            "---\nname: testpkg\nversion: 1.0.0\n---\n# No ecosystem\n",
+        )
+        .unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Cannot determine ecosystem"),
+            "should mention missing ecosystem: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_read_file_content() {
+        // Verify the file is actually read (line 31) by using non-trivial content
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        let content = "---\nname: mylib\nversion: 2.0.0\necosystem: rust\n---\n\n# MyLib\n\nRust library for testing.\n\n## Imports\n\n```rust\nuse mylib::Thing;\n```\n";
+        std::fs::write(&skill_path, content).unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_go_ecosystem() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            "---\nname: gin\nversion: 1.10.0\necosystem: go\n---\n# Gin\n",
+        )
+        .unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_javascript_ecosystem() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            "---\nname: express\nversion: 4.18.0\necosystem: javascript\n---\n# Express\n",
+        )
+        .unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        result.unwrap();
+    }
+
+    #[test]
+    fn test_extract_frontmatter_meta_language_fallback_when_ecosystem_empty() {
+        // ecosystem is empty string, language has value -> language is used
+        let md = "---\nname: pkg\necosystem: \nlanguage: rust\n---\n# Content";
+        let (name, lang) = extract_frontmatter_meta(md);
+        assert_eq!(name.unwrap(), "pkg");
+        assert_eq!(lang.unwrap(), "rust");
+    }
+
+    #[test]
+    fn test_extract_frontmatter_meta_only_language_no_ecosystem() {
+        // No ecosystem field at all, just language
+        let md = "---\nname: pkg\nlanguage: go\n---\n# Content";
+        let (name, lang) = extract_frontmatter_meta(md);
+        assert_eq!(name.unwrap(), "pkg");
+        assert_eq!(lang.unwrap(), "go");
+    }
+
+    #[tokio::test]
+    async fn test_run_invalid_config_path_errors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test\n",
+        )
+        .unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            Some("/tmp/nonexistent-skilldo-config-99999.toml".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_with_custom_config() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test\n",
+        )
+        .unwrap();
+        let config_path = dir.path().join("skilldo.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+provider_type = "anthropic"
+model = "claude-sonnet"
+api_key_env = "none"
+"#,
+        )
+        .unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            Some(config_path.to_str().unwrap().to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_with_invalid_provider_override_errors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test\n",
+        )
+        .unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            None,
+            None,
+            Some("invalid-provider-that-does-not-exist".to_string()),
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_frontmatter_meta_whitespace_in_values() {
+        let md = "---\nname:   spaced-pkg  \necosystem:   python  \n---\n# Content";
+        let (name, lang) = extract_frontmatter_meta(md);
+        assert_eq!(name.unwrap(), "spaced-pkg");
+        assert_eq!(lang.unwrap(), "python");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_unreadable_file_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            "---\nname: testpkg\necosystem: python\n---\n# Content\n",
+        )
+        .unwrap();
+        // Make unreadable
+        std::fs::set_permissions(&skill_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = run(
+            skill_path.to_str().unwrap().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await;
+
+        // Restore permissions for cleanup
+        std::fs::set_permissions(&skill_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_frontmatter_meta_multiple_colons_in_value() {
+        let md = "---\nname: my:lib:thing\necosystem: python\n---\n# Content";
+        let (name, lang) = extract_frontmatter_meta(md);
+        assert_eq!(name.unwrap(), "my:lib:thing");
+        assert_eq!(lang.unwrap(), "python");
+    }
+
+    #[test]
+    fn test_extract_frontmatter_meta_tabs_in_values() {
+        let md = "---\nname:\ttabbed-pkg\necosystem:\tpython\n---\n# Content";
+        let (name, lang) = extract_frontmatter_meta(md);
+        assert_eq!(name.unwrap(), "tabbed-pkg");
+        assert_eq!(lang.unwrap(), "python");
+    }
+
+    #[test]
+    fn test_extract_frontmatter_meta_mixed_quotes() {
+        // Single quotes on name, double on ecosystem
+        let md = "---\nname: 'single-quoted'\necosystem: \"double-quoted\"\n---\n# Content";
+        let (name, lang) = extract_frontmatter_meta(md);
+        assert_eq!(name.unwrap(), "single-quoted");
+        assert_eq!(lang.unwrap(), "double-quoted");
     }
 }

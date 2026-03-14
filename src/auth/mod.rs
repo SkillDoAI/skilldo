@@ -461,4 +461,182 @@ mod tests {
         let path = token_path("my-provider").unwrap();
         assert!(path.to_str().unwrap().ends_with("my-provider.json"));
     }
+
+    #[test]
+    fn tokens_dir_returns_valid_path() {
+        let dir = tokens_dir().unwrap();
+        assert!(dir.to_str().unwrap().contains("skilldo"));
+        assert!(dir.to_str().unwrap().ends_with("tokens"));
+    }
+
+    #[test]
+    fn sanitize_provider_name_rejects_single_dot() {
+        let result = sanitize_provider_name(".");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("Invalid"),
+            "should say 'Invalid' for single dot"
+        );
+    }
+
+    #[test]
+    fn save_and_overwrite_tokens_preserves_latest() {
+        let name = "test-oauth-overwrite";
+        let tokens_v1 = TokenSet {
+            access_token: "old-access".to_string(),
+            refresh_token: "old-refresh".to_string(),
+            expires_at: 1000,
+        };
+        save_tokens(name, &tokens_v1).unwrap();
+
+        let tokens_v2 = TokenSet {
+            access_token: "new-access".to_string(),
+            refresh_token: "new-refresh".to_string(),
+            expires_at: 2000,
+        };
+        save_tokens(name, &tokens_v2).unwrap();
+
+        let loaded = load_tokens(name).unwrap().unwrap();
+        assert_eq!(loaded.access_token, "new-access");
+        assert_eq!(loaded.refresh_token, "new-refresh");
+        assert_eq!(loaded.expires_at, 2000);
+
+        delete_tokens(name).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_tokens_returns_error_on_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let name = "test-oauth-unreadable";
+        let tokens = TokenSet {
+            access_token: "a".to_string(),
+            refresh_token: "r".to_string(),
+            expires_at: 9999999999,
+        };
+        save_tokens(name, &tokens).unwrap();
+
+        let path = token_path(name).unwrap();
+        // Make the file unreadable
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = load_tokens(name);
+        // Restore permissions before asserting so cleanup works even if assertion fails
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(result.is_err(), "should error on permission denied");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to read token file"),
+            "error should mention reading: {err}"
+        );
+
+        delete_tokens(name).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_secure_dir_creates_with_correct_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("test-secure-dir").to_path_buf();
+        ensure_secure_dir(&dir).unwrap();
+
+        let meta = std::fs::metadata(&dir).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_secure_dir_reharden_existing_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("test-reharden-dir").to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        // Weaken permissions
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // ensure_secure_dir should fix it
+        ensure_secure_dir(&dir).unwrap();
+
+        let meta = std::fs::metadata(&dir).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_secure_file_rehardens_existing_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("test-reharden.json").to_path_buf();
+        // Create with weak permissions
+        std::fs::write(&path, "initial").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // write_secure_file should fix permissions
+        write_secure_file(&path, "updated content").unwrap();
+
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "updated content");
+    }
+
+    #[test]
+    fn token_set_debug_format() {
+        let tokens = TokenSet {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            expires_at: 12345,
+        };
+        let debug = format!("{:?}", tokens);
+        assert!(debug.contains("TokenSet"));
+        assert!(debug.contains("12345"));
+    }
+
+    #[test]
+    fn oauth_endpoint_debug_format() {
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://auth.example.com".to_string(),
+            token_url: "https://token.example.com".to_string(),
+            scopes: "openid".to_string(),
+            client_id: "cid".to_string(),
+            client_secret: None,
+            provider_name: "test".to_string(),
+        };
+        let debug = format!("{:?}", endpoint);
+        assert!(debug.contains("OAuthEndpoint"));
+        assert!(debug.contains("test"));
+    }
+
+    #[test]
+    fn oauth_endpoint_clone() {
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://auth.example.com".to_string(),
+            token_url: "https://token.example.com".to_string(),
+            scopes: "openid".to_string(),
+            client_id: "cid".to_string(),
+            client_secret: Some("secret".to_string()),
+            provider_name: "clone-test".to_string(),
+        };
+        let cloned = endpoint.clone();
+        assert_eq!(cloned.provider_name, "clone-test");
+        assert_eq!(cloned.client_secret, Some("secret".to_string()));
+    }
+
+    #[test]
+    fn token_set_clone() {
+        let tokens = TokenSet {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            expires_at: 999,
+        };
+        let cloned = tokens.clone();
+        assert_eq!(cloned.access_token, "at");
+        assert_eq!(cloned.expires_at, 999);
+    }
 }
