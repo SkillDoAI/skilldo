@@ -791,8 +791,13 @@ api_key_env = "none"
             "---\nname: testpkg\necosystem: python\n---\n# Content\n",
         )
         .unwrap();
-        // Make unreadable
         std::fs::set_permissions(&skill_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Skip if running as root — 0o000 won't block reads
+        if std::fs::read(&skill_path).is_ok() {
+            std::fs::set_permissions(&skill_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            return;
+        }
 
         let result = run(
             skill_path.to_str().unwrap().to_string(),
@@ -804,7 +809,6 @@ api_key_env = "none"
         )
         .await;
 
-        // Restore permissions for cleanup
         std::fs::set_permissions(&skill_path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
         assert!(result.is_err());

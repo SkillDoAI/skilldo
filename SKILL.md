@@ -188,9 +188,8 @@ skilldo review SKILL.md --config skilldo.toml
 
 When `telemetry = true`, each run appends a row to `~/.skilldo/runs.csv`:
 - Timestamp, language, library name, version
-- Models used (generate, review, test)
-- Pass/fail, retry count, duration
-- Review degraded status (grounded vs advisory)
+- Models and providers used (generate, review, test)
+- Pass/fail, retry count, duration, failure details
 
 Data is local only — nothing is sent anywhere.
 
