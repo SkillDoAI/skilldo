@@ -136,7 +136,9 @@ pub fn append_run(record: &RunRecord, path: Option<PathBuf>) -> std::io::Result<
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+                if let Err(e) = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)) {
+                    tracing::warn!("Failed to set permissions on {}: {e}", dir.display());
+                }
             }
             dir.join("runs.csv")
         }
