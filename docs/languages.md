@@ -54,4 +54,4 @@ The pattern for each new language:
 3. `src/test_agent/{lang}_code_gen.rs` — code generator implementing `LanguageCodeGenerator`
 4. `src/test_agent/executor.rs` — executor (bare-metal) or `container_executor.rs` (container)
 5. `src/detector.rs` — add detection entry
-6. Prompt hints in `src/pipeline/generator.rs`
+6. Prompt hints in `src/llm/prompts_v2.rs`

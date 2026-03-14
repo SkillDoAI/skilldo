@@ -29,7 +29,7 @@ Add OAuth fields to your `skilldo.toml`:
 
 ```toml
 [llm]
-provider_type = "openai"
+provider_type = "chatgpt"
 provider_name = "openai-sub"
 model = "gpt-5.3"
 oauth_auth_url = "https://auth.openai.com/oauth/authorize"

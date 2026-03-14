@@ -186,14 +186,6 @@ enum Commands {
         #[arg(long)]
         base_url: Option<String>,
 
-        /// Container runtime: docker or podman
-        #[arg(long)]
-        runtime: Option<String>,
-
-        /// Container execution timeout in seconds
-        #[arg(long)]
-        timeout: Option<u64>,
-
         /// Use mock LLM client for testing
         #[arg(long)]
         dry_run: bool,
@@ -367,14 +359,9 @@ async fn main() -> Result<()> {
             model,
             provider,
             base_url,
-            runtime,
-            timeout,
             dry_run,
         } => {
-            cli::review::run(
-                path, config, model, provider, base_url, runtime, timeout, dry_run,
-            )
-            .await?;
+            cli::review::run(path, config, model, provider, base_url, dry_run).await?;
         }
         Commands::Config { action } => match action {
             ConfigAction::Check { config, strict } => {
@@ -914,21 +901,12 @@ mod tests {
     #[test]
     fn test_parse_review() {
         let cli = Cli::try_parse_from(["skilldo", "review", "SKILL.md"]).unwrap();
-        assert_review!(cli, |path,
-                             config,
-                             model,
-                             provider,
-                             base_url,
-                             runtime,
-                             timeout,
-                             dry_run| {
+        assert_review!(cli, |path, config, model, provider, base_url, dry_run| {
             assert_eq!(path, "SKILL.md");
             assert!(config.is_none());
             assert!(model.is_none());
             assert!(provider.is_none());
             assert!(base_url.is_none());
-            assert!(runtime.is_none());
-            assert!(timeout.is_none());
             assert!(!dry_run);
         });
     }
@@ -953,28 +931,15 @@ mod tests {
             "openai-compatible",
             "--base-url",
             "http://localhost:11434/v1",
-            "--runtime",
-            "podman",
-            "--timeout",
-            "120",
             "--dry-run",
         ])
         .unwrap();
-        assert_review!(cli, |path,
-                             config,
-                             model,
-                             provider,
-                             base_url,
-                             runtime,
-                             timeout,
-                             dry_run| {
+        assert_review!(cli, |path, config, model, provider, base_url, dry_run| {
             assert_eq!(path, "test.md");
             assert_eq!(config.unwrap(), "my.toml");
             assert_eq!(model.unwrap(), "codestral:latest");
             assert_eq!(provider.unwrap(), "openai-compatible");
             assert_eq!(base_url.unwrap(), "http://localhost:11434/v1");
-            assert_eq!(runtime.unwrap(), "podman");
-            assert_eq!(timeout.unwrap(), 120);
             assert!(dry_run);
         });
     }
@@ -1143,12 +1108,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_parse_review_invalid_timeout_type() {
-        let result = Cli::try_parse_from(["skilldo", "review", "x.md", "--timeout", "not-num"]);
-        assert!(result.is_err());
-    }
-
     // --- Config without subaction ---
 
     #[test]
@@ -1259,26 +1218,6 @@ mod tests {
         assert_review!(cli, |provider, base_url| {
             assert_eq!(provider.unwrap(), "openai-compatible");
             assert_eq!(base_url.unwrap(), "http://localhost:8080/v1");
-        });
-    }
-
-    // --- Review with runtime and timeout ---
-
-    #[test]
-    fn test_parse_review_runtime_timeout() {
-        let cli = Cli::try_parse_from([
-            "skilldo",
-            "review",
-            "s.md",
-            "--runtime",
-            "podman",
-            "--timeout",
-            "60",
-        ])
-        .unwrap();
-        assert_review!(cli, |runtime, timeout| {
-            assert_eq!(runtime.unwrap(), "podman");
-            assert_eq!(timeout.unwrap(), 60);
         });
     }
 

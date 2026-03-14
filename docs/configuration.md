@@ -46,11 +46,11 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Defaults: anthropic=8192, openai=8192, openai-compatible=16384, gemini=8192
 # max_tokens = 8192
 
-# Number of automatic retries on network/API errors (default: 3)
-# network_retries = 3
+# Number of automatic retries on network/API errors (default: 10)
+# network_retries = 10
 
-# Delay in seconds between retries (default: 2)
-# retry_delay = 2
+# Delay in seconds between retries (default: 120)
+# retry_delay = 120
 
 # Timeout for individual LLM requests in seconds (default: 120)
 # request_timeout_secs = 120
@@ -103,7 +103,7 @@ enable_review = true
 
 # ── Container / Execution Settings ────────────────────────────
 [generation.container]
-# Container runtime: "docker" or "podman" (default: "docker")
+# Container runtime: "podman" or "docker" (default: auto-detected, prefers podman)
 runtime = "docker"
 
 # Timeout for test execution in seconds (default: 60)

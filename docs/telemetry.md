@@ -10,17 +10,22 @@ Each run appends one row to `~/.skilldo/runs.csv` with these fields:
 |-------|---------|-------------|
 | language | python | Detected or specified language |
 | library | click | Library name from package metadata |
-| version | 8.1.7 | Library version |
+| library_version | 8.1.7 | Library version |
+| provider | anthropic | Primary LLM provider |
 | model | claude-sonnet-4-6 | Primary LLM model used |
+| test_provider | openai | Test stage provider (if different) |
 | test_model | gpt-5.2 | Test stage model (if different) |
+| review_provider | openai | Review stage provider (if different) |
 | review_model | gpt-5.2 | Review stage model (if different) |
+| max_retries | 5 | Max retry attempts configured |
+| retries_used | 2 | Number of test retry attempts used |
+| review_retries_used | 1 | Number of review retry attempts used |
 | passed | true | Whether generation succeeded |
-| retries | 2 | Number of retry attempts |
-| duration_secs | 180 | Total generation time |
-| skilldo_version | 0.4.2 | Skilldo binary version |
-| failure_stage | test | Which stage failed (if any) |
+| failed_stage | test | Which stage failed (if any) |
 | failure_reason | test_timeout | Failure detail |
+| duration_secs | 180.0 | Total generation time |
 | timestamp | 2026-03-13T20:00:00Z | ISO 8601 timestamp |
+| skilldo_version | 0.4.2 | Skilldo binary version |
 
 ## What We Don't Log
 
@@ -62,7 +67,7 @@ The CSV file is plain text — open it in any spreadsheet or query it:
 cat ~/.skilldo/runs.csv
 
 # Count runs by model
-awk -F, '{print $4}' ~/.skilldo/runs.csv | sort | uniq -c | sort -rn
+awk -F, '{print $5}' ~/.skilldo/runs.csv | sort | uniq -c | sort -rn
 
 # Find failed runs
 grep ',false,' ~/.skilldo/runs.csv

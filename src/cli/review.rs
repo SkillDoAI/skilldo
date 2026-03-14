@@ -9,15 +9,12 @@ use crate::llm::factory;
 use crate::review::{self, ReviewAgent};
 
 /// Run the review agent standalone against an existing SKILL.md file.
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
     path: String,
     config_path: Option<String>,
     model_override: Option<String>,
     provider_override: Option<String>,
     base_url_override: Option<String>,
-    runtime_override: Option<String>,
-    timeout_override: Option<u64>,
     dry_run: bool,
 ) -> Result<()> {
     let file = Path::new(&path);
@@ -32,7 +29,7 @@ pub async fn run(
     info!("Reviewing: {}", path);
 
     // Load config
-    let mut config = Config::load_with_path(config_path)?;
+    let config = Config::load_with_path(config_path)?;
 
     // Resolve LLM config: review_llm if set, otherwise main llm
     let mut llm_config = config
@@ -50,12 +47,6 @@ pub async fn run(
     }
     if let Some(ref base_url) = base_url_override {
         llm_config.base_url = Some(base_url.clone());
-    }
-    if let Some(ref runtime) = runtime_override {
-        config.generation.container.runtime = runtime.clone();
-    }
-    if let Some(timeout) = timeout_override {
-        config.generation.container.timeout = timeout;
     }
 
     let client = factory::create_client_from_llm_config(&llm_config, dry_run).await?;
@@ -198,8 +189,6 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
             false,
         )
         .await;
@@ -223,8 +212,6 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
             true, // dry_run
         )
         .await;
@@ -237,8 +224,6 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let result = run(
             dir.path().to_str().unwrap().to_string(),
-            None,
-            None,
             None,
             None,
             None,
@@ -267,8 +252,6 @@ mod tests {
             Some("override-model".to_string()),
             Some("openai-compatible".to_string()),
             Some("http://localhost:9999".to_string()),
-            Some("podman".to_string()),
-            Some(120),
             true, // dry_run
         )
         .await;
@@ -369,8 +352,6 @@ mod tests {
             Some("custom-model".to_string()),
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -393,56 +374,6 @@ mod tests {
             None,
             Some("openai".to_string()),
             None,
-            None,
-            None,
-            true,
-        )
-        .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_run_dry_run_with_runtime_override() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let skill_path = dir.path().join("SKILL.md");
-        std::fs::write(
-            &skill_path,
-            "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test\n",
-        )
-        .unwrap();
-
-        let result = run(
-            skill_path.to_str().unwrap().to_string(),
-            None,
-            None,
-            None,
-            None,
-            Some("podman".to_string()),
-            None,
-            true,
-        )
-        .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_run_dry_run_with_timeout_override() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let skill_path = dir.path().join("SKILL.md");
-        std::fs::write(
-            &skill_path,
-            "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test\n",
-        )
-        .unwrap();
-
-        let result = run(
-            skill_path.to_str().unwrap().to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(120),
             true,
         )
         .await;
@@ -465,8 +396,6 @@ mod tests {
             None,
             None,
             Some("http://localhost:11434/v1".to_string()),
-            None,
-            None,
             true,
         )
         .await;
@@ -509,8 +438,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -533,8 +460,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -549,8 +474,6 @@ base_url = "http://localhost:11434/v1"
 
         let result = run(
             skill_path.to_str().unwrap().to_string(),
-            None,
-            None,
             None,
             None,
             None,
@@ -581,8 +504,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -601,8 +522,6 @@ base_url = "http://localhost:11434/v1"
 
         let result = run(
             skill_path.to_str().unwrap().to_string(),
-            None,
-            None,
             None,
             None,
             None,
@@ -651,8 +570,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -684,8 +601,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -707,8 +622,6 @@ base_url = "http://localhost:11434/v1"
 
         let result = run(
             skill_path.to_str().unwrap().to_string(),
-            None,
-            None,
             None,
             None,
             None,
@@ -735,8 +648,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -755,8 +666,6 @@ base_url = "http://localhost:11434/v1"
 
         let result = run(
             skill_path.to_str().unwrap().to_string(),
-            None,
-            None,
             None,
             None,
             None,
@@ -801,8 +710,6 @@ base_url = "http://localhost:11434/v1"
             None,
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -836,8 +743,6 @@ api_key_env = "none"
             None,
             None,
             None,
-            None,
-            None,
             true,
         )
         .await;
@@ -859,8 +764,6 @@ api_key_env = "none"
             None,
             None,
             Some("invalid-provider-that-does-not-exist".to_string()),
-            None,
-            None,
             None,
             true,
         )
@@ -893,8 +796,6 @@ api_key_env = "none"
 
         let result = run(
             skill_path.to_str().unwrap().to_string(),
-            None,
-            None,
             None,
             None,
             None,
