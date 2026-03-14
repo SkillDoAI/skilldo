@@ -689,9 +689,31 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                         unresolved_warnings = pass_warnings;
                     }
                     info!("  ✓ review: passed");
-                    // Clear errors from earlier review attempts — but only if
-                    // the most recent post-rewrite tests also passed. Don't
-                    // mask a real test failure just because review is happy.
+                    // If tests failed on a previous rewrite but review now
+                    // passes, re-run tests to give the current code a fair
+                    // shot before declaring unresolved errors.
+                    if had_unresolved_errors && !last_review_tests_passed {
+                        if let Some(ref tv) = test_validator {
+                            info!("  → Re-running tests after review pass...");
+                            match tv.validate(&skill_md).await {
+                                Ok(tr) if tr.all_passed() || tr.test_cases.is_empty() => {
+                                    info!("  ✓ Re-test passed — clearing previous errors");
+                                    last_review_tests_passed = true;
+                                }
+                                Ok(tr) => {
+                                    warn!(
+                                        "  ✗ Re-test: {}/{} failed — errors remain",
+                                        tr.failed,
+                                        tr.passed + tr.failed
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!("  ✗ Re-test error: {e}");
+                                }
+                            }
+                        }
+                    }
+                    // Clear errors if tests passed (either originally or on re-test)
                     if had_unresolved_errors
                         && last_review_tests_passed
                         && matches!(
