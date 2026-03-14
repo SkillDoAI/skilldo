@@ -137,13 +137,6 @@ Validate a config file for correctness.
 ### `skilldo auth login|status|logout`
 Manage OAuth tokens for providers that use OAuth (e.g., ChatGPT).
 
-### `skilldo hello-world`
-Smoke-test a provider config — loads config, sends one prompt, prints response. Fastest way to verify a provider works.
-
-```bash
-skilldo hello-world --config skilldo.toml
-```
-
 ## Supported Languages
 
 | Language | Ecosystem | Detection |
