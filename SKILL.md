@@ -131,7 +131,7 @@ LLM-powered review of an existing SKILL.md for accuracy and safety.
 Key flags:
 - `--config <PATH>` — config with LLM settings
 
-### `skilldo config <PATH>`
+### `skilldo config check --config <PATH>`
 Validate a config file for correctness.
 
 ### `skilldo auth login|status|logout`
