@@ -150,15 +150,34 @@ fn collect_all_endpoints(config: &Config) -> Result<Vec<OAuthEndpoint>> {
 }
 
 /// Group endpoints by OAuth app (token_url + client_id) for login dedup.
-/// Returns: Vec<(first_endpoint, all_provider_names_sharing_this_app)>
-fn group_by_oauth_app(endpoints: &[OAuthEndpoint]) -> Vec<(&OAuthEndpoint, Vec<&str>)> {
-    let mut groups: std::collections::HashMap<(&str, &str), (&OAuthEndpoint, Vec<&str>)> =
+/// Scopes are unioned across all endpoints sharing the same app so a single
+/// login covers all stages.
+/// Returns: Vec<(merged_endpoint, all_provider_names_sharing_this_app)>
+fn group_by_oauth_app(endpoints: &[OAuthEndpoint]) -> Vec<(OAuthEndpoint, Vec<&str>)> {
+    let mut groups: std::collections::HashMap<(&str, &str), (OAuthEndpoint, Vec<&str>)> =
         std::collections::HashMap::new();
     for ep in endpoints {
         groups
             .entry((&ep.token_url, &ep.client_id))
-            .and_modify(|(_, names)| names.push(&ep.provider_name))
-            .or_insert((ep, vec![&ep.provider_name]));
+            .and_modify(|(merged, names)| {
+                names.push(&ep.provider_name);
+                // Union scopes: merge space-delimited scope strings
+                if !ep.scopes.is_empty() {
+                    let existing: HashSet<&str> = merged.scopes.split_whitespace().collect();
+                    let new_scopes: Vec<&str> = ep
+                        .scopes
+                        .split_whitespace()
+                        .filter(|s| !existing.contains(s))
+                        .collect();
+                    for scope in new_scopes {
+                        if !merged.scopes.is_empty() {
+                            merged.scopes.push(' ');
+                        }
+                        merged.scopes.push_str(scope);
+                    }
+                }
+            })
+            .or_insert((ep.clone(), vec![&ep.provider_name]));
     }
     let mut result: Vec<_> = groups.into_values().collect();
     result.sort_by(|a, b| a.0.provider_name.cmp(&b.0.provider_name));
@@ -649,6 +668,36 @@ provider_name = "{provider_name}"
         let groups = group_by_oauth_app(&endpoints);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].1.len(), 3);
+    }
+
+    #[test]
+    fn group_by_oauth_app_unions_scopes() {
+        let endpoints = vec![
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid profile".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "stage-a".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid email offline_access".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "stage-b".to_string(),
+            },
+        ];
+        let groups = group_by_oauth_app(&endpoints);
+        assert_eq!(groups.len(), 1);
+        let merged_scopes: HashSet<&str> = groups[0].0.scopes.split_whitespace().collect();
+        assert!(merged_scopes.contains("openid"));
+        assert!(merged_scopes.contains("profile"));
+        assert!(merged_scopes.contains("email"));
+        assert!(merged_scopes.contains("offline_access"));
+        assert_eq!(merged_scopes.len(), 4, "should have 4 unique scopes");
     }
 
     #[test]
