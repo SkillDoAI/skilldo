@@ -51,7 +51,7 @@ Skilldo uses TOML config files. Place `skilldo.toml` in the repo root, or pass `
 
 ```toml
 [llm]
-provider = "anthropic"          # anthropic, openai, gemini, openai-compatible, chatgpt
+provider_type = "anthropic"          # anthropic, openai, gemini, openai-compatible, chatgpt
 model = "claude-sonnet-4-6"
 api_key_env = "ANTHROPIC_API_KEY"  # env var name containing the key
 
@@ -66,7 +66,7 @@ Different models can be used for review and test stages:
 
 ```toml
 [llm]
-provider = "anthropic"
+provider_type = "anthropic"
 model = "claude-sonnet-4-6"
 api_key_env = "ANTHROPIC_API_KEY"
 
@@ -90,7 +90,7 @@ api_key_env = "OPENAI_API_KEY"
 
 ```toml
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "qwen3-coder:latest"
 base_url = "http://localhost:11434/v1"
 api_key_env = "none"            # Ollama doesn't need a key
