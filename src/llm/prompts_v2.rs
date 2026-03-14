@@ -1035,15 +1035,6 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
     prompt
 }
 
-/// Review agent Phase A: generate a Python introspection script to verify SKILL.md claims.
-///
-/// The LLM reads the SKILL.md and produces a script that checks:
-/// - Imports work
-/// - Function signatures match (inspect.signature)
-/// - Dates/weekdays are correct (datetime)
-/// - Package version matches (importlib.metadata)
-///
-/// Script uses PEP 723 inline metadata for uv compatibility.
 /// Review agent: evaluate SKILL.md for accuracy, safety, and consistency.
 pub fn review_verdict_prompt(
     skill_md: &str,

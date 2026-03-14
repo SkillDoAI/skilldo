@@ -907,7 +907,7 @@ async fn test_security_violations_not_forgiven_even_with_zero_retries() {
 // Tests: Review Pipeline
 // ============================================================================
 
-/// Mock client that handles review agent prompts (Phase A + Phase B).
+/// Mock client that handles review agent prompts (verdict).
 /// Supports configurable review pass/fail behavior.
 struct ReviewMockClient {
     review_call_count: Arc<Mutex<usize>>,
@@ -956,20 +956,7 @@ impl LlmClient for ReviewMockClient {
             return Ok(valid_skill_content("Reviewed SKILL.md"));
         }
 
-        // Review Phase A: introspection script
-        if prompt.contains("verification script generator") {
-            return Ok(r#"```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["test_package"]
-# ///
-import json
-print(json.dumps({"version": "1.0.0", "imports": [], "signatures": []}))
-```"#
-                .to_string());
-        }
-
-        // Review Phase B: verdict
+        // Review verdict
         if prompt.contains("quality gate for a generated SKILL.md") {
             let mut count = self.review_call_count.lock().unwrap();
             let current = *count;
@@ -1044,9 +1031,9 @@ async fn test_review_disabled_skips_review() {
 }
 
 #[tokio::test]
-async fn test_review_non_python_skips_introspection() {
+async fn test_review_non_python_language() {
     let client = ReviewMockClient::always_pass();
-    // Review is LLM-verdict-only for all languages
+    // Review runs for all languages
     let generator = Generator::new(Box::new(client), 3)
         .with_review(true)
         .with_review_max_retries(0);
@@ -1055,6 +1042,6 @@ async fn test_review_non_python_skips_introspection() {
     data.language = Language::Rust;
     let output = generator.generate(&data).await.unwrap();
     assert!(output.skill_md.contains("---"));
-    // Should still pass — review runs LLM-only verdict without introspection
+    // Should still pass — review runs LLM-only verdict
     assert!(output.unresolved_warnings.is_empty());
 }

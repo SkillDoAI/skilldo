@@ -76,7 +76,6 @@ pub async fn run(
     let lang_str = language.ok_or_else(|| {
         anyhow::anyhow!("Cannot determine ecosystem. Set `ecosystem:` in SKILL.md frontmatter.")
     })?;
-    let pkg = package_name.as_deref().unwrap_or("unknown");
     let lang = lang_str.parse::<Language>().map_err(|_| {
         anyhow::anyhow!(
             "Unsupported ecosystem '{}'. Supported: {}",
@@ -88,7 +87,7 @@ pub async fn run(
     let review_agent =
         ReviewAgent::new(client.as_ref(), config.prompts.review_custom.clone()).with_strict(true);
 
-    let result = review_agent.review(&skill_md, pkg, &lang).await?;
+    let result = review_agent.review(&skill_md, &lang).await?;
 
     // Print results
     if result.passed && !result.issues.is_empty() {

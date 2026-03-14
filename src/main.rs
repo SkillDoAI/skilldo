@@ -1422,6 +1422,12 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_skill_command() {
+        let cli = Cli::try_parse_from(["skilldo", "skill"]).unwrap();
+        assert!(matches!(cli.command, Commands::Skill));
+    }
+
+    #[test]
     fn test_hello_world_is_hidden() {
         use clap::CommandFactory;
         let cmd = Cli::command();

@@ -5,7 +5,7 @@
 //! captured data, replace the JSON files in tests/fixtures/.
 //!
 //! Each fixture file contains responses for all pipeline stages:
-//! extract, map, learn, create, review_introspect, review_verdict.
+//! extract, map, learn, create, review_verdict.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -476,10 +476,6 @@ fn test_fixture_loads_and_has_required_stages() {
     assert!(
         fixture.responses.contains_key("create"),
         "should have create stage"
-    );
-    assert!(
-        fixture.responses.contains_key("review_introspect"),
-        "should have review_introspect stage"
     );
     assert!(
         fixture.responses.contains_key("review_verdict_pass"),

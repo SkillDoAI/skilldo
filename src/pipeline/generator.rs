@@ -659,9 +659,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     self.review_max_retries + 1
                 );
 
-                let result = review_agent
-                    .review(&skill_md, &data.package_name, &data.language)
-                    .await?;
+                let result = review_agent.review(&skill_md, &data.language).await?;
 
                 if result.malformed {
                     if review_attempt < self.review_max_retries {
@@ -1953,12 +1951,12 @@ testpkg.run()
     }
 
     // ========================================================================
-    // Review with non-Python language (introspection skipped)
+    // Review with non-Python language
     // ========================================================================
 
     #[tokio::test]
-    async fn test_generate_review_non_python_skips_introspection() {
-        // Non-Python language: review runs but introspection is skipped
+    async fn test_generate_review_non_python_language() {
+        // Non-Python language: review runs for non-Python
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
             .with_test(false)
             .with_review(true)

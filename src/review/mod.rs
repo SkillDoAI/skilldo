@@ -83,12 +83,7 @@ impl<'a> ReviewAgent<'a> {
     }
 
     /// Run the review on a SKILL.md (LLM verdict only).
-    pub async fn review(
-        &self,
-        skill_md: &str,
-        _package_name: &str,
-        language: &Language,
-    ) -> Result<ReviewResult> {
+    pub async fn review(&self, skill_md: &str, language: &Language) -> Result<ReviewResult> {
         // LLM verdict (accuracy + safety + consistency)
         let verdict_prompt =
             prompts_v2::review_verdict_prompt(skill_md, self.custom_prompt.as_deref(), language);
@@ -552,7 +547,6 @@ mod tests {
         let r = agent
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
-                "testpkg",
                 &Language::Python,
             )
             .await
@@ -571,7 +565,6 @@ mod tests {
         let r = agent
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
-                "testpkg",
                 &Language::Python,
             )
             .await
