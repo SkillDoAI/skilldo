@@ -183,18 +183,21 @@ fn migrate_header_if_stale(path: &std::path::Path) -> std::io::Result<()> {
         if first_line != expected {
             let expected_cols = expected.matches(',').count() + 1;
             let old_cols = first_line.matches(',').count() + 1;
-            // Normalize data rows: trim or pad to match new column count
+            // Normalize data rows: trim trailing columns to match new width.
+            // Uses rfind(',') instead of split to avoid breaking quoted fields
+            // that contain commas (e.g., failure_reason = "foo, bar").
+            let cols_to_trim = old_cols.saturating_sub(expected_cols);
             let rest: String = content
                 .lines()
                 .skip(1)
                 .map(|line| {
-                    let fields: Vec<&str> = line.splitn(old_cols, ',').collect();
-                    if fields.len() > expected_cols {
-                        // Old rows have extra columns — trim to new width
-                        fields[..expected_cols].join(",")
-                    } else {
-                        line.to_string()
+                    let mut trimmed = line;
+                    for _ in 0..cols_to_trim {
+                        if let Some(pos) = trimmed.rfind(',') {
+                            trimmed = &trimmed[..pos];
+                        }
                     }
+                    trimmed.to_string()
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
