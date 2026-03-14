@@ -651,6 +651,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             );
 
             let mut last_review_attempt = 0;
+            let mut last_review_tests_passed = true;
             for review_attempt in 0..=self.review_max_retries {
                 last_review_attempt = review_attempt;
                 info!(
@@ -688,9 +689,11 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                         unresolved_warnings = pass_warnings;
                     }
                     info!("  ✓ review: passed");
-                    // Clear errors from earlier review attempts — the final
-                    // review+test cycle succeeded, so prior failures are resolved.
+                    // Clear errors from earlier review attempts — but only if
+                    // the most recent post-rewrite tests also passed. Don't
+                    // mask a real test failure just because review is happy.
                     if had_unresolved_errors
+                        && last_review_tests_passed
                         && matches!(
                             failed_stage,
                             Some(FailedStage::Review) | Some(FailedStage::Test)
@@ -757,10 +760,12 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 rescan_after_rewrite(&skill_md, self.enable_security_scan, "review fix")?;
 
                 // Single test pass after review rewrite — mark unresolved if broken.
+                last_review_tests_passed = true;
                 if let Some(ref tv) = test_validator {
                     match tv.validate(&skill_md).await {
                         Ok(tr) if !tr.all_passed() && !tr.test_cases.is_empty() => {
                             warn!("  ⚠ review rewrite broke {} test(s)", tr.failed);
+                            last_review_tests_passed = false;
                             had_unresolved_errors = true;
                             if failed_stage.is_none() {
                                 failed_stage = Some(FailedStage::Test);
@@ -773,6 +778,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                         }
                         Err(e) => {
                             warn!("  ⚠ post-review test error: {e}");
+                            last_review_tests_passed = false;
                             had_unresolved_errors = true;
                             if failed_stage.is_none() {
                                 failed_stage = Some(FailedStage::Test);
