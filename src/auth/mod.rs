@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use tracing::debug;
 
 /// Stored OAuth token set, persisted to disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TokenSet {
     pub access_token: String,
     pub refresh_token: String,
@@ -21,8 +21,18 @@ pub struct TokenSet {
     pub expires_at: u64,
 }
 
+impl std::fmt::Debug for TokenSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenSet")
+            .field("access_token", &"[REDACTED]")
+            .field("refresh_token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
 /// Resolved OAuth endpoint configuration — all env vars dereferenced.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OAuthEndpoint {
     pub auth_url: String,
     pub token_url: String,
@@ -30,6 +40,22 @@ pub struct OAuthEndpoint {
     pub client_id: String,
     pub client_secret: Option<String>,
     pub provider_name: String,
+}
+
+impl std::fmt::Debug for OAuthEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthEndpoint")
+            .field("auth_url", &self.auth_url)
+            .field("token_url", &self.token_url)
+            .field("scopes", &self.scopes)
+            .field("client_id", &"[REDACTED]")
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("provider_name", &self.provider_name)
+            .finish()
+    }
 }
 
 impl TokenSet {
@@ -518,11 +544,16 @@ mod tests {
         save_tokens(name, &tokens).unwrap();
 
         let path = token_path(name).unwrap();
-        // Make the file unreadable
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
 
+        // Skip if running as root or elevated — 0o000 won't block reads
+        if std::fs::read(&path).is_ok() {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            delete_tokens(name).unwrap();
+            return; // Can't test permission denial in this environment
+        }
+
         let result = load_tokens(name);
-        // Restore permissions before asserting so cleanup works even if assertion fails
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         assert!(result.is_err(), "should error on permission denied");
@@ -587,30 +618,36 @@ mod tests {
     }
 
     #[test]
-    fn token_set_debug_format() {
+    fn token_set_debug_redacts_secrets() {
         let tokens = TokenSet {
-            access_token: "at".to_string(),
-            refresh_token: "rt".to_string(),
+            access_token: "super-secret-token".to_string(),
+            refresh_token: "super-secret-refresh".to_string(),
             expires_at: 12345,
         };
         let debug = format!("{:?}", tokens);
         assert!(debug.contains("TokenSet"));
         assert!(debug.contains("12345"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("super-secret-token"));
+        assert!(!debug.contains("super-secret-refresh"));
     }
 
     #[test]
-    fn oauth_endpoint_debug_format() {
+    fn oauth_endpoint_debug_redacts_secrets() {
         let endpoint = OAuthEndpoint {
             auth_url: "https://auth.example.com".to_string(),
             token_url: "https://token.example.com".to_string(),
             scopes: "openid".to_string(),
-            client_id: "cid".to_string(),
-            client_secret: None,
+            client_id: "secret-client-id".to_string(),
+            client_secret: Some("secret-client-secret".to_string()),
             provider_name: "test".to_string(),
         };
         let debug = format!("{:?}", endpoint);
         assert!(debug.contains("OAuthEndpoint"));
         assert!(debug.contains("test"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("secret-client-id"));
+        assert!(!debug.contains("secret-client-secret"));
     }
 
     #[test]

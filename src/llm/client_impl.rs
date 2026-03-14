@@ -576,11 +576,11 @@ impl LlmClient for ChatGPTClient {
             let body = response
                 .text()
                 .await
-                .context("Failed to read error response")?;
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             bail!(
                 "Responses API error {} {}: {}",
                 status.as_u16(),
-                status.canonical_reason().unwrap_or(""),
+                status.canonical_reason().unwrap_or("Unknown Status"),
                 body
             );
         }
