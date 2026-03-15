@@ -145,6 +145,7 @@ Manage OAuth tokens for providers that use OAuth (e.g., ChatGPT).
 | JavaScript/TypeScript | npm, package.json | `*.js`, `*.ts`, `package.json` |
 | Go | go modules, go.mod | `*.go`, `go.mod` |
 | Rust | cargo, Cargo.toml | `*.rs`, `Cargo.toml` |
+| Java | Maven/Gradle, pom.xml, build.gradle | `*.java`, `pom.xml`, `build.gradle` |
 
 ## Common Workflows
 

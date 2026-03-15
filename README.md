@@ -15,7 +15,7 @@ The goal: make agent rules a standard part of every open-source package — like
 - **3-layer security scanning** — Regex patterns + prompt injection detection + 41 YARA rules catch malicious content
 - **Multi-provider** — Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, etc.)
 - **Per-stage model mixing** — Cheap local model for extraction, frontier cloud model for review. One config, multiple providers.
-- **Python, Go, JavaScript/TypeScript, and Rust** — Full pipeline support with language-specific parsers and test validation
+- **Python, Go, JavaScript/TypeScript, Rust, and Java** — Full pipeline support with language-specific parsers and test validation
 - **Free with local models** — Run the entire pipeline on Ollama with zero API cost
 - **Zero global pollution** — Test validation runs in isolated temp directories; nothing installed to your system
 

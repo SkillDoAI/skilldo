@@ -3,6 +3,19 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.0
+
+- Added Java language ecosystem support — full pipeline with Maven and Gradle projects
+- `JavaHandler`: file discovery, metadata extraction from pom.xml and build.gradle/build.gradle.kts
+- `JavaParser`: import and Maven coordinate extraction from SKILL.md
+- `JavaCodeGenerator`: Main.java generation with pattern wrapping
+- `JavaExecutor`: bare-metal (javac+java) and container (maven:3-eclipse-temurin-21-alpine)
+- Package name detection: handles parent POMs (-parent suffix), Gradle constants (falls back to settings.gradle), -root suffix stripping
+- Java prompt hints for all pipeline stages
+- 150+ new tests for Java ecosystem
+- Fixed re-test logic when review passes after test-breaking rewrite
+- Re-run tests when review passes but `last_review_tests_passed` is false
+
 ## 0.4.2
 
 - Removed review introspection (Phase A) — the test agent's feedback loop already validates correctness, making container introspection redundant. Simplifies the review agent to LLM-verdict-only for all languages. (-1042 lines)
