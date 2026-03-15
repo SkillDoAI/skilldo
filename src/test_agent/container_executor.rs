@@ -95,9 +95,13 @@ impl ContainerExecutor {
                 if parts.len() >= 2 {
                     let group = parts[0];
                     let artifact = parts[1];
-                    let version = parts.get(2).unwrap_or(&"RELEASE");
+                    let version_tag = if let Some(v) = parts.get(2) {
+                        format!("<version>{v}</version>")
+                    } else {
+                        String::new()
+                    };
                     Some(format!(
-                        "        <dependency><groupId>{group}</groupId><artifactId>{artifact}</artifactId><version>{version}</version></dependency>"
+                        "        <dependency><groupId>{group}</groupId><artifactId>{artifact}</artifactId>{version_tag}</dependency>"
                     ))
                 } else {
                     None
@@ -1362,14 +1366,19 @@ mod tests {
     }
 
     #[test]
-    fn test_java_container_script_two_part_coord_uses_release() {
+    fn test_java_container_script_two_part_coord_omits_dep_version() {
         let executor = ContainerExecutor::new(make_config(), Language::Java);
         let deps = vec!["com.google.code.gson:gson".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
+        // The dependency line should NOT have a <version> tag (project version is OK)
         assert!(
-            script.contains("RELEASE"),
-            "two-part coord should use RELEASE version"
+            !script.contains("RELEASE"),
+            "two-part coord should not use RELEASE"
         );
+        assert!(script.contains("com.google.code.gson"));
+        // Verify the dep line doesn't have version but project does
+        assert!(script.contains("<artifactId>gson</artifactId>"));
+        assert!(!script.contains("<artifactId>gson</artifactId><version>"));
     }
 
     #[test]

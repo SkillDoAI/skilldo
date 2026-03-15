@@ -351,11 +351,40 @@ impl JavaHandler {
     }
 
     /// Check if a path is inside a test directory.
+    /// Matches standard Maven/Gradle layouts (`src/test/`, `tests/`) and
+    /// common test-named files, but NOT deep package components like
+    /// `org.springframework.test.context` which are production code.
     fn is_test_path(path: &Path) -> bool {
-        path.components().any(|c| {
-            let s = c.as_os_str().to_str().unwrap_or("");
-            s == "test" || s == "tests"
-        })
+        let components: Vec<&str> = path
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+
+        // Match src/test/* (Maven/Gradle standard layout)
+        for window in components.windows(2) {
+            if window[0] == "src" && (window[1] == "test" || window[1] == "tests") {
+                return true;
+            }
+        }
+
+        // Match top-level test/ or tests/ directory
+        if let Some(&first) = components.first() {
+            if first == "test" || first == "tests" {
+                return true;
+            }
+        }
+
+        // Match common test file patterns
+        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+            if fname.ends_with("Test.java")
+                || fname.ends_with("Tests.java")
+                || fname.starts_with("Test")
+            {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Directories to skip during traversal.

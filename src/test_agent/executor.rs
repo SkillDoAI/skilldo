@@ -677,9 +677,14 @@ impl LanguageExecutor for JavaExecutor {
                     if parts.len() >= 2 {
                         let group = parts[0];
                         let artifact = parts[1];
-                        let version = parts.get(2).unwrap_or(&"RELEASE");
+                        let version_tag = if let Some(v) = parts.get(2) {
+                            format!("\n            <version>{v}</version>")
+                        } else {
+                            // No version: omit tag, Maven resolves from BOM or fails clearly
+                            String::new()
+                        };
                         Some(format!(
-                            "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>\n            <version>{version}</version>\n        </dependency>"
+                            "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>{version_tag}\n        </dependency>"
                         ))
                     } else {
                         None
@@ -1620,16 +1625,16 @@ func main() {
             return;
         }
         let executor = JavaExecutor::new();
-        // Two-part coordinate (group:artifact, no version => RELEASE)
+        // Two-part coordinate (group:artifact, no version => version tag omitted)
         let deps = vec!["com.google.code.gson:gson".to_string()];
         let env = executor.setup_environment(&deps).await;
-        // May fail fetching RELEASE, but the pom.xml should be written
         if let Ok(env) = &env {
             let pom = std::fs::read_to_string(env.temp_dir.path().join("pom.xml")).unwrap();
             assert!(
-                pom.contains("RELEASE"),
-                "two-part coord should use RELEASE version"
+                !pom.contains("<version>"),
+                "two-part coord should omit version tag"
             );
+            assert!(pom.contains("com.google.code.gson"));
         }
     }
 
