@@ -265,7 +265,8 @@ impl JavaHandler {
                     if !name.ends_with(".java") {
                         continue;
                     }
-                    let in_test_dir = Self::is_test_path(&path);
+                    let rel_path = path.strip_prefix(&self.repo_path).unwrap_or(&path);
+                    let in_test_dir = Self::is_test_path(rel_path);
                     let is_test_file = name.ends_with("Test.java")
                         || name.ends_with("Tests.java")
                         || name.starts_with("Test");
@@ -1880,6 +1881,43 @@ dependencies {
         fs::write(tmp.path().join("build.gradle.kts"), "version = '8.1.0'").unwrap();
         let handler = JavaHandler::new(tmp.path());
         assert_eq!(handler.get_version().unwrap(), "8.1.0");
+    }
+
+    // ── is_test_path: absolute paths via TempDir ──
+
+    #[test]
+    fn is_test_path_works_with_absolute_paths_via_collect() {
+        // Regression: collect_java_files passes absolute paths from entry.path().
+        // is_test_path must still classify them correctly after strip_prefix.
+        let tmp = TempDir::new().unwrap();
+
+        // Create src/test/java/FooTest.java (should be a test)
+        let test_dir = tmp.path().join("src/test/java");
+        fs::create_dir_all(&test_dir).unwrap();
+        fs::write(test_dir.join("FooTest.java"), "class FooTest {}").unwrap();
+
+        // Create src/main/java/App.java (should NOT be a test)
+        let main_dir = tmp.path().join("src/main/java");
+        fs::create_dir_all(&main_dir).unwrap();
+        fs::write(main_dir.join("App.java"), "class App {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+
+        let tests = handler.find_test_files().unwrap();
+        assert!(
+            tests.iter().any(|p| p.ends_with("FooTest.java")),
+            "should find test file"
+        );
+
+        let sources = handler.find_source_files().unwrap();
+        assert!(
+            sources.iter().any(|p| p.ends_with("App.java")),
+            "should find source file"
+        );
+        assert!(
+            !sources.iter().any(|p| p.ends_with("FooTest.java")),
+            "test file should not appear in sources"
+        );
     }
 
     // ── get_package_name with pom.xml having empty artifactId ──

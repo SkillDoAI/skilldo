@@ -13,7 +13,7 @@ use crate::llm::client::LlmClient;
 /// Java environment: runner command + 1–2 line notes the LLM can't infer.
 pub const JAVA_ENV: TestEnv = TestEnv {
     lang_tag: "java",
-    runner: "`javac Main.java && java Main`",
+    runner: "`javac -cp 'deps/*:.' Main.java && java -cp 'deps/*:.' Main`",
     env_notes: "\
 - Write a `public class Main` with `public static void main(String[] args)` — no JUnit runner
 - Use `System.exit(1)` for assertion failures",
@@ -159,7 +159,7 @@ System.out.println(json);"#
 
         assert!(prompt.contains("public class Main"));
         assert!(prompt.contains("System.exit(1)"));
-        assert!(prompt.contains("javac Main.java"));
+        assert!(prompt.contains("javac -cp 'deps/*:.' Main.java"));
     }
 
     #[test]

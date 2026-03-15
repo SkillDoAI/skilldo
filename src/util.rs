@@ -209,6 +209,16 @@ pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
     Ok(dep)
 }
 
+/// Escape XML special characters in a string to prevent XML injection.
+/// Used when interpolating user-supplied values (e.g., Maven coordinates)
+/// into XML templates like pom.xml.
+pub fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Calculate file priority for source file reading order.
 /// Lower values = higher priority (read first).
 /// Uses `Path::components()` for separator-agnostic matching (works on Unix, macOS, WSL).
@@ -632,5 +642,38 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].0, "");
         assert_eq!(blocks[0].1, "");
+    }
+
+    // ── xml_escape tests ──
+
+    #[test]
+    fn xml_escape_no_special_chars() {
+        assert_eq!(xml_escape("com.google.gson"), "com.google.gson");
+    }
+
+    #[test]
+    fn xml_escape_ampersand() {
+        assert_eq!(xml_escape("a&b"), "a&amp;b");
+    }
+
+    #[test]
+    fn xml_escape_angle_brackets() {
+        assert_eq!(xml_escape("<foo>"), "&lt;foo&gt;");
+    }
+
+    #[test]
+    fn xml_escape_quotes() {
+        assert_eq!(xml_escape("a\"b"), "a&quot;b");
+    }
+
+    #[test]
+    fn xml_escape_all_special_chars() {
+        assert_eq!(xml_escape("a&b<c>d\"e"), "a&amp;b&lt;c&gt;d&quot;e");
+    }
+
+    #[test]
+    fn xml_escape_version_range() {
+        // Version ranges like [0,) should pass through unchanged
+        assert_eq!(xml_escape("[0,)"), "[0,)");
     }
 }

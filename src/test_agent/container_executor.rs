@@ -14,7 +14,7 @@ use super::executor::{ExecutionEnv, ExecutionResult};
 use super::LanguageExecutor;
 use crate::config::{ContainerConfig, InstallSource};
 use crate::detector::Language;
-use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
+use crate::util::{run_cmd_with_timeout, sanitize_dep_name, xml_escape};
 
 pub struct ContainerExecutor {
     config: ContainerConfig,
@@ -93,12 +93,11 @@ impl ContainerExecutor {
             .filter_map(|d| {
                 let parts: Vec<&str> = d.splitn(3, ':').collect();
                 if parts.len() >= 2 {
-                    let group = parts[0];
-                    let artifact = parts[1];
-                    let version = parts.get(2).copied().unwrap_or("[0,)");
-                    let version_tag = format!("<version>{version}</version>");
+                    let group = xml_escape(parts[0]);
+                    let artifact = xml_escape(parts[1]);
+                    let version = xml_escape(parts.get(2).copied().unwrap_or("[0,)"));
                     Some(format!(
-                        "        <dependency><groupId>{group}</groupId><artifactId>{artifact}</artifactId>{version_tag}</dependency>"
+                        "        <dependency><groupId>{group}</groupId><artifactId>{artifact}</artifactId><version>{version}</version></dependency>"
                     ))
                 } else {
                     None
@@ -1379,6 +1378,23 @@ mod tests {
         let executor = ContainerExecutor::new(make_config(), Language::Java);
         let deps = vec!["com.evil:lib; rm -rf /".to_string()];
         assert!(executor.generate_java_install_script(&deps).is_err());
+    }
+
+    #[test]
+    fn test_java_install_script_escapes_xml_special_chars() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        // `<` and `>` pass sanitize_dep_name (version constraint chars) but need XML escaping
+        let deps = vec!["com.example:mylib:>=1.0,<2.0".to_string()];
+        let script = executor.generate_java_install_script(&deps).unwrap();
+        assert!(script.contains("com.example"), "group should be present");
+        assert!(
+            script.contains("&gt;=1.0,&lt;2.0"),
+            "angle brackets in version should be XML-escaped"
+        );
+        assert!(
+            !script.contains("<version>>=1.0,<2.0</version>"),
+            "raw angle brackets must not appear inside version tag"
+        );
     }
 
     #[test]

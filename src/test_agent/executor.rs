@@ -12,7 +12,7 @@ use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use super::LanguageExecutor;
-use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
+use crate::util::{run_cmd_with_timeout, sanitize_dep_name, xml_escape};
 
 /// Check if a CLI tool is available in PATH.
 pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
@@ -675,16 +675,11 @@ impl LanguageExecutor for JavaExecutor {
                     // Parse Maven coordinates: group:artifact:version
                     let parts: Vec<&str> = d.splitn(3, ':').collect();
                     if parts.len() >= 2 {
-                        let group = parts[0];
-                        let artifact = parts[1];
-                        let version_tag = if let Some(v) = parts.get(2) {
-                            format!("\n            <version>{v}</version>")
-                        } else {
-                            // No version: omit tag, Maven resolves from BOM or fails clearly
-                            String::new()
-                        };
+                        let group = xml_escape(parts[0]);
+                        let artifact = xml_escape(parts[1]);
+                        let version = xml_escape(parts.get(2).copied().unwrap_or("[0,)"));
                         Some(format!(
-                            "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>{version_tag}\n        </dependency>"
+                            "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>\n            <version>{version}</version>\n        </dependency>"
                         ))
                     } else {
                         None
@@ -1625,15 +1620,14 @@ func main() {
             return;
         }
         let executor = JavaExecutor::new();
-        // Two-part coordinate (group:artifact, no version => version tag omitted)
+        // Two-part coordinate (group:artifact, no version => uses [0,) range)
         let deps = vec!["com.google.code.gson:gson".to_string()];
         let env = executor.setup_environment(&deps).await;
         if let Ok(env) = &env {
             let pom = std::fs::read_to_string(env.temp_dir.path().join("pom.xml")).unwrap();
-            // Dep line should NOT have a version tag (project version is OK)
             assert!(
-                !pom.contains("<artifactId>gson</artifactId>\n            <version>"),
-                "two-part coord should omit version in dependency"
+                pom.contains("[0,)"),
+                "two-part coord should use [0,) version range"
             );
             assert!(pom.contains("com.google.code.gson"));
         }
