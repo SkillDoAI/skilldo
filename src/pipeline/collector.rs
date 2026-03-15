@@ -2000,6 +2000,194 @@ setup(
 
     // -- Python changelog collection test --
 
+    // -- Java collection tests --
+
+    /// Helper: create a minimal Java project structure in a temp dir.
+    fn create_java_project(dir: &Path) {
+        // Create pom.xml
+        fs::write(
+            dir.join("pom.xml"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example</groupId>
+    <artifactId>testlib</artifactId>
+    <version>1.2.3</version>
+</project>"#,
+        )
+        .unwrap();
+
+        // Source files
+        let src = dir
+            .join("src")
+            .join("main")
+            .join("java")
+            .join("com")
+            .join("example");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("Main.java"),
+            "package com.example;\npublic class Main {\n    public static void hello() {}\n}\n",
+        )
+        .unwrap();
+
+        // Test files
+        let test = dir
+            .join("src")
+            .join("test")
+            .join("java")
+            .join("com")
+            .join("example");
+        fs::create_dir_all(&test).unwrap();
+        fs::write(
+            test.join("MainTest.java"),
+            "package com.example;\nimport org.junit.Test;\npublic class MainTest {\n    @Test\n    public void testHello() {}\n}\n",
+        )
+        .unwrap();
+
+        // README
+        fs::write(dir.join("README.md"), "# testlib\nA test Java library.\n").unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_collect_java_minimal_project() {
+        let dir = TempDir::new().unwrap();
+        create_java_project(dir.path());
+
+        let c = Collector::new(dir.path(), Language::Java);
+        let data = c.collect().await.unwrap();
+
+        assert_eq!(data.language, Language::Java);
+        assert_eq!(data.package_name, "testlib");
+        assert_eq!(data.version, "1.2.3");
+        assert!(!data.source_content.is_empty());
+        assert!(data.source_file_count >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_collect_java_with_changelog() {
+        let dir = TempDir::new().unwrap();
+        create_java_project(dir.path());
+        fs::write(
+            dir.path().join("CHANGELOG.md"),
+            "# Changelog\n\n## 1.2.3\n- Initial release\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::Java);
+        let data = c.collect().await.unwrap();
+
+        assert!(!data.changelog_content.is_empty());
+        assert!(data.changelog_content.contains("Changelog"));
+    }
+
+    #[tokio::test]
+    async fn test_collect_java_with_license() {
+        let dir = TempDir::new().unwrap();
+        create_java_project(dir.path());
+        fs::write(
+            dir.path().join("LICENSE"),
+            "Apache License\nVersion 2.0, January 2004\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::Java);
+        let data = c.collect().await.unwrap();
+
+        assert!(data.license.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_collect_java_with_examples() {
+        let dir = TempDir::new().unwrap();
+        create_java_project(dir.path());
+        let examples = dir.path().join("examples");
+        fs::create_dir_all(&examples).unwrap();
+        fs::write(
+            examples.join("Example.java"),
+            "public class Example { public static void main(String[] args) {} }\n",
+        )
+        .unwrap();
+
+        let c = Collector::new(dir.path(), Language::Java);
+        let data = c.collect().await.unwrap();
+
+        assert!(!data.examples_content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_collect_java_respects_budget() {
+        let dir = TempDir::new().unwrap();
+        create_java_project(dir.path());
+        // Add a large source file
+        let src = dir
+            .path()
+            .join("src")
+            .join("main")
+            .join("java")
+            .join("com")
+            .join("example");
+        fs::write(
+            src.join("BigClass.java"),
+            format!(
+                "package com.example;\npublic class BigClass {{\n{}\n}}\n",
+                "// padding\n".repeat(500)
+            ),
+        )
+        .unwrap();
+
+        let small = Collector::new(dir.path(), Language::Java).with_max_source_chars(200);
+        let large = Collector::new(dir.path(), Language::Java).with_max_source_chars(50_000);
+
+        let small_data = small.collect().await.unwrap();
+        let large_data = large.collect().await.unwrap();
+
+        assert!(
+            small_data.source_content.len() < large_data.source_content.len(),
+            "budget should constrain source: small={} large={}",
+            small_data.source_content.len(),
+            large_data.source_content.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_collect_java_invalid_package_name_falls_back() {
+        let dir = TempDir::new().unwrap();
+        // Create a pom.xml with an artifactId that will fail sanitize_dep_name
+        fs::write(
+            dir.path().join("pom.xml"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example</groupId>
+    <artifactId>-bad-name</artifactId>
+    <version>1.0.0</version>
+</project>"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("main").join("java");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("Main.java"), "public class Main {}\n").unwrap();
+        let test = dir.path().join("src").join("test").join("java");
+        fs::create_dir_all(&test).unwrap();
+        fs::write(test.join("MainTest.java"), "public class MainTest {}\n").unwrap();
+
+        let c = Collector::new(dir.path(), Language::Java);
+        let data = c.collect().await.unwrap();
+
+        // "-bad-name" starts with '-', sanitize_dep_name rejects it => "unknown"
+        assert_eq!(data.package_name, "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_collect_java_empty_project_fails() {
+        let dir = TempDir::new().unwrap();
+        // No Java files at all
+        let c = Collector::new(dir.path(), Language::Java);
+        let result = c.collect().await;
+        assert!(result.is_err());
+    }
+
     #[tokio::test]
     async fn test_collect_python_with_changelog() {
         let dir = TempDir::new().unwrap();

@@ -1361,4 +1361,220 @@ parallel_extraction = true
             result.err()
         );
     }
+
+    /// Create a minimal Java repo in a temp dir for dry-run tests
+    fn make_java_test_repo() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        // pom.xml
+        fs::write(
+            dir.path().join("pom.xml"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example</groupId>
+    <artifactId>testpkg</artifactId>
+    <version>1.0.0</version>
+</project>"#,
+        )
+        .unwrap();
+        // Source (use com/example to avoid "test" component triggering is_test_path)
+        let src = dir
+            .path()
+            .join("src")
+            .join("main")
+            .join("java")
+            .join("com")
+            .join("example");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("App.java"),
+            "package com.example;\npublic class App {\n    public static String hello() { return \"world\"; }\n}\n",
+        )
+        .unwrap();
+        // Test
+        let test_dir = dir
+            .path()
+            .join("src")
+            .join("test")
+            .join("java")
+            .join("com")
+            .join("example");
+        fs::create_dir_all(&test_dir).unwrap();
+        fs::write(
+            test_dir.join("AppTest.java"),
+            "package com.example;\npublic class AppTest {\n    public void testHello() {}\n}\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_java_language() {
+        let repo = make_java_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("java".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(result.is_ok(), "Java dry run failed: {:?}", result.err());
+        assert!(output.exists(), "SKILL.md should be written");
+    }
+
+    #[tokio::test]
+    async fn test_run_java_with_model_and_provider_override() {
+        let repo = make_java_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("java".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            model_override: Some("custom-model".to_string()),
+            provider_override: Some("openai".to_string()),
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "Java model/provider override failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_java_rejects_local_install() {
+        let repo = make_java_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("java".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            install_source_override: Some("local-install".to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(result.is_err(), "Java local-install should fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("install_source"),
+            "error should mention install_source: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_java_with_no_test_and_local_install() {
+        let repo = make_java_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("java".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            install_source_override: Some("local-mount".to_string()),
+            no_test: true,
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        // Should NOT fail with install_source guard since --no-test is set
+        if let Err(e) = &result {
+            assert!(
+                !e.to_string().contains("install_source"),
+                "install_source guard should be skipped with --no-test: {e}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_java_with_review_model_provider_override() {
+        let repo = make_java_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("java".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            review_model_override: Some("gpt-5.2".to_string()),
+            review_provider_override: Some("openai".to_string()),
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "Java review override failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_java_with_per_stage_config() {
+        let repo = make_java_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = write_per_stage_config(repo.path());
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("java".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(config_path),
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "Java per-stage config failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_java_with_telemetry_enabled() {
+        let repo = make_java_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("java".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            telemetry: true,
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "Java telemetry run failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_java_with_version_override() {
+        let repo = make_java_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("java".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            version_override: Some("9.9.9".to_string()),
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "Java version override failed: {:?}",
+            result.err()
+        );
+    }
 }

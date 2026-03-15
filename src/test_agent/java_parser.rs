@@ -413,4 +413,120 @@ import static org.junit.Assert.assertEquals;
             "code should contain println"
         );
     }
+
+    #[test]
+    fn categorize_async_via_executor_keyword() {
+        assert_eq!(
+            JavaParser::categorize_pattern("Executor Service", "Run tasks with executor"),
+            PatternCategory::AsyncPattern
+        );
+    }
+
+    #[test]
+    fn categorize_async_via_concurrent_keyword() {
+        assert_eq!(
+            JavaParser::categorize_pattern("Concurrent Map", "Using concurrent collections"),
+            PatternCategory::AsyncPattern
+        );
+    }
+
+    #[test]
+    fn categorize_async_via_async_keyword() {
+        assert_eq!(
+            JavaParser::categorize_pattern("Async Processing", "Process items asynchronously"),
+            PatternCategory::AsyncPattern
+        );
+    }
+
+    #[test]
+    fn categorize_async_via_completablefuture() {
+        assert_eq!(
+            JavaParser::categorize_pattern("CompletableFuture", "Chain completablefuture tasks"),
+            PatternCategory::AsyncPattern
+        );
+    }
+
+    #[test]
+    fn categorize_async_via_future_keyword() {
+        assert_eq!(
+            JavaParser::categorize_pattern("Future Result", "Get a future value"),
+            PatternCategory::AsyncPattern
+        );
+    }
+
+    #[test]
+    fn categorize_other_when_no_keywords_match() {
+        assert_eq!(
+            JavaParser::categorize_pattern("Data Transform", "Convert between formats"),
+            PatternCategory::Other
+        );
+    }
+
+    #[test]
+    fn extract_dependencies_drops_invalid_deps() {
+        let parser = JavaParser;
+        // The import has a semicolon embedded in the package name which sanitize_dep_name rejects
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```java
+import com.example.valid.Dep;
+import com.example.bad dep;
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        // "com.example.valid.Dep" is valid
+        assert!(deps.contains(&"com.example.valid.Dep".to_string()));
+        // "com.example.bad dep" has a space — sanitize_dep_name rejects it
+        assert!(
+            !deps.iter().any(|d| d.contains("bad dep")),
+            "invalid deps should be dropped"
+        );
+    }
+
+    #[test]
+    fn extract_patterns_success_exercises_debug_log() {
+        // This test covers the debug log path at line 124
+        let parser = JavaParser;
+        let patterns = parser.extract_patterns(SAMPLE_SKILL).unwrap();
+        assert_eq!(patterns.len(), 3, "should log and return 3 patterns");
+    }
+
+    #[test]
+    fn extract_dependencies_with_maven_and_imports_exercises_debug_log() {
+        // Exercises the debug log at line 166 by extracting deps successfully
+        let parser = JavaParser;
+        let deps = parser.extract_dependencies(SAMPLE_SKILL).unwrap();
+        assert!(!deps.is_empty(), "should have deps and log count");
+    }
+
+    #[test]
+    fn maven_coord_without_dots_in_group_is_skipped() {
+        let parser = JavaParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```
+simple:artifact:1.0
+com.real.group:artifact:2.0
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        // "simple:artifact:1.0" has no dots in group — should be skipped
+        assert!(
+            !deps.iter().any(|d| d.starts_with("simple:")),
+            "maven coord without dots in group should be skipped"
+        );
+        // "com.real.group:artifact:2.0" has dots — should be included
+        assert!(
+            deps.iter().any(|d| d.contains("com.real.group")),
+            "maven coord with dots in group should be included"
+        );
+    }
 }

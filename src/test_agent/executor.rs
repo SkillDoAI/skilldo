@@ -1564,4 +1564,138 @@ func main() {
         let result = executor.run_code(&env, code).await.unwrap();
         assert!(result.is_fail());
     }
+
+    #[tokio::test]
+    async fn test_java_setup_environment_rejects_bad_deps() {
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        // Even if mvn is available, bad dep names should be rejected
+        let result = executor
+            .setup_environment(&["valid-pkg; rm -rf /".to_string()])
+            .await;
+        // If mvn is not available, deps are skipped entirely (no error).
+        // If mvn IS available, sanitize_dep_name should reject the bad name.
+        if is_tool_available("mvn", "--version").await {
+            assert!(result.is_err(), "bad dep name should be rejected with mvn");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_java_setup_with_maven_deps_creates_pom() {
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        if !is_tool_available("mvn", "--version").await {
+            return; // Skip if mvn not installed
+        }
+        let executor = JavaExecutor::new();
+        let deps = vec!["com.google.code.gson:gson:2.10.1".to_string()];
+        let env = executor.setup_environment(&deps).await.unwrap();
+
+        // Verify pom.xml was created
+        let pom_path = env.temp_dir.path().join("pom.xml");
+        assert!(
+            pom_path.exists(),
+            "pom.xml should be created for Maven deps"
+        );
+        let pom_content = std::fs::read_to_string(&pom_path).unwrap();
+        assert!(
+            pom_content.contains("com.google.code.gson"),
+            "pom.xml should contain groupId"
+        );
+        assert!(
+            pom_content.contains("gson"),
+            "pom.xml should contain artifactId"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_java_setup_with_two_part_maven_coord() {
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        if !is_tool_available("mvn", "--version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        // Two-part coordinate (group:artifact, no version => LATEST)
+        let deps = vec!["com.google.code.gson:gson".to_string()];
+        let env = executor.setup_environment(&deps).await;
+        // May fail fetching LATEST, but the pom.xml should be written
+        if let Ok(env) = &env {
+            let pom = std::fs::read_to_string(env.temp_dir.path().join("pom.xml")).unwrap();
+            assert!(
+                pom.contains("LATEST"),
+                "two-part coord should use LATEST version"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_java_setup_no_deps_no_mvn_needed() {
+        // Even without mvn, Java setup with no deps should work (only needs javac)
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+        let m2 = env.temp_dir.path().join(MAVEN_REPO_DIR);
+        assert!(
+            m2.exists(),
+            "Maven repo dir should be created even with no deps"
+        );
+        // No pom.xml should be created when there are no deps
+        assert!(
+            !env.temp_dir.path().join("pom.xml").exists(),
+            "pom.xml should not be created with no deps"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_java_run_code_with_deps_dir() {
+        // Test that run_code includes deps/ in classpath when the dir exists
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let env = executor.setup_environment(&[]).await.unwrap();
+
+        // Create a deps directory to exercise the classpath branch
+        std::fs::create_dir_all(env.temp_dir.path().join("deps")).unwrap();
+
+        let code = r#"public class Main {
+    public static void main(String[] args) {
+        System.out.println("Test with deps dir");
+    }
+}
+"#;
+
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_pass());
+    }
+
+    #[tokio::test]
+    async fn test_java_setup_skips_non_maven_deps() {
+        // Deps that don't have ":" (not Maven coordinates) should be filtered
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        if !is_tool_available("mvn", "--version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        // Single-part dep (no colon) won't match Maven coordinate format
+        let deps = vec!["simplepackage".to_string()];
+        let env = executor.setup_environment(&deps).await;
+        // Should succeed but no deps_xml generated (filter_map returns None)
+        if let Ok(env) = &env {
+            // pom.xml should NOT be created because deps_xml is empty
+            assert!(
+                !env.temp_dir.path().join("pom.xml").exists(),
+                "pom.xml should not be created for non-Maven deps"
+            );
+        }
+    }
 }

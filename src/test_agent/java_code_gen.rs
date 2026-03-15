@@ -316,4 +316,102 @@ public class Main {
         assert!(code.contains("public class Main"));
         assert!(!code.contains("~~~"));
     }
+
+    #[test]
+    fn test_extract_code_strips_known_language_tag_from_generic_block() {
+        // Covers the generic code block path with known language tag stripping (lines 86-88)
+        let response = "```\nbash\necho hello\n```";
+        let code = JavaCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains("echo hello"),
+            "should extract code after stripping bash tag"
+        );
+        assert!(
+            !code.starts_with("bash"),
+            "bash tag should be stripped: got '{}'",
+            code
+        );
+    }
+
+    #[test]
+    fn test_extract_code_strips_shell_tag_from_generic_block() {
+        let response = "```\nshell\nls -la\n```";
+        let code = JavaCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("ls -la"));
+        assert!(!code.starts_with("shell"));
+    }
+
+    #[test]
+    fn test_extract_code_strips_xml_tag_from_generic_block() {
+        let response = "```\nxml\n<root>data</root>\n```";
+        let code = JavaCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("<root>data</root>"));
+        assert!(!code.starts_with("xml"));
+    }
+
+    #[test]
+    fn test_extract_code_preserves_unknown_first_line_in_generic_block() {
+        // If the first line is not a known tag, it should be preserved
+        let response = "```\nSomeClass obj = new SomeClass();\nobj.run();\n```";
+        let code = JavaCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains("SomeClass"),
+            "non-tag first line should be preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_mock() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = JavaCodeGenerator::new(&mock_client);
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "old code", "compile error: missing semicolon")
+            .await;
+        assert!(result.is_ok());
+        let code = result.unwrap();
+        assert!(!code.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = JavaCodeGenerator::new(&mock_client);
+        generator.set_local_package(Some("com.google.code.gson:gson".to_string()));
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "previous attempt", "NullPointerException")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_custom_instructions() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = JavaCodeGenerator::new(&mock_client)
+            .with_custom_instructions(Some("Always test null inputs.".to_string()));
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "prev code", "AssertionError")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_extract_code_from_tilde_generic_block() {
+        let response =
+            "~~~\npublic class Main {\n    public static void main(String[] args) {}\n}\n~~~";
+        let code = JavaCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(code.contains("public class Main"));
+        assert!(!code.contains("~~~"));
+    }
 }

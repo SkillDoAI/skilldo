@@ -395,6 +395,12 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
     "HOME",
     "SHELL",
     "USER",
+    // Language-specific interpreter hijack vars
+    "NODE_OPTIONS",
+    "JAVA_TOOL_OPTIONS",
+    "GEM_PATH",
+    "PERL5LIB",
+    "RUBYLIB",
 ];
 
 fn warn_dangerous_env_var(key: &str) {
