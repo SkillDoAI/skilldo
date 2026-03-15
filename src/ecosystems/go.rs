@@ -2015,4 +2015,168 @@ mod tests {
         // "release.1.0" starts with 'r' (not a digit) after stripping v
         assert_eq!(parse_version_tag("release.1.0"), None);
     }
+
+    #[test]
+    fn collect_go_files_stops_at_max_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+        let mut deep = root.to_path_buf();
+        for i in 0..22 {
+            deep = deep.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("deep.go"), "package deep\n").unwrap();
+        let handler = GoHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(!files
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "deep.go")));
+    }
+
+    #[test]
+    fn collect_all_go_in_dir_stops_at_max_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+        let mut deep = root.join("examples");
+        for i in 0..22 {
+            deep = deep.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("deep_example.go"), "package main\n").unwrap();
+        let handler = GoHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        assert!(!files
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "deep_example.go")));
+    }
+
+    #[test]
+    fn collect_example_test_files_stops_at_max_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+        let mut deep = root.to_path_buf();
+        for i in 0..22 {
+            deep = deep.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("example_deep_test.go"), "package deep\n").unwrap();
+        let handler = GoHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        assert!(!files
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "example_deep_test.go")));
+    }
+
+    #[test]
+    fn collect_docs_recursive_stops_at_max_depth_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        let mut deep = root.join("docs");
+        for i in 0..22 {
+            deep = deep.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("unreachable.md"), "# Hidden\n").unwrap();
+        let handler = GoHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert!(!docs
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "unreachable.md")));
+    }
+
+    #[test]
+    fn get_version_from_internal_version_subdir_no_git() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir_all(dir.path().join("internal").join("version")).unwrap();
+        fs::write(
+            dir.path()
+                .join("internal")
+                .join("version")
+                .join("version.go"),
+            "package version\n\nvar Version = \"2.4.6\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "2.4.6");
+    }
+
+    #[test]
+    fn extract_version_parts_missing_minor_returns_none() {
+        assert_eq!(extract_version_parts("Major = 3\nPatch = 1\n"), None);
+    }
+
+    #[test]
+    fn is_dev_placeholder_zero_zero_zero_unset() {
+        assert!(is_dev_placeholder("0.0.0-unset"));
+    }
+
+    #[test]
+    fn is_dev_placeholder_library_import() {
+        assert!(is_dev_placeholder("library-import"));
+    }
+
+    #[test]
+    fn is_dev_placeholder_untracked() {
+        assert!(is_dev_placeholder("(untracked)"));
+    }
+
+    #[test]
+    fn is_dev_placeholder_real_version_returns_false() {
+        assert!(!is_dev_placeholder("1.2.3"));
+        assert!(!is_dev_placeholder("v2.0.0"));
+    }
+
+    #[test]
+    fn is_major_version_suffix_v2() {
+        assert!(is_major_version_suffix("v2"));
+        assert!(is_major_version_suffix("v100"));
+    }
+
+    #[test]
+    fn is_major_version_suffix_v1_false() {
+        assert!(!is_major_version_suffix("v1"));
+        assert!(!is_major_version_suffix("v0"));
+    }
+
+    #[test]
+    fn is_major_version_suffix_non_version_false() {
+        assert!(!is_major_version_suffix("vendor"));
+        assert!(!is_major_version_suffix("v"));
+        assert!(!is_major_version_suffix("v2a"));
+    }
+
+    #[test]
+    fn extract_version_constant_rejects_dev() {
+        assert_eq!(extract_version_constant("const Version = \"dev\"\n"), None);
+    }
+
+    #[test]
+    fn extract_version_constant_rejects_unversioned() {
+        assert_eq!(
+            extract_version_constant("const Version = \"unversioned\"\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_version_constant_accepts_valid() {
+        assert_eq!(
+            extract_version_constant("const Version = \"v1.5.3\"\n"),
+            Some("1.5.3".to_string()),
+        );
+    }
+
+    #[test]
+    fn extract_version_constant_parts_fallback_with_struct_syntax() {
+        let content = "package version\n\nMajor: 2,\nMinor: 0,\nPatch: 1,\n";
+        assert_eq!(extract_version_constant(content), Some("2.0.1".to_string()));
+    }
 }
