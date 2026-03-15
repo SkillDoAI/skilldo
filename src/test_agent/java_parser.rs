@@ -18,7 +18,9 @@ static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").u
 static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)[^\n]*\n([\s\S]*?)(?:```|~~~)").unwrap());
 static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([a-zA-Z0-9._-]+):([a-zA-Z0-9._-]+)(?::([a-zA-Z0-9._-]+))?").unwrap()
+    // Match Maven coordinates: group:artifact or group:artifact:version
+    // Version may include range syntax like [0,) or [1.0,2.0)
+    Regex::new(r"([a-zA-Z0-9._-]+):([a-zA-Z0-9._-]+)(?::([a-zA-Z0-9._\[\],\(\)-]+))?").unwrap()
 });
 
 /// Java-specific parser for SKILL.md files
@@ -131,7 +133,9 @@ impl LanguageParser for JavaParser {
             if let Some(content) = extract_section(skill_md, section_re)? {
                 for cap in MAVEN_COORD_RE.captures_iter(content) {
                     let coord = cap[0].to_string();
-                    if cap[1].contains('.') && !dependencies.contains(&coord) {
+                    // Accept any group:artifact coord — dots in groupId are
+                    // convention, not required (e.g., junit:junit is valid)
+                    if !dependencies.contains(&coord) {
                         dependencies.push(coord);
                     }
                 }
@@ -489,7 +493,7 @@ name: test
     }
 
     #[test]
-    fn maven_coord_without_dots_in_group_is_skipped() {
+    fn maven_coord_without_dots_in_group_accepted() {
         let parser = JavaParser;
         let skill = r#"---
 name: test
@@ -498,20 +502,19 @@ name: test
 ## Imports
 
 ```
-simple:artifact:1.0
+junit:junit:4.13.2
 com.real.group:artifact:2.0
 ```
 "#;
         let deps = parser.extract_dependencies(skill).unwrap();
-        // "simple:artifact:1.0" has no dots in group — should be skipped
+        // Both should be accepted — dots in groupId are convention, not required
         assert!(
-            !deps.iter().any(|d| d.starts_with("simple:")),
-            "maven coord without dots in group should be skipped"
+            deps.iter().any(|d| d.starts_with("junit:")),
+            "dot-less groupId like junit:junit should be accepted"
         );
-        // "com.real.group:artifact:2.0" has dots — should be included
         assert!(
             deps.iter().any(|d| d.contains("com.real.group")),
-            "maven coord with dots in group should be included"
+            "dotted groupId should be accepted"
         );
     }
 }
