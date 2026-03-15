@@ -677,7 +677,7 @@ impl LanguageExecutor for JavaExecutor {
                     if parts.len() >= 2 {
                         let group = parts[0];
                         let artifact = parts[1];
-                        let version = parts.get(2).unwrap_or(&"LATEST");
+                        let version = parts.get(2).unwrap_or(&"RELEASE");
                         Some(format!(
                             "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>\n            <version>{version}</version>\n        </dependency>"
                         ))
@@ -1620,15 +1620,15 @@ func main() {
             return;
         }
         let executor = JavaExecutor::new();
-        // Two-part coordinate (group:artifact, no version => LATEST)
+        // Two-part coordinate (group:artifact, no version => RELEASE)
         let deps = vec!["com.google.code.gson:gson".to_string()];
         let env = executor.setup_environment(&deps).await;
-        // May fail fetching LATEST, but the pom.xml should be written
+        // May fail fetching RELEASE, but the pom.xml should be written
         if let Ok(env) = &env {
             let pom = std::fs::read_to_string(env.temp_dir.path().join("pom.xml")).unwrap();
             assert!(
-                pom.contains("LATEST"),
-                "two-part coord should use LATEST version"
+                pom.contains("RELEASE"),
+                "two-part coord should use RELEASE version"
             );
         }
     }

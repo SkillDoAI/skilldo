@@ -249,19 +249,10 @@ impl<'a> TestCodeValidator<'a> {
                             Box::new(JavaExecutor::new().with_timeout(config.timeout)),
                             ExecutionMode::BareMetal,
                         ),
-                        ExecutionMode::Container => {
-                            // Container mode for Java uses bare javac which can't resolve
-                            // external dependencies. Fall back to BareMetal (JavaExecutor).
-                            tracing::warn!(
-                                "Container mode is not yet fully supported for Java \
-                                 (external deps require Maven). Falling back to bare metal. \
-                                 Set `execution_mode = \"bare-metal\"` in your config to suppress this warning."
-                            );
-                            (
-                                Box::new(JavaExecutor::new().with_timeout(config.timeout)),
-                                ExecutionMode::BareMetal,
-                            )
-                        }
+                        ExecutionMode::Container => (
+                            Box::new(ContainerExecutor::new(config.clone(), Language::Java)),
+                            ExecutionMode::Container,
+                        ),
                     };
                 Ok(Self {
                     language: Language::Java,

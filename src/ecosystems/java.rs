@@ -354,7 +354,7 @@ impl JavaHandler {
     fn is_test_path(path: &Path) -> bool {
         path.components().any(|c| {
             let s = c.as_os_str().to_str().unwrap_or("");
-            s == "test" || s == "tests" || s == "src/test"
+            s == "test" || s == "tests"
         })
     }
 
@@ -389,6 +389,9 @@ fn parse_pom_artifact_id(content: &str) -> Option<String> {
     let deps_pos = content.find("<dependencies>");
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
     let search_region = if let Some(dp) = deps_pos {
+        if parent_end > dp {
+            return None;
+        }
         &content[parent_end..dp]
     } else {
         &content[parent_end..]
@@ -402,6 +405,9 @@ fn parse_pom_version(content: &str) -> Option<String> {
     let deps_pos = content.find("<dependencies>");
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
     let search_region = if let Some(dp) = deps_pos {
+        if parent_end > dp {
+            return None;
+        }
         &content[parent_end..dp]
     } else {
         &content[parent_end..]
@@ -426,6 +432,9 @@ fn parse_pom_url(content: &str) -> Option<String> {
         .or_else(|| content.find("<build>"))
         .unwrap_or(content.len());
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
+    if parent_end > end_pos {
+        return None;
+    }
     let search = &content[parent_end..end_pos];
     extract_xml_tag(search, "url")
 }
@@ -1649,5 +1658,26 @@ dependencies {
         let handler = JavaHandler::new(tmp.path());
         let name = handler.get_package_name().unwrap();
         assert!(!name.is_empty());
+    }
+
+    // ── Malformed POM bounds-check tests ──
+
+    #[test]
+    fn parse_pom_artifact_id_parent_after_deps() {
+        // Malformed: </parent> appears after <dependencies> — must not panic
+        let pom = "<dependencies><dep/></dependencies></parent><artifactId>x</artifactId>";
+        assert_eq!(parse_pom_artifact_id(pom), None);
+    }
+
+    #[test]
+    fn parse_pom_version_parent_after_deps() {
+        let pom = "<dependencies></dependencies></parent><version>1.0</version>";
+        assert_eq!(parse_pom_version(pom), None);
+    }
+
+    #[test]
+    fn parse_pom_url_parent_after_build() {
+        let pom = "<build></build></parent><url>https://example.com</url>";
+        assert_eq!(parse_pom_url(pom), None);
     }
 }

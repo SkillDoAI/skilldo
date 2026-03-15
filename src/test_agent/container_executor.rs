@@ -77,12 +77,64 @@ impl ContainerExecutor {
         Ok(lines.join("\n"))
     }
 
-    /// Generate run.sh for non-Python languages (JS, Rust, Go)
+    /// Generate dependency installation script for Java.
+    /// Creates a pom.xml and uses `mvn dependency:copy-dependencies` to fetch jars.
+    fn generate_java_install_script(&self, deps: &[String]) -> Result<String> {
+        if deps.is_empty() {
+            return Ok(String::new());
+        }
+
+        for dep in deps {
+            sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+        }
+
+        let deps_xml: Vec<String> = deps
+            .iter()
+            .filter_map(|d| {
+                let parts: Vec<&str> = d.splitn(3, ':').collect();
+                if parts.len() >= 2 {
+                    let group = parts[0];
+                    let artifact = parts[1];
+                    let version = parts.get(2).unwrap_or(&"RELEASE");
+                    Some(format!(
+                        "        <dependency><groupId>{group}</groupId><artifactId>{artifact}</artifactId><version>{version}</version></dependency>"
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if deps_xml.is_empty() {
+            return Ok(String::new());
+        }
+
+        let pom = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>skilldo</groupId>
+    <artifactId>test</artifactId>
+    <version>0.1.0</version>
+    <dependencies>
+{}
+    </dependencies>
+</project>"#,
+            deps_xml.join("\n")
+        );
+
+        Ok(format!(
+            "mkdir -p deps\ncat > pom.xml << 'POMEOF'\n{pom}\nPOMEOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -q 2>/dev/null || true"
+        ))
+    }
+
+    /// Generate run.sh for non-Python languages (JS, Rust, Go, Java)
     /// Python uses `uv run test.py` directly — no run.sh needed
     fn generate_container_script(&self, deps: &[String]) -> Result<String> {
         let install_cmd = match self.language {
             Language::JavaScript => self.generate_node_install_script(deps)?,
             Language::Go => self.generate_go_install_script(deps)?,
+            Language::Java => self.generate_java_install_script(deps)?,
             _ => String::new(),
         };
 
@@ -90,7 +142,7 @@ impl ContainerExecutor {
             Language::JavaScript => "node test.js",
             Language::Rust => "rustc main.rs -o main && ./main",
             Language::Go => "go run main.go",
-            Language::Java => "javac Main.java && java Main",
+            Language::Java => "javac -cp 'deps/*:.' Main.java && java -cp 'deps/*:.' Main",
             Language::Python => {
                 bail!("generate_container_script should not be called for Python")
             }
@@ -1284,5 +1336,58 @@ mod tests {
         assert!(script.contains("go mod init test"));
         assert!(script.contains("go get 'github.com/spf13/cobra'"));
         assert!(script.contains("go run main.go"));
+    }
+
+    // --- Java container script tests ---
+
+    #[test]
+    fn test_java_container_script_without_deps() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let script = executor.generate_container_script(&[]).unwrap();
+        assert!(script.contains("javac -cp 'deps/*:.' Main.java"));
+        assert!(script.contains("java -cp 'deps/*:.' Main"));
+        // No mvn/pom lines when no deps
+        assert!(!script.contains("pom.xml"));
+    }
+
+    #[test]
+    fn test_java_container_script_with_deps() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let deps = vec!["com.google.code.gson:gson:2.10.1".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.contains("pom.xml"));
+        assert!(script.contains("mvn dependency:copy-dependencies"));
+        assert!(script.contains("deps"));
+        assert!(script.contains("javac -cp 'deps/*:.' Main.java"));
+    }
+
+    #[test]
+    fn test_java_container_script_two_part_coord_uses_release() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let deps = vec!["com.google.code.gson:gson".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(
+            script.contains("RELEASE"),
+            "two-part coord should use RELEASE version"
+        );
+    }
+
+    #[test]
+    fn test_java_install_script_rejects_shell_injection() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let deps = vec!["com.evil:lib; rm -rf /".to_string()];
+        assert!(executor.generate_java_install_script(&deps).is_err());
+    }
+
+    #[test]
+    fn test_java_container_script_structure() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let deps = vec!["org.slf4j:slf4j-api:2.0.9".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(script.contains("set -e"));
+        assert!(script.contains("cd /workspace"));
+        assert!(script.contains("mkdir -p deps"));
+        assert!(script.contains("java -cp 'deps/*:.' Main"));
     }
 }

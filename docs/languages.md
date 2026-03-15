@@ -10,7 +10,7 @@ Skilldo auto-detects the language from project files. Use `--language` to overri
 | Go | Full support | go modules | `*.go`, `go.mod` | go toolchain bare-metal or container |
 | JavaScript/TypeScript | Full support | npm | `*.js`, `*.ts`, `package.json` | node+npm bare-metal or container |
 | Rust | Full support | cargo | `*.rs`, `Cargo.toml` | cargo bare-metal or container |
-| Java | Full support | Maven/Gradle | `*.java`, `pom.xml`, `build.gradle` | javac bare-metal or Maven container |
+| Java | Full support | Maven/Gradle | `*.java`, `pom.xml`, `build.gradle`, `build.gradle.kts` | javac bare-metal or Maven container |
 
 ## Test Validation
 
