@@ -749,8 +749,13 @@ impl LanguageExecutor for JavaExecutor {
 
         // Build classpath: include deps/ if it exists
         let deps_dir = env.temp_dir.path().join("deps");
+        let sep = if cfg!(target_os = "windows") {
+            ";"
+        } else {
+            ":"
+        };
         let classpath = if deps_dir.is_dir() {
-            format!("{}/*:.", deps_dir.display())
+            format!("{}/*{sep}.", deps_dir.display())
         } else {
             ".".to_string()
         };

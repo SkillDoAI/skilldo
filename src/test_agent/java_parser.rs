@@ -19,8 +19,12 @@ static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)[^\n]*\n([\s\S]*?)(?:```|~~~)").unwrap());
 static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
     // Match Maven coordinates: group:artifact or group:artifact:version
+    // Group must start with a letter (excludes port numbers like 11434).
     // Version may include range syntax like [0,) or [1.0,2.0)
-    Regex::new(r"([a-zA-Z0-9._-]+):([a-zA-Z0-9._-]+)(?::([a-zA-Z0-9._\[\],\(\)-]+))?").unwrap()
+    Regex::new(
+        r"([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*)(?::([a-zA-Z0-9._\[\],\(\)-]+))?",
+    )
+    .unwrap()
 });
 
 /// Java-specific parser for SKILL.md files
