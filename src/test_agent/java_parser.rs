@@ -123,33 +123,17 @@ impl LanguageParser for JavaParser {
     fn extract_dependencies(&self, skill_md: &str) -> Result<Vec<String>> {
         let mut dependencies = Vec::new();
 
-        let imports_content = match extract_section(skill_md, r"(?m)^##\s+Imports\s*$")? {
-            Some(s) => s,
-            None => {
-                debug!("No Imports section found in SKILL.md");
-                return Ok(dependencies);
-            }
-        };
+        // Scan multiple sections for Maven coordinates (group:artifact:version).
+        // Don't early-return if one section is missing — coords may appear in any.
+        let sections_to_scan = [r"(?m)^##\s+Imports\s*$", r"(?m)^##\s+Core Patterns\s*$"];
 
-        // Maven coordinates: groupId:artifactId:version in code blocks or text
-        // Only colon-separated coordinates are usable by the executor.
-        // Java imports (com.google.gson.Gson) are already in the code patterns
-        // and don't need to be in the dependency list.
-        for cap in MAVEN_COORD_RE.captures_iter(imports_content) {
-            let coord = cap[0].to_string();
-            // Only include if it looks like a Maven coordinate (has dots in group)
-            if cap[1].contains('.') && !dependencies.contains(&coord) {
-                dependencies.push(coord);
-            }
-        }
-
-        // Also check code blocks for Maven coordinates (common in install sections)
-        let patterns_content = extract_section(skill_md, r"(?m)^##\s+Core Patterns\s*$")?;
-        if let Some(content) = patterns_content {
-            for cap in MAVEN_COORD_RE.captures_iter(content) {
-                let coord = cap[0].to_string();
-                if cap[1].contains('.') && !dependencies.contains(&coord) {
-                    dependencies.push(coord);
+        for section_re in &sections_to_scan {
+            if let Some(content) = extract_section(skill_md, section_re)? {
+                for cap in MAVEN_COORD_RE.captures_iter(content) {
+                    let coord = cap[0].to_string();
+                    if cap[1].contains('.') && !dependencies.contains(&coord) {
+                        dependencies.push(coord);
+                    }
                 }
             }
         }
