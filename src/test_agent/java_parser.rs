@@ -13,8 +13,10 @@ use crate::util::sanitize_dep_name;
 
 // Cached regexes for pattern/dependency extraction
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
+// Generic fence regex for finding code block boundaries (position only).
+// Actual code extraction uses find_fenced_blocks for proper tag-aware parsing.
 static CODE_BLOCK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:java)?\n([\s\S]*?)(?:```|~~~)").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)[^\n]*\n([\s\S]*?)(?:```|~~~)").unwrap());
 static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"([a-zA-Z0-9._-]+):([a-zA-Z0-9._-]+)(?::([a-zA-Z0-9._-]+))?").unwrap()
 });

@@ -51,49 +51,24 @@ impl<'a> JavaCodeGenerator<'a> {
         build_test_prompt(pattern, &JAVA_ENV, local_package, custom_instructions)
     }
 
-    /// Extract Java code from markdown code blocks (supports both ``` and ~~~ fences).
+    /// Extract Java code from markdown code blocks using the shared fence parser.
     fn extract_code_from_response(response: &str) -> Result<String> {
-        let trimmed = response.trim();
+        let blocks = crate::util::find_fenced_blocks(response);
 
-        // Try language-tagged fence first (```java or ~~~java), then generic fence
-        for fence in &["```", "~~~"] {
-            let java_fence = format!("{fence}java");
-            if let Some(start) = trimmed.find(&java_fence) {
-                let code_start = start + java_fence.len();
-                let after = &trimmed[code_start..];
-                let newline_pos = after.find('\n').unwrap_or(0);
-                let actual_start = code_start + newline_pos;
-                if let Some(end) = trimmed[actual_start..].find(*fence) {
-                    let code = trimmed[actual_start..actual_start + end].trim();
-                    return Ok(code.to_string());
-                }
+        // Prefer java-tagged blocks
+        for (tag, body) in &blocks {
+            if tag == "java" {
+                return Ok(body.clone());
             }
         }
 
-        // Try generic ``` or ~~~ code block
-        for fence in &["```", "~~~"] {
-            if let Some(start) = trimmed.find(*fence) {
-                let code_start = start + fence.len();
-                if let Some(end) = trimmed[code_start..].find(*fence) {
-                    let mut code = trimmed[code_start..code_start + end].trim();
-                    // Strip known language tags
-                    if let Some((first_line, rest)) = code.split_once('\n') {
-                        let tag = first_line.trim().to_ascii_lowercase();
-                        const KNOWN_TAGS: &[&str] = &[
-                            "java", "bash", "sh", "shell", "text", "txt", "json", "yaml", "yml",
-                            "toml", "xml",
-                        ];
-                        if KNOWN_TAGS.contains(&tag.as_str()) {
-                            code = rest.trim();
-                        }
-                    }
-                    return Ok(code.to_string());
-                }
-            }
+        // Fall back to first untagged or generically tagged block
+        if let Some((_, body)) = blocks.first() {
+            return Ok(body.clone());
         }
 
-        // If no code block found, use the response as-is
-        Ok(trimmed.to_string())
+        // No code block found — use the response as-is
+        Ok(response.trim().to_string())
     }
 }
 
@@ -318,35 +293,28 @@ public class Main {
     }
 
     #[test]
-    fn test_extract_code_strips_known_language_tag_from_generic_block() {
-        // Covers the generic code block path with known language tag stripping (lines 86-88)
-        let response = "```\nbash\necho hello\n```";
+    fn test_extract_code_handles_bash_tagged_block() {
+        // find_fenced_blocks parses the tag — bash tag on same line as fence
+        let response = "```bash\necho hello\n```";
         let code = JavaCodeGenerator::extract_code_from_response(response).unwrap();
         assert!(
             code.contains("echo hello"),
-            "should extract code after stripping bash tag"
-        );
-        assert!(
-            !code.starts_with("bash"),
-            "bash tag should be stripped: got '{}'",
-            code
+            "should extract code from bash-tagged block"
         );
     }
 
     #[test]
-    fn test_extract_code_strips_shell_tag_from_generic_block() {
-        let response = "```\nshell\nls -la\n```";
+    fn test_extract_code_handles_shell_tagged_block() {
+        let response = "```shell\nls -la\n```";
         let code = JavaCodeGenerator::extract_code_from_response(response).unwrap();
         assert!(code.contains("ls -la"));
-        assert!(!code.starts_with("shell"));
     }
 
     #[test]
-    fn test_extract_code_strips_xml_tag_from_generic_block() {
-        let response = "```\nxml\n<root>data</root>\n```";
+    fn test_extract_code_handles_xml_tagged_block() {
+        let response = "```xml\n<root>data</root>\n```";
         let code = JavaCodeGenerator::extract_code_from_response(response).unwrap();
         assert!(code.contains("<root>data</root>"));
-        assert!(!code.starts_with("xml"));
     }
 
     #[test]

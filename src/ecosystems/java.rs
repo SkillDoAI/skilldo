@@ -1734,4 +1734,181 @@ dependencies {
         let pom = "<build></build></parent><url>https://example.com</url>";
         assert_eq!(parse_pom_url(pom), None);
     }
+
+    // ── parse_gradle_version: no-equals-sign path (version '1.0.0') ──
+
+    #[test]
+    fn parse_gradle_version_no_equals_sign() {
+        // Gradle shorthand: version '1.0.0' without '='
+        assert_eq!(
+            parse_gradle_version("version '1.0.0'"),
+            Some("1.0.0".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_gradle_version_no_equals_double_quotes() {
+        assert_eq!(
+            parse_gradle_version("version \"2.3.4\""),
+            Some("2.3.4".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_gradle_version_bare_keyword_only() {
+        // Line is exactly "version" with nothing after — should skip
+        assert_eq!(parse_gradle_version("version"), None);
+    }
+
+    #[test]
+    fn parse_gradle_version_rejects_version_code() {
+        // "versionCode" starts with "version" but rest begins with 'C' (not =, space, or quote)
+        assert_eq!(parse_gradle_version("versionCode 1"), None);
+    }
+
+    // ── is_test_path: top-level test/ directory ──
+
+    #[test]
+    fn is_test_path_top_level_test_dir() {
+        // Files in a top-level test/ directory should be classified as tests
+        let path = Path::new("test/com/example/Foo.java");
+        assert!(JavaHandler::is_test_path(path));
+    }
+
+    #[test]
+    fn is_test_path_top_level_tests_dir() {
+        let path = Path::new("tests/FooTest.java");
+        assert!(JavaHandler::is_test_path(path));
+    }
+
+    #[test]
+    fn is_test_path_deep_package_test_not_top_level() {
+        // Deep "test" in package path should NOT be matched as top-level
+        let path = Path::new("com/example/test/util/Helper.java");
+        assert!(!JavaHandler::is_test_path(path));
+    }
+
+    // ── Depth limit tests ──
+
+    #[test]
+    fn collect_java_files_stops_at_max_depth() {
+        let tmp = TempDir::new().unwrap();
+        // Create a path deeper than MAX_DEPTH (20)
+        let mut deep = tmp.path().to_path_buf();
+        for i in 0..22 {
+            deep = deep.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("Deep.java"), "class Deep {}").unwrap();
+
+        // Also create a shallow file so find_source_files doesn't error
+        let shallow = tmp.path().join("src/main/java");
+        fs::create_dir_all(&shallow).unwrap();
+        fs::write(shallow.join("App.java"), "class App {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let files = handler.find_source_files().unwrap();
+        assert!(
+            !files
+                .iter()
+                .any(|p| p.to_str().unwrap().contains("Deep.java")),
+            "should not find files beyond MAX_DEPTH"
+        );
+    }
+
+    #[test]
+    fn collect_all_java_in_dir_stops_at_max_depth() {
+        let tmp = TempDir::new().unwrap();
+        let examples = tmp.path().join("examples");
+        let mut deep = examples.clone();
+        for i in 0..22 {
+            deep = deep.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("DeepExample.java"), "class DeepExample {}").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let files = handler.find_examples().unwrap();
+        assert!(
+            !files
+                .iter()
+                .any(|p| p.to_str().unwrap().contains("DeepExample.java")),
+            "should not find example files beyond MAX_DEPTH"
+        );
+    }
+
+    #[test]
+    fn collect_docs_recursive_stops_at_max_depth() {
+        let tmp = TempDir::new().unwrap();
+        let mut deep = tmp.path().join("docs");
+        for i in 0..22 {
+            deep = deep.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("deep.md"), "# Deep").unwrap();
+
+        let handler = JavaHandler::new(tmp.path());
+        let docs = handler.find_docs().unwrap();
+        assert!(
+            !docs.iter().any(|p| p.to_str().unwrap().contains("deep.md")),
+            "should not find docs beyond MAX_DEPTH"
+        );
+    }
+
+    // ── get_package_name: settings.gradle name empty after stripping -root ──
+
+    #[test]
+    fn get_package_name_settings_gradle_root_suffix_empty_name() {
+        // rootProject.name = "-root" -> stripped to empty -> fallback to dir name
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle"),
+            "rootProject.name = '-root'",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let name = handler.get_package_name().unwrap();
+        // Should fall through to directory name since stripped name is empty
+        assert!(!name.is_empty());
+    }
+
+    // ── get_version: build.gradle.kts without pom.xml ──
+
+    #[test]
+    fn get_version_gradle_kts_no_pom() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("build.gradle.kts"), "version = '8.1.0'").unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_version().unwrap(), "8.1.0");
+    }
+
+    // ── get_package_name with pom.xml having empty artifactId ──
+
+    #[test]
+    fn get_package_name_pom_empty_artifact_id() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId></artifactId></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let name = handler.get_package_name().unwrap();
+        // Empty artifactId via extract_xml_tag returns None, falls through to dir name
+        assert!(!name.is_empty());
+    }
+
+    // ── get_license: no pom, LICENSE file with classify_license match ──
+
+    #[test]
+    fn get_license_bsd_from_file() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("LICENSE"),
+            "BSD 3-Clause License\n\nRedistribution and use",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_license(), Some("BSD-3-Clause".to_string()));
+    }
 }
