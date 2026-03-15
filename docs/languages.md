@@ -47,7 +47,7 @@ Each language has a dedicated executor that runs generated test code:
 Each language has a handler in `src/ecosystems/` that provides:
 
 - **File discovery** — finds source files, test files, documentation, changelogs, examples
-- **Version detection** — extracts version from package metadata (pyproject.toml, Cargo.toml, package.json, go.mod tags, pom.xml, build.gradle)
+- **Version detection** — extracts version from package metadata (pyproject.toml, Cargo.toml, package.json, go.mod tags, pom.xml, build.gradle, build.gradle.kts)
 - **License detection** — reads license from metadata or LICENSE files
 - **Dependency parsing** — extracts dependencies for the test agent
 - **Project URL extraction** — finds homepage, repository, documentation links
