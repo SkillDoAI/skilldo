@@ -266,11 +266,7 @@ impl JavaHandler {
                         continue;
                     }
                     let rel_path = path.strip_prefix(&self.repo_path).unwrap_or(&path);
-                    let in_test_dir = Self::is_test_path(rel_path);
-                    let is_test_file = name.ends_with("Test.java")
-                        || name.ends_with("Tests.java")
-                        || name.starts_with("Test");
-                    let is_test = in_test_dir || is_test_file;
+                    let is_test = Self::is_test_path(rel_path);
                     if tests_only == is_test {
                         files.push(path);
                     }
@@ -461,11 +457,10 @@ fn parse_pom_license(content: &str) -> Option<String> {
 
 /// Extract `<url>` from pom.xml (top-level).
 fn parse_pom_url(content: &str) -> Option<String> {
-    // Only match top-level <url>, before <dependencies> or <build>
-    let end_pos = content
-        .find("<dependencies>")
-        .or_else(|| content.find("<build>"))
-        .unwrap_or(content.len());
+    // Only match top-level <url>, before <dependencies> or <build> (whichever comes first)
+    let deps_pos = content.find("<dependencies>").unwrap_or(content.len());
+    let build_pos = content.find("<build>").unwrap_or(content.len());
+    let end_pos = deps_pos.min(build_pos);
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
     if parent_end > end_pos {
         return None;
@@ -491,7 +486,10 @@ fn parse_gradle_group(content: &str) -> Option<String> {
         let trimmed = line.trim();
         // group = 'com.example' or group = "com.example"
         if trimmed.starts_with("group") {
-            let rhs = trimmed.split_once('=')?.1.trim();
+            let rhs = match trimmed.split_once('=') {
+                Some((_, r)) => r.trim(),
+                None => continue,
+            };
             // Must be a quoted string (single or double quotes)
             if (rhs.starts_with('\'') && rhs.ends_with('\''))
                 || (rhs.starts_with('"') && rhs.ends_with('"'))
@@ -610,6 +608,12 @@ pub(crate) fn parse_gradle_dependencies(content: &str) -> Vec<String> {
         // Match: implementation 'group:artifact:version' or api "group:artifact:version"
         for keyword in &["implementation", "api", "compile", "testImplementation"] {
             if let Some(stripped) = trimmed.strip_prefix(keyword) {
+                // Ensure word boundary — reject "compileOnly", "implementationClass" etc.
+                if let Some(next_ch) = stripped.chars().next() {
+                    if next_ch.is_alphanumeric() {
+                        continue;
+                    }
+                }
                 let rest = stripped.trim();
                 // Strip parentheses if present: implementation("...")
                 let rest = rest.trim_start_matches('(').trim_end_matches(')').trim();

@@ -1367,9 +1367,10 @@ mod tests {
         let deps = vec!["com.google.code.gson:gson".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
         assert!(
-            script.contains("[0,)"),
-            "two-part coord should use [0,) version range"
+            script.contains("<version>[0,)</version>"),
+            "two-part coord should produce <version>[0,)</version>"
         );
+        assert!(!script.contains("RELEASE"), "should not use RELEASE");
         assert!(script.contains("com.google.code.gson"));
     }
 
