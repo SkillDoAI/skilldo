@@ -1630,9 +1630,10 @@ func main() {
         let env = executor.setup_environment(&deps).await;
         if let Ok(env) = &env {
             let pom = std::fs::read_to_string(env.temp_dir.path().join("pom.xml")).unwrap();
+            // Dep line should NOT have a version tag (project version is OK)
             assert!(
-                !pom.contains("<version>"),
-                "two-part coord should omit version tag"
+                !pom.contains("<artifactId>gson</artifactId>\n            <version>"),
+                "two-part coord should omit version in dependency"
             );
             assert!(pom.contains("com.google.code.gson"));
         }
