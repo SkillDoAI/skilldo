@@ -367,11 +367,16 @@ impl JavaHandler {
             }
         }
 
-        // Match top-level test/ or tests/ directory
-        if let Some(&first) = components.first() {
-            if first == "test" || first == "tests" {
+        // Match top-level test/ or tests/ directory (skip root "/" on absolute paths)
+        for comp in &components {
+            if *comp == "/" || *comp == "." {
+                continue;
+            }
+            // First real directory component
+            if *comp == "test" || *comp == "tests" {
                 return true;
             }
+            break; // Only check the first real component
         }
 
         // Match common test file patterns
