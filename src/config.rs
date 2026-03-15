@@ -2283,4 +2283,157 @@ model = "claude-sonnet-4-6"
         let result = Config::try_load_from_path(&path);
         assert!(result.is_err(), "Invalid TOML should produce an error");
     }
+
+    #[test]
+    fn test_provider_from_str_anthropic() {
+        assert!(matches!(
+            "anthropic".parse::<Provider>().unwrap(),
+            Provider::Anthropic
+        ));
+    }
+
+    #[test]
+    fn test_provider_from_str_chatgpt() {
+        assert!(matches!(
+            "chatgpt".parse::<Provider>().unwrap(),
+            Provider::ChatGPT
+        ));
+    }
+
+    #[test]
+    fn test_provider_from_str_gemini() {
+        assert!(matches!(
+            "gemini".parse::<Provider>().unwrap(),
+            Provider::Gemini
+        ));
+    }
+
+    #[test]
+    fn test_provider_from_str_cli() {
+        assert!(matches!("cli".parse::<Provider>().unwrap(), Provider::Cli));
+    }
+
+    #[test]
+    fn test_provider_from_str_unknown_errors() {
+        let result = "foobar".parse::<Provider>();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown provider"));
+    }
+
+    #[test]
+    fn test_provider_display_round_trip() {
+        for p in &[
+            "anthropic",
+            "openai",
+            "chatgpt",
+            "openai-compatible",
+            "gemini",
+            "cli",
+        ] {
+            let parsed: Provider = p.parse().unwrap();
+            assert_eq!(&parsed.to_string(), *p);
+        }
+    }
+
+    #[test]
+    fn test_config_load_with_explicit_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("skilldo.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+api_key_env = "none"
+"#,
+        )
+        .unwrap();
+        let config =
+            Config::load_with_path(Some(config_path.to_str().unwrap().to_string())).unwrap();
+        assert_eq!(config.llm.model, "claude-sonnet");
+    }
+
+    #[test]
+    fn test_config_default_uses_anthropic() {
+        let config = Config::default();
+        assert!(matches!(config.llm.provider, Provider::Anthropic));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_load_credentials_json_empty_env() {
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_EMPTY".to_string());
+        std::env::set_var("SKILLDO_TEST_CREDS_EMPTY", "");
+        let result = llm.load_credentials_json().unwrap();
+        assert!(result.is_none(), "empty env var should return None");
+        std::env::remove_var("SKILLDO_TEST_CREDS_EMPTY");
+    }
+
+    #[test]
+    fn test_load_credentials_json_no_env() {
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = None;
+        let result = llm.load_credentials_json().unwrap();
+        assert!(result.is_none(), "no env var should return None");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_load_credentials_json_bad_base64() {
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_BAD64".to_string());
+        std::env::set_var("SKILLDO_TEST_CREDS_BAD64", "not-valid-base64!!!");
+        let result = llm.load_credentials_json();
+        assert!(result.is_err(), "invalid base64 should error");
+        std::env::remove_var("SKILLDO_TEST_CREDS_BAD64");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_load_credentials_json_valid() {
+        use base64::Engine;
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_CREDS_VALID".to_string());
+        let json = r#"{"installed":{"client_id":"my-client","client_secret":"my-secret","auth_uri":"https://auth.example.com","token_uri":"https://token.example.com"}}"#;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(json);
+        std::env::set_var("SKILLDO_TEST_CREDS_VALID", &encoded);
+        let result = llm.load_credentials_json().unwrap();
+        assert!(result.is_some());
+        let creds = result.unwrap();
+        assert_eq!(creds.client_id, "my-client");
+        assert_eq!(creds.client_secret, Some("my-secret".to_string()));
+        std::env::remove_var("SKILLDO_TEST_CREDS_VALID");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_oauth_endpoint_from_credentials_json() {
+        use base64::Engine;
+        let mut llm = Config::default().llm;
+        llm.oauth_credentials_env = Some("SKILLDO_TEST_OAUTH_CREDS".to_string());
+        let json = r#"{"installed":{"client_id":"test-cid","client_secret":"test-secret","auth_uri":"https://auth.test.com","token_uri":"https://token.test.com"}}"#;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(json);
+        std::env::set_var("SKILLDO_TEST_OAUTH_CREDS", &encoded);
+        let endpoint = llm.resolve_oauth_endpoint().unwrap();
+        assert!(endpoint.is_some());
+        let ep = endpoint.unwrap();
+        assert_eq!(ep.client_id, "test-cid");
+        assert_eq!(ep.auth_url, "https://auth.test.com");
+        assert_eq!(ep.token_url, "https://token.test.com");
+        std::env::remove_var("SKILLDO_TEST_OAUTH_CREDS");
+    }
+
+    #[test]
+    fn test_config_load_nonexistent_returns_default() {
+        let result = Config::load_with_path_and_repo(
+            None,
+            Some(std::path::Path::new("/tmp/nonexistent-skilldo-repo-xyz")),
+        );
+        assert!(
+            result.is_ok(),
+            "missing config should fall back to defaults"
+        );
+    }
 }

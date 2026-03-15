@@ -1577,4 +1577,193 @@ parallel_extraction = true
             result.err()
         );
     }
+
+    #[tokio::test]
+    async fn test_run_with_no_review_and_review_model_only() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            no_review: true,
+            review_model_override: Some("gpt-5.2".to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_no_review_and_review_provider_only() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            no_review: true,
+            review_provider_override: Some("openai".to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_auto_detect_language_python() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            output: Some(output.to_str().unwrap().to_string()),
+            dry_run: true,
+            language: None,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "auto-detect language failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_telemetry_with_test_review_llm_metadata() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = repo.path().join("skilldo.toml");
+        fs::write(
+            &config_path,
+            r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+api_key_env = "none"
+
+[generation]
+max_retries = 0
+max_source_tokens = 50000
+telemetry = true
+
+[generation.test_llm]
+provider = "openai-compatible"
+model = "local-test"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.review_llm]
+provider = "openai-compatible"
+model = "local-review"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+"#,
+        )
+        .unwrap();
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(config_path.to_str().unwrap().to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "telemetry with test/review LLM failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_output_defaults_to_skill_md_path() {
+        let repo = make_test_repo();
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "default output path failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_runtime_no_container_warns_only() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            runtime_override: Some("docker".to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_install_source_auto_container_mode() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            install_source_override: Some("local-mount".to_string()),
+            best_effort: true,
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "local-mount auto-container failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_no_test_and_test_provider_only2() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            no_test: true,
+            test_provider_override: Some("openai".to_string()),
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_version_from_git_tag() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            version_from: Some(crate::config::VersionStrategy::GitTag),
+            dry_run: true,
+            ..Default::default()
+        })
+        .await;
+        // May fail if no git tags, but should not panic
+        let _ = result;
+    }
 }

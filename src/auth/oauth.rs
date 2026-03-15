@@ -959,4 +959,129 @@ mod tests {
         assert_eq!(html_escape("safe text"), "safe text");
         assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
     }
+
+    #[test]
+    fn urlencoding_round_trip_preserves_input() {
+        let original = "hello world/foo+bar=baz&qux";
+        let encoded = urlencoding::encode(original);
+        let decoded = urlencoding::decode(&encoded);
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn urlencoding_decode_plus_as_space() {
+        assert_eq!(urlencoding::decode("foo+bar+baz"), "foo bar baz");
+    }
+
+    #[test]
+    fn urlencoding_empty_round_trip() {
+        assert_eq!(urlencoding::encode(""), "");
+        assert_eq!(urlencoding::decode(""), "");
+    }
+
+    #[test]
+    fn html_escape_all_specials() {
+        assert_eq!(html_escape("&<>\""), "&amp;&lt;&gt;&quot;");
+    }
+
+    #[test]
+    fn html_escape_no_change_safe_text() {
+        assert_eq!(html_escape("hello world 123"), "hello world 123");
+    }
+
+    #[test]
+    fn redirect_config_custom_non_openai() {
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://some-custom-provider.com/authorize".to_string(),
+            token_url: "https://some-custom-provider.com/token".to_string(),
+            scopes: "openid".to_string(),
+            client_id: "test".to_string(),
+            client_secret: None,
+            provider_name: "custom".to_string(),
+        };
+        let (port, uri) = redirect_config(&endpoint);
+        assert_eq!(port, DEFAULT_REDIRECT_PORT);
+        assert_eq!(uri, DEFAULT_REDIRECT_URI);
+    }
+
+    #[tokio::test]
+    async fn exchange_code_no_refresh_token_returns_empty() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"at-only","expires_in":3600}"#)
+            .create_async()
+            .await;
+
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://unused".to_string(),
+            token_url: server.url() + "/token",
+            scopes: "openid".to_string(),
+            client_id: "cid".to_string(),
+            client_secret: None,
+            provider_name: "test".to_string(),
+        };
+
+        let tokens = exchange_code(&endpoint, "code", "verifier").await.unwrap();
+        assert_eq!(tokens.access_token, "at-only");
+        assert_eq!(tokens.refresh_token, "");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn exchange_code_defaults_expires_in() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"at-default"}"#)
+            .create_async()
+            .await;
+
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://unused".to_string(),
+            token_url: server.url() + "/token",
+            scopes: "openid".to_string(),
+            client_id: "cid".to_string(),
+            client_secret: None,
+            provider_name: "test".to_string(),
+        };
+
+        let tokens = exchange_code(&endpoint, "code", "verifier").await.unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(tokens.expires_at >= now + 3500);
+        assert!(tokens.expires_at <= now + 3700);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn exchange_code_missing_access_token() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"refresh_token":"rt-only"}"#)
+            .create_async()
+            .await;
+
+        let endpoint = OAuthEndpoint {
+            auth_url: "https://unused".to_string(),
+            token_url: server.url() + "/token",
+            scopes: "openid".to_string(),
+            client_id: "cid".to_string(),
+            client_secret: None,
+            provider_name: "test".to_string(),
+        };
+
+        let result = exchange_code(&endpoint, "code", "verifier").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("access_token"));
+    }
 }
