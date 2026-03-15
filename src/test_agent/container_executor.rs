@@ -128,7 +128,7 @@ impl ContainerExecutor {
         );
 
         Ok(format!(
-            "mkdir -p deps\ncat > pom.xml << 'POMEOF'\n{pom}\nPOMEOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -q 2>/dev/null || true"
+            "mkdir -p deps\ncat > pom.xml << 'POMEOF'\n{pom}\nPOMEOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -q || echo 'WARNING: Maven dependency resolution failed — tests may fail due to missing jars' >&2"
         ))
     }
 
