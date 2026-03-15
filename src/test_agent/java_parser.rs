@@ -15,8 +15,6 @@ use crate::util::sanitize_dep_name;
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
 static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:java)?\n([\s\S]*?)(?:```|~~~)").unwrap());
-static IMPORT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)import\s+(?:static\s+)?([a-zA-Z0-9_.]+(?:\.\*)?);").unwrap());
 static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"([a-zA-Z0-9._-]+):([a-zA-Z0-9._-]+)(?::([a-zA-Z0-9._-]+))?").unwrap()
 });
@@ -55,11 +53,6 @@ impl JavaParser {
         } else {
             PatternCategory::Other
         }
-    }
-
-    /// Check if a Java import is from the standard library (java.*, javax.*).
-    fn is_stdlib_package(name: &str) -> bool {
-        name.starts_with("java.") || name.starts_with("javax.")
     }
 }
 
@@ -136,20 +129,26 @@ impl LanguageParser for JavaParser {
             }
         };
 
-        // Java import statements: import com.google.gson.Gson;
-        for cap in IMPORT_RE.captures_iter(imports_content) {
-            let pkg = cap[1].to_string();
-            if !Self::is_stdlib_package(&pkg) && !dependencies.contains(&pkg) {
-                dependencies.push(pkg);
-            }
-        }
-
         // Maven coordinates: groupId:artifactId:version in code blocks or text
+        // Only colon-separated coordinates are usable by the executor.
+        // Java imports (com.google.gson.Gson) are already in the code patterns
+        // and don't need to be in the dependency list.
         for cap in MAVEN_COORD_RE.captures_iter(imports_content) {
             let coord = cap[0].to_string();
             // Only include if it looks like a Maven coordinate (has dots in group)
             if cap[1].contains('.') && !dependencies.contains(&coord) {
                 dependencies.push(coord);
+            }
+        }
+
+        // Also check code blocks for Maven coordinates (common in install sections)
+        let patterns_content = extract_section(skill_md, r"(?m)^##\s+Core Patterns\s*$")?;
+        if let Some(content) = patterns_content {
+            for cap in MAVEN_COORD_RE.captures_iter(content) {
+                let coord = cap[0].to_string();
+                if cap[1].contains('.') && !dependencies.contains(&coord) {
+                    dependencies.push(coord);
+                }
             }
         }
 
@@ -262,14 +261,18 @@ String json = gson.toJson(Map.of("key", "value"));
     }
 
     #[test]
-    fn extract_dependencies_filters_stdlib() {
+    fn extract_dependencies_only_maven_coords() {
         let parser = JavaParser;
         let deps = parser.extract_dependencies(SAMPLE_SKILL).unwrap();
-        assert!(deps.contains(&"com.google.gson.Gson".to_string()));
-        assert!(deps.contains(&"com.google.gson.GsonBuilder".to_string()));
+        // Only Maven coordinates (with ':') should be in deps, not import class names
+        assert!(
+            deps.iter().all(|d| d.contains(':')),
+            "deps should only contain Maven coordinates, not class names: {:?}",
+            deps
+        );
         assert!(
             !deps.iter().any(|d| d.starts_with("java.")),
-            "stdlib should be filtered"
+            "stdlib should not be in deps"
         );
     }
 
@@ -332,21 +335,6 @@ String json = gson.toJson(Map.of("key", "value"));
     }
 
     #[test]
-    fn is_stdlib_package_basics() {
-        assert!(JavaParser::is_stdlib_package("java.util.List"));
-        assert!(JavaParser::is_stdlib_package("java.io.File"));
-        assert!(JavaParser::is_stdlib_package("javax.net.ssl.SSLContext"));
-    }
-
-    #[test]
-    fn is_stdlib_rejects_external_packages() {
-        assert!(!JavaParser::is_stdlib_package("com.google.gson.Gson"));
-        assert!(!JavaParser::is_stdlib_package(
-            "org.apache.commons.lang3.StringUtils"
-        ));
-    }
-
-    #[test]
     fn categorize_thread_pattern() {
         assert_eq!(
             JavaParser::categorize_pattern("Thread Pool", "Run concurrent tasks"),
@@ -383,7 +371,7 @@ String json = gson.toJson(Map.of("key", "value"));
     }
 
     #[test]
-    fn extract_static_import() {
+    fn extract_deps_skips_import_class_names() {
         let parser = JavaParser;
         let skill = r#"---
 name: test
@@ -393,10 +381,25 @@ name: test
 
 ```java
 import static org.junit.Assert.assertEquals;
+import com.google.gson.Gson;
 ```
+
+Add to pom.xml:
+```xml
+<dependency>
+  <groupId>org.junit</groupId>
+  <artifactId>junit</artifactId>
+</dependency>
+```
+
+`com.google.code.gson:gson:2.10.1`
 "#;
         let deps = parser.extract_dependencies(skill).unwrap();
-        assert!(deps.contains(&"org.junit.Assert.assertEquals".to_string()));
+        // Class names should NOT be in deps
+        assert!(!deps.contains(&"org.junit.Assert.assertEquals".to_string()));
+        assert!(!deps.contains(&"com.google.gson.Gson".to_string()));
+        // Maven coordinates SHOULD be in deps
+        assert!(deps.iter().any(|d| d.contains("com.google.code.gson:gson")));
     }
 
     #[test]
@@ -463,24 +466,20 @@ import static org.junit.Assert.assertEquals;
     }
 
     #[test]
-    fn extract_dependencies_drops_invalid_deps() {
+    fn extract_dependencies_drops_invalid_maven_coords() {
         let parser = JavaParser;
-        // The import has a semicolon embedded in the package name which sanitize_dep_name rejects
         let skill = r#"---
 name: test
 ---
 
 ## Imports
 
-```java
-import com.example.valid.Dep;
-import com.example.bad dep;
-```
+`com.example.valid:dep:1.0`
+`com.example.bad dep:lib:2.0`
 "#;
         let deps = parser.extract_dependencies(skill).unwrap();
-        // "com.example.valid.Dep" is valid
-        assert!(deps.contains(&"com.example.valid.Dep".to_string()));
-        // "com.example.bad dep" has a space — sanitize_dep_name rejects it
+        assert!(deps.contains(&"com.example.valid:dep:1.0".to_string()));
+        // "com.example.bad dep:lib:2.0" has a space — sanitize_dep_name rejects it
         assert!(
             !deps.iter().any(|d| d.contains("bad dep")),
             "invalid deps should be dropped"

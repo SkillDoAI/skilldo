@@ -521,17 +521,37 @@ fn parse_settings_gradle_name(content: &str) -> Option<String> {
 }
 
 /// Extract `version` from build.gradle.
+/// Only matches `version = '...'` or `version '...'`, NOT `versionCode`, `versionName`, etc.
 fn parse_gradle_version(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("version") && !trimmed.starts_with("versions") {
-            if let Some((_, rhs)) = trimmed.split_once('=') {
-                let v = rhs
-                    .trim()
-                    .trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace());
-                if !v.is_empty() {
-                    return Some(v.to_string());
-                }
+        // Must be exactly "version" followed by = or space+quote
+        if !trimmed.starts_with("version") {
+            continue;
+        }
+        let rest = &trimmed["version".len()..];
+        if rest.is_empty() {
+            continue;
+        }
+        let first = rest.chars().next().unwrap();
+        // Accept "version = '...'" or "version '...'" — reject "versionCode", "versionName"
+        if first != '=' && first != ' ' && first != '\'' && first != '"' {
+            continue;
+        }
+        if let Some((_, rhs)) = trimmed.split_once('=') {
+            let v = rhs
+                .trim()
+                .trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace());
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        } else {
+            // version '1.0.0' (no equals sign)
+            let v = rest
+                .trim()
+                .trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace());
+            if !v.is_empty() {
+                return Some(v.to_string());
             }
         }
     }
