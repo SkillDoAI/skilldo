@@ -590,7 +590,7 @@ fn parse_gradle_version(content: &str) -> Option<String> {
         }
         let first = rest.chars().next().unwrap();
         // Accept "version = '...'" or "version '...'" — reject "versionCode", "versionName"
-        if first != '=' && first != ' ' && first != '\'' && first != '"' {
+        if first != '=' && first != ' ' && first != '\t' && first != '\'' && first != '"' {
             continue;
         }
         if let Some((_, rhs)) = trimmed.split_once('=') {
@@ -1897,6 +1897,15 @@ dependencies {
     fn parse_gradle_version_rejects_version_code() {
         // "versionCode" starts with "version" but rest begins with 'C' (not =, space, or quote)
         assert_eq!(parse_gradle_version("versionCode 1"), None);
+    }
+
+    #[test]
+    fn parse_gradle_version_tab_after_keyword() {
+        // Tab between "version" and "=" should be accepted (common in some Gradle files)
+        assert_eq!(
+            parse_gradle_version("version\t= '3.2.1'"),
+            Some("3.2.1".into())
+        );
     }
 
     // ── is_test_path: top-level test/ directory ──
