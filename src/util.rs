@@ -254,6 +254,7 @@ pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
                      </dependency>"
                 ))
             } else {
+                tracing::debug!("Skipping non-Maven dep '{d}' (no ':' separator)");
                 None
             }
         })

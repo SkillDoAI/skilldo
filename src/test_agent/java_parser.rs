@@ -30,6 +30,25 @@ static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Strip XML comments (`<!-- ... -->`) from content.
+fn strip_xml_comments_simple(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+    let mut remaining = content;
+    while let Some(start) = remaining.find("<!--") {
+        result.push_str(&remaining[..start]);
+        remaining = &remaining[start..];
+        match remaining.find("-->") {
+            Some(end) => remaining = &remaining[end + 3..],
+            None => {
+                remaining = "";
+                break;
+            }
+        }
+    }
+    result.push_str(remaining);
+    result
+}
+
 /// Extract Maven deps from XML `<dependency>` blocks in section content.
 /// Handles the common documentation format:
 /// ```xml
@@ -40,7 +59,9 @@ static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
 /// </dependency>
 /// ```
 fn extract_xml_deps(content: &str, deps: &mut Vec<String>) {
-    let mut remaining = content;
+    // Strip XML comments to avoid extracting commented-out dependencies
+    let content = strip_xml_comments_simple(content);
+    let mut remaining = content.as_str();
     while let Some(start) = remaining.find("<dependency>") {
         let after = &remaining[start..];
         let end = match after.find("</dependency>") {
