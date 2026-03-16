@@ -94,7 +94,7 @@ impl ContainerExecutor {
         };
 
         Ok(format!(
-            "mkdir -p deps {MAVEN_REPO_DIR}\ncat > pom.xml << 'SKILLDO_EOF'\n{pom}\nSKILLDO_EOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -Dmaven.repo.local={MAVEN_REPO_DIR} -q 2>maven-errors.log; mvn_rc=$?; [ -s maven-errors.log ] && cat maven-errors.log >&2; rm -f maven-errors.log; [ $mvn_rc -eq 0 ] || echo 'WARNING: Maven dependency resolution failed — tests may fail due to missing jars' >&2"
+            "mkdir -p deps {MAVEN_REPO_DIR}\ncat > pom.xml << 'SKILLDO_EOF'\n{pom}\nSKILLDO_EOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -Dmaven.repo.local={MAVEN_REPO_DIR} -q 2>maven-errors.log || echo 'WARNING: Maven dependency resolution failed — tests may fail due to missing jars' >&2\n[ -s maven-errors.log ] && cat maven-errors.log >&2\nrm -f maven-errors.log"
         ))
     }
 
