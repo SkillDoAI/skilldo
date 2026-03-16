@@ -789,7 +789,7 @@ impl LanguageExecutor for JavaExecutor {
             .current_dir(env.temp_dir.path());
 
         let result = run_cmd_with_timeout(java_cmd, timeout).await;
-        classify_result(result, self.timeout_secs, "Java", stderr_only)
+        classify_result(result, self.timeout_secs, "Java", stdout_and_stderr)
     }
 
     async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {

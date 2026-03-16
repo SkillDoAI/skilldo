@@ -645,7 +645,15 @@ pub(crate) fn parse_gradle_dependencies(content: &str) -> Vec<String> {
                 let dep = rest
                     .trim_matches(|c: char| c == '\'' || c == '"')
                     .to_string();
-                // Must look like a Maven coordinate (contains at least one colon)
+                // Skip non-Maven notations (project refs, file deps)
+                if dep.starts_with("project(")
+                    || dep.starts_with("files(")
+                    || dep.starts_with("fileTree(")
+                    || dep.starts_with(':')
+                {
+                    continue;
+                }
+                // Must look like a Maven coordinate (group:artifact[:version])
                 if dep.contains(':') && !deps.contains(&dep) {
                     deps.push(dep);
                 }
