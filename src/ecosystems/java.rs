@@ -464,6 +464,7 @@ fn parse_pom_version(content: &str) -> Option<String> {
 
 /// Extract license name from pom.xml `<licenses>` section.
 fn parse_pom_license(content: &str) -> Option<String> {
+    let content = strip_xml_comments(content);
     let start = content.find("<licenses>")?;
     let end = content[start..].find("</licenses>")?;
     let section = &content[start..start + end];
@@ -487,6 +488,7 @@ fn parse_pom_url(content: &str) -> Option<String> {
 
 /// Extract SCM URL from pom.xml `<scm>` section.
 fn parse_pom_scm_url(content: &str) -> Option<String> {
+    let content = strip_xml_comments(content);
     let start = content.find("<scm>")?;
     let end = content[start..].find("</scm>")?;
     let section = &content[start..start + end];
@@ -603,6 +605,8 @@ fn strip_xml_comments(content: &str) -> String {
 
 /// Simple XML tag value extraction — finds `<tag>value</tag>`.
 /// Strips XML comments first to avoid matching commented-out tags.
+/// Note: some callers (parse_pom_artifact_id, parse_pom_version) pre-strip for
+/// boundary computation — the double-strip here is a no-op in those cases.
 fn extract_xml_tag(content: &str, tag: &str) -> Option<String> {
     let clean = strip_xml_comments(content);
     let open = format!("<{tag}>");

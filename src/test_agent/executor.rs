@@ -674,8 +674,13 @@ impl LanguageExecutor for JavaExecutor {
             }
         }
 
-        // If there are dependencies and mvn is available, create pom.xml and fetch them
-        if !deps.is_empty() && !is_tool_available("mvn", "--version").await {
+        // If there are dependencies, check mvn once and either fetch or warn
+        let has_mvn = if !deps.is_empty() {
+            is_tool_available("mvn", "--version").await
+        } else {
+            false
+        };
+        if !deps.is_empty() && !has_mvn {
             warn!(
                 "Maven (mvn) not installed — {} Java {} cannot be downloaded. \
                  Tests may fail with missing classes.",
@@ -687,7 +692,7 @@ impl LanguageExecutor for JavaExecutor {
                 }
             );
         }
-        if !deps.is_empty() && is_tool_available("mvn", "--version").await {
+        if !deps.is_empty() && has_mvn {
             let deps_xml: Vec<String> = deps
                 .iter()
                 .filter_map(|d| {
