@@ -483,7 +483,10 @@ fn parse_pom_url(content: &str) -> Option<String> {
         return None;
     }
     let search = &content[parent_end..end_pos];
-    extract_xml_tag(search, "url")
+    // Also exclude <scm> section to avoid picking up SCM URL as homepage
+    let scm_start = search.find("<scm>").unwrap_or(search.len());
+    let before_scm = &search[..scm_start];
+    extract_xml_tag(before_scm, "url")
 }
 
 /// Extract SCM URL from pom.xml `<scm>` section.
@@ -502,8 +505,8 @@ fn parse_pom_scm_url(content: &str) -> Option<String> {
 fn parse_gradle_group(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
-        // group = 'com.example' or group = "com.example"
-        if trimmed.starts_with("group") {
+        // Exact "group" keyword — reject groupId, grouping, etc.
+        if trimmed.starts_with("group") && trimmed[5..].starts_with([' ', '=', '\t']) {
             let rhs = match trimmed.split_once('=') {
                 Some((_, r)) => r.trim(),
                 None => continue,
@@ -527,7 +530,8 @@ fn parse_gradle_group(content: &str) -> Option<String> {
 fn parse_settings_gradle_name(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("rootProject.name") {
+        // Exact match — reject rootProject.nameSuffix etc.
+        if trimmed.starts_with("rootProject.name") && trimmed[16..].starts_with([' ', '=', '\t']) {
             let rhs = match trimmed.split_once('=') {
                 Some((_, r)) => r.trim(),
                 None => continue,
