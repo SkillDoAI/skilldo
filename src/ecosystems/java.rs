@@ -5,7 +5,7 @@
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 pub struct JavaHandler {
     repo_path: PathBuf,
@@ -191,6 +191,10 @@ impl JavaHandler {
             }
         }
 
+        warn!(
+            "No version found in pom.xml or build.gradle for {} (may be parent-inherited)",
+            self.repo_path.display()
+        );
         Ok("unknown".to_string())
     }
 
