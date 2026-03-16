@@ -1821,6 +1821,40 @@ dependencies {
         assert_eq!(parse_pom_artifact_id(pom), Some("myapp".to_string()));
     }
 
+    // ── pom_section_boundary ──
+
+    #[test]
+    fn pom_boundary_finds_dependencies() {
+        let pom = "<project><version>1.0</version><dependencies></dependencies></project>";
+        assert_eq!(
+            pom_section_boundary(pom, 0),
+            Some(pom.find("<dependencies>").unwrap())
+        );
+    }
+
+    #[test]
+    fn pom_boundary_finds_build_before_dependencies() {
+        let pom = "<project><build></build><dependencies></dependencies></project>";
+        assert_eq!(
+            pom_section_boundary(pom, 0),
+            Some(pom.find("<build>").unwrap())
+        );
+    }
+
+    #[test]
+    fn pom_boundary_returns_none_when_no_sections() {
+        let pom = "<project><version>1.0</version></project>";
+        assert_eq!(pom_section_boundary(pom, 0), None);
+    }
+
+    #[test]
+    fn pom_boundary_respects_start_pos() {
+        let pom = "<dependencies></dependencies><build></build>";
+        // Start search after </dependencies>
+        let after_deps = pom.find("<build>").unwrap();
+        assert_eq!(pom_section_boundary(pom, after_deps), Some(after_deps));
+    }
+
     #[test]
     fn parse_pom_url_before_build() {
         // <url> should be found even when <build> exists but <dependencies> doesn't
