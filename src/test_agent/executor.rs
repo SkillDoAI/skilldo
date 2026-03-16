@@ -12,7 +12,7 @@ use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use super::LanguageExecutor;
-use crate::util::{run_cmd_with_timeout, sanitize_dep_name, xml_escape};
+use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 
 /// Check if a CLI tool is available in PATH.
 pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
@@ -693,54 +693,8 @@ impl LanguageExecutor for JavaExecutor {
             );
         }
         if !deps.is_empty() && has_mvn {
-            let deps_xml: Vec<String> = deps
-                .iter()
-                .filter_map(|d| {
-                    // Parse Maven coordinates: group:artifact:version
-                    let parts: Vec<&str> = d.splitn(3, ':').collect();
-                    if parts.len() >= 2 {
-                        let group = xml_escape(parts[0]);
-                        let artifact = xml_escape(parts[1]);
-                        let version_str = match parts.get(2).copied() {
-                            Some(v) => v,
-                            None => {
-                                tracing::warn!(
-                                    "Maven dep '{d}' has no version — skipping. \
-                                     Add a version to SKILL.md Imports to fix."
-                                );
-                                return None;
-                            }
-                        };
-                        if version_str.is_empty() {
-                            tracing::warn!("Maven dep '{d}' has empty version — skipping");
-                            return None;
-                        }
-                        let version = xml_escape(version_str);
-                        Some(format!(
-                            "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>\n            <version>{version}</version>\n        </dependency>"
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if !deps_xml.is_empty() {
-                let pom = format!(
-                    r#"<?xml version="1.0" encoding="UTF-8"?>
-<project>
-    <modelVersion>4.0.0</modelVersion>
-    <groupId>skilldo</groupId>
-    <artifactId>test</artifactId>
-    <version>0.1.0</version>
-    <dependencies>
-{}
-    </dependencies>
-</project>"#,
-                    deps_xml.join("\n")
-                );
-
-                fs::write(temp_dir.path().join("pom.xml"), pom)
+            if let Some(pom) = crate::util::build_maven_pom_xml(deps) {
+                fs::write(temp_dir.path().join("pom.xml"), &pom)
                     .context("Failed to write pom.xml")?;
 
                 info!("Fetching Java dependencies with Maven...");

@@ -1367,6 +1367,7 @@ fn java_hints(stage: &str) -> &'static str {
             "\
 \n\nJAVA-SPECIFIC HINTS:\n\
 - Use Java import conventions: `import com.example.ClassName;`\n\
+- Include Maven coordinates (group:artifact:version) in the ## Imports section alongside import statements\n\
 - Always show try-catch blocks for checked exceptions\n\
 - Use `public class Main` with `public static void main(String[] args)` in runnable examples\n\
 - Follow Java conventions: camelCase methods, PascalCase classes, UPPER_SNAKE_CASE constants"

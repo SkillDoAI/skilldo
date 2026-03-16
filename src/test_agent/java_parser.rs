@@ -130,9 +130,9 @@ impl LanguageParser for JavaParser {
     fn extract_dependencies(&self, skill_md: &str) -> Result<Vec<String>> {
         let mut dependencies = Vec::new();
 
-        // Only scan ## Imports for Maven coordinates — Core Patterns contains
-        // Java source examples that produce false positives (e.g., "step:done").
-        let sections_to_scan = [r"(?m)^##\s+Imports\s*$"];
+        // Scan ## Imports and ## Installation for Maven coordinates.
+        // Core Patterns is excluded — Java source examples produce false positives.
+        let sections_to_scan = [r"(?m)^##\s+Imports\s*$", r"(?m)^##\s+Installation\s*$"];
 
         for section_re in &sections_to_scan {
             if let Some(content) = extract_section(skill_md, section_re)? {

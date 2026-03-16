@@ -223,6 +223,61 @@ pub fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// Build a minimal Maven pom.xml from a list of Maven coordinates.
+/// Each dep should be "group:artifact:version". Deps without a version are
+/// skipped with a warning. Returns `None` if no valid deps remain.
+/// Used by both bare-metal and container Java executors.
+pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
+    let deps_xml: Vec<String> = deps
+        .iter()
+        .filter_map(|d| {
+            let parts: Vec<&str> = d.splitn(3, ':').collect();
+            if parts.len() >= 2 {
+                let group = xml_escape(parts[0]);
+                let artifact = xml_escape(parts[1]);
+                let version = match parts.get(2).copied() {
+                    Some(v) if !v.is_empty() => xml_escape(v),
+                    Some(_) | None => {
+                        tracing::warn!(
+                            "Maven dep '{}:{}' has no version — skipping",
+                            parts[0],
+                            parts[1]
+                        );
+                        return None;
+                    }
+                };
+                Some(format!(
+                    "        <dependency>\n            \
+                     <groupId>{group}</groupId>\n            \
+                     <artifactId>{artifact}</artifactId>\n            \
+                     <version>{version}</version>\n        \
+                     </dependency>"
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if deps_xml.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>skilldo</groupId>
+    <artifactId>test</artifactId>
+    <version>0.1.0</version>
+    <dependencies>
+{}
+    </dependencies>
+</project>"#,
+        deps_xml.join("\n")
+    ))
+}
+
 /// Calculate file priority for source file reading order.
 /// Lower values = higher priority (read first).
 /// Uses `Path::components()` for separator-agnostic matching (works on Unix, macOS, WSL).
@@ -679,5 +734,32 @@ mod tests {
     fn xml_escape_version_range() {
         // Version ranges like [0,) should pass through unchanged
         assert_eq!(xml_escape("[0,)"), "[0,)");
+    }
+
+    #[test]
+    fn build_maven_pom_basic() {
+        let deps = vec!["com.google.code.gson:gson:2.10.1".into()];
+        let pom = build_maven_pom_xml(&deps).unwrap();
+        assert!(pom.contains("<groupId>com.google.code.gson</groupId>"));
+        assert!(pom.contains("<artifactId>gson</artifactId>"));
+        assert!(pom.contains("<version>2.10.1</version>"));
+    }
+
+    #[test]
+    fn build_maven_pom_empty_deps() {
+        assert!(build_maven_pom_xml(&[]).is_none());
+    }
+
+    #[test]
+    fn build_maven_pom_skips_versionless() {
+        let deps = vec!["com.example:lib".into()];
+        assert!(build_maven_pom_xml(&deps).is_none());
+    }
+
+    #[test]
+    fn build_maven_pom_xml_escapes_values() {
+        let deps = vec!["com.example:lib&test:1.0".into()];
+        let pom = build_maven_pom_xml(&deps).unwrap();
+        assert!(pom.contains("lib&amp;test"));
     }
 }

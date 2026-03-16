@@ -14,7 +14,7 @@ use super::executor::{ExecutionEnv, ExecutionResult};
 use super::LanguageExecutor;
 use crate::config::{ContainerConfig, InstallSource};
 use crate::detector::Language;
-use crate::util::{run_cmd_with_timeout, sanitize_dep_name, xml_escape};
+use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 
 pub struct ContainerExecutor {
     config: ContainerConfig,
@@ -88,49 +88,10 @@ impl ContainerExecutor {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
         }
 
-        let deps_xml: Vec<String> = deps
-            .iter()
-            .filter_map(|d| {
-                let parts: Vec<&str> = d.splitn(3, ':').collect();
-                if parts.len() >= 2 {
-                    let group = xml_escape(parts[0]);
-                    let artifact = xml_escape(parts[1]);
-                    let version = match parts.get(2).copied() {
-                        Some(v) if !v.is_empty() => xml_escape(v),
-                        Some(_) | None => {
-                            tracing::warn!(
-                                "Maven dep '{}:{}' has no version — skipping",
-                                parts[0], parts[1]
-                            );
-                            return None;
-                        }
-                    };
-                    Some(format!(
-                        "        <dependency><groupId>{group}</groupId><artifactId>{artifact}</artifactId><version>{version}</version></dependency>"
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if deps_xml.is_empty() {
-            return Ok(String::new());
-        }
-
-        let pom = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<project>
-    <modelVersion>4.0.0</modelVersion>
-    <groupId>skilldo</groupId>
-    <artifactId>test</artifactId>
-    <version>0.1.0</version>
-    <dependencies>
-{}
-    </dependencies>
-</project>"#,
-            deps_xml.join("\n")
-        );
+        let pom = match crate::util::build_maven_pom_xml(deps) {
+            Some(p) => p,
+            None => return Ok(String::new()),
+        };
 
         Ok(format!(
             "mkdir -p deps m2-repo\ncat > pom.xml << 'POMEOF'\n{pom}\nPOMEOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -Dmaven.repo.local=m2-repo -q || echo 'WARNING: Maven dependency resolution failed — tests may fail due to missing jars' >&2"
