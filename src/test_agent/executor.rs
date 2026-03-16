@@ -1708,14 +1708,11 @@ func main() {
         let executor = JavaExecutor::new();
         // Single-part dep (no colon) won't match Maven coordinate format
         let deps = vec!["simplepackage".to_string()];
-        let env = executor.setup_environment(&deps).await;
-        // Should succeed but no deps_xml generated (filter_map returns None)
-        if let Ok(env) = &env {
-            // pom.xml should NOT be created because deps_xml is empty
-            assert!(
-                !env.temp_dir.path().join("pom.xml").exists(),
-                "pom.xml should not be created for non-Maven deps"
-            );
-        }
+        let env = executor.setup_environment(&deps).await.unwrap();
+        // pom.xml should NOT be created because deps_xml is empty
+        assert!(
+            !env.temp_dir.path().join("pom.xml").exists(),
+            "pom.xml should not be created for non-Maven deps"
+        );
     }
 }
