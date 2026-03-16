@@ -30,6 +30,51 @@ static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Extract Maven deps from XML `<dependency>` blocks in section content.
+/// Handles the common documentation format:
+/// ```xml
+/// <dependency>
+///     <groupId>com.example</groupId>
+///     <artifactId>lib</artifactId>
+///     <version>1.0</version>
+/// </dependency>
+/// ```
+fn extract_xml_deps(content: &str, deps: &mut Vec<String>) {
+    let mut remaining = content;
+    while let Some(start) = remaining.find("<dependency>") {
+        let after = &remaining[start..];
+        let end = match after.find("</dependency>") {
+            Some(e) => e + 13,
+            None => break,
+        };
+        let block = &after[..end];
+        let group = extract_simple_xml_tag(block, "groupId");
+        let artifact = extract_simple_xml_tag(block, "artifactId");
+        let version = extract_simple_xml_tag(block, "version");
+        if let (Some(g), Some(a), Some(v)) = (group, artifact, version) {
+            let coord = format!("{g}:{a}:{v}");
+            if !deps.contains(&coord) {
+                deps.push(coord);
+            }
+        }
+        remaining = &after[end..];
+    }
+}
+
+/// Simple XML tag extraction — finds `<tag>value</tag>` and returns value.
+fn extract_simple_xml_tag<'a>(content: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = content.find(&open)? + open.len();
+    let end = content[start..].find(&close)?;
+    let value = content[start..start + end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 /// Java-specific parser for SKILL.md files
 pub struct JavaParser;
 
@@ -139,6 +184,7 @@ impl LanguageParser for JavaParser {
 
         for section_re in &sections_to_scan {
             if let Some(content) = extract_section(skill_md, section_re)? {
+                // Try inline format: group:artifact:version
                 for cap in MAVEN_COORD_RE.captures_iter(content) {
                     let coord = cap[0].to_string();
                     // Regex requires a dot in groupId to filter prose false positives
@@ -146,6 +192,8 @@ impl LanguageParser for JavaParser {
                         dependencies.push(coord);
                     }
                 }
+                // Fallback: extract from XML <dependency> blocks (common in docs)
+                extract_xml_deps(content, &mut dependencies);
             }
         }
 
@@ -546,6 +594,60 @@ Returns:String is not a Maven coord.
         assert!(
             deps.iter().any(|d| d.contains("gson")),
             "real Maven coord should still be extracted"
+        );
+    }
+
+    #[test]
+    fn extract_deps_from_xml_dependency_block() {
+        let parser = JavaParser;
+        let skill = r#"---
+name: test
+---
+
+## Installation
+
+```xml
+<dependency>
+    <groupId>com.google.code.gson</groupId>
+    <artifactId>gson</artifactId>
+    <version>2.10.1</version>
+</dependency>
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.iter().any(|d| d == "com.google.code.gson:gson:2.10.1"),
+            "should extract XML-format Maven dependency, got: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn extract_deps_xml_and_inline_deduped() {
+        let parser = JavaParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+`com.google.code.gson:gson:2.10.1`
+
+## Installation
+
+```xml
+<dependency>
+    <groupId>com.google.code.gson</groupId>
+    <artifactId>gson</artifactId>
+    <version>2.10.1</version>
+</dependency>
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        let gson_count = deps.iter().filter(|d| d.contains("gson")).count();
+        assert_eq!(
+            gson_count, 1,
+            "same coord from XML and inline should be deduped"
         );
     }
 }
