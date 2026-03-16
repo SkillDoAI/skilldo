@@ -292,6 +292,11 @@ impl LanguageExecutor for ContainerExecutor {
 
         // Pass extra environment variables (private registries, proxies, etc.)
         for (key, value) in &self.config.extra_env {
+            // Block JVM injection vars — these allow arbitrary agent/flag injection
+            if BLOCKED_ENV_VARS.iter().any(|b| key.eq_ignore_ascii_case(b)) {
+                warn!("extra_env: blocking JVM hijack var '{key}'");
+                continue;
+            }
             warn_dangerous_env_var(key);
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
@@ -428,6 +433,10 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
     "PERL5LIB",
     "RUBYLIB",
 ];
+
+/// Env vars that are unconditionally blocked (not just warned).
+/// These allow code injection via the JVM's agent/flag mechanism.
+const BLOCKED_ENV_VARS: &[&str] = &["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS"];
 
 fn warn_dangerous_env_var(key: &str) {
     if DANGEROUS_ENV_VARS
@@ -1226,6 +1235,13 @@ mod tests {
         assert!(DANGEROUS_ENV_VARS.contains(&"LD_PRELOAD"));
         assert!(DANGEROUS_ENV_VARS.contains(&"PATH"));
         assert!(!DANGEROUS_ENV_VARS.contains(&"PYTHONPATH"));
+    }
+
+    #[test]
+    fn test_blocked_env_vars_includes_jvm_options() {
+        assert!(BLOCKED_ENV_VARS.contains(&"JAVA_TOOL_OPTIONS"));
+        assert!(BLOCKED_ENV_VARS.contains(&"_JAVA_OPTIONS"));
+        assert!(BLOCKED_ENV_VARS.contains(&"JDK_JAVA_OPTIONS"));
     }
 
     // --- generate_go_install_script ---

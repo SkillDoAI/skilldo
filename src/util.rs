@@ -236,7 +236,11 @@ pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
                 let group = xml_escape(parts[0]);
                 let artifact = xml_escape(parts[1]);
                 let version = match parts.get(2).copied() {
-                    // Strip classifier suffix (e.g., "1.0:javadoc" → "1.0")
+                    // splitn(3) folds classifier into version for 4-part coords:
+                    //   "g:a:1.0:javadoc" → parts[2] = "1.0:javadoc"
+                    // split(':').next() strips the classifier, yielding "1.0".
+                    // For version ranges like "[1.0,2.0)" there's no inner ':',
+                    // so split(':').next() returns the whole string unchanged.
                     Some(v) if !v.is_empty() => {
                         let v = v.split(':').next().unwrap_or(v);
                         xml_escape(v)

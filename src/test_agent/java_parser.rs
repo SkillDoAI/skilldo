@@ -205,7 +205,7 @@ impl LanguageParser for JavaParser {
 
         // Scan ## Imports and ## Installation for Maven coordinates.
         // Core Patterns is excluded — Java source examples produce false positives.
-        let sections_to_scan = [r"(?m)^##\s+Imports\s*$", r"(?m)^##\s+Installation\s*$"];
+        let sections_to_scan = [r"(?mi)^##\s+Imports\s*$", r"(?mi)^##\s+Installation\s*$"];
 
         for section_re in &sections_to_scan {
             if let Some(content) = extract_section(skill_md, section_re)? {
