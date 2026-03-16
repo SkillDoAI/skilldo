@@ -219,9 +219,11 @@ impl LanguageParser for JavaParser {
                 // 2-part coords (group:artifact, requires dot in group)
                 for cap in MAVEN_2PART_RE.captures_iter(content) {
                     let coord = cap[0].to_string();
-                    // Skip if already matched as 3-part
+                    // Skip if already matched as 3-part (append ':' to prevent
+                    // "g:a-extras:1.0".starts_with("g:a") false suppression)
+                    let coord_prefix = format!("{coord}:");
                     if !dependencies.contains(&coord)
-                        && !dependencies.iter().any(|d| d.starts_with(&coord))
+                        && !dependencies.iter().any(|d| d.starts_with(&coord_prefix))
                     {
                         dependencies.push(coord);
                     }
