@@ -634,7 +634,7 @@ pub struct JavaExecutor {
     timeout_secs: u64,
 }
 
-const MAVEN_REPO_DIR: &str = "m2-repo";
+pub(crate) const MAVEN_REPO_DIR: &str = "m2-repo";
 
 impl JavaExecutor {
     pub fn new() -> Self {
