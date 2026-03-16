@@ -430,10 +430,22 @@ impl JavaHandler {
 
 /// Extract `<artifactId>` from pom.xml (top-level, not inside `<parent>` or `<dependency>`).
 fn parse_pom_artifact_id(content: &str) -> Option<String> {
-    // Strip comments before boundary detection to avoid matching commented-out tags
+    // Strip comments before boundary detection
     let content = strip_xml_comments(content);
     let deps_pos = content.find("<dependencies>");
+    let parent_start = content.find("<parent>");
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
+
+    // Try before <parent> first (handles non-standard but valid ordering)
+    if let Some(ps) = parent_start {
+        let before_parent = &content[..ps];
+        if let Some(v) = extract_xml_tag(before_parent, "artifactId") {
+            if !v.starts_with("${") {
+                return Some(v);
+            }
+        }
+    }
+
     let search_region = if let Some(dp) = deps_pos {
         if parent_end > dp {
             return None;
