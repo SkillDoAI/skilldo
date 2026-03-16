@@ -48,6 +48,7 @@ impl JavaHandler {
             );
         }
 
+        files.sort();
         info!("Found {} Java test files", files.len());
         Ok(files)
     }
