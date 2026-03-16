@@ -377,11 +377,10 @@ impl JavaHandler {
         }
 
         // Match common test file patterns
+        // Match JUnit naming conventions (suffix only — prefix "Test" is too broad
+        // and catches production files like TestHelper.java, TestUtils.java)
         if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-            if fname.ends_with("Test.java")
-                || fname.ends_with("Tests.java")
-                || fname.starts_with("Test")
-            {
+            if fname.ends_with("Test.java") || fname.ends_with("Tests.java") {
                 return true;
             }
         }
@@ -1452,20 +1451,24 @@ dependencies {
     }
 
     #[test]
-    fn find_test_files_test_prefix() {
+    fn find_test_files_suffix_only() {
+        // Test* prefix is NOT a test signal — only *Test.java and *Tests.java are
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src/main/java");
         fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("TestApp.java"), "class TestApp {}").unwrap();
+        fs::write(src.join("TestHelper.java"), "class TestHelper {}").unwrap();
+        fs::write(src.join("AppTest.java"), "class AppTest {}").unwrap();
 
         let handler = JavaHandler::new(tmp.path());
         let tests = handler.find_test_files().unwrap();
+        // Only AppTest.java should be a test, TestHelper.java is production code
         assert_eq!(tests.len(), 1);
-        assert!(tests[0].to_str().unwrap().contains("TestApp.java"));
+        assert!(tests[0].to_str().unwrap().contains("AppTest.java"));
     }
 
     #[test]
-    fn find_source_files_excludes_test_named_files() {
+    fn find_source_files_keeps_test_prefix_as_production() {
+        // TestHelper.java, TestUtils.java etc. are production code (not tests)
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src/main/java");
         fs::create_dir_all(&src).unwrap();
@@ -1476,8 +1479,14 @@ dependencies {
 
         let handler = JavaHandler::new(tmp.path());
         let files = handler.find_source_files().unwrap();
-        assert_eq!(files.len(), 1);
-        assert!(files[0].to_str().unwrap().contains("App.java"));
+        // App.java + TestHelper.java = 2 source files (AppTest/AppTests are tests)
+        assert_eq!(files.len(), 2);
+        assert!(files
+            .iter()
+            .any(|f| f.to_str().unwrap().contains("App.java")));
+        assert!(files
+            .iter()
+            .any(|f| f.to_str().unwrap().contains("TestHelper.java")));
     }
 
     // ── Skipped directories ──

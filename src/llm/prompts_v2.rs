@@ -1384,7 +1384,7 @@ fn java_hints(stage: &str) -> &'static str {
 \n\nJAVA-SPECIFIC TEST HINTS:\n\
 - Runs via `javac Main.java && java Main` — write a `public class Main` with `public static void main`\n\
 - Use `System.exit(1)` for assertion failures (no JUnit runner available)\n\
-- Standard library classes (java.*, javax.*) are always available without imports"
+- Only java.lang.* (String, System, Math, Integer) is auto-imported — all other java.*/javax.* classes need explicit imports"
         }
         _ => "",
     }
