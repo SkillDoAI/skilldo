@@ -621,6 +621,10 @@ impl LanguageExecutor for NodeExecutor {
 /// Java executor — compiles with `javac` and runs with `java`.
 /// For projects with Maven dependencies, creates a minimal pom.xml and uses
 /// `mvn dependency:copy-dependencies` if mvn is available.
+///
+/// **Timeout note:** `run_code` applies `timeout_secs` independently to both
+/// `javac` (compile) and `java` (run), so a single call can take up to
+/// 2× timeout_secs. With Maven setup, total wall-clock can reach 3× timeout_secs.
 pub struct JavaExecutor {
     timeout_secs: u64,
 }

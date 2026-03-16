@@ -522,9 +522,15 @@ fn parse_settings_gradle_name(content: &str) -> Option<String> {
                 Some((_, r)) => r.trim(),
                 None => continue,
             };
-            let name = rhs.trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace());
-            if !name.is_empty() {
-                return Some(name.to_string());
+            // Extract quoted string value, handling inline comments
+            if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
+                let quote = rhs.chars().next().unwrap();
+                if let Some(end) = rhs[1..].find(quote) {
+                    let name = &rhs[1..1 + end];
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
             }
         }
     }
@@ -604,7 +610,9 @@ fn extract_xml_tag(content: &str, tag: &str) -> Option<String> {
 }
 
 /// Parse dependencies from pom.xml `<dependency>` elements.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Currently only used in tests — will be wired into collect_java when
+/// dependency context is added to LLM prompts.
+#[cfg(test)]
 pub(crate) fn parse_pom_dependencies(content: &str) -> Vec<String> {
     let mut deps = Vec::new();
     let mut search_from = 0;
@@ -630,7 +638,7 @@ pub(crate) fn parse_pom_dependencies(content: &str) -> Vec<String> {
 }
 
 /// Parse dependencies from build.gradle `implementation`/`api` lines.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn parse_gradle_dependencies(content: &str) -> Vec<String> {
     let mut deps = Vec::new();
     for line in content.lines() {
