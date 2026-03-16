@@ -190,7 +190,7 @@ impl JavaHandler {
             }
         }
 
-        Ok("latest".to_string())
+        Ok("unknown".to_string())
     }
 
     /// Extract license from pom.xml or LICENSE file.
@@ -434,7 +434,13 @@ fn parse_pom_artifact_id(content: &str) -> Option<String> {
     let content = strip_xml_comments(content);
     let deps_pos = content.find("<dependencies>");
     let parent_start = content.find("<parent>");
-    let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
+    let parent_close = content.find("</parent>");
+    let parent_end = parent_close.map(|p| p + 9).unwrap_or(0);
+
+    // If <parent> exists but </parent> is missing, XML is malformed — bail
+    if parent_start.is_some() && parent_close.is_none() {
+        return None;
+    }
 
     // Try before <parent> first (handles non-standard but valid ordering)
     if let Some(ps) = parent_start {
@@ -463,6 +469,10 @@ fn parse_pom_version(content: &str) -> Option<String> {
     // Strip comments before boundary detection
     let content = strip_xml_comments(content);
     let deps_pos = content.find("<dependencies>");
+    // Bail on malformed XML: <parent> opened but never closed
+    if content.contains("<parent>") && !content.contains("</parent>") {
+        return None;
+    }
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
     let search_region = if let Some(dp) = deps_pos {
         if parent_end > dp {
@@ -596,8 +606,12 @@ fn parse_gradle_version(content: &str) -> Option<String> {
                 }
             }
         } else {
-            // version '1.0.0' (no equals sign) — extract quoted value
-            let rest_trimmed = rest.trim();
+            // version '1.0.0' or version("1.0.0") (Kotlin DSL) — extract quoted value
+            let rest_trimmed = rest
+                .trim()
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .trim();
             if (rest_trimmed.starts_with('\'') || rest_trimmed.starts_with('"'))
                 && rest_trimmed.len() > 1
             {
@@ -1125,7 +1139,7 @@ dependencies {
     fn get_version_fallback() {
         let tmp = TempDir::new().unwrap();
         let handler = JavaHandler::new(tmp.path());
-        assert_eq!(handler.get_version().unwrap(), "latest");
+        assert_eq!(handler.get_version().unwrap(), "unknown");
     }
 
     #[test]
