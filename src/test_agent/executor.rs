@@ -783,6 +783,7 @@ impl LanguageExecutor for JavaExecutor {
         let script_path = env.temp_dir.path().join("Main.java");
         fs::write(&script_path, code).context("Failed to write Main.java")?;
 
+        // Note: timeout applies independently to javac AND java — total can be 2× timeout_secs
         let timeout = Duration::from_secs(self.timeout_secs);
 
         // Build classpath: include deps/ if it exists
