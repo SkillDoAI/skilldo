@@ -9,7 +9,12 @@ use super::client::LlmClient;
 use crate::util::SecretString;
 
 /// Headers that must not be overridden by extra_headers (case-insensitive).
-const PROTECTED_HEADERS: &[&str] = &["authorization", "x-api-key", "x-goog-api-key"];
+const PROTECTED_HEADERS: &[&str] = &[
+    "authorization",
+    "x-api-key",
+    "x-goog-api-key",
+    "content-type",
+];
 
 /// Check if a header key is protected (auth-related).
 fn is_protected_header(key: &str) -> bool {

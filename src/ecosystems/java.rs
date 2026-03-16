@@ -556,14 +556,24 @@ fn parse_gradle_version(content: &str) -> Option<String> {
     None
 }
 
+/// Strip XML comments (`<!-- ... -->`) to avoid matching commented-out tags.
+fn strip_xml_comments(content: &str) -> String {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
+    RE.replace_all(content, "").to_string()
+}
+
 /// Simple XML tag value extraction — finds `<tag>value</tag>`.
+/// Strips XML comments first to avoid matching commented-out tags.
 fn extract_xml_tag(content: &str, tag: &str) -> Option<String> {
+    let clean = strip_xml_comments(content);
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
-    let start = content.find(&open)?;
+    let start = clean.find(&open)?;
     let value_start = start + open.len();
-    let end = content[value_start..].find(&close)?;
-    let value = content[value_start..value_start + end].trim();
+    let end = clean[value_start..].find(&close)?;
+    let value = clean[value_start..value_start + end].trim();
     if value.is_empty() {
         None
     } else {

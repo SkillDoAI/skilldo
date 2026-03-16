@@ -55,16 +55,18 @@ impl<'a> JavaCodeGenerator<'a> {
     fn extract_code_from_response(response: &str) -> Result<String> {
         let blocks = crate::util::find_fenced_blocks(response);
 
-        // Prefer java-tagged blocks
+        // Prefer java-tagged blocks (case-insensitive)
         for (tag, body) in &blocks {
-            if tag == "java" {
+            if tag.eq_ignore_ascii_case("java") {
                 return Ok(body.clone());
             }
         }
 
-        // Fall back to first untagged or generically tagged block
-        if let Some((_, body)) = blocks.first() {
-            return Ok(body.clone());
+        // Fall back to first untagged block only — reject bash/xml/etc.
+        for (tag, body) in &blocks {
+            if tag.is_empty() {
+                return Ok(body.clone());
+            }
         }
 
         // No code block found — use the response as-is
