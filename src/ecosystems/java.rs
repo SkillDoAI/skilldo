@@ -513,14 +513,14 @@ fn parse_gradle_group(content: &str) -> Option<String> {
                 Some((_, r)) => r.trim(),
                 None => continue,
             };
-            // Must be a quoted string (single or double quotes), len > 1 to avoid panic
-            if rhs.len() > 1
-                && ((rhs.starts_with('\'') && rhs.ends_with('\''))
-                    || (rhs.starts_with('"') && rhs.ends_with('"')))
-            {
-                let name = &rhs[1..rhs.len() - 1];
-                if !name.is_empty() {
-                    return Some(name.to_string());
+            // Extract quoted value, handling inline comments
+            if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
+                let quote = rhs.chars().next().unwrap();
+                if let Some(end) = rhs[1..].find(quote) {
+                    let name = &rhs[1..1 + end];
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
                 }
             }
         }
@@ -573,29 +573,32 @@ fn parse_gradle_version(content: &str) -> Option<String> {
         }
         if let Some((_, rhs)) = trimmed.split_once('=') {
             let rhs = rhs.trim();
-            // Only accept quoted literals — reject VERSION_NAME, libs.versions.*, etc.
-            if rhs.len() > 1
-                && ((rhs.starts_with('\'') && rhs.ends_with('\''))
-                    || (rhs.starts_with('"') && rhs.ends_with('"')))
-            {
-                let v = &rhs[1..rhs.len() - 1];
-                if !v.is_empty() {
-                    return Some(v.to_string());
+            // Extract quoted value, handling inline comments
+            if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
+                let quote = rhs.chars().next().unwrap();
+                if let Some(end) = rhs[1..].find(quote) {
+                    let v = &rhs[1..1 + end];
+                    if !v.is_empty() {
+                        return Some(v.to_string());
+                    }
                 }
             }
         } else {
-            // version '1.0.0' (no equals sign) — must also be quoted
+            // version '1.0.0' (no equals sign) — extract quoted value
             let rest_trimmed = rest.trim();
-            if rest_trimmed.len() <= 1
-                || !((rest_trimmed.starts_with('\'') && rest_trimmed.ends_with('\''))
-                    || (rest_trimmed.starts_with('"') && rest_trimmed.ends_with('"')))
+            if (rest_trimmed.starts_with('\'') || rest_trimmed.starts_with('"'))
+                && rest_trimmed.len() > 1
             {
-                continue;
+                let quote = rest_trimmed.chars().next().unwrap();
+                if let Some(end) = rest_trimmed[1..].find(quote) {
+                    let v = &rest_trimmed[1..1 + end];
+                    if !v.is_empty() {
+                        return Some(v.to_string());
+                    }
+                }
             }
-            let v = &rest_trimmed[1..rest_trimmed.len() - 1];
-            if !v.is_empty() {
-                return Some(v.to_string());
-            }
+            // No quoted value found — skip
+            continue;
         }
     }
     None

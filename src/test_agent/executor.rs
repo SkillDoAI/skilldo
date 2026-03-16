@@ -711,6 +711,10 @@ impl LanguageExecutor for JavaExecutor {
                                 return None;
                             }
                         };
+                        if version_str.is_empty() {
+                            tracing::warn!("Maven dep '{d}' has empty version — skipping");
+                            return None;
+                        }
                         let version = xml_escape(version_str);
                         Some(format!(
                             "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>\n            <version>{version}</version>\n        </dependency>"

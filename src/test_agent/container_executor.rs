@@ -96,8 +96,8 @@ impl ContainerExecutor {
                     let group = xml_escape(parts[0]);
                     let artifact = xml_escape(parts[1]);
                     let version = match parts.get(2).copied() {
-                        Some(v) => xml_escape(v),
-                        None => {
+                        Some(v) if !v.is_empty() => xml_escape(v),
+                        Some(_) | None => {
                             tracing::warn!(
                                 "Maven dep '{}:{}' has no version — skipping",
                                 parts[0], parts[1]
