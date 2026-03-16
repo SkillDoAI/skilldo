@@ -428,11 +428,29 @@ impl JavaHandler {
 
 // ── Parsing helpers (simple string-based, no XML crate) ──────────────
 
+/// Find the earliest POM section boundary after `start_pos`.
+/// Returns the position of the first opening tag among `<dependencies>`,
+/// `<dependencyManagement>`, `<build>`, `<profiles>`, and `<reporting>`.
+/// These sections contain their own `<version>` and `<artifactId>` tags
+/// that are NOT the project-level values we want.
+fn pom_section_boundary(content: &str, start_pos: usize) -> Option<usize> {
+    let boundaries = [
+        "<dependencies>",
+        "<dependencyManagement>",
+        "<build>",
+        "<profiles>",
+        "<reporting>",
+    ];
+    boundaries
+        .iter()
+        .filter_map(|tag| content[start_pos..].find(tag).map(|p| start_pos + p))
+        .min()
+}
+
 /// Extract `<artifactId>` from pom.xml (top-level, not inside `<parent>` or `<dependency>`).
 fn parse_pom_artifact_id(content: &str) -> Option<String> {
     // Strip comments before boundary detection
     let content = strip_xml_comments(content);
-    let deps_pos = content.find("<dependencies>");
     let parent_start = content.find("<parent>");
     let parent_close = content.find("</parent>");
     let parent_end = parent_close.map(|p| p + 9).unwrap_or(0);
@@ -452,11 +470,16 @@ fn parse_pom_artifact_id(content: &str) -> Option<String> {
         }
     }
 
-    let search_region = if let Some(dp) = deps_pos {
-        if parent_end > dp {
+    // Check if any section boundary appears before parent_end (malformed ordering)
+    let boundary = pom_section_boundary(&content, 0);
+    if let Some(bp) = boundary {
+        if parent_end > bp {
             return None;
         }
-        &content[parent_end..dp]
+    }
+    let search_boundary = pom_section_boundary(&content, parent_end);
+    let search_region = if let Some(bp) = search_boundary {
+        &content[parent_end..bp]
     } else {
         &content[parent_end..]
     };
@@ -468,17 +491,22 @@ fn parse_pom_artifact_id(content: &str) -> Option<String> {
 fn parse_pom_version(content: &str) -> Option<String> {
     // Strip comments before boundary detection
     let content = strip_xml_comments(content);
-    let deps_pos = content.find("<dependencies>");
     // Bail on malformed XML: <parent> opened but never closed
     if content.contains("<parent>") && !content.contains("</parent>") {
         return None;
     }
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
-    let search_region = if let Some(dp) = deps_pos {
-        if parent_end > dp {
+    // Check if any section boundary appears before parent_end (malformed ordering)
+    let boundary = pom_section_boundary(&content, 0);
+    if let Some(bp) = boundary {
+        if parent_end > bp {
             return None;
         }
-        &content[parent_end..dp]
+    }
+    // Now find the boundary from parent_end onwards for the search region
+    let search_boundary = pom_section_boundary(&content, parent_end);
+    let search_region = if let Some(bp) = search_boundary {
+        &content[parent_end..bp]
     } else {
         &content[parent_end..]
     };
@@ -1771,6 +1799,26 @@ dependencies {
     fn parse_pom_version_no_deps_section() {
         let pom = "<project><version>9.0</version></project>";
         assert_eq!(parse_pom_version(pom), Some("9.0".to_string()));
+    }
+
+    #[test]
+    fn parse_pom_version_ignores_build_section_version() {
+        // <version> inside <build> plugin config should NOT be picked up
+        let pom = "<project><version>2.0</version><build><plugin><version>3.8.1</version></plugin></build></project>";
+        assert_eq!(parse_pom_version(pom), Some("2.0".to_string()));
+    }
+
+    #[test]
+    fn parse_pom_version_stops_at_dependency_management() {
+        // <version> inside <dependencyManagement> should NOT be picked up
+        let pom = "<project><version>1.5</version><dependencyManagement><dependency><version>2.0</version></dependency></dependencyManagement></project>";
+        assert_eq!(parse_pom_version(pom), Some("1.5".to_string()));
+    }
+
+    #[test]
+    fn parse_pom_artifact_id_ignores_build_section() {
+        let pom = "<project><artifactId>myapp</artifactId><build><plugin><artifactId>maven-compiler</artifactId></plugin></build></project>";
+        assert_eq!(parse_pom_artifact_id(pom), Some("myapp".to_string()));
     }
 
     #[test]

@@ -731,6 +731,11 @@ mod tests {
     }
 
     #[test]
+    fn xml_escape_apostrophe() {
+        assert_eq!(xml_escape("a'b"), "a&apos;b");
+    }
+
+    #[test]
     fn xml_escape_version_range() {
         // Version ranges like [0,) should pass through unchanged
         assert_eq!(xml_escape("[0,)"), "[0,)");
