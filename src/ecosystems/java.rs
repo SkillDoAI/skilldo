@@ -88,6 +88,8 @@ impl JavaHandler {
             }
         }
 
+        docs.sort();
+        docs.dedup();
         info!("Found {} documentation files", docs.len());
         Ok(docs)
     }
