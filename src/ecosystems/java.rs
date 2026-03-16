@@ -353,6 +353,11 @@ impl JavaHandler {
                     }
                 }
             } else if ft.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if Self::should_skip_dir(name) {
+                        continue;
+                    }
+                }
                 self.collect_docs_recursive(&path, docs, depth + 1)?;
             }
         }
@@ -544,12 +549,22 @@ fn parse_pom_url(content: &str) -> Option<String> {
             return None;
         }
     }
-    let end_pos = pom_section_boundary(&content, parent_end).unwrap_or(content.len());
+    let section_end = pom_section_boundary(&content, parent_end).unwrap_or(content.len());
+    // Also exclude metadata blocks that contain their own nested <url>
+    let nested_url_start = [
+        "<organization>",
+        "<issueManagement>",
+        "<ciManagement>",
+        "<distributionManagement>",
+        "<scm>",
+    ]
+    .iter()
+    .filter_map(|tag| content[parent_end..].find(tag).map(|p| parent_end + p))
+    .min()
+    .unwrap_or(content.len());
+    let end_pos = section_end.min(nested_url_start);
     let search = &content[parent_end..end_pos];
-    // Also exclude <scm> section to avoid picking up SCM URL as homepage
-    let scm_start = search.find("<scm>").unwrap_or(search.len());
-    let before_scm = &search[..scm_start];
-    extract_xml_tag(before_scm, "url")
+    extract_xml_tag(search, "url")
 }
 
 /// Extract SCM URL from pom.xml `<scm>` section.
@@ -661,6 +676,7 @@ fn parse_gradle_version(content: &str) -> Option<String> {
             let rest_trimmed = rest
                 .trim()
                 .trim_start_matches(".set")
+                .trim()
                 .trim_start_matches('(')
                 .trim_end_matches(')')
                 .trim();
@@ -2043,6 +2059,15 @@ dependencies {
         // version.set("1.0.0") — Kotlin DSL Property.set() API
         assert_eq!(
             parse_gradle_version(r#"version.set("1.0.0")"#),
+            Some("1.0.0".into())
+        );
+    }
+
+    #[test]
+    fn parse_gradle_version_kotlin_dsl_set_with_space() {
+        // version.set ("1.0.0") — space before paren
+        assert_eq!(
+            parse_gradle_version(r#"version.set ("1.0.0")"#),
             Some("1.0.0".into())
         );
     }

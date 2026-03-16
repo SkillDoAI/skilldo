@@ -679,26 +679,28 @@ impl LanguageExecutor for JavaExecutor {
             }
         }
 
-        // If there are dependencies, check mvn once and either fetch or warn
-        let has_mvn = if !deps.is_empty() {
-            is_tool_available("mvn", "--version").await
+        // Precompute POM before probing mvn — versionless coords are filtered here,
+        // so we skip the mvn check entirely when there's nothing fetchable.
+        let pom = if deps.is_empty() {
+            None
         } else {
-            false
+            crate::util::build_maven_pom_xml(deps)
         };
-        if !deps.is_empty() && !has_mvn {
-            warn!(
-                "Maven (mvn) not installed — {} Java {} cannot be downloaded. \
-                 Tests may fail with missing classes.",
-                deps.len(),
-                if deps.len() == 1 {
-                    "dependency"
-                } else {
-                    "dependencies"
-                }
-            );
-        }
-        if !deps.is_empty() && has_mvn {
-            if let Some(pom) = crate::util::build_maven_pom_xml(deps) {
+        if pom.is_some() {
+            let has_mvn = is_tool_available("mvn", "--version").await;
+            if !has_mvn {
+                warn!(
+                    "Maven (mvn) not installed — {} Java {} cannot be downloaded. \
+                     Tests may fail with missing classes.",
+                    deps.len(),
+                    if deps.len() == 1 {
+                        "dependency"
+                    } else {
+                        "dependencies"
+                    }
+                );
+            }
+            if let Some(pom) = pom.filter(|_| has_mvn) {
                 fs::write(temp_dir.path().join("pom.xml"), &pom)
                     .context("Failed to write pom.xml")?;
 
@@ -730,17 +732,17 @@ impl LanguageExecutor for JavaExecutor {
                         warn!("Maven dependency fetch failed: {e}");
                     }
                 }
-            } else {
-                warn!(
-                    "All {} Java {} lack a version — no jars will be downloaded",
-                    deps.len(),
-                    if deps.len() == 1 {
-                        "dependency"
-                    } else {
-                        "dependencies"
-                    }
-                );
             }
+        } else if !deps.is_empty() {
+            warn!(
+                "All {} Java {} lack a version — no jars will be downloaded",
+                deps.len(),
+                if deps.len() == 1 {
+                    "dependency"
+                } else {
+                    "dependencies"
+                }
+            );
         }
 
         info!("Java environment setup complete");
