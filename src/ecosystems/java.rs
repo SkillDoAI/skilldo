@@ -533,13 +533,14 @@ fn parse_pom_license(content: &str) -> Option<String> {
 fn parse_pom_url(content: &str) -> Option<String> {
     // Strip comments before boundary detection
     let content = strip_xml_comments(content);
-    let deps_pos = content.find("<dependencies>").unwrap_or(content.len());
-    let build_pos = content.find("<build>").unwrap_or(content.len());
-    let end_pos = deps_pos.min(build_pos);
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
-    if parent_end > end_pos {
-        return None;
+    // Check if any section boundary appears before parent_end (malformed ordering)
+    if let Some(bp) = pom_section_boundary(&content, 0) {
+        if parent_end > bp {
+            return None;
+        }
     }
+    let end_pos = pom_section_boundary(&content, parent_end).unwrap_or(content.len());
     let search = &content[parent_end..end_pos];
     // Also exclude <scm> section to avoid picking up SCM URL as homepage
     let scm_start = search.find("<scm>").unwrap_or(search.len());
