@@ -389,7 +389,11 @@ impl JavaHandler {
             .any(|w| w[0] == "src" && w[1] == "main");
         if !under_src_main {
             if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-                if fname.ends_with("Test.java") || fname.ends_with("Tests.java") {
+                if fname.ends_with("Test.java")
+                    || fname.ends_with("Tests.java")
+                    || fname.ends_with("Spec.java")
+                    || fname.ends_with("IT.java")
+                {
                     return true;
                 }
             }

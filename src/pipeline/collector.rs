@@ -340,10 +340,11 @@ impl Collector {
     async fn collect_java(&self) -> Result<CollectedData> {
         let handler = JavaHandler::new(&self.repo_path);
 
-        let example_paths = handler.find_examples()?;
-        let test_paths = handler.find_test_files()?;
-        let doc_paths = handler.find_docs()?;
+        // Source first — clearer error if project is misidentified
         let source_paths = handler.find_source_files()?;
+        let test_paths = handler.find_test_files()?;
+        let example_paths = handler.find_examples()?;
+        let doc_paths = handler.find_docs()?;
         let changelog_path = handler.find_changelog();
         let version = handler.get_version()?;
         let license = handler.get_license();

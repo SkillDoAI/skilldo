@@ -675,6 +675,18 @@ impl LanguageExecutor for JavaExecutor {
         }
 
         // If there are dependencies and mvn is available, create pom.xml and fetch them
+        if !deps.is_empty() && !is_tool_available("mvn", "--version").await {
+            warn!(
+                "Maven (mvn) not installed — {} Java {} cannot be downloaded. \
+                 Tests may fail with missing classes.",
+                deps.len(),
+                if deps.len() == 1 {
+                    "dependency"
+                } else {
+                    "dependencies"
+                }
+            );
+        }
         if !deps.is_empty() && is_tool_available("mvn", "--version").await {
             let deps_xml: Vec<String> = deps
                 .iter()
