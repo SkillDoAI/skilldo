@@ -644,6 +644,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_protected_headers() {
+        assert!(is_protected_header("authorization"));
+        assert!(is_protected_header("Authorization"));
+        assert!(is_protected_header("x-api-key"));
+        assert!(is_protected_header("X-API-KEY"));
+        assert!(is_protected_header("x-goog-api-key"));
+        assert!(is_protected_header("content-type"));
+        assert!(is_protected_header("Content-Type"));
+        assert!(!is_protected_header("x-custom-header"));
+        assert!(!is_protected_header("user-agent"));
+    }
+
+    #[test]
     fn test_anthropic_client_creation() {
         let client =
             AnthropicClient::new("test_key".to_string(), "claude-3".to_string(), 4096, 120)

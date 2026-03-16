@@ -1443,6 +1443,33 @@ mod tests {
     }
 
     #[test]
+    fn test_new_java_validator_bare_metal() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new(&Language::Java, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Java validator should construct successfully"
+        );
+    }
+
+    #[test]
+    fn test_new_java_validator_container_mode() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let mut config = ContainerConfig::default();
+        config.execution_mode = crate::config::ExecutionMode::Container;
+        let validator = TestCodeValidator::new(&Language::Java, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Java container validator should construct successfully"
+        );
+    }
+
+    #[test]
     fn test_new_javascript_validator_with_custom_instructions() {
         use crate::llm::client::MockLlmClient;
 

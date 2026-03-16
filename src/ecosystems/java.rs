@@ -863,6 +863,29 @@ dependencies {
     // ── Parsing unit tests ──
 
     #[test]
+    fn strip_xml_comments_removes_single_comment() {
+        let input = "before <!-- comment --> after";
+        assert_eq!(strip_xml_comments(input), "before  after");
+    }
+
+    #[test]
+    fn strip_xml_comments_removes_multiline() {
+        let input = "<project>\n<!-- \n<artifactId>old</artifactId>\n-->\n<artifactId>real</artifactId>\n</project>";
+        let clean = strip_xml_comments(input);
+        assert!(!clean.contains("old"));
+        assert!(clean.contains("real"));
+    }
+
+    #[test]
+    fn extract_xml_tag_skips_commented_out_value() {
+        let pom = "<!-- <artifactId>wrong</artifactId> -->\n<artifactId>correct</artifactId>";
+        assert_eq!(
+            extract_xml_tag(pom, "artifactId"),
+            Some("correct".to_string())
+        );
+    }
+
+    #[test]
     fn parse_pom_artifact_id_basic() {
         let pom = "<project><artifactId>foo</artifactId></project>";
         assert_eq!(parse_pom_artifact_id(pom), Some("foo".to_string()));

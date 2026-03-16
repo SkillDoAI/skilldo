@@ -137,6 +137,11 @@ mod tests {
     }
 
     #[test]
+    fn run_all_stages_java() {
+        run("java", None).unwrap();
+    }
+
+    #[test]
     fn run_single_stage_extract() {
         run("python", Some("extract")).unwrap();
     }
