@@ -629,7 +629,11 @@ fn parse_gradle_version(content: &str) -> Option<String> {
         {
             continue;
         }
-        if let Some((_, rhs)) = trimmed.split_once('=') {
+        if let Some((lhs, rhs)) = trimmed.split_once('=') {
+            // Only match "version = ..." — reject "version.release = ...", etc.
+            if lhs.trim() != "version" {
+                continue;
+            }
             let rhs = rhs.trim();
             // Extract quoted value, handling inline comments
             if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
@@ -2015,6 +2019,18 @@ dependencies {
             parse_gradle_version(r#"version.set("1.0.0")"#),
             Some("1.0.0".into())
         );
+    }
+
+    #[test]
+    fn parse_gradle_version_rejects_version_dot_release() {
+        // "version.release" is a nebula-release plugin property, not the project version
+        assert_eq!(parse_gradle_version("version.release = '2.0.0'"), None);
+    }
+
+    #[test]
+    fn parse_gradle_version_rejects_version_dot_suffix() {
+        // Any "version.xxx = ..." should be rejected
+        assert_eq!(parse_gradle_version("version.catalog = '1.0'"), None);
     }
 
     // ── is_test_path: top-level test/ directory ──
