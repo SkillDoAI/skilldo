@@ -151,7 +151,9 @@ impl ContainerExecutor {
             Language::JavaScript => "node test.js",
             Language::Rust => "rustc main.rs -o main && ./main",
             Language::Go => "go run main.go",
-            Language::Java => "javac -cp 'deps/*:.' Main.java && java -cp 'deps/*:.' Main",
+            Language::Java => {
+                "mkdir -p deps && javac -cp 'deps/*:.' Main.java && java -cp 'deps/*:.' Main"
+            }
             Language::Python => {
                 bail!("generate_container_script should not be called for Python")
             }

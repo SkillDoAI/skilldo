@@ -424,8 +424,8 @@ impl JavaHandler {
 
 /// Extract `<artifactId>` from pom.xml (top-level, not inside `<parent>` or `<dependency>`).
 fn parse_pom_artifact_id(content: &str) -> Option<String> {
-    // Find the top-level <artifactId> that's not inside <parent> or <dependencies>
-    // Simple heuristic: take the first <artifactId> that appears before <dependencies>
+    // Strip comments before boundary detection to avoid matching commented-out tags
+    let content = strip_xml_comments(content);
     let deps_pos = content.find("<dependencies>");
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
     let search_region = if let Some(dp) = deps_pos {
@@ -442,6 +442,8 @@ fn parse_pom_artifact_id(content: &str) -> Option<String> {
 
 /// Extract `<version>` from pom.xml (top-level).
 fn parse_pom_version(content: &str) -> Option<String> {
+    // Strip comments before boundary detection
+    let content = strip_xml_comments(content);
     let deps_pos = content.find("<dependencies>");
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
     let search_region = if let Some(dp) = deps_pos {
@@ -466,7 +468,8 @@ fn parse_pom_license(content: &str) -> Option<String> {
 
 /// Extract `<url>` from pom.xml (top-level).
 fn parse_pom_url(content: &str) -> Option<String> {
-    // Only match top-level <url>, before <dependencies> or <build> (whichever comes first)
+    // Strip comments before boundary detection
+    let content = strip_xml_comments(content);
     let deps_pos = content.find("<dependencies>").unwrap_or(content.len());
     let build_pos = content.find("<build>").unwrap_or(content.len());
     let end_pos = deps_pos.min(build_pos);

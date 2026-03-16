@@ -196,6 +196,8 @@ pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
     for ch in dep.chars() {
         match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' => {}
+            // ':' added for Maven coordinates (group:artifact:version).
+            // Other ecosystems don't use ':' in dep names, so it's a no-op for them.
             '-' | '_' | '.' | '/' | '[' | ']' | ',' | '@' | ':' => {}
             '>' | '<' | '=' | '!' | '~' | '^' => {} // version constraints
             _ => {
