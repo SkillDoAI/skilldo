@@ -663,12 +663,15 @@ impl LanguageExecutor for JavaExecutor {
         let m2_repo = temp_dir.path().join(MAVEN_REPO_DIR);
         fs::create_dir_all(&m2_repo).context("Failed to create Maven repo dir")?;
 
-        // If there are dependencies and mvn is available, create pom.xml and fetch them
-        if !deps.is_empty() && is_tool_available("mvn", "--version").await {
+        // Validate deps unconditionally (catch bad names even without mvn)
+        if !deps.is_empty() {
             for dep in deps {
                 sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             }
+        }
 
+        // If there are dependencies and mvn is available, create pom.xml and fetch them
+        if !deps.is_empty() && is_tool_available("mvn", "--version").await {
             let deps_xml: Vec<String> = deps
                 .iter()
                 .filter_map(|d| {

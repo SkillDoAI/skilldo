@@ -129,9 +129,9 @@ impl LanguageParser for JavaParser {
     fn extract_dependencies(&self, skill_md: &str) -> Result<Vec<String>> {
         let mut dependencies = Vec::new();
 
-        // Scan multiple sections for Maven coordinates (group:artifact:version).
-        // Don't early-return if one section is missing — coords may appear in any.
-        let sections_to_scan = [r"(?m)^##\s+Imports\s*$", r"(?m)^##\s+Core Patterns\s*$"];
+        // Only scan ## Imports for Maven coordinates — Core Patterns contains
+        // Java source examples that produce false positives (e.g., "step:done").
+        let sections_to_scan = [r"(?m)^##\s+Imports\s*$"];
 
         for section_re in &sections_to_scan {
             if let Some(content) = extract_section(skill_md, section_re)? {
