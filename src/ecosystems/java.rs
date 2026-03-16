@@ -510,12 +510,22 @@ fn parse_pom_version(content: &str) -> Option<String> {
     if content.contains("<parent>") && !content.contains("</parent>") {
         return None;
     }
+    let parent_start = content.find("<parent>");
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
     // Check if any section boundary appears before parent_end (malformed ordering)
     let boundary = pom_section_boundary(&content, 0);
     if let Some(bp) = boundary {
         if parent_end > bp {
             return None;
+        }
+    }
+    // Try before <parent> first (mirrors parse_pom_artifact_id)
+    if let Some(ps) = parent_start {
+        let search_end = boundary.map(|bp| bp.min(ps)).unwrap_or(ps);
+        if let Some(v) = extract_xml_tag(&content[..search_end], "version") {
+            if !v.starts_with("${") {
+                return Some(v);
+            }
         }
     }
     // Now find the boundary from parent_end onwards for the search region
@@ -1062,6 +1072,14 @@ dependencies {
     fn parse_pom_version_basic() {
         let pom = "<project><version>3.0.0</version></project>";
         assert_eq!(parse_pom_version(pom), Some("3.0.0".to_string()));
+    }
+
+    #[test]
+    fn parse_pom_version_before_parent() {
+        // Version declared before <parent> — should be found
+        let pom =
+            "<project><version>2.0</version><parent><version>1.0</version></parent></project>";
+        assert_eq!(parse_pom_version(pom), Some("2.0".to_string()));
     }
 
     #[test]
