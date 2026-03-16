@@ -381,12 +381,17 @@ impl JavaHandler {
             break; // Only check the first real component
         }
 
-        // Match common test file patterns
-        // Match JUnit naming conventions (suffix only — prefix "Test" is too broad
-        // and catches production files like TestHelper.java, TestUtils.java)
-        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-            if fname.ends_with("Test.java") || fname.ends_with("Tests.java") {
-                return true;
+        // File-name heuristic: only apply *Test.java/*Tests.java suffix check
+        // when NOT under src/main/ — files in src/main are production code even
+        // if named FooTest.java (e.g., AbstractContextTest, AssertionTest).
+        let under_src_main = components
+            .windows(2)
+            .any(|w| w[0] == "src" && w[1] == "main");
+        if !under_src_main {
+            if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+                if fname.ends_with("Test.java") || fname.ends_with("Tests.java") {
+                    return true;
+                }
             }
         }
 
@@ -1495,11 +1500,16 @@ dependencies {
     // ── File classification: test file naming patterns ──
 
     #[test]
-    fn find_test_files_tests_suffix() {
+    fn find_test_files_tests_suffix_in_test_dir() {
+        // *Tests.java under src/test/ should be classified as test
         let tmp = TempDir::new().unwrap();
+        let test_dir = tmp.path().join("src/test/java");
+        fs::create_dir_all(&test_dir).unwrap();
+        fs::write(test_dir.join("AppTests.java"), "class AppTests {}").unwrap();
+        // Need at least one source file too
         let src = tmp.path().join("src/main/java");
         fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("AppTests.java"), "class AppTests {}").unwrap();
+        fs::write(src.join("App.java"), "class App {}").unwrap();
 
         let handler = JavaHandler::new(tmp.path());
         let tests = handler.find_test_files().unwrap();
@@ -1508,24 +1518,25 @@ dependencies {
     }
 
     #[test]
-    fn find_test_files_suffix_only() {
-        // Test* prefix is NOT a test signal — only *Test.java and *Tests.java are
+    fn find_test_files_suffix_not_under_src_main() {
+        // *Test.java suffix only triggers outside src/main/
         let tmp = TempDir::new().unwrap();
-        let src = tmp.path().join("src/main/java");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("TestHelper.java"), "class TestHelper {}").unwrap();
-        fs::write(src.join("AppTest.java"), "class AppTest {}").unwrap();
+        // File under src/main — should NOT be classified as test
+        let main_src = tmp.path().join("src/main/java");
+        fs::create_dir_all(&main_src).unwrap();
+        fs::write(main_src.join("AppTest.java"), "class AppTest {}").unwrap();
+        // File under top-level — SHOULD be classified as test
+        fs::write(tmp.path().join("FooTest.java"), "class FooTest {}").unwrap();
 
         let handler = JavaHandler::new(tmp.path());
         let tests = handler.find_test_files().unwrap();
-        // Only AppTest.java should be a test, TestHelper.java is production code
         assert_eq!(tests.len(), 1);
-        assert!(tests[0].to_str().unwrap().contains("AppTest.java"));
+        assert!(tests[0].to_str().unwrap().contains("FooTest.java"));
     }
 
     #[test]
-    fn find_source_files_keeps_test_prefix_as_production() {
-        // TestHelper.java, TestUtils.java etc. are production code (not tests)
+    fn find_source_files_keeps_all_under_src_main() {
+        // Under src/main/, ALL .java files are production — even *Test.java names
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src/main/java");
         fs::create_dir_all(&src).unwrap();
@@ -1536,14 +1547,8 @@ dependencies {
 
         let handler = JavaHandler::new(tmp.path());
         let files = handler.find_source_files().unwrap();
-        // App.java + TestHelper.java = 2 source files (AppTest/AppTests are tests)
-        assert_eq!(files.len(), 2);
-        assert!(files
-            .iter()
-            .any(|f| f.to_str().unwrap().contains("App.java")));
-        assert!(files
-            .iter()
-            .any(|f| f.to_str().unwrap().contains("TestHelper.java")));
+        // ALL 4 files are production code under src/main
+        assert_eq!(files.len(), 4);
     }
 
     // ── Skipped directories ──

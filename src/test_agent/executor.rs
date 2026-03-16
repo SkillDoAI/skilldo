@@ -680,7 +680,11 @@ impl LanguageExecutor for JavaExecutor {
                     if parts.len() >= 2 {
                         let group = xml_escape(parts[0]);
                         let artifact = xml_escape(parts[1]);
-                        let version = xml_escape(parts.get(2).copied().unwrap_or("[0,)"));
+                        let version_str = parts.get(2).copied().unwrap_or_else(|| {
+                            tracing::warn!("Maven dep {d} has no version — using [0,) (latest)");
+                            "[0,)"
+                        });
+                        let version = xml_escape(version_str);
                         Some(format!(
                             "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>\n            <version>{version}</version>\n        </dependency>"
                         ))
