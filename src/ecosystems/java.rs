@@ -461,8 +461,16 @@ fn parse_pom_artifact_id(content: &str) -> Option<String> {
         return None;
     }
 
-    // Try before <parent> first (handles non-standard but valid ordering)
+    // Try before <parent> first (handles non-standard but valid ordering),
+    // but only if no major POM section appears before <parent>.
     if let Some(ps) = parent_start {
+        if let Some(bp) = pom_section_boundary(&content, 0) {
+            if bp < ps {
+                // A section like <dependencies> appears before <parent> —
+                // don't trust artifactIds found before <parent>.
+                return None;
+            }
+        }
         let before_parent = &content[..ps];
         if let Some(v) = extract_xml_tag(before_parent, "artifactId") {
             if !v.starts_with("${") {
@@ -1949,6 +1957,14 @@ dependencies {
     fn parse_pom_artifact_id_parent_after_deps() {
         // Malformed: </parent> appears after <dependencies> — must not panic
         let pom = "<dependencies><dep/></dependencies></parent><artifactId>x</artifactId>";
+        assert_eq!(parse_pom_artifact_id(pom), None);
+    }
+
+    #[test]
+    fn parse_pom_artifact_id_deps_before_parent_rejects() {
+        // <dependencies> before <parent> — artifactId in before_parent region
+        // should NOT be returned as the project artifactId
+        let pom = "<artifactId>dep-lib</artifactId><dependencies></dependencies><parent><artifactId>parent-art</artifactId></parent>";
         assert_eq!(parse_pom_artifact_id(pom), None);
     }
 
