@@ -598,11 +598,19 @@ fn parse_gradle_group(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         // Exact "group" keyword — reject groupId, grouping, etc.
-        if trimmed.starts_with("group") && trimmed[5..].starts_with([' ', '=', '\t']) {
-            // Handle both "group = 'x'" and "group 'x'" (Groovy method-call syntax)
+        if trimmed.starts_with("group") && trimmed[5..].starts_with([' ', '=', '\t', '.']) {
+            // Handle "group = 'x'", "group 'x'", and "group.set('x')" (Kotlin DSL)
             let rhs = match trimmed.split_once('=') {
-                Some((_, r)) => r.trim(),
-                None => trimmed[5..].trim(), // skip "group" keyword
+                Some((lhs, r)) if lhs.trim() == "group" => r.trim(),
+                Some(_) => continue, // group.release = ... etc.
+                None => trimmed[5..]
+                    .trim()
+                    .trim_start_matches(".set")
+                    .trim()
+                    .trim_start_matches('(')
+                    .strip_suffix(')')
+                    .unwrap_or(trimmed[5..].trim())
+                    .trim(),
             };
             // Extract quoted value, handling inline comments
             if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
@@ -1770,6 +1778,15 @@ dependencies {
         // Groovy method-call syntax: group 'com.example' (no '=')
         assert_eq!(
             parse_gradle_group("group 'com.example'"),
+            Some("com.example".into())
+        );
+    }
+
+    #[test]
+    fn parse_gradle_group_kotlin_dsl_set() {
+        // Kotlin DSL: group.set("com.example")
+        assert_eq!(
+            parse_gradle_group(r#"group.set("com.example")"#),
             Some("com.example".into())
         );
     }

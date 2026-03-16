@@ -17,17 +17,16 @@ static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").u
 // Used by extract_patterns for both position detection and code body capture.
 static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)[^\n]*\n([\s\S]*?)(?:```|~~~)").unwrap());
-static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
-    // Match Maven coordinates: group:artifact or group:artifact:version.
-    // Require a dot in groupId (e.g., com.google, org.junit) to reduce
-    // false positives from prose like "Returns:String" or "scope:test".
-    // Legacy dot-less coords like "junit:junit" are exceedingly rare in
-    // modern Java — org.junit.jupiter:junit-jupiter is the standard.
-    // Version may include range syntax like [0,) or [1.0,2.0)
-    Regex::new(
-        r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*)(?::([a-zA-Z0-9._\[\],\(\)-]+))?",
-    )
-    .unwrap()
+// Two regexes: one for 3-part coords (group:artifact:version, dot-less OK),
+// one for 2-part (group:artifact, requires dot in group to avoid prose matches).
+static MAVEN_3PART_RE: Lazy<Regex> = Lazy::new(|| {
+    // group:artifact:version — dot-less groupIds accepted (junit:junit:4.13.2)
+    Regex::new(r"([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z0-9._\[\],\(\)-]+)")
+        .unwrap()
+});
+static MAVEN_2PART_RE: Lazy<Regex> = Lazy::new(|| {
+    // group:artifact (no version) — require dot in group to reduce prose false positives
+    Regex::new(r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*)").unwrap()
 });
 
 /// Strip XML comments (`<!-- ... -->`) from content.
@@ -210,10 +209,20 @@ impl LanguageParser for JavaParser {
         for section_re in &sections_to_scan {
             if let Some(content) = extract_section(skill_md, section_re)? {
                 // Try inline format: group:artifact:version
-                for cap in MAVEN_COORD_RE.captures_iter(content) {
+                // 3-part coords first (group:artifact:version, dot-less OK)
+                for cap in MAVEN_3PART_RE.captures_iter(content) {
                     let coord = cap[0].to_string();
-                    // Regex requires a dot in groupId to filter prose false positives
                     if !dependencies.contains(&coord) {
+                        dependencies.push(coord);
+                    }
+                }
+                // 2-part coords (group:artifact, requires dot in group)
+                for cap in MAVEN_2PART_RE.captures_iter(content) {
+                    let coord = cap[0].to_string();
+                    // Skip if already matched as 3-part
+                    if !dependencies.contains(&coord)
+                        && !dependencies.iter().any(|d| d.starts_with(&coord))
+                    {
                         dependencies.push(coord);
                     }
                 }
@@ -573,7 +582,7 @@ name: test
     }
 
     #[test]
-    fn maven_coord_requires_dot_in_group() {
+    fn maven_coord_accepts_dot_less_group() {
         let parser = JavaParser;
         let skill = r#"---
 name: test
@@ -587,11 +596,10 @@ com.real.group:artifact:2.0
 ```
 "#;
         let deps = parser.extract_dependencies(skill).unwrap();
-        // Dot-less groupId like "junit:junit" is now rejected to prevent
-        // false positives from prose like "Returns:String"
+        // Dot-less groupIds like junit:junit are accepted (common in legacy Java)
         assert!(
-            !deps.iter().any(|d| d.starts_with("junit:")),
-            "dot-less groupId should be rejected"
+            deps.iter().any(|d| d.starts_with("junit:")),
+            "dot-less groupId like junit:junit should be accepted"
         );
         assert!(
             deps.iter().any(|d| d.contains("com.real.group")),
