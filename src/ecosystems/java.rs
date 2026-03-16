@@ -499,9 +499,10 @@ fn parse_gradle_group(content: &str) -> Option<String> {
                 Some((_, r)) => r.trim(),
                 None => continue,
             };
-            // Must be a quoted string (single or double quotes)
-            if (rhs.starts_with('\'') && rhs.ends_with('\''))
-                || (rhs.starts_with('"') && rhs.ends_with('"'))
+            // Must be a quoted string (single or double quotes), len > 1 to avoid panic
+            if rhs.len() > 1
+                && ((rhs.starts_with('\'') && rhs.ends_with('\''))
+                    || (rhs.starts_with('"') && rhs.ends_with('"')))
             {
                 let name = &rhs[1..rhs.len() - 1];
                 if !name.is_empty() {
@@ -558,8 +559,9 @@ fn parse_gradle_version(content: &str) -> Option<String> {
         if let Some((_, rhs)) = trimmed.split_once('=') {
             let rhs = rhs.trim();
             // Only accept quoted literals — reject VERSION_NAME, libs.versions.*, etc.
-            if (rhs.starts_with('\'') && rhs.ends_with('\''))
-                || (rhs.starts_with('"') && rhs.ends_with('"'))
+            if rhs.len() > 1
+                && ((rhs.starts_with('\'') && rhs.ends_with('\''))
+                    || (rhs.starts_with('"') && rhs.ends_with('"')))
             {
                 let v = &rhs[1..rhs.len() - 1];
                 if !v.is_empty() {
@@ -569,8 +571,9 @@ fn parse_gradle_version(content: &str) -> Option<String> {
         } else {
             // version '1.0.0' (no equals sign) — must also be quoted
             let rest_trimmed = rest.trim();
-            if !((rest_trimmed.starts_with('\'') && rest_trimmed.ends_with('\''))
-                || (rest_trimmed.starts_with('"') && rest_trimmed.ends_with('"')))
+            if rest_trimmed.len() <= 1
+                || !((rest_trimmed.starts_with('\'') && rest_trimmed.ends_with('\''))
+                    || (rest_trimmed.starts_with('"') && rest_trimmed.ends_with('"')))
             {
                 continue;
             }

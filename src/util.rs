@@ -217,6 +217,7 @@ pub fn xml_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// Calculate file priority for source file reading order.

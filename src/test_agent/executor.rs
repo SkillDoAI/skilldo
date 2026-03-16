@@ -1587,15 +1587,14 @@ func main() {
             return;
         }
         let executor = JavaExecutor::new();
-        // Even if mvn is available, bad dep names should be rejected
+        // sanitize_dep_name runs unconditionally — bad dep names are always rejected
         let result = executor
             .setup_environment(&["valid-pkg; rm -rf /".to_string()])
             .await;
-        // If mvn is not available, deps are skipped entirely (no error).
-        // If mvn IS available, sanitize_dep_name should reject the bad name.
-        if is_tool_available("mvn", "--version").await {
-            assert!(result.is_err(), "bad dep name should be rejected with mvn");
-        }
+        assert!(
+            result.is_err(),
+            "bad dep name should be rejected regardless of mvn availability"
+        );
     }
 
     #[tokio::test]
