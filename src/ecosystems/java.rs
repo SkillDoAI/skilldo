@@ -617,8 +617,16 @@ fn parse_gradle_version(content: &str) -> Option<String> {
             continue;
         }
         let first = rest.chars().next().unwrap();
-        // Accept "version = '...'" or "version '...'" — reject "versionCode", "versionName"
-        if first != '=' && first != ' ' && first != '\t' && first != '\'' && first != '"' {
+        // Accept version=, version , version\t, version', version", version(, version.
+        // Reject "versionCode", "versionName" (first char is alphanumeric).
+        if first != '='
+            && first != ' '
+            && first != '\t'
+            && first != '\''
+            && first != '"'
+            && first != '('
+            && first != '.'
+        {
             continue;
         }
         if let Some((_, rhs)) = trimmed.split_once('=') {
@@ -634,9 +642,10 @@ fn parse_gradle_version(content: &str) -> Option<String> {
                 }
             }
         } else {
-            // version '1.0.0' or version("1.0.0") (Kotlin DSL) — extract quoted value
+            // version '1.0.0', version("1.0.0"), or version.set("1.0.0") (Kotlin DSL)
             let rest_trimmed = rest
                 .trim()
+                .trim_start_matches(".set")
                 .trim_start_matches('(')
                 .trim_end_matches(')')
                 .trim();
@@ -1987,6 +1996,24 @@ dependencies {
         assert_eq!(
             parse_gradle_version("version\t= '3.2.1'"),
             Some("3.2.1".into())
+        );
+    }
+
+    #[test]
+    fn parse_gradle_version_kotlin_dsl_parens() {
+        // version("1.0.0") — Kotlin DSL shorthand
+        assert_eq!(
+            parse_gradle_version(r#"version("1.0.0")"#),
+            Some("1.0.0".into())
+        );
+    }
+
+    #[test]
+    fn parse_gradle_version_kotlin_dsl_set() {
+        // version.set("1.0.0") — Kotlin DSL Property.set() API
+        assert_eq!(
+            parse_gradle_version(r#"version.set("1.0.0")"#),
+            Some("1.0.0".into())
         );
     }
 

@@ -711,12 +711,19 @@ impl LanguageExecutor for JavaExecutor {
                     ])
                     .current_dir(temp_dir.path());
 
-                let mvn_output =
-                    run_cmd_with_timeout(mvn_cmd, Duration::from_secs(self.timeout_secs)).await?;
-                if !mvn_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&mvn_output.stderr);
-                    warn!("mvn dependency:copy-dependencies failed: {}", stderr);
-                    // Continue without deps — javac will fail if they're actually needed
+                match run_cmd_with_timeout(mvn_cmd, Duration::from_secs(self.timeout_secs)).await {
+                    Ok(mvn_output) => {
+                        if !mvn_output.status.success() {
+                            let stderr = String::from_utf8_lossy(&mvn_output.stderr);
+                            warn!("mvn dependency:copy-dependencies failed: {}", stderr);
+                        }
+                    }
+                    Err(e) => {
+                        // Timeout or other error — warn and continue without deps.
+                        // Cold Maven caches can exceed timeout; javac will fail later
+                        // if the deps are actually needed.
+                        warn!("Maven dependency fetch failed: {e}");
+                    }
                 }
             }
         }
