@@ -17,36 +17,18 @@ static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").u
 // Used by extract_patterns for both position detection and code body capture.
 static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)[^\n]*\n([\s\S]*?)(?:```|~~~)").unwrap());
-// Two regexes: one for 3-part coords (group:artifact:version, dot-less OK),
-// one for 2-part (group:artifact, requires dot in group to avoid prose matches).
+// Both regexes require a dot in groupId to reduce false positives from prose
+// like "HH:mm:ss" or "Returns:String". Dot-less coords (junit:junit:4.13.2)
+// are still covered by the extract_xml_deps XML <dependency> fallback.
 static MAVEN_3PART_RE: Lazy<Regex> = Lazy::new(|| {
-    // group:artifact:version — dot-less groupIds accepted (junit:junit:4.13.2)
-    Regex::new(r"([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z0-9._\[\],\(\)-]+)")
-        .unwrap()
+    Regex::new(
+        r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z0-9._\[\],\(\)-]+)",
+    )
+    .unwrap()
 });
 static MAVEN_2PART_RE: Lazy<Regex> = Lazy::new(|| {
-    // group:artifact (no version) — require dot in group to reduce prose false positives
     Regex::new(r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*)").unwrap()
 });
-
-/// Strip XML comments (`<!-- ... -->`) from content.
-fn strip_xml_comments_simple(content: &str) -> String {
-    let mut result = String::with_capacity(content.len());
-    let mut remaining = content;
-    while let Some(start) = remaining.find("<!--") {
-        result.push_str(&remaining[..start]);
-        remaining = &remaining[start..];
-        match remaining.find("-->") {
-            Some(end) => remaining = &remaining[end + 3..],
-            None => {
-                remaining = "";
-                break;
-            }
-        }
-    }
-    result.push_str(remaining);
-    result
-}
 
 /// Extract Maven deps from XML `<dependency>` blocks in section content.
 /// Handles the common documentation format:
@@ -59,7 +41,7 @@ fn strip_xml_comments_simple(content: &str) -> String {
 /// ```
 fn extract_xml_deps(content: &str, deps: &mut Vec<String>) {
     // Strip XML comments to avoid extracting commented-out dependencies
-    let content = strip_xml_comments_simple(content);
+    let content = crate::util::strip_xml_comments(content);
     let mut remaining = content.as_str();
     while let Some(start) = remaining.find("<dependency>") {
         let after = &remaining[start..];
@@ -210,7 +192,7 @@ impl LanguageParser for JavaParser {
             if let Some(content) = extract_section(skill_md, section_re)? {
                 // Strip XML comments before regex scans to avoid matching
                 // commented-out coordinates like <!-- com.foo:bar:1.0 -->
-                let clean = strip_xml_comments_simple(content);
+                let clean = crate::util::strip_xml_comments(content);
                 // Try inline format: group:artifact:version
                 // 3-part coords first (group:artifact:version, dot-less OK)
                 for cap in MAVEN_3PART_RE.captures_iter(&clean) {
@@ -587,7 +569,7 @@ name: test
     }
 
     #[test]
-    fn maven_coord_accepts_dot_less_group() {
+    fn maven_coord_dot_less_inline_rejected_xml_accepted() {
         let parser = JavaParser;
         let skill = r#"---
 name: test
@@ -599,16 +581,27 @@ name: test
 junit:junit:4.13.2
 com.real.group:artifact:2.0
 ```
+
+## Installation
+
+```xml
+<dependency>
+    <groupId>junit</groupId>
+    <artifactId>junit</artifactId>
+    <version>4.13.2</version>
+</dependency>
+```
 "#;
         let deps = parser.extract_dependencies(skill).unwrap();
-        // Dot-less groupIds like junit:junit are accepted (common in legacy Java)
+        // Dot-less inline coords are rejected (prevents HH:mm:ss false positives)
+        // but XML <dependency> blocks still extract them
         assert!(
             deps.iter().any(|d| d.starts_with("junit:")),
-            "dot-less groupId like junit:junit should be accepted"
+            "dot-less groupId should be accepted via XML fallback"
         );
         assert!(
             deps.iter().any(|d| d.contains("com.real.group")),
-            "dotted groupId should be accepted"
+            "dotted groupId should be accepted inline"
         );
     }
 

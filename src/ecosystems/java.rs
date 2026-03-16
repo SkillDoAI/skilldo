@@ -726,12 +726,9 @@ fn parse_gradle_version(content: &str) -> Option<String> {
     None
 }
 
-/// Strip XML comments (`<!-- ... -->`) to avoid matching commented-out tags.
+/// Alias for the shared XML comment stripper in util.rs.
 fn strip_xml_comments(content: &str) -> String {
-    use once_cell::sync::Lazy;
-    use regex::Regex;
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
-    RE.replace_all(content, "").to_string()
+    crate::util::strip_xml_comments(content)
 }
 
 /// Simple XML tag value extraction — finds `<tag>value</tag>`.

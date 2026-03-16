@@ -223,6 +223,15 @@ pub fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// Strip XML comments (`<!-- ... -->`) to avoid matching commented-out tags.
+/// Shared by java.rs POM parsers and java_parser.rs dependency extraction.
+pub fn strip_xml_comments(content: &str) -> String {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
+    RE.replace_all(content, "").to_string()
+}
+
 /// Build a minimal Maven pom.xml from a list of Maven coordinates.
 /// Each dep should be "group:artifact:version". Deps without a version are
 /// skipped with a warning. Returns `None` if no valid deps remain.
@@ -242,7 +251,8 @@ pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
                     // For version ranges like "[1.0,2.0)" there's no inner ':',
                     // so split(':').next() returns the whole string unchanged.
                     Some(v) if !v.is_empty() => {
-                        let v = v.split(':').next().unwrap_or(v);
+                        // split(':').next() always returns Some for non-empty strings
+                        let v = v.split(':').next().unwrap();
                         xml_escape(v)
                     }
                     Some(_) | None => {
