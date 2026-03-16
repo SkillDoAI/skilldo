@@ -450,6 +450,8 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
     // Language-specific interpreter hijack vars
     "NODE_OPTIONS",
     "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",    // undocumented OpenJDK, overrides JAVA_TOOL_OPTIONS
+    "JDK_JAVA_OPTIONS", // Java 9+ replacement for java/javac/etc.
     "GEM_PATH",
     "PERL5LIB",
     "RUBYLIB",

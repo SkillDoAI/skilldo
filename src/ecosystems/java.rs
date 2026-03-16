@@ -127,19 +127,7 @@ impl JavaHandler {
             }
         }
 
-        // Try build.gradle / build.gradle.kts (quoted string values only)
-        for gradle_name in &["build.gradle", "build.gradle.kts"] {
-            let gradle = self.repo_path.join(gradle_name);
-            if gradle.is_file() {
-                if let Ok(content) = fs::read_to_string(&gradle) {
-                    if let Some(name) = parse_gradle_group(&content) {
-                        return Ok(name);
-                    }
-                }
-            }
-        }
-
-        // Try settings.gradle for rootProject.name
+        // Try settings.gradle for rootProject.name first (project name, not namespace)
         for settings_name in &["settings.gradle", "settings.gradle.kts"] {
             let settings = self.repo_path.join(settings_name);
             if settings.is_file() {
@@ -155,7 +143,19 @@ impl JavaHandler {
             }
         }
 
-        // Fallback: directory name
+        // Try build.gradle group as fallback (namespace, not project name)
+        for gradle_name in &["build.gradle", "build.gradle.kts"] {
+            let gradle = self.repo_path.join(gradle_name);
+            if gradle.is_file() {
+                if let Ok(content) = fs::read_to_string(&gradle) {
+                    if let Some(name) = parse_gradle_group(&content) {
+                        return Ok(name);
+                    }
+                }
+            }
+        }
+
+        // Last fallback: directory name
         let name = self
             .repo_path
             .file_name()
@@ -274,6 +274,11 @@ impl JavaHandler {
             } else if ft.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if Self::should_skip_dir(name) {
+                        continue;
+                    }
+                    // Skip example directories at repo root — they're collected separately.
+                    // Don't skip deep "example" package components (e.g., com.example).
+                    if depth == 0 && matches!(name, "examples" | "example" | "samples" | "sample") {
                         continue;
                     }
                     self.collect_java_files(&path, files, depth + 1, tests_only)?;
@@ -540,17 +545,25 @@ fn parse_gradle_version(content: &str) -> Option<String> {
             continue;
         }
         if let Some((_, rhs)) = trimmed.split_once('=') {
-            let v = rhs
-                .trim()
-                .trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace());
-            if !v.is_empty() {
-                return Some(v.to_string());
+            let rhs = rhs.trim();
+            // Only accept quoted literals — reject VERSION_NAME, libs.versions.*, etc.
+            if (rhs.starts_with('\'') && rhs.ends_with('\''))
+                || (rhs.starts_with('"') && rhs.ends_with('"'))
+            {
+                let v = &rhs[1..rhs.len() - 1];
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
             }
         } else {
-            // version '1.0.0' (no equals sign)
-            let v = rest
-                .trim()
-                .trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace());
+            // version '1.0.0' (no equals sign) — must also be quoted
+            let rest_trimmed = rest.trim();
+            if !((rest_trimmed.starts_with('\'') && rest_trimmed.ends_with('\''))
+                || (rest_trimmed.starts_with('"') && rest_trimmed.ends_with('"')))
+            {
+                continue;
+            }
+            let v = &rest_trimmed[1..rest_trimmed.len() - 1];
             if !v.is_empty() {
                 return Some(v.to_string());
             }
