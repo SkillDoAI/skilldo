@@ -553,6 +553,10 @@ fn parse_pom_url(content: &str) -> Option<String> {
     // Also exclude metadata blocks that contain their own nested <url>
     let nested_url_start = [
         "<organization>",
+        "<licenses>",
+        "<developers>",
+        "<contributors>",
+        "<mailingLists>",
         "<issueManagement>",
         "<ciManagement>",
         "<distributionManagement>",
@@ -1905,6 +1909,19 @@ dependencies {
     #[test]
     fn parse_pom_url_no_url() {
         let pom = "<project><artifactId>foo</artifactId></project>";
+        assert_eq!(parse_pom_url(pom), None);
+    }
+
+    #[test]
+    fn parse_pom_url_ignores_license_url() {
+        // No top-level <url>, only a <license><url> — should NOT be returned
+        let pom = "<project><licenses><license><url>https://license.example.com</url></license></licenses></project>";
+        assert_eq!(parse_pom_url(pom), None);
+    }
+
+    #[test]
+    fn parse_pom_url_ignores_developer_url() {
+        let pom = "<project><developers><developer><url>https://dev.example.com</url></developer></developers></project>";
         assert_eq!(parse_pom_url(pom), None);
     }
 

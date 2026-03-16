@@ -51,8 +51,12 @@ fn extract_xml_deps(content: &str, deps: &mut Vec<String>) {
         let group = extract_simple_xml_tag(block, "groupId");
         let artifact = extract_simple_xml_tag(block, "artifactId");
         let version = extract_simple_xml_tag(block, "version");
-        if let (Some(g), Some(a), Some(v)) = (group, artifact, version) {
-            let coord = format!("{g}:{a}:{v}");
+        if let (Some(g), Some(a)) = (group, artifact) {
+            let coord = if let Some(v) = version {
+                format!("{g}:{a}:{v}")
+            } else {
+                format!("{g}:{a}")
+            };
             if !deps.contains(&coord) {
                 deps.push(coord);
             }
