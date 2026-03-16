@@ -292,11 +292,6 @@ impl LanguageExecutor for ContainerExecutor {
 
         // Pass extra environment variables (private registries, proxies, etc.)
         for (key, value) in &self.config.extra_env {
-            // Block JVM injection vars — these allow arbitrary agent/flag injection
-            if BLOCKED_ENV_VARS.iter().any(|b| key.eq_ignore_ascii_case(b)) {
-                warn!("extra_env: blocking JVM hijack var '{key}'");
-                continue;
-            }
             warn_dangerous_env_var(key);
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
@@ -416,7 +411,9 @@ impl ContainerExecutor {
     }
 }
 
-/// Env vars that could compromise container isolation or hijack execution.
+/// Potentially dangerous env vars — warned but not blocked, since the end user
+/// configuring extra_env already has full access to the config file.
+/// JVM vars (JAVA_TOOL_OPTIONS etc.) have legitimate uses like -Xmx heap sizing.
 const DANGEROUS_ENV_VARS: &[&str] = &[
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
@@ -434,17 +431,13 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
     "RUBYLIB",
 ];
 
-/// Env vars that are unconditionally blocked (not just warned).
-/// These allow code injection via the JVM's agent/flag mechanism.
-const BLOCKED_ENV_VARS: &[&str] = &["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS"];
-
 fn warn_dangerous_env_var(key: &str) {
     if DANGEROUS_ENV_VARS
         .iter()
         .any(|d| key.eq_ignore_ascii_case(d))
     {
         warn!(
-            "extra_env contains sensitive variable '{}' — this may compromise container isolation",
+            "extra_env contains potentially dangerous variable '{}' — may affect container isolation",
             key
         );
     }
@@ -1235,13 +1228,6 @@ mod tests {
         assert!(DANGEROUS_ENV_VARS.contains(&"LD_PRELOAD"));
         assert!(DANGEROUS_ENV_VARS.contains(&"PATH"));
         assert!(!DANGEROUS_ENV_VARS.contains(&"PYTHONPATH"));
-    }
-
-    #[test]
-    fn test_blocked_env_vars_includes_jvm_options() {
-        assert!(BLOCKED_ENV_VARS.contains(&"JAVA_TOOL_OPTIONS"));
-        assert!(BLOCKED_ENV_VARS.contains(&"_JAVA_OPTIONS"));
-        assert!(BLOCKED_ENV_VARS.contains(&"JDK_JAVA_OPTIONS"));
     }
 
     // --- generate_go_install_script ---
