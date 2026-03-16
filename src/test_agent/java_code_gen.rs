@@ -62,14 +62,19 @@ impl<'a> JavaCodeGenerator<'a> {
             }
         }
 
-        // Fall back to first untagged block only — reject bash/xml/etc.
+        // Fall back to first untagged block
         for (tag, body) in &blocks {
             if tag.is_empty() {
                 return Ok(body.clone());
             }
         }
 
-        // No code block found — use the response as-is
+        // Last resort: extract body from any tagged block (strips fences)
+        if let Some((_, body)) = blocks.first() {
+            return Ok(body.clone());
+        }
+
+        // No code block at all — use the response as-is
         Ok(response.trim().to_string())
     }
 }

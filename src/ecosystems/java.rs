@@ -427,7 +427,7 @@ fn parse_pom_artifact_id(content: &str) -> Option<String> {
         &content[parent_end..]
     };
 
-    extract_xml_tag(search_region, "artifactId")
+    extract_xml_tag(search_region, "artifactId").filter(|v| !v.starts_with("${"))
 }
 
 /// Extract `<version>` from pom.xml (top-level).
@@ -443,7 +443,7 @@ fn parse_pom_version(content: &str) -> Option<String> {
         &content[parent_end..]
     };
 
-    extract_xml_tag(search_region, "version")
+    extract_xml_tag(search_region, "version").filter(|v| !v.starts_with("${"))
 }
 
 /// Extract license name from pom.xml `<licenses>` section.
@@ -508,7 +508,10 @@ fn parse_settings_gradle_name(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("rootProject.name") {
-            let rhs = trimmed.split_once('=')?.1.trim();
+            let rhs = match trimmed.split_once('=') {
+                Some((_, r)) => r.trim(),
+                None => continue,
+            };
             let name = rhs.trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace());
             if !name.is_empty() {
                 return Some(name.to_string());
