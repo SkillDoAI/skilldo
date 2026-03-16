@@ -677,13 +677,13 @@ fn parse_gradle_version(content: &str) -> Option<String> {
             }
         } else {
             // version '1.0.0', version("1.0.0"), or version.set("1.0.0") (Kotlin DSL)
-            let rest_trimmed = rest
+            let rest_inner = rest
                 .trim()
                 .trim_start_matches(".set")
                 .trim()
-                .trim_start_matches('(')
-                .trim_end_matches(')')
-                .trim();
+                .trim_start_matches('(');
+            // Strip exactly one trailing ')' — not all (trim_end_matches strips all)
+            let rest_trimmed = rest_inner.strip_suffix(')').unwrap_or(rest_inner).trim();
             if (rest_trimmed.starts_with('\'') || rest_trimmed.starts_with('"'))
                 && rest_trimmed.len() > 1
             {
