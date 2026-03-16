@@ -208,16 +208,19 @@ impl LanguageParser for JavaParser {
 
         for section_re in &sections_to_scan {
             if let Some(content) = extract_section(skill_md, section_re)? {
+                // Strip XML comments before regex scans to avoid matching
+                // commented-out coordinates like <!-- com.foo:bar:1.0 -->
+                let clean = strip_xml_comments_simple(content);
                 // Try inline format: group:artifact:version
                 // 3-part coords first (group:artifact:version, dot-less OK)
-                for cap in MAVEN_3PART_RE.captures_iter(content) {
+                for cap in MAVEN_3PART_RE.captures_iter(&clean) {
                     let coord = cap[0].to_string();
                     if !dependencies.contains(&coord) {
                         dependencies.push(coord);
                     }
                 }
                 // 2-part coords (group:artifact, requires dot in group)
-                for cap in MAVEN_2PART_RE.captures_iter(content) {
+                for cap in MAVEN_2PART_RE.captures_iter(&clean) {
                     let coord = cap[0].to_string();
                     // Skip if already matched as 3-part (append ':' to prevent
                     // "g:a-extras:1.0".starts_with("g:a") false suppression)

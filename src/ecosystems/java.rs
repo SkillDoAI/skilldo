@@ -552,6 +552,10 @@ fn parse_pom_license(content: &str) -> Option<String> {
 fn parse_pom_url(content: &str) -> Option<String> {
     // Strip comments before boundary detection
     let content = strip_xml_comments(content);
+    // Bail on malformed XML: <parent> opened but never closed
+    if content.contains("<parent>") && !content.contains("</parent>") {
+        return None;
+    }
     let parent_end = content.find("</parent>").map(|p| p + 9).unwrap_or(0);
     // Check if any section boundary appears before parent_end (malformed ordering)
     if let Some(bp) = pom_section_boundary(&content, 0) {
