@@ -18,11 +18,14 @@ static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").u
 static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)[^\n]*\n([\s\S]*?)(?:```|~~~)").unwrap());
 static MAVEN_COORD_RE: Lazy<Regex> = Lazy::new(|| {
-    // Match Maven coordinates: group:artifact or group:artifact:version
-    // Group must start with a letter (excludes port numbers like 11434).
+    // Match Maven coordinates: group:artifact or group:artifact:version.
+    // Require a dot in groupId (e.g., com.google, org.junit) to reduce
+    // false positives from prose like "Returns:String" or "scope:test".
+    // Legacy dot-less coords like "junit:junit" are exceedingly rare in
+    // modern Java — org.junit.jupiter:junit-jupiter is the standard.
     // Version may include range syntax like [0,) or [1.0,2.0)
     Regex::new(
-        r"([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*)(?::([a-zA-Z0-9._\[\],\(\)-]+))?",
+        r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*)(?::([a-zA-Z0-9._\[\],\(\)-]+))?",
     )
     .unwrap()
 });
@@ -138,8 +141,7 @@ impl LanguageParser for JavaParser {
             if let Some(content) = extract_section(skill_md, section_re)? {
                 for cap in MAVEN_COORD_RE.captures_iter(content) {
                     let coord = cap[0].to_string();
-                    // Accept any group:artifact coord — dots in groupId are
-                    // convention, not required (e.g., junit:junit is valid)
+                    // Regex requires a dot in groupId to filter prose false positives
                     if !dependencies.contains(&coord) {
                         dependencies.push(coord);
                     }
@@ -498,7 +500,7 @@ name: test
     }
 
     #[test]
-    fn maven_coord_without_dots_in_group_accepted() {
+    fn maven_coord_requires_dot_in_group() {
         let parser = JavaParser;
         let skill = r#"---
 name: test
@@ -512,14 +514,38 @@ com.real.group:artifact:2.0
 ```
 "#;
         let deps = parser.extract_dependencies(skill).unwrap();
-        // Both should be accepted — dots in groupId are convention, not required
+        // Dot-less groupId like "junit:junit" is now rejected to prevent
+        // false positives from prose like "Returns:String"
         assert!(
-            deps.iter().any(|d| d.starts_with("junit:")),
-            "dot-less groupId like junit:junit should be accepted"
+            !deps.iter().any(|d| d.starts_with("junit:")),
+            "dot-less groupId should be rejected"
         );
         assert!(
             deps.iter().any(|d| d.contains("com.real.group")),
             "dotted groupId should be accepted"
+        );
+    }
+
+    #[test]
+    fn maven_coord_rejects_prose_false_positives() {
+        let parser = JavaParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+Returns:String is not a Maven coord.
+`com.google.code.gson:gson:2.10.1`
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            !deps.iter().any(|d| d.contains("Returns")),
+            "prose like Returns:String should not be extracted"
+        );
+        assert!(
+            deps.iter().any(|d| d.contains("gson")),
+            "real Maven coord should still be extracted"
         );
     }
 }

@@ -622,9 +622,14 @@ impl LanguageExecutor for NodeExecutor {
 /// For projects with Maven dependencies, creates a minimal pom.xml and uses
 /// `mvn dependency:copy-dependencies` if mvn is available.
 ///
-/// **Timeout note:** `run_code` applies `timeout_secs` independently to both
-/// `javac` (compile) and `java` (run), so a single call can take up to
-/// 2× timeout_secs. With Maven setup, total wall-clock can reach 3× timeout_secs.
+/// **Timeout note:** Each phase gets its own `timeout_secs` budget:
+///
+///   - `setup_environment`: mvn dependency:copy-dependencies → up to 1× timeout_secs
+///   - `run_code`: javac compile → up to 1× timeout_secs
+///   - `run_code`: java execute  → up to 1× timeout_secs
+///
+/// Total wall-clock can reach **3× timeout_secs** (default 120s → 360s / 6 min).
+/// Callers should set timeout_secs accordingly.
 pub struct JavaExecutor {
     timeout_secs: u64,
 }
@@ -725,6 +730,16 @@ impl LanguageExecutor for JavaExecutor {
                         warn!("Maven dependency fetch failed: {e}");
                     }
                 }
+            } else {
+                warn!(
+                    "All {} Java {} lack a version — no jars will be downloaded",
+                    deps.len(),
+                    if deps.len() == 1 {
+                        "dependency"
+                    } else {
+                        "dependencies"
+                    }
+                );
             }
         }
 
