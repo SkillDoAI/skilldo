@@ -199,7 +199,7 @@ pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
             // ':' added for Maven coordinates (group:artifact:version).
             // Safe for other ecosystems: Go import paths don't use ':',
             // npm/pip/cargo names don't use ':', and their parsers never produce it.
-            '-' | '_' | '.' | '/' | '[' | ']' | ',' | '@' | ':' => {}
+            '-' | '_' | '.' | '/' | '[' | ']' | '(' | ')' | ',' | '@' | ':' => {}
             '>' | '<' | '=' | '!' | '~' | '^' => {} // version constraints
             _ => {
                 return Err(format!(

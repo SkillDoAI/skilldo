@@ -76,7 +76,7 @@ impl JavaHandler {
 
         for name in &["README.md", "README.rst", "README.txt", "README"] {
             let path = self.repo_path.join(name);
-            if path.exists() {
+            if path.is_file() {
                 docs.push(path);
                 break;
             }
@@ -599,9 +599,10 @@ fn parse_gradle_group(content: &str) -> Option<String> {
         let trimmed = line.trim();
         // Exact "group" keyword — reject groupId, grouping, etc.
         if trimmed.starts_with("group") && trimmed[5..].starts_with([' ', '=', '\t']) {
+            // Handle both "group = 'x'" and "group 'x'" (Groovy method-call syntax)
             let rhs = match trimmed.split_once('=') {
                 Some((_, r)) => r.trim(),
-                None => continue,
+                None => trimmed[5..].trim(), // skip "group" keyword
             };
             // Extract quoted value, handling inline comments
             if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
@@ -624,9 +625,10 @@ fn parse_settings_gradle_name(content: &str) -> Option<String> {
         let trimmed = line.trim();
         // Exact match — reject rootProject.nameSuffix etc.
         if trimmed.starts_with("rootProject.name") && trimmed[16..].starts_with([' ', '=', '\t']) {
+            // Handle both "rootProject.name = 'x'" and "rootProject.name 'x'" (method-call)
             let rhs = match trimmed.split_once('=') {
                 Some((_, r)) => r.trim(),
-                None => continue,
+                None => trimmed[16..].trim(), // skip "rootProject.name" keyword
             };
             // Extract quoted string value, handling inline comments
             if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
@@ -1759,8 +1761,26 @@ dependencies {
 
     #[test]
     fn parse_gradle_group_no_equals() {
-        // "group" appears but no '=' on line
+        // "group" appears but no '=' on line — but with a non-quoted value
         assert_eq!(parse_gradle_group("grouping stuff"), None);
+    }
+
+    #[test]
+    fn parse_gradle_group_method_call() {
+        // Groovy method-call syntax: group 'com.example' (no '=')
+        assert_eq!(
+            parse_gradle_group("group 'com.example'"),
+            Some("com.example".into())
+        );
+    }
+
+    #[test]
+    fn parse_settings_gradle_name_method_call() {
+        // Groovy: rootProject.name 'my-lib' (no '=')
+        assert_eq!(
+            parse_settings_gradle_name("rootProject.name 'my-lib'"),
+            Some("my-lib".into())
+        );
     }
 
     #[test]
