@@ -236,7 +236,11 @@ pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
                 let group = xml_escape(parts[0]);
                 let artifact = xml_escape(parts[1]);
                 let version = match parts.get(2).copied() {
-                    Some(v) if !v.is_empty() => xml_escape(v),
+                    // Strip classifier suffix (e.g., "1.0:javadoc" → "1.0")
+                    Some(v) if !v.is_empty() => {
+                        let v = v.split(':').next().unwrap_or(v);
+                        xml_escape(v)
+                    }
                     Some(_) | None => {
                         tracing::warn!(
                             "Maven dep '{}:{}' has no version — skipping",

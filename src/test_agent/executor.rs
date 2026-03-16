@@ -735,7 +735,8 @@ impl LanguageExecutor for JavaExecutor {
             }
         } else if !deps.is_empty() {
             warn!(
-                "All {} Java {} lack a version — no jars will be downloaded",
+                "No fetchable Maven coordinates in {} {} — no jars will be downloaded. \
+                 Check that deps have group:artifact:version format.",
                 deps.len(),
                 if deps.len() == 1 {
                     "dependency"
