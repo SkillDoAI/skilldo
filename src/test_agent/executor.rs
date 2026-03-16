@@ -684,10 +684,16 @@ impl LanguageExecutor for JavaExecutor {
                     if parts.len() >= 2 {
                         let group = xml_escape(parts[0]);
                         let artifact = xml_escape(parts[1]);
-                        let version_str = parts.get(2).copied().unwrap_or_else(|| {
-                            tracing::warn!("Maven dep {d} has no version — using [0,) (latest)");
-                            "[0,)"
-                        });
+                        let version_str = match parts.get(2).copied() {
+                            Some(v) => v,
+                            None => {
+                                tracing::warn!(
+                                    "Maven dep '{d}' has no version — skipping. \
+                                     Add a version to SKILL.md Imports to fix."
+                                );
+                                return None;
+                            }
+                        };
                         let version = xml_escape(version_str);
                         Some(format!(
                             "        <dependency>\n            <groupId>{group}</groupId>\n            <artifactId>{artifact}</artifactId>\n            <version>{version}</version>\n        </dependency>"
@@ -1635,17 +1641,15 @@ func main() {
             return;
         }
         let executor = JavaExecutor::new();
-        // Two-part coordinate (group:artifact, no version => uses [0,) range)
+        // Two-part coordinate (group:artifact, no version) — should be skipped with warning
         let deps = vec!["com.google.code.gson:gson".to_string()];
-        let env = executor.setup_environment(&deps).await;
-        if let Ok(env) = &env {
-            let pom = std::fs::read_to_string(env.temp_dir.path().join("pom.xml")).unwrap();
-            assert!(
-                pom.contains("[0,)"),
-                "two-part coord should use [0,) version range"
-            );
-            assert!(pom.contains("com.google.code.gson"));
-        }
+        let env = executor.setup_environment(&deps).await.unwrap();
+        // No pom.xml should be created since the only dep was skipped (no version)
+        let pom_path = env.temp_dir.path().join("pom.xml");
+        assert!(
+            !pom_path.exists(),
+            "pom.xml should not be created when all deps are versionless"
+        );
     }
 
     #[tokio::test]

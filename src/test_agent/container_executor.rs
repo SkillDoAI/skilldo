@@ -95,7 +95,16 @@ impl ContainerExecutor {
                 if parts.len() >= 2 {
                     let group = xml_escape(parts[0]);
                     let artifact = xml_escape(parts[1]);
-                    let version = xml_escape(parts.get(2).copied().unwrap_or("[0,)"));
+                    let version = match parts.get(2).copied() {
+                        Some(v) => xml_escape(v),
+                        None => {
+                            tracing::warn!(
+                                "Maven dep '{}:{}' has no version — skipping",
+                                parts[0], parts[1]
+                            );
+                            return None;
+                        }
+                    };
                     Some(format!(
                         "        <dependency><groupId>{group}</groupId><artifactId>{artifact}</artifactId><version>{version}</version></dependency>"
                     ))
@@ -1364,16 +1373,16 @@ mod tests {
     }
 
     #[test]
-    fn test_java_container_script_two_part_coord_uses_version_range() {
+    fn test_java_container_script_two_part_coord_skipped() {
+        // Versionless deps are now skipped with a warning, not given [0,)
         let executor = ContainerExecutor::new(make_config(), Language::Java);
         let deps = vec!["com.google.code.gson:gson".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
+        // Dep should be skipped — no pom.xml content in script
         assert!(
-            script.contains("<version>[0,)</version>"),
-            "two-part coord should produce <version>[0,)</version>"
+            !script.contains("com.google.code.gson"),
+            "versionless dep should be skipped"
         );
-        assert!(!script.contains("RELEASE"), "should not use RELEASE");
-        assert!(script.contains("com.google.code.gson"));
     }
 
     #[test]

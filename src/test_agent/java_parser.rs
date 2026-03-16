@@ -98,7 +98,8 @@ impl LanguageParser for JavaParser {
                 .map(|m| m.start())
                 .unwrap_or(pattern_section.len());
 
-            let description = pattern_section[description_start..code_block_start]
+            let desc_end = code_block_start.max(description_start);
+            let description = pattern_section[description_start..desc_end]
                 .trim()
                 .to_string();
 
