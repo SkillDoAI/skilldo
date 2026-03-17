@@ -170,6 +170,12 @@ impl LanguageParser for JavaParser {
             }
         }
 
+        if pattern_starts.is_empty() {
+            anyhow::bail!(
+                "Core Patterns section found but no ### pattern headings. \
+                 Check that patterns use ### headings."
+            );
+        }
         if patterns.is_empty() {
             anyhow::bail!(
                 "Core Patterns section found but no code blocks extracted. \

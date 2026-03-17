@@ -90,7 +90,14 @@ impl ContainerExecutor {
 
         let pom = match crate::util::build_maven_pom_xml(deps) {
             Some(p) => p,
-            None => return Ok(String::new()),
+            None => {
+                warn!(
+                    "No fetchable Maven coordinates in {} container {} — no jars will be downloaded",
+                    deps.len(),
+                    if deps.len() == 1 { "dep" } else { "deps" }
+                );
+                return Ok(String::new());
+            }
         };
 
         Ok(format!(
