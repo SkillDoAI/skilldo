@@ -22,7 +22,7 @@ static CODE_BLOCK_RE: Lazy<Regex> =
 // are still covered by the extract_xml_deps XML <dependency> fallback.
 static MAVEN_3PART_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z0-9._\[\],\(\)-]+)",
+        r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*):([a-zA-Z0-9._\[\],\(\)\+-]+)",
     )
     .unwrap()
 });
