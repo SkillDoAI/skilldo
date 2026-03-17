@@ -27,7 +27,8 @@ static MAVEN_3PART_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 static MAVEN_2PART_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-zA-Z][a-zA-Z0-9._-]*)").unwrap()
+    // Artifact must start lowercase (Maven convention) to reject class refs like org.springframework:AbstractContext
+    Regex::new(r"([a-zA-Z][a-zA-Z0-9._-]*\.[a-zA-Z0-9._-]*):([a-z][a-zA-Z0-9._-]*)").unwrap()
 });
 
 /// Extract Maven deps from XML `<dependency>` blocks in section content.

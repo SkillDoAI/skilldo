@@ -246,7 +246,9 @@ impl<'a> TestCodeValidator<'a> {
                 let (executor, execution_mode): (Box<dyn LanguageExecutor>, ExecutionMode) =
                     match execution_mode {
                         ExecutionMode::BareMetal => (
-                            Box::new(JavaExecutor::new().with_timeout(config.timeout)),
+                            // Java needs more time: Maven download + javac + java = 3× timeout.
+                            // Floor at 120s to avoid cold-cache Maven timeouts.
+                            Box::new(JavaExecutor::new().with_timeout(config.timeout.max(120))),
                             ExecutionMode::BareMetal,
                         ),
                         ExecutionMode::Container => (

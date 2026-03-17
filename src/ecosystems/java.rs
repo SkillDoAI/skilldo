@@ -529,7 +529,8 @@ fn parse_pom_version(content: &str) -> Option<String> {
             }
         }
     }
-    // Now find the boundary from parent_end onwards for the search region
+    // Separate boundary computation: `boundary` (from 0) guards malformed ordering,
+    // `search_boundary` (from parent_end) limits the after-parent search region.
     let search_boundary = pom_section_boundary(&content, parent_end);
     let search_region = if let Some(bp) = search_boundary {
         &content[parent_end..bp]
