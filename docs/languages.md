@@ -10,6 +10,7 @@ Skilldo auto-detects the language from project files. Use `--language` to overri
 | Go | Full support | go modules | `*.go`, `go.mod` | go toolchain bare-metal or container |
 | JavaScript/TypeScript | Full support | npm | `*.js`, `*.ts`, `package.json` | node+npm bare-metal or container |
 | Rust | Full support | cargo | `*.rs`, `Cargo.toml` | cargo bare-metal or container |
+| Java | Full support | Maven/Gradle | `*.java`, `pom.xml`, `build.gradle`, `build.gradle.kts` | javac bare-metal or Maven container |
 
 ## Test Validation
 
@@ -35,12 +36,18 @@ Each language has a dedicated executor that runs generated test code:
 - **Container**: `rust:1.75-slim`
 - **Requirements**: Rust toolchain installed locally (bare-metal) or Docker/Podman (container)
 
+### Java
+- **Bare-metal**: Creates an isolated temp directory, writes `Main.java`, compiles with `javac`, runs with `java`. If Maven is available, generates `pom.xml` and downloads dependencies.
+- **Container**: `maven:3-eclipse-temurin-21-alpine`
+- **Requirements**: JDK 17+ installed locally (bare-metal) or Docker/Podman (container)
+- **Build systems**: Maven (`pom.xml`) and Gradle (`build.gradle`, `build.gradle.kts`) are both detected and parsed
+
 ## Ecosystem Handlers
 
 Each language has a handler in `src/ecosystems/` that provides:
 
 - **File discovery** — finds source files, test files, documentation, changelogs, examples
-- **Version detection** — extracts version from package metadata (pyproject.toml, Cargo.toml, package.json, go.mod tags)
+- **Version detection** — extracts version from package metadata (pyproject.toml, Cargo.toml, package.json, go.mod tags, pom.xml, build.gradle, build.gradle.kts)
 - **License detection** — reads license from metadata or LICENSE files
 - **Dependency parsing** — extracts dependencies for the test agent
 - **Project URL extraction** — finds homepage, repository, documentation links

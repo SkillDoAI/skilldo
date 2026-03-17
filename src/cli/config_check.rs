@@ -1785,4 +1785,220 @@ runtime = "nonexistent_runtime_xyz"
             "Should pass for 'none' api key env"
         );
     }
+
+    #[test]
+    fn test_run_with_test_llm_override_covers_check() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "base-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+
+[generation.test_llm]
+provider = "openai-compatible"
+model = "test-agent-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+"#
+        )
+        .unwrap();
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_strict_fails_on_config_load_error() {
+        let result = run(
+            Some("/tmp/nonexistent-skilldo-strict-cfg2.toml".to_string()),
+            true,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("config check failed"));
+    }
+
+    #[test]
+    fn test_run_non_strict_ok_on_config_load_error() {
+        let result = run(
+            Some("/tmp/nonexistent-skilldo-nonstrict-cfg2.toml".to_string()),
+            false,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_parallel_local_provider_warns() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "test-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+parallel_extraction = true
+"#
+        )
+        .unwrap();
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_strict_bails_with_missing_key() {
+        use std::io::Write;
+        let _guard = EnvGuard::new("OPENAI_API_KEY");
+        env::remove_var("OPENAI_API_KEY");
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai"
+model = "gpt-4o"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+"#
+        )
+        .unwrap();
+        let result = run(Some(config_path.to_str().unwrap().to_string()), true);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("config error(s) found"));
+    }
+
+    #[test]
+    fn test_is_likely_local_extract_override() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::Anthropic;
+        let mut extract = config.llm.clone();
+        extract.provider = Provider::OpenAICompatible;
+        extract.base_url = Some("http://localhost:11434/v1".to_string());
+        config.generation.extract_llm = Some(extract);
+        assert!(is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_likely_local_map_override() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::Anthropic;
+        let mut map_llm = config.llm.clone();
+        map_llm.provider = Provider::OpenAICompatible;
+        map_llm.base_url = Some("http://127.0.0.1:11434/v1".to_string());
+        config.generation.map_llm = Some(map_llm);
+        assert!(is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_likely_local_learn_override() {
+        let mut config = Config::default();
+        config.llm.provider = Provider::Anthropic;
+        let mut learn_llm = config.llm.clone();
+        learn_llm.provider = Provider::OpenAICompatible;
+        learn_llm.base_url = None;
+        config.generation.learn_llm = Some(learn_llm);
+        assert!(is_likely_local_provider(&config));
+    }
+
+    #[test]
+    fn test_is_url_local_checks() {
+        assert!(is_url_local("http://localhost:11434/v1"));
+        assert!(is_url_local("http://127.0.0.1:8080/api"));
+        assert!(is_url_local("http://0.0.0.0:3000"));
+        assert!(!is_url_local("https://api.openai.com/v1"));
+        assert!(!is_url_local("https://openrouter.ai/api"));
+    }
+
+    #[test]
+    fn test_run_test_llm_cli_provider() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "base-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+enable_test = true
+
+[generation.test_llm]
+provider = "cli"
+model = "gemini-2.5-pro"
+cli_command = "gemini"
+"#
+        )
+        .unwrap();
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_extra_body_on_extract_llm() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("test.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        writeln!(
+            f,
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "base-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation]
+max_retries = 1
+max_source_tokens = 1000
+
+[generation.extract_llm]
+provider = "openai-compatible"
+model = "extract-model"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.extract_llm.extra_body]
+temperature = 0.5
+"#
+        )
+        .unwrap();
+        let result = run(Some(config_path.to_str().unwrap().to_string()), false);
+        assert!(result.is_ok());
+    }
 }

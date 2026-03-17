@@ -14,6 +14,7 @@ pub enum Language {
     JavaScript,
     Rust,
     Go,
+    Java,
 }
 
 impl Language {
@@ -23,6 +24,7 @@ impl Language {
         Language::JavaScript,
         Language::Rust,
         Language::Go,
+        Language::Java,
     ];
 
     /// Comma-separated list of supported language names.
@@ -40,6 +42,7 @@ impl Language {
             Language::JavaScript => "javascript",
             Language::Rust => "rust",
             Language::Go => "go",
+            Language::Java => "java",
         }
     }
 
@@ -49,6 +52,7 @@ impl Language {
             Language::Go => "module",
             Language::Rust => "crate",
             Language::JavaScript => "package",
+            Language::Java => "package",
         }
     }
 }
@@ -62,6 +66,7 @@ impl FromStr for Language {
             "javascript" | "js" | "node" | "npm" => Ok(Language::JavaScript),
             "rust" | "rs" => Ok(Language::Rust),
             "go" | "golang" => Ok(Language::Go),
+            "java" | "jvm" | "maven" | "gradle" => Ok(Language::Java),
             _ => bail!("Unknown language: {}", s),
         }
     }
@@ -85,6 +90,13 @@ pub fn detect_language(path: &Path) -> Result<Language> {
 
     if path.join("go.mod").exists() {
         return Ok(Language::Go);
+    }
+
+    if path.join("pom.xml").exists()
+        || path.join("build.gradle").exists()
+        || path.join("build.gradle.kts").exists()
+    {
+        return Ok(Language::Java);
     }
 
     bail!(
@@ -122,6 +134,13 @@ mod tests {
         // Go aliases
         assert_eq!(Language::from_str("go").unwrap(), Language::Go);
         assert_eq!(Language::from_str("golang").unwrap(), Language::Go);
+
+        // Java aliases
+        assert_eq!(Language::from_str("java").unwrap(), Language::Java);
+        assert_eq!(Language::from_str("jvm").unwrap(), Language::Java);
+        assert_eq!(Language::from_str("maven").unwrap(), Language::Java);
+        assert_eq!(Language::from_str("gradle").unwrap(), Language::Java);
+        assert_eq!(Language::from_str("JAVA").unwrap(), Language::Java);
     }
 
     #[test]
@@ -137,6 +156,7 @@ mod tests {
             Language::JavaScript,
             Language::Rust,
             Language::Go,
+            Language::Java,
         ] {
             assert_eq!(Language::from_str(lang.as_str()).unwrap(), *lang);
         }
@@ -148,6 +168,7 @@ mod tests {
         assert_eq!(Language::Go.ecosystem_term(), "module");
         assert_eq!(Language::Rust.ecosystem_term(), "crate");
         assert_eq!(Language::JavaScript.ecosystem_term(), "package");
+        assert_eq!(Language::Java.ecosystem_term(), "package");
     }
 
     #[test]
@@ -190,6 +211,31 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_java_pom() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>test</artifactId></project>",
+        )
+        .unwrap();
+        assert_eq!(detect_language(tmp.path()).unwrap(), Language::Java);
+    }
+
+    #[test]
+    fn test_detect_java_gradle() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("build.gradle"), "plugins { id 'java' }").unwrap();
+        assert_eq!(detect_language(tmp.path()).unwrap(), Language::Java);
+    }
+
+    #[test]
+    fn test_detect_java_gradle_kts() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("build.gradle.kts"), "plugins { java }").unwrap();
+        assert_eq!(detect_language(tmp.path()).unwrap(), Language::Java);
+    }
+
+    #[test]
     fn test_detect_unknown() {
         let tmp = TempDir::new().unwrap();
         let result = detect_language(tmp.path());
@@ -207,7 +253,8 @@ mod tests {
         assert!(list.contains("javascript"));
         assert!(list.contains("rust"));
         assert!(list.contains("go"));
+        assert!(list.contains("java"));
         // Should be comma-separated
-        assert_eq!(list, "python, javascript, rust, go");
+        assert_eq!(list, "python, javascript, rust, go, java");
     }
 }

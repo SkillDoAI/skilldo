@@ -8,6 +8,20 @@ use tracing::debug;
 use super::client::LlmClient;
 use crate::util::SecretString;
 
+/// Headers that must not be overridden by extra_headers (case-insensitive).
+const PROTECTED_HEADERS: &[&str] = &[
+    "authorization",
+    "x-api-key",
+    "x-goog-api-key",
+    "content-type",
+];
+
+/// Check if a header key is protected (auth-related).
+fn is_protected_header(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    PROTECTED_HEADERS.iter().any(|h| *h == lower)
+}
+
 fn build_http_client(timeout_secs: u64) -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
@@ -88,6 +102,10 @@ impl LlmClient for AnthropicClient {
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json");
         for (key, value) in &self.extra_headers {
+            if is_protected_header(key) {
+                tracing::warn!("extra_headers: skipping protected header '{key}'");
+                continue;
+            }
             req = req.header(key, value);
         }
         let response = req
@@ -266,6 +284,10 @@ impl LlmClient for OpenAIClient {
             req = req.header("authorization", format!("Bearer {}", self.api_key.expose()));
         }
         for (key, value) in &self.extra_headers {
+            if is_protected_header(key) {
+                tracing::warn!("extra_headers: skipping protected header '{key}'");
+                continue;
+            }
             req = req.header(key, value);
         }
 
@@ -409,6 +431,10 @@ impl LlmClient for GeminiClient {
             req.header("x-goog-api-key", self.api_key.expose())
         };
         for (key, value) in &self.extra_headers {
+            if is_protected_header(key) {
+                tracing::warn!("extra_headers: skipping protected header '{key}'");
+                continue;
+            }
             req = req.header(key, value);
         }
         let response = req
@@ -566,6 +592,10 @@ impl LlmClient for ChatGPTClient {
             req = req.header("authorization", format!("Bearer {}", self.api_key.expose()));
         }
         for (key, value) in &self.extra_headers {
+            if is_protected_header(key) {
+                tracing::warn!("extra_headers: skipping protected header '{key}'");
+                continue;
+            }
             req = req.header(key, value);
         }
 
@@ -612,6 +642,19 @@ impl LlmClient for ChatGPTClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_protected_headers() {
+        assert!(is_protected_header("authorization"));
+        assert!(is_protected_header("Authorization"));
+        assert!(is_protected_header("x-api-key"));
+        assert!(is_protected_header("X-API-KEY"));
+        assert!(is_protected_header("x-goog-api-key"));
+        assert!(is_protected_header("content-type"));
+        assert!(is_protected_header("Content-Type"));
+        assert!(!is_protected_header("x-custom-header"));
+        assert!(!is_protected_header("user-agent"));
+    }
 
     #[test]
     fn test_anthropic_client_creation() {

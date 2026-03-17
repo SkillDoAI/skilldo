@@ -6,9 +6,13 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::container_executor::ContainerExecutor;
-use super::executor::{CargoExecutor, ExecutionResult, GoExecutor, NodeExecutor, PythonUvExecutor};
+use super::executor::{
+    CargoExecutor, ExecutionResult, GoExecutor, JavaExecutor, NodeExecutor, PythonUvExecutor,
+};
 use super::go_code_gen::GoCodeGenerator;
 use super::go_parser::GoParser;
+use super::java_code_gen::JavaCodeGenerator;
+use super::java_parser::JavaParser;
 use super::js_code_gen::JsCodeGenerator;
 use super::js_parser::JsParser;
 use super::python_code_gen::PythonCodeGenerator;
@@ -230,6 +234,33 @@ impl<'a> TestCodeValidator<'a> {
                     parser: Box::new(RustParser),
                     code_generator: Box::new(
                         RustCodeGenerator::new(llm_client)
+                            .with_custom_instructions(custom_instructions),
+                    ),
+                    executor,
+                    execution_mode,
+                    mode: ValidationMode::default(),
+                    install_source,
+                })
+            }
+            Language::Java => {
+                let (executor, execution_mode): (Box<dyn LanguageExecutor>, ExecutionMode) =
+                    match execution_mode {
+                        ExecutionMode::BareMetal => (
+                            // Java needs more time: Maven download + javac + java = 3× timeout.
+                            // Floor at 120s to avoid cold-cache Maven timeouts.
+                            Box::new(JavaExecutor::new().with_timeout(config.timeout.max(120))),
+                            ExecutionMode::BareMetal,
+                        ),
+                        ExecutionMode::Container => (
+                            Box::new(ContainerExecutor::new(config.clone(), Language::Java)),
+                            ExecutionMode::Container,
+                        ),
+                    };
+                Ok(Self {
+                    language: Language::Java,
+                    parser: Box::new(JavaParser),
+                    code_generator: Box::new(
+                        JavaCodeGenerator::new(llm_client)
                             .with_custom_instructions(custom_instructions),
                     ),
                     executor,
@@ -1410,6 +1441,33 @@ mod tests {
         assert!(
             validator.is_ok(),
             "JavaScript validator should construct successfully"
+        );
+    }
+
+    #[test]
+    fn test_new_java_validator_bare_metal() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig::default();
+        let validator = TestCodeValidator::new(&Language::Java, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Java validator should construct successfully"
+        );
+    }
+
+    #[test]
+    fn test_new_java_validator_container_mode() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let mut config = ContainerConfig::default();
+        config.execution_mode = crate::config::ExecutionMode::Container;
+        let validator = TestCodeValidator::new(&Language::Java, &client, config, None);
+        assert!(
+            validator.is_ok(),
+            "Java container validator should construct successfully"
         );
     }
 

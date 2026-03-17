@@ -25,7 +25,7 @@ Each run appends one row to `~/.skilldo/runs.csv` with these fields:
 | failure_reason | test_timeout | Failure detail |
 | duration_secs | 180.0 | Total generation time |
 | timestamp | 2026-03-13T20:00:00Z | ISO 8601 timestamp |
-| skilldo_version | 0.4.2 | Skilldo binary version |
+| skilldo_version | 0.5.0 | Skilldo binary version |
 
 ## What We Don't Log
 

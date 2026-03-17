@@ -10,7 +10,7 @@ use tempfile::TempDir;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use super::executor::{ExecutionEnv, ExecutionResult};
+use super::executor::{ExecutionEnv, ExecutionResult, MAVEN_REPO_DIR};
 use super::LanguageExecutor;
 use crate::config::{ContainerConfig, InstallSource};
 use crate::detector::Language;
@@ -33,6 +33,7 @@ impl ContainerExecutor {
             Language::JavaScript => &self.config.javascript_image,
             Language::Rust => &self.config.rust_image,
             Language::Go => &self.config.go_image,
+            Language::Java => &self.config.java_image,
         }
     }
 
@@ -76,12 +77,41 @@ impl ContainerExecutor {
         Ok(lines.join("\n"))
     }
 
-    /// Generate run.sh for non-Python languages (JS, Rust, Go)
+    /// Generate dependency installation script for Java.
+    /// Creates a pom.xml and uses `mvn dependency:copy-dependencies` to fetch jars.
+    fn generate_java_install_script(&self, deps: &[String]) -> Result<String> {
+        if deps.is_empty() {
+            return Ok(String::new());
+        }
+
+        for dep in deps {
+            sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+        }
+
+        let pom = match crate::util::build_maven_pom_xml(deps) {
+            Some(p) => p,
+            None => {
+                warn!(
+                    "No fetchable Maven coordinates in {} container {} — no jars will be downloaded",
+                    deps.len(),
+                    if deps.len() == 1 { "dep" } else { "deps" }
+                );
+                return Ok(String::new());
+            }
+        };
+
+        Ok(format!(
+            "mkdir -p deps {MAVEN_REPO_DIR}\ncat > pom.xml << 'SKILLDO_EOF'\n{pom}\nSKILLDO_EOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -Dmaven.repo.local={MAVEN_REPO_DIR} -q 2>maven-errors.log || echo 'WARNING: Maven dependency resolution failed — tests may fail due to missing jars' >&2\n[ -s maven-errors.log ] && cat maven-errors.log >&2\nrm -f maven-errors.log"
+        ))
+    }
+
+    /// Generate run.sh for non-Python languages (JS, Rust, Go, Java)
     /// Python uses `uv run test.py` directly — no run.sh needed
     fn generate_container_script(&self, deps: &[String]) -> Result<String> {
         let install_cmd = match self.language {
             Language::JavaScript => self.generate_node_install_script(deps)?,
             Language::Go => self.generate_go_install_script(deps)?,
+            Language::Java => self.generate_java_install_script(deps)?,
             _ => String::new(),
         };
 
@@ -89,6 +119,9 @@ impl ContainerExecutor {
             Language::JavaScript => "node test.js",
             Language::Rust => "rustc main.rs -o main && ./main",
             Language::Go => "go run main.go",
+            Language::Java => {
+                "mkdir -p deps && javac -cp 'deps/*:.' Main.java && java -cp 'deps/*:.' Main"
+            }
             Language::Python => {
                 bail!("generate_container_script should not be called for Python")
             }
@@ -160,6 +193,7 @@ impl LanguageExecutor for ContainerExecutor {
             Language::JavaScript => "test.js",
             Language::Rust => "main.rs",
             Language::Go => "main.go",
+            Language::Java => "Main.java",
         };
 
         let code_path = env.temp_dir.path().join(code_file);
@@ -384,7 +418,9 @@ impl ContainerExecutor {
     }
 }
 
-/// Env vars that could compromise container isolation or hijack execution.
+/// Potentially dangerous env vars — warned but not blocked, since the end user
+/// configuring extra_env already has full access to the config file.
+/// JVM vars (JAVA_TOOL_OPTIONS etc.) have legitimate uses like -Xmx heap sizing.
 const DANGEROUS_ENV_VARS: &[&str] = &[
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
@@ -392,6 +428,14 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
     "HOME",
     "SHELL",
     "USER",
+    // Language-specific interpreter hijack vars
+    "NODE_OPTIONS",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",    // undocumented OpenJDK, overrides JAVA_TOOL_OPTIONS
+    "JDK_JAVA_OPTIONS", // Java 9+ replacement for java/javac/etc.
+    "GEM_PATH",
+    "PERL5LIB",
+    "RUBYLIB",
 ];
 
 fn warn_dangerous_env_var(key: &str) {
@@ -400,7 +444,7 @@ fn warn_dangerous_env_var(key: &str) {
         .any(|d| key.eq_ignore_ascii_case(d))
     {
         warn!(
-            "extra_env contains sensitive variable '{}' — this may compromise container isolation",
+            "extra_env contains potentially dangerous variable '{}' — may affect container isolation",
             key
         );
     }
@@ -420,6 +464,7 @@ mod tests {
             javascript_image: "node:18-alpine".to_string(),
             rust_image: "rust:1.70-alpine".to_string(),
             go_image: "golang:1.20-alpine".to_string(),
+            java_image: "maven:3-eclipse-temurin-21-alpine".to_string(),
             timeout: 60,
             cleanup: true,
             install_source: InstallSource::Registry,
@@ -456,6 +501,7 @@ mod tests {
             javascript_image: "node:18-alpine".to_string(),
             rust_image: "rust:1.70-alpine".to_string(),
             go_image: "golang:1.20-alpine".to_string(),
+            java_image: "maven:3-eclipse-temurin-21-alpine".to_string(),
             timeout: 60,
             cleanup: true,
             install_source: InstallSource::Registry,
@@ -491,6 +537,12 @@ mod tests {
                 "golang:1.20-alpine",
                 "main.go",
                 "package main",
+            ),
+            (
+                Language::Java,
+                "maven:3-eclipse-temurin-21-alpine",
+                "Main.java",
+                "public class Main { public static void main(String[] args) {} }",
             ),
         ]
     }
@@ -1267,5 +1319,77 @@ mod tests {
         assert!(script.contains("go mod init test"));
         assert!(script.contains("go get 'github.com/spf13/cobra'"));
         assert!(script.contains("go run main.go"));
+    }
+
+    // --- Java container script tests ---
+
+    #[test]
+    fn test_java_container_script_without_deps() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let script = executor.generate_container_script(&[]).unwrap();
+        assert!(script.contains("javac -cp 'deps/*:.' Main.java"));
+        assert!(script.contains("java -cp 'deps/*:.' Main"));
+        // No mvn/pom lines when no deps
+        assert!(!script.contains("pom.xml"));
+    }
+
+    #[test]
+    fn test_java_container_script_with_deps() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let deps = vec!["com.google.code.gson:gson:2.10.1".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.contains("pom.xml"));
+        assert!(script.contains("mvn dependency:copy-dependencies"));
+        assert!(script.contains("deps"));
+        assert!(script.contains("javac -cp 'deps/*:.' Main.java"));
+    }
+
+    #[test]
+    fn test_java_container_script_two_part_coord_skipped() {
+        // Versionless deps are now skipped with a warning, not given [0,)
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let deps = vec!["com.google.code.gson:gson".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        // Dep should be skipped — no pom.xml content in script
+        assert!(
+            !script.contains("com.google.code.gson"),
+            "versionless dep should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_java_install_script_rejects_shell_injection() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let deps = vec!["com.evil:lib; rm -rf /".to_string()];
+        assert!(executor.generate_java_install_script(&deps).is_err());
+    }
+
+    #[test]
+    fn test_java_install_script_escapes_xml_special_chars() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        // `<` and `>` pass sanitize_dep_name (version constraint chars) but need XML escaping
+        let deps = vec!["com.example:mylib:>=1.0,<2.0".to_string()];
+        let script = executor.generate_java_install_script(&deps).unwrap();
+        assert!(script.contains("com.example"), "group should be present");
+        assert!(
+            script.contains("&gt;=1.0,&lt;2.0"),
+            "angle brackets in version should be XML-escaped"
+        );
+        assert!(
+            !script.contains("<version>>=1.0,<2.0</version>"),
+            "raw angle brackets must not appear inside version tag"
+        );
+    }
+
+    #[test]
+    fn test_java_container_script_structure() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let deps = vec!["org.slf4j:slf4j-api:2.0.9".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(script.contains("set -e"));
+        assert!(script.contains("cd /workspace"));
+        assert!(script.contains("mkdir -p deps"));
+        assert!(script.contains("java -cp 'deps/*:.' Main"));
     }
 }

@@ -196,7 +196,10 @@ pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
     for ch in dep.chars() {
         match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' => {}
-            '-' | '_' | '.' | '/' | '[' | ']' | ',' | '@' => {}
+            // ':' added for Maven coordinates (group:artifact:version).
+            // Safe for other ecosystems: Go import paths don't use ':',
+            // npm/pip/cargo names don't use ':', and their parsers never produce it.
+            '-' | '_' | '.' | '/' | '[' | ']' | '(' | ')' | ',' | '@' | ':' => {}
             '>' | '<' | '=' | '!' | '~' | '^' => {} // version constraints
             _ => {
                 return Err(format!(
@@ -207,6 +210,96 @@ pub fn sanitize_dep_name(dep: &str) -> Result<&str, String> {
         }
     }
     Ok(dep)
+}
+
+/// Escape XML special characters in a string to prevent XML injection.
+/// Used when interpolating user-supplied values (e.g., Maven coordinates)
+/// into XML templates like pom.xml.
+pub fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Strip XML comments (`<!-- ... -->`) to avoid matching commented-out tags.
+/// Shared by java.rs POM parsers and java_parser.rs dependency extraction.
+pub fn strip_xml_comments(content: &str) -> String {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
+    RE.replace_all(content, "").to_string()
+}
+
+/// Build a minimal Maven pom.xml from a list of Maven coordinates.
+/// Each dep should be "group:artifact:version". Deps without a version are
+/// skipped with a warning. Returns `None` if no valid deps remain.
+/// Used by both bare-metal and container Java executors.
+pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
+    let deps_xml: Vec<String> = deps
+        .iter()
+        .filter_map(|d| {
+            let parts: Vec<&str> = d.splitn(3, ':').collect();
+            if parts.len() >= 2 {
+                let group = xml_escape(parts[0]);
+                let artifact = xml_escape(parts[1]);
+                let version = match parts.get(2).copied() {
+                    // splitn(3) folds classifier into version for 4-part coords:
+                    //   "g:a:1.0:javadoc" → parts[2] = "1.0:javadoc"
+                    // split(':').next() strips the classifier, yielding "1.0".
+                    // For version ranges like "[1.0,2.0)" there's no inner ':',
+                    // so split(':').next() returns the whole string unchanged.
+                    Some(v) if !v.is_empty() => {
+                        // split(':').next() always returns Some for non-empty strings
+                        let version_only = v.split(':').next().unwrap();
+                        if version_only != v {
+                            tracing::debug!(
+                                "Stripped classifier from Maven coord: '{v}' → '{version_only}'"
+                            );
+                        }
+                        xml_escape(version_only)
+                    }
+                    Some(_) | None => {
+                        tracing::warn!(
+                            "Maven dep '{}:{}' has no version — skipping",
+                            parts[0],
+                            parts[1]
+                        );
+                        return None;
+                    }
+                };
+                Some(format!(
+                    "        <dependency>\n            \
+                     <groupId>{group}</groupId>\n            \
+                     <artifactId>{artifact}</artifactId>\n            \
+                     <version>{version}</version>\n        \
+                     </dependency>"
+                ))
+            } else {
+                tracing::debug!("Skipping non-Maven dep '{d}' (no ':' separator)");
+                None
+            }
+        })
+        .collect();
+
+    if deps_xml.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>skilldo</groupId>
+    <artifactId>test</artifactId>
+    <version>0.1.0</version>
+    <dependencies>
+{}
+    </dependencies>
+</project>"#,
+        deps_xml.join("\n")
+    ))
 }
 
 /// Calculate file priority for source file reading order.
@@ -632,5 +725,70 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].0, "");
         assert_eq!(blocks[0].1, "");
+    }
+
+    // ── xml_escape tests ──
+
+    #[test]
+    fn xml_escape_no_special_chars() {
+        assert_eq!(xml_escape("com.google.gson"), "com.google.gson");
+    }
+
+    #[test]
+    fn xml_escape_ampersand() {
+        assert_eq!(xml_escape("a&b"), "a&amp;b");
+    }
+
+    #[test]
+    fn xml_escape_angle_brackets() {
+        assert_eq!(xml_escape("<foo>"), "&lt;foo&gt;");
+    }
+
+    #[test]
+    fn xml_escape_quotes() {
+        assert_eq!(xml_escape("a\"b"), "a&quot;b");
+    }
+
+    #[test]
+    fn xml_escape_all_special_chars() {
+        assert_eq!(xml_escape("a&b<c>d\"e"), "a&amp;b&lt;c&gt;d&quot;e");
+    }
+
+    #[test]
+    fn xml_escape_apostrophe() {
+        assert_eq!(xml_escape("a'b"), "a&apos;b");
+    }
+
+    #[test]
+    fn xml_escape_version_range() {
+        // Version ranges like [0,) should pass through unchanged
+        assert_eq!(xml_escape("[0,)"), "[0,)");
+    }
+
+    #[test]
+    fn build_maven_pom_basic() {
+        let deps = vec!["com.google.code.gson:gson:2.10.1".into()];
+        let pom = build_maven_pom_xml(&deps).unwrap();
+        assert!(pom.contains("<groupId>com.google.code.gson</groupId>"));
+        assert!(pom.contains("<artifactId>gson</artifactId>"));
+        assert!(pom.contains("<version>2.10.1</version>"));
+    }
+
+    #[test]
+    fn build_maven_pom_empty_deps() {
+        assert!(build_maven_pom_xml(&[]).is_none());
+    }
+
+    #[test]
+    fn build_maven_pom_skips_versionless() {
+        let deps = vec!["com.example:lib".into()];
+        assert!(build_maven_pom_xml(&deps).is_none());
+    }
+
+    #[test]
+    fn build_maven_pom_xml_escapes_values() {
+        let deps = vec!["com.example:lib&test:1.0".into()];
+        let pom = build_maven_pom_xml(&deps).unwrap();
+        assert!(pom.contains("lib&amp;test"));
     }
 }

@@ -1,11 +1,11 @@
 ---
 name: skilldo
-description: Generate SKILL.md agent rules files for software libraries. Use when you need to create, review, or lint SKILL.md documentation for Python, Go, JavaScript, or Rust libraries, or when configuring skilldo.toml files.
+description: Generate SKILL.md agent rules files for software libraries. Use when you need to create, review, or lint SKILL.md documentation for Python, Go, JavaScript, Rust, or Java libraries, or when configuring skilldo.toml files.
 license: AGPL-3.0
 compatibility: Requires an LLM API key (Anthropic, OpenAI, Gemini, or OpenAI-compatible). Optional container runtime (docker/podman) for test validation.
 metadata:
   author: SkillDoAI
-  version: "0.4.2"
+  version: "0.5.0"
 ---
 
 # Skilldo CLI
@@ -145,6 +145,7 @@ Manage OAuth tokens for providers that use OAuth (e.g., ChatGPT).
 | JavaScript/TypeScript | npm, package.json | `*.js`, `*.ts`, `package.json` |
 | Go | go modules, go.mod | `*.go`, `go.mod` |
 | Rust | cargo, Cargo.toml | `*.rs`, `Cargo.toml` |
+| Java | Maven/Gradle, pom.xml, build.gradle | `*.java`, `pom.xml`, `build.gradle` |
 
 ## Common Workflows
 
