@@ -40,9 +40,8 @@ static MAVEN_2PART_RE: Lazy<Regex> = Lazy::new(|| {
 /// </dependency>
 /// ```
 fn extract_xml_deps(content: &str, deps: &mut Vec<String>) {
-    // Strip XML comments to avoid extracting commented-out dependencies
-    let content = crate::util::strip_xml_comments(content);
-    let mut remaining = content.as_str();
+    // Caller passes pre-stripped content (XML comments already removed).
+    let mut remaining = content;
     while let Some(start) = remaining.find("<dependency>") {
         let after = &remaining[start..];
         let end = match after.find("</dependency>") {

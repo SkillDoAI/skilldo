@@ -252,8 +252,13 @@ pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
                     // so split(':').next() returns the whole string unchanged.
                     Some(v) if !v.is_empty() => {
                         // split(':').next() always returns Some for non-empty strings
-                        let v = v.split(':').next().unwrap();
-                        xml_escape(v)
+                        let version_only = v.split(':').next().unwrap();
+                        if version_only != v {
+                            tracing::debug!(
+                                "Stripped classifier from Maven coord: '{v}' → '{version_only}'"
+                            );
+                        }
+                        xml_escape(version_only)
                     }
                     Some(_) | None => {
                         tracing::warn!(
