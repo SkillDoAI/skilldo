@@ -765,7 +765,7 @@ impl LanguageExecutor for JavaExecutor {
         // Note: timeout applies independently to javac AND java — total can be 2× timeout_secs
         let timeout = Duration::from_secs(self.timeout_secs);
 
-        // Build classpath: include deps/ if it exists
+        // Build classpath: include deps/ if it exists (relative — current_dir is temp_dir)
         let deps_dir = env.temp_dir.path().join("deps");
         let sep = if cfg!(target_os = "windows") {
             ";"
@@ -773,7 +773,7 @@ impl LanguageExecutor for JavaExecutor {
             ":"
         };
         let classpath = if deps_dir.is_dir() {
-            format!("{}/*{sep}.", deps_dir.display())
+            format!("deps/*{sep}.")
         } else {
             ".".to_string()
         };

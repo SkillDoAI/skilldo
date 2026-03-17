@@ -424,6 +424,7 @@ impl JavaHandler {
                 | ".idea"
                 | ".gradle"
                 | ".mvn"
+                | "buildSrc"
                 | "target"
                 | "build"
                 | "out"
@@ -605,6 +606,27 @@ fn parse_pom_scm_url(content: &str) -> Option<String> {
         })
 }
 
+/// Extract a quoted string value from a Gradle RHS, rejecting computed/concatenated
+/// expressions like `"1.0" + suffix`. Returns `None` if the tail after the closing
+/// quote contains non-comment content (e.g., `+`, method calls).
+fn extract_gradle_quoted(rhs: &str) -> Option<String> {
+    if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
+        let quote = rhs.chars().next().unwrap();
+        if let Some(end) = rhs[1..].find(quote) {
+            let value = &rhs[1..1 + end];
+            if value.is_empty() {
+                return None;
+            }
+            // Reject if non-comment content follows the closing quote
+            let tail = rhs[1 + end + 1..].trim();
+            if tail.is_empty() || tail.starts_with("//") || tail.starts_with("/*") {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Extract `group` from build.gradle.
 /// Only accepts quoted string values — skips constants like `JavaBasePlugin.DOCUMENTATION_GROUP`.
 fn parse_gradle_group(content: &str) -> Option<String> {
@@ -625,15 +647,8 @@ fn parse_gradle_group(content: &str) -> Option<String> {
                     .unwrap_or(trimmed[5..].trim())
                     .trim(),
             };
-            // Extract quoted value, handling inline comments
-            if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
-                let quote = rhs.chars().next().unwrap();
-                if let Some(end) = rhs[1..].find(quote) {
-                    let name = &rhs[1..1 + end];
-                    if !name.is_empty() {
-                        return Some(name.to_string());
-                    }
-                }
+            if let Some(v) = extract_gradle_quoted(rhs) {
+                return Some(v);
             }
         }
     }
@@ -651,15 +666,8 @@ fn parse_settings_gradle_name(content: &str) -> Option<String> {
                 Some((_, r)) => r.trim(),
                 None => trimmed[16..].trim(), // skip "rootProject.name" keyword
             };
-            // Extract quoted string value, handling inline comments
-            if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
-                let quote = rhs.chars().next().unwrap();
-                if let Some(end) = rhs[1..].find(quote) {
-                    let name = &rhs[1..1 + end];
-                    if !name.is_empty() {
-                        return Some(name.to_string());
-                    }
-                }
+            if let Some(v) = extract_gradle_quoted(rhs) {
+                return Some(v);
             }
         }
     }
@@ -698,15 +706,8 @@ fn parse_gradle_version(content: &str) -> Option<String> {
                 continue;
             }
             let rhs = rhs.trim();
-            // Extract quoted value, handling inline comments
-            if (rhs.starts_with('\'') || rhs.starts_with('"')) && rhs.len() > 1 {
-                let quote = rhs.chars().next().unwrap();
-                if let Some(end) = rhs[1..].find(quote) {
-                    let v = &rhs[1..1 + end];
-                    if !v.is_empty() {
-                        return Some(v.to_string());
-                    }
-                }
+            if let Some(v) = extract_gradle_quoted(rhs) {
+                return Some(v);
             }
         } else {
             // version '1.0.0', version("1.0.0"), or version.set("1.0.0") (Kotlin DSL)
@@ -717,16 +718,8 @@ fn parse_gradle_version(content: &str) -> Option<String> {
                 .trim_start_matches('(');
             // Strip exactly one trailing ')' — not all (trim_end_matches strips all)
             let rest_trimmed = rest_inner.strip_suffix(')').unwrap_or(rest_inner).trim();
-            if (rest_trimmed.starts_with('\'') || rest_trimmed.starts_with('"'))
-                && rest_trimmed.len() > 1
-            {
-                let quote = rest_trimmed.chars().next().unwrap();
-                if let Some(end) = rest_trimmed[1..].find(quote) {
-                    let v = &rest_trimmed[1..1 + end];
-                    if !v.is_empty() {
-                        return Some(v.to_string());
-                    }
-                }
+            if let Some(v) = extract_gradle_quoted(rest_trimmed) {
+                return Some(v);
             }
             // No quoted value found — skip
             continue;
