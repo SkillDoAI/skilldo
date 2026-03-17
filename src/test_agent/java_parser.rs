@@ -214,7 +214,7 @@ impl LanguageParser for JavaParser {
                     }
                 }
                 // Fallback: extract from XML <dependency> blocks (common in docs)
-                extract_xml_deps(content, &mut dependencies);
+                extract_xml_deps(&clean, &mut dependencies);
             }
         }
 

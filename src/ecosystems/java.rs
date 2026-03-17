@@ -633,8 +633,8 @@ fn parse_gradle_group(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         // Exact "group" keyword — reject groupId, grouping, etc.
-        if trimmed.starts_with("group") && trimmed[5..].starts_with([' ', '=', '\t', '.']) {
-            // Handle "group = 'x'", "group 'x'", and "group.set('x')" (Kotlin DSL)
+        if trimmed.starts_with("group") && trimmed[5..].starts_with([' ', '=', '\t', '.', '(']) {
+            // Handle "group = 'x'", "group 'x'", "group.set('x')", "group('x')"
             let rhs = match trimmed.split_once('=') {
                 Some((lhs, r)) if lhs.trim() == "group" => r.trim(),
                 Some(_) => continue, // group.release = ... etc.
@@ -1799,6 +1799,15 @@ dependencies {
         // Kotlin DSL: group.set("com.example")
         assert_eq!(
             parse_gradle_group(r#"group.set("com.example")"#),
+            Some("com.example".into())
+        );
+    }
+
+    #[test]
+    fn parse_gradle_group_function_call() {
+        // Groovy: group("com.example")
+        assert_eq!(
+            parse_gradle_group(r#"group("com.example")"#),
             Some("com.example".into())
         );
     }
