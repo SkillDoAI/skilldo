@@ -13,10 +13,11 @@ use crate::llm::client::LlmClient;
 /// Java environment: runner command + 1–2 line notes the LLM can't infer.
 pub const JAVA_ENV: TestEnv = TestEnv {
     lang_tag: "java",
-    runner: "`javac -cp 'deps/*:.' Main.java && java -cp 'deps/*:.' Main`",
+    runner: "`javac -cp 'deps/*<SEP>.' Main.java && java -cp 'deps/*<SEP>.' Main`  (where `<SEP>` is `:` on Unix/macOS, `;` on Windows)",
     env_notes: "\
 - Write a `public class Main` with `public static void main(String[] args)` — no JUnit runner
-- Use `System.exit(1)` for assertion failures",
+- Use `System.exit(1)` for assertion failures
+- Classpath separator is OS-dependent: `:` on Unix/macOS, `;` on Windows",
 };
 
 /// Java code generator using LLM
@@ -166,7 +167,7 @@ System.out.println(json);"#
 
         assert!(prompt.contains("public class Main"));
         assert!(prompt.contains("System.exit(1)"));
-        assert!(prompt.contains("javac -cp 'deps/*:.' Main.java"));
+        assert!(prompt.contains("javac -cp 'deps/*<SEP>.' Main.java"));
     }
 
     #[test]
