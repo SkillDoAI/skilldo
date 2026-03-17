@@ -574,6 +574,7 @@ fn parse_pom_url(content: &str) -> Option<String> {
         "<issueManagement>",
         "<ciManagement>",
         "<distributionManagement>",
+        "<properties>",
         "<scm>",
     ]
     .iter()
@@ -593,7 +594,15 @@ fn parse_pom_scm_url(content: &str) -> Option<String> {
     let section = &content[start..start + end];
     extract_xml_tag(section, "url")
         .or_else(|| extract_xml_tag(section, "connection"))
-        .map(|url| url.trim_start_matches("scm:git:").to_string())
+        .map(|url| {
+            // Strip Maven SCM prefix (scm:git:, scm:svn:, scm:hg:, etc.)
+            if let Some(stripped) = url.strip_prefix("scm:") {
+                if let Some(pos) = stripped.find(':') {
+                    return stripped[pos + 1..].to_string();
+                }
+            }
+            url
+        })
 }
 
 /// Extract `group` from build.gradle.
@@ -1292,6 +1301,15 @@ dependencies {
         assert_eq!(
             parse_pom_scm_url(pom),
             Some("https://github.com/foo/bar.git".to_string())
+        );
+    }
+
+    #[test]
+    fn pom_scm_strips_svn_prefix() {
+        let pom = "<scm><url>scm:svn:https://svn.apache.org/repos/asf/foo</url></scm>";
+        assert_eq!(
+            parse_pom_scm_url(pom),
+            Some("https://svn.apache.org/repos/asf/foo".to_string())
         );
     }
 
