@@ -1698,11 +1698,9 @@ func main() {
 
     #[tokio::test]
     async fn test_java_setup_skips_non_maven_deps() {
-        // Deps that don't have ":" (not Maven coordinates) should be filtered
+        // Deps without ":" (not Maven coordinates) are filtered by build_maven_pom_xml
+        // before Maven is ever invoked — no mvn guard needed.
         if !is_tool_available("javac", "-version").await {
-            return;
-        }
-        if !is_tool_available("mvn", "--version").await {
             return;
         }
         let executor = JavaExecutor::new();
