@@ -219,8 +219,8 @@ jobs:
             tag: "8.3.1"
             flag: "--language python"
           - lang: go
-            repo: go-chi/chi
-            tag: v5.2.1
+            repo: spf13/cobra
+            tag: v1.9.1
             flag: "--language go"
           - lang: javascript
             repo: lodash/lodash
@@ -257,6 +257,7 @@ jobs:
             --model gpt-oss-120b \
             --base-url https://api.cerebras.ai/v1 \
             --max-retries 5 \
+            --best-effort \
             ${{ matrix.flag }} \
             -o /tmp/test-SKILL.md
         env:
