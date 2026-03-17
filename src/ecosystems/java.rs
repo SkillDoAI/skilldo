@@ -576,6 +576,8 @@ fn parse_pom_url(content: &str) -> Option<String> {
         "<ciManagement>",
         "<distributionManagement>",
         "<properties>",
+        "<repositories>",
+        "<pluginRepositories>",
         "<scm>",
     ]
     .iter()
@@ -617,8 +619,10 @@ fn extract_gradle_quoted(rhs: &str) -> Option<String> {
             if value.is_empty() {
                 return None;
             }
-            // Reject if non-comment content follows the closing quote
+            // Strip one optional closing ')' for function-call syntax like version("1.0")
             let tail = rhs[1 + end + 1..].trim();
+            let tail = tail.strip_prefix(')').map(|t| t.trim()).unwrap_or(tail);
+            // Accept if tail is empty or only contains a comment
             if tail.is_empty() || tail.starts_with("//") || tail.starts_with("/*") {
                 return Some(value.to_string());
             }
