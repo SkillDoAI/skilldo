@@ -42,7 +42,7 @@ fn classify_result(
                 Ok(ExecutionResult::Pass(stdout))
             } else {
                 let msg = fail_output(&output);
-                debug!("{} code execution failed", lang);
+                debug!("{} code execution failed:\n{}", lang, msg);
                 Ok(ExecutionResult::Fail(msg))
             }
         }
@@ -513,7 +513,14 @@ edition = "2021"
 {deps_section}"#
         );
 
-        fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml)
+        debug!(
+            "Structured deps for Cargo.toml: {:?}",
+            deps.iter()
+                .map(|d| format!("{}={:?}", d.name, d.raw_spec))
+                .collect::<Vec<_>>()
+        );
+        debug!("Generated Cargo.toml:\n{}", cargo_toml);
+        fs::write(temp_dir.path().join("Cargo.toml"), &cargo_toml)
             .context("Failed to write Cargo.toml")?;
 
         let src_dir = temp_dir.path().join("src");
