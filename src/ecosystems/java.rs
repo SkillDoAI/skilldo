@@ -381,9 +381,10 @@ impl JavaHandler {
             }
         }
 
-        // Match top-level test/ or tests/ directory (skip root "/" on absolute paths)
+        // Match top-level test/ or tests/ directory.
+        // Skip root/prefix components on any OS: "/" on Unix, "C:" / "\" on Windows.
         for comp in &components {
-            if *comp == "/" || *comp == "." {
+            if *comp == "/" || *comp == "." || *comp == "\\" || comp.ends_with(':') {
                 continue;
             }
             // First real directory component
