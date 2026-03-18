@@ -214,7 +214,7 @@ impl LanguageParser for RustParser {
         // not in the Imports section. Models often list only the target crate
         // in Imports but use peer deps in code examples.
         if let Ok(Some(patterns_content)) =
-            extract_section(skill_md, r"(?m)^##\s+Core Patterns\s*$")
+            extract_section(skill_md, r"(?mi)^##\s+Core\s+Patterns\s*$")
         {
             // `use crate_name::...` statements
             for cap in USE_IMPORT_RE.captures_iter(patterns_content) {
@@ -1057,5 +1057,49 @@ async fn main() {
         let skill = "---\nname: test\n---\n\n## Core Patterns\n";
         let deps = parser.extract_structured_dependencies(skill).unwrap();
         assert!(deps.is_empty());
+    }
+
+    /// Regression: `tokio = { workspace = true }` in a direct TOML block (no
+    /// [dependencies] header) should only be promoted if `tokio` already appears
+    /// in name-only extraction (use/cargo-add). Unknown entries like `edition`
+    /// or bare `workspace = true` deps not seen in imports must be filtered out.
+    #[test]
+    fn structured_deps_workspace_true_in_direct_toml_only_promotes_known() {
+        let parser = RustParser;
+        let skill = r#"---
+name: mylib
+---
+
+## Imports
+
+```rust
+use tokio::runtime::Runtime;
+```
+
+```toml
+tokio = { workspace = true }
+edition = "2021"
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // tokio is known from `use tokio::...`, so it should be promoted with its TOML spec
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio");
+        assert!(
+            tokio_dep.is_some(),
+            "tokio should be promoted (known from use import): {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        assert!(
+            tokio_dep.unwrap().raw_spec.is_some(),
+            "tokio should have raw_spec from TOML block"
+        );
+        // edition is NOT a real dep — it should be filtered out
+        assert!(
+            !deps.iter().any(|d| d.name == "edition"),
+            "edition should be filtered out (not in name_deps): {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
     }
 }

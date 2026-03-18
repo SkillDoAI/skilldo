@@ -776,11 +776,11 @@ impl LanguageExecutor for NodeExecutor {
         let npm_cache = temp_dir.path().join("npm-cache");
         fs::create_dir_all(&npm_cache).context("Failed to create npm cache dir")?;
 
-        // npm install for each dependency
+        // npm install for each dependency (or local source even when deps is empty)
         // No shell quoting needed — Command passes args directly to the process.
         // sanitize_dep_name already rejects shell metacharacters, and `--` prevents
         // flag injection.
-        if !deps.is_empty() {
+        if self.local_source.is_some() || !deps.is_empty() {
             if !is_tool_available("npm", "--version").await {
                 bail!("npm is not installed or not in PATH");
             }
