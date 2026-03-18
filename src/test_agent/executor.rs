@@ -365,34 +365,30 @@ impl LanguageExecutor for GoExecutor {
             bail!("go mod init failed: {}", stderr);
         }
 
-        // go get for each dependency
+        // Validate all dep names first
         for dep in deps {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
-            info!("Installing Go dependency: {}", dep);
-            let mut get_cmd = Command::new("go");
-            get_cmd.args(["get", dep]).current_dir(temp_dir.path());
-            Self::apply_go_env(&mut get_cmd, temp_dir.path());
-            let get_output = run_cmd_with_timeout(get_cmd, Duration::from_secs(120)).await?;
-            if !get_output.status.success() {
-                let stderr = String::from_utf8_lossy(&get_output.stderr);
-                bail!("go get {} failed: {}", dep, stderr);
-            }
+        }
 
-            // Local-install: redirect only the target module to local source
-            if let Some(ref source) = self.local_source {
-                let go_mod = std::path::Path::new(source).join("go.mod");
-                let is_local = std::fs::read_to_string(&go_mod)
-                    .ok()
-                    .and_then(|content| {
-                        content.lines().find_map(|line| {
-                            line.trim().strip_prefix("module ").map(|module| {
-                                let m = module.trim();
-                                dep == m || dep.starts_with(&format!("{m}/"))
-                            })
-                        })
-                    })
-                    .unwrap_or(false);
-                if is_local {
+        // Local-install: apply replace directives BEFORE go get, so unpublished
+        // modules resolve from local source instead of failing on the registry.
+        let local_module = if let Some(ref source) = self.local_source {
+            let go_mod = std::path::Path::new(source).join("go.mod");
+            std::fs::read_to_string(&go_mod).ok().and_then(|content| {
+                content.lines().find_map(|line| {
+                    line.trim()
+                        .strip_prefix("module ")
+                        .map(|m| m.trim().to_string())
+                })
+            })
+        } else {
+            None
+        };
+
+        if let (Some(ref module), Some(ref source)) = (&local_module, &self.local_source) {
+            // Apply replace for the target module and any subpackages
+            for dep in deps {
+                if dep == module.as_str() || dep.starts_with(&format!("{module}/")) {
                     info!("Replacing {} with local source: {}", dep, source);
                     let mut replace_cmd = Command::new("go");
                     replace_cmd
@@ -406,6 +402,19 @@ impl LanguageExecutor for GoExecutor {
                         warn!("go mod edit -replace failed for {}: {}", dep, stderr);
                     }
                 }
+            }
+        }
+
+        // go get for each dependency (local modules now resolve via replace)
+        for dep in deps {
+            info!("Installing Go dependency: {}", dep);
+            let mut get_cmd = Command::new("go");
+            get_cmd.args(["get", dep]).current_dir(temp_dir.path());
+            Self::apply_go_env(&mut get_cmd, temp_dir.path());
+            let get_output = run_cmd_with_timeout(get_cmd, Duration::from_secs(120)).await?;
+            if !get_output.status.success() {
+                let stderr = String::from_utf8_lossy(&get_output.stderr);
+                bail!("go get {} failed: {}", dep, stderr);
             }
         }
 
