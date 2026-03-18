@@ -158,16 +158,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         info!("CLI override: execution_mode = container");
         config.generation.container.execution_mode = crate::config::ExecutionMode::Container;
     }
-    // Auto-upgrade: local-install/local-mount require container mode
-    if config.generation.container.install_source != InstallSource::Registry
-        && config.generation.container.execution_mode == crate::config::ExecutionMode::BareMetal
-    {
-        tracing::warn!(
-            "install_source={:?} requires container mode; auto-switching to --container",
-            config.generation.container.install_source
-        );
-        config.generation.container.execution_mode = crate::config::ExecutionMode::Container;
-    }
+    // local-install/local-mount now works with both bare-metal and container modes.
+    // No auto-switch needed — bare-metal executors handle path deps natively.
     // Warn if --runtime passed without --container
     if runtime_override.is_some()
         && config.generation.container.execution_mode == crate::config::ExecutionMode::BareMetal
