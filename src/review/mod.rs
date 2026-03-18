@@ -218,12 +218,24 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
     let has_errors = issues
         .iter()
         .any(|i| i.severity != Severity::Warning && i.severity != Severity::Info);
-    let passed = !has_errors;
+
+    // If the LLM said "passed: false" but provided no issues, treat as malformed —
+    // something was detected but not articulated. Trigger a retry.
+    let llm_said_passed = parsed
+        .get("passed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let malformed = !llm_said_passed && issues.is_empty();
+    if malformed {
+        warn!("review: LLM said passed=false but provided no issues (malformed)");
+    }
+
+    let passed = !has_errors && !malformed;
 
     Ok(ReviewResult {
         passed,
         issues,
-        malformed: false,
+        malformed,
     })
 }
 
