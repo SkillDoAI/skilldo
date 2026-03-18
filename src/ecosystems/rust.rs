@@ -380,8 +380,13 @@ impl RustHandler {
                 }
             }
 
-            // Resolve { workspace = true }
-            let resolved_raw = if raw.contains("workspace") {
+            // Resolve { workspace = true } — check structurally, not by substring
+            let resolved_raw = if value
+                .as_table()
+                .and_then(|t| t.get("workspace"))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+            {
                 if let Some(ws_spec) = workspace_deps.get(name.as_str()) {
                     debug!("Resolved workspace dep {}: {}", name, ws_spec);
                     ws_spec.clone()
@@ -392,6 +397,13 @@ impl RustHandler {
             } else {
                 raw
             };
+
+            // Drop path deps that survived workspace resolution
+            // (workspace entry itself could be a path dep)
+            if resolved_raw.contains("path =") || resolved_raw.contains("path=") {
+                debug!("Dropping resolved path dep: {}", name);
+                continue;
+            }
 
             result.push(StructuredDep {
                 name: name.clone(),

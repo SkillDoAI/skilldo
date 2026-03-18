@@ -212,6 +212,25 @@ dependencies = [
             bail!("Failed to setup environment with uv sync: {}", stderr);
         }
 
+        // Install local package if local-install mode is active
+        if let Some(ref source) = self.local_source {
+            info!("Installing local package from: {}", source);
+            let mut pip_cmd = Command::new("uv");
+            pip_cmd
+                .args(["pip", "install", "-e", source, "--no-deps"])
+                .env("UV_CACHE_DIR", &uv_cache)
+                .env(
+                    "VIRTUAL_ENV",
+                    temp_dir.path().join(".venv").to_string_lossy().as_ref(),
+                )
+                .current_dir(temp_dir.path());
+            let pip_output = run_cmd_with_timeout(pip_cmd, Duration::from_secs(60)).await?;
+            if !pip_output.status.success() {
+                let stderr = String::from_utf8_lossy(&pip_output.stderr);
+                bail!("Failed to install local package: {}", stderr);
+            }
+        }
+
         info!("✓ Environment setup complete");
 
         // Determine Python executable path

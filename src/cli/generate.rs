@@ -1674,8 +1674,11 @@ base_url = "http://localhost:11434/v1"
     #[tokio::test]
     async fn test_run_output_defaults_to_skill_md_path() {
         let repo = make_test_repo();
+        // Use a temp-dir output so this test never overwrites the repo's SKILL.md
+        let output = repo.path().join("SKILL.md");
         let result = run(GenerateOptions {
             path: repo.path().to_str().unwrap().to_string(),
+            output: Some(output.to_str().unwrap().to_string()),
             language: Some("python".to_string()),
             dry_run: true,
             ..Default::default()
