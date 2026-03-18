@@ -511,16 +511,13 @@ impl CargoExecutor {
                         let cargo_path = std::path::Path::new(source).join("Cargo.toml");
                         let is_local = std::fs::read_to_string(&cargo_path)
                             .ok()
-                            .and_then(|content| {
-                                content.lines().find_map(|line| {
-                                    let t = line.trim();
-                                    if t.starts_with("name") && t.contains('=') {
-                                        let val = t.split('=').nth(1)?.trim().trim_matches('"');
-                                        Some(val == d.name)
-                                    } else {
-                                        None
-                                    }
-                                })
+                            .and_then(|content| content.parse::<toml::Table>().ok())
+                            .and_then(|t| {
+                                t.get("package")?
+                                    .as_table()?
+                                    .get("name")?
+                                    .as_str()
+                                    .map(|n| n == d.name)
                             })
                             .unwrap_or(false);
                         if is_local {
@@ -631,17 +628,13 @@ impl LanguageExecutor for CargoExecutor {
                         let cargo_toml = std::path::Path::new(source).join("Cargo.toml");
                         let is_local_pkg = std::fs::read_to_string(&cargo_toml)
                             .ok()
-                            .and_then(|content| {
-                                content.lines().find_map(|line| {
-                                    let trimmed = line.trim();
-                                    if trimmed.starts_with("name") && trimmed.contains('=') {
-                                        let val =
-                                            trimmed.split('=').nth(1)?.trim().trim_matches('"');
-                                        Some(val == *d)
-                                    } else {
-                                        None
-                                    }
-                                })
+                            .and_then(|content| content.parse::<toml::Table>().ok())
+                            .and_then(|t| {
+                                t.get("package")?
+                                    .as_table()?
+                                    .get("name")?
+                                    .as_str()
+                                    .map(|n| n == *d)
                             })
                             .unwrap_or(false);
                         if is_local_pkg {
