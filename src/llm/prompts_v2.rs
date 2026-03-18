@@ -710,6 +710,7 @@ pub fn create_prompt(
     context: &str,
     custom_instructions: Option<&str>,
     overwrite: bool,
+    deps: &[crate::pipeline::collector::StructuredDep],
 ) -> String {
     // If overwrite mode and custom provided, use it directly
     if overwrite {
@@ -943,6 +944,19 @@ Now generate the SKILL.md content for {} v{}:
     );
 
     prompt.push_str(language_hints(language, "create"));
+
+    // Inject structured deps for Rust so the LLM can emit a [dependencies] block
+    if !deps.is_empty() && matches!(language, Language::Rust) {
+        prompt.push_str("\n\n## Known Dependencies (from Cargo.toml — include in ## Imports)\n\nThe ## Imports section for Rust must include both `use` statements AND a fenced ```toml [dependencies] block with exact versions and features.\n\n```toml\n[dependencies]\n");
+        for dep in deps {
+            if let Some(ref spec) = dep.raw_spec {
+                prompt.push_str(&format!("{} = {}\n", dep.name, spec));
+            } else {
+                prompt.push_str(&format!("{} = \"*\"\n", dep.name));
+            }
+        }
+        prompt.push_str("```\n");
+    }
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
@@ -1486,6 +1500,7 @@ mod tests {
             "context",
             None,
             false,
+            &[],
         );
         assert!(
             prompt.contains("PEP 8"),
@@ -1506,6 +1521,7 @@ mod tests {
             "context",
             None,
             false,
+            &[],
         );
         assert!(
             !prompt.contains("PEP 8"),
@@ -1833,6 +1849,7 @@ mod tests {
             "context",
             Some(custom),
             true,
+            &[],
         );
         assert_eq!(
             prompt, custom,
@@ -1854,6 +1871,7 @@ mod tests {
             "context",
             Some(custom),
             false,
+            &[],
         );
         assert!(
             prompt.contains("CUSTOM INSTRUCTIONS FOR THIS REPO"),
@@ -1908,6 +1926,7 @@ mod tests {
             "context",
             None,
             true,
+            &[],
         );
         assert!(prompt.contains("click"));
     }
@@ -1958,6 +1977,7 @@ mod tests {
             "context",
             None,
             false,
+            &[],
         );
         assert!(
             prompt.contains("GO-SPECIFIC"),

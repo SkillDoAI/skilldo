@@ -403,6 +403,7 @@ impl Generator {
                 &context,
                 self.prompts_config.create_custom.as_deref(),
                 self.prompts_config.is_overwrite("create"),
+                &data.dependencies,
             );
             self.get_client("create")
                 .complete(&synthesis_prompt)
