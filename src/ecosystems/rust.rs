@@ -341,6 +341,102 @@ impl RustHandler {
         urls
     }
 
+    /// Extract structured dependencies from Cargo.toml [dependencies] section.
+    /// Preserves raw TOML value specs losslessly. Drops path deps (non-portable).
+    /// Resolves `workspace = true` against root [workspace.dependencies] if available.
+    pub fn get_dependencies(&self) -> Vec<crate::pipeline::collector::StructuredDep> {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        let cargo_toml = self.repo_path.join("Cargo.toml");
+        let Ok(content) = fs::read_to_string(&cargo_toml) else {
+            return Vec::new();
+        };
+
+        let Ok(parsed) = content.parse::<toml::Table>() else {
+            debug!("Failed to parse Cargo.toml as TOML");
+            return Vec::new();
+        };
+
+        // Try to load workspace deps for resolving { workspace = true }
+        let workspace_deps = self.load_workspace_deps();
+
+        let Some(deps_table) = parsed.get("dependencies").and_then(|v| v.as_table()) else {
+            return Vec::new();
+        };
+
+        let mut result = Vec::new();
+        for (name, value) in deps_table {
+            let raw = match value {
+                toml::Value::String(s) => format!("\"{}\"", s),
+                other => other.to_string(),
+            };
+
+            // Drop ALL path deps — non-portable for SKILL.md and temp Cargo projects.
+            // The target crate's path dep is handled by local-install in the executor.
+            if let Some(tbl) = value.as_table() {
+                if tbl.contains_key("path") {
+                    debug!("Dropping path dep: {}", name);
+                    continue;
+                }
+            }
+
+            // Resolve { workspace = true }
+            let resolved_raw = if raw.contains("workspace") {
+                if let Some(ws_spec) = workspace_deps.get(name.as_str()) {
+                    debug!("Resolved workspace dep {}: {}", name, ws_spec);
+                    ws_spec.clone()
+                } else {
+                    debug!("Unresolvable workspace dep {}, degrading to wildcard", name);
+                    "\"*\"".to_string()
+                }
+            } else {
+                raw
+            };
+
+            result.push(StructuredDep {
+                name: name.clone(),
+                raw_spec: Some(resolved_raw),
+                source: DepSource::Manifest,
+            });
+        }
+
+        debug!("Extracted {} dependencies from Cargo.toml", result.len());
+        result
+    }
+
+    /// Load [workspace.dependencies] from the root Cargo.toml for resolving
+    /// `{ workspace = true }` entries. Returns name → raw TOML spec pairs.
+    fn load_workspace_deps(&self) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+
+        // Walk up to find the workspace root (has [workspace] section)
+        let mut dir = self.repo_path.as_path();
+        for _ in 0..5 {
+            let cargo_path = dir.join("Cargo.toml");
+            if let Ok(content) = fs::read_to_string(&cargo_path) {
+                if let Ok(parsed) = content.parse::<toml::Table>() {
+                    if let Some(ws) = parsed.get("workspace").and_then(|v| v.as_table()) {
+                        if let Some(ws_deps) = ws.get("dependencies").and_then(|v| v.as_table()) {
+                            for (name, value) in ws_deps {
+                                let raw = match value {
+                                    toml::Value::String(s) => format!("\"{}\"", s),
+                                    other => other.to_string(),
+                                };
+                                map.insert(name.clone(), raw);
+                            }
+                            return map;
+                        }
+                    }
+                }
+            }
+            match dir.parent() {
+                Some(p) if p != dir => dir = p,
+                _ => break,
+            }
+        }
+        map
+    }
+
     // ── Private helpers ────────────────────────────────────────────────
 
     /// Collect .rs source files (not tests, not in excluded dirs).

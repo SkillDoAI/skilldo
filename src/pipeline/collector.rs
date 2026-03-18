@@ -325,6 +325,8 @@ impl Collector {
             package_name = "unknown".to_string();
         }
 
+        let dependencies = handler.get_dependencies();
+
         Ok(CollectedData {
             package_name,
             version,
@@ -337,7 +339,7 @@ impl Collector {
             docs_content,
             source_content,
             changelog_content,
-            dependencies: Vec::new(),
+            dependencies,
         })
     }
 
