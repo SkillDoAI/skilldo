@@ -128,6 +128,10 @@ pub struct TestCodeValidator<'a> {
     mode: ValidationMode,
     /// Install source from config; when not Registry, local_package is set on code_generator
     install_source: InstallSource,
+    /// Timeout for executor operations (stored for Rust concrete path)
+    executor_timeout: u64,
+    /// Local source path (stored for Rust concrete path)
+    local_source: Option<String>,
 }
 
 impl<'a> TestCodeValidator<'a> {
@@ -141,6 +145,7 @@ impl<'a> TestCodeValidator<'a> {
     ) -> anyhow::Result<Self> {
         let install_source = config.install_source;
         let execution_mode = config.execution_mode;
+        let timeout = config.timeout;
         // Extract local source path for bare-metal executors
         let local_source = if install_source != InstallSource::Registry {
             config.source_path.clone()
@@ -151,7 +156,7 @@ impl<'a> TestCodeValidator<'a> {
             Language::Python => {
                 let executor: Box<dyn LanguageExecutor> = match execution_mode {
                     ExecutionMode::BareMetal => {
-                        let mut exe = PythonUvExecutor::new().with_timeout(config.timeout);
+                        let mut exe = PythonUvExecutor::new().with_timeout(timeout);
                         if let Some(ref src) = local_source {
                             exe = exe.with_local_source(src.clone());
                         }
@@ -172,12 +177,14 @@ impl<'a> TestCodeValidator<'a> {
                     execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
+                    executor_timeout: timeout,
+                    local_source: local_source.clone(),
                 })
             }
             Language::Go => {
                 let executor: Box<dyn LanguageExecutor> = match execution_mode {
                     ExecutionMode::BareMetal => {
-                        let mut exe = GoExecutor::new().with_timeout(config.timeout);
+                        let mut exe = GoExecutor::new().with_timeout(timeout);
                         if let Some(ref src) = local_source {
                             exe = exe.with_local_source(src.clone());
                         }
@@ -198,12 +205,14 @@ impl<'a> TestCodeValidator<'a> {
                     execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
+                    executor_timeout: timeout,
+                    local_source: local_source.clone(),
                 })
             }
             Language::JavaScript => {
                 let executor: Box<dyn LanguageExecutor> = match execution_mode {
                     ExecutionMode::BareMetal => {
-                        let mut exe = NodeExecutor::new().with_timeout(config.timeout);
+                        let mut exe = NodeExecutor::new().with_timeout(timeout);
                         if let Some(ref src) = local_source {
                             exe = exe.with_local_source(src.clone());
                         }
@@ -224,13 +233,15 @@ impl<'a> TestCodeValidator<'a> {
                     execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
+                    executor_timeout: timeout,
+                    local_source: local_source.clone(),
                 })
             }
             Language::Rust => {
                 let (executor, execution_mode): (Box<dyn LanguageExecutor>, ExecutionMode) =
                     match execution_mode {
                         ExecutionMode::BareMetal => {
-                            let mut exe = CargoExecutor::new().with_timeout(config.timeout);
+                            let mut exe = CargoExecutor::new().with_timeout(timeout);
                             if let Some(ref src) = local_source {
                                 exe = exe.with_local_source(src.clone());
                             }
@@ -245,7 +256,7 @@ impl<'a> TestCodeValidator<'a> {
                                  Set `execution_mode = \"bare-metal\"` in your config to suppress this warning."
                             );
                             (
-                                Box::new(CargoExecutor::new().with_timeout(config.timeout)),
+                                Box::new(CargoExecutor::new().with_timeout(timeout)),
                                 ExecutionMode::BareMetal,
                             )
                         }
@@ -261,6 +272,8 @@ impl<'a> TestCodeValidator<'a> {
                     execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
+                    executor_timeout: timeout,
+                    local_source: local_source.clone(),
                 })
             }
             Language::Java => {
@@ -269,7 +282,7 @@ impl<'a> TestCodeValidator<'a> {
                         ExecutionMode::BareMetal => {
                             // Java needs more time: Maven download + javac + java = 3× timeout.
                             // Floor at 120s to avoid cold-cache Maven timeouts.
-                            let mut exe = JavaExecutor::new().with_timeout(config.timeout.max(120));
+                            let mut exe = JavaExecutor::new().with_timeout(timeout.max(120));
                             if let Some(ref src) = local_source {
                                 exe = exe.with_local_source(src.clone());
                             }
@@ -291,6 +304,8 @@ impl<'a> TestCodeValidator<'a> {
                     execution_mode,
                     mode: ValidationMode::default(),
                     install_source,
+                    executor_timeout: timeout,
+                    local_source: local_source.clone(),
                 })
             }
         }
@@ -441,7 +456,29 @@ impl<'a> TestCodeValidator<'a> {
 
         // 3. Setup environment once (reuse for all tests)
         info!("  → Setting up {} environment...", self.language.as_str());
-        let env = self.executor.setup_environment(&deps).await?;
+        let env = if matches!(self.language, Language::Rust) {
+            // Rust-specific path: extract structured deps for lossless Cargo.toml
+            let rust_parser = super::rust_parser::RustParser;
+            let structured_deps = rust_parser.extract_structured_dependencies(skill_md)?;
+            debug!(
+                "  Structured deps: {} total, {} with specs",
+                structured_deps.len(),
+                structured_deps
+                    .iter()
+                    .filter(|d| d.raw_spec.is_some())
+                    .count()
+            );
+            let mut cargo_exec =
+                super::executor::CargoExecutor::new().with_timeout(self.executor_timeout);
+            if let Some(ref src) = self.local_source {
+                cargo_exec = cargo_exec.with_local_source(src.clone());
+            }
+            cargo_exec
+                .setup_structured_environment(&structured_deps)
+                .await?
+        } else {
+            self.executor.setup_environment(&deps).await?
+        };
 
         let mut test_cases = Vec::new();
 
@@ -857,6 +894,8 @@ mod tests {
             execution_mode: ExecutionMode::Container,
             mode,
             install_source,
+            executor_timeout: 120,
+            local_source: None,
         }
     }
 

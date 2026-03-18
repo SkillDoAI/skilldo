@@ -1330,7 +1330,10 @@ fn rust_hints(stage: &str) -> &'static str {
 - Use Rust import conventions: `use crate_name::module::Type;`\n\
 - Always show error handling with `Result<T, E>` and the `?` operator\n\
 - Use `fn main() -> Result<(), Box<dyn std::error::Error>>` in runnable examples\n\
-- Follow Rust conventions: snake_case functions, CamelCase types, SCREAMING_SNAKE_CASE constants"
+- Follow Rust conventions: snake_case functions, CamelCase types, SCREAMING_SNAKE_CASE constants\n\
+- The ## Imports section MUST include: (1) `use` statements for public API paths, \
+(2) a fenced ```toml block with [dependencies] listing exact versions and features \
+from the Known Dependencies input. The tool uses this block to write Cargo.toml."
         }
         "review_verdict" => {
             "\

@@ -30,6 +30,9 @@ static EXTERN_CRATE_RE: Lazy<Regex> = Lazy::new(|| {
 });
 static CARGO_ADD_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"cargo\s+add\s+([a-zA-Z_][a-zA-Z0-9_\-]*)").unwrap());
+// Matches #[crate_name::macro] attribute usage (e.g., #[tokio::main], #[tokio::test])
+static ATTR_CRATE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"#\[([a-zA-Z_][a-zA-Z0-9_]*)::").unwrap());
 static CARGO_TOML_DEP_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?m)^([a-zA-Z_][a-zA-Z0-9_\-]*)\s*="#).unwrap());
 
@@ -206,6 +209,31 @@ impl LanguageParser for RustParser {
             }
         }
 
+        // Also scan Core Patterns code blocks for `use` statements to catch
+        // peer deps (tokio, reqwest, serde_json) that appear in examples but
+        // not in the Imports section. Models often list only the target crate
+        // in Imports but use peer deps in code examples.
+        if let Ok(Some(patterns_content)) =
+            extract_section(skill_md, r"(?m)^##\s+Core Patterns\s*$")
+        {
+            // `use crate_name::...` statements
+            for cap in USE_IMPORT_RE.captures_iter(patterns_content) {
+                let crate_name = cap[1].to_string();
+                if !Self::is_stdlib_crate(&crate_name) && !dependencies.contains(&crate_name) {
+                    debug!("Found peer dep in Core Patterns (use): {}", crate_name);
+                    dependencies.push(crate_name);
+                }
+            }
+            // `#[crate_name::macro]` attribute macros (e.g., #[tokio::main])
+            for cap in ATTR_CRATE_RE.captures_iter(patterns_content) {
+                let crate_name = cap[1].to_string();
+                if !Self::is_stdlib_crate(&crate_name) && !dependencies.contains(&crate_name) {
+                    debug!("Found peer dep in Core Patterns (attr): {}", crate_name);
+                    dependencies.push(crate_name);
+                }
+            }
+        }
+
         dependencies.retain(|dep| match sanitize_dep_name(dep) {
             Ok(_) => true,
             Err(e) => {
@@ -219,6 +247,116 @@ impl LanguageParser for RustParser {
             dependencies.len()
         );
         Ok(dependencies)
+    }
+}
+
+/// Structured dependency extraction — non-trait method for Rust-specific path.
+impl RustParser {
+    /// Extract structured dependencies from SKILL.md, preserving raw TOML specs.
+    /// Merges: (1) TOML [dependencies] block in ## Imports (authoritative, with features),
+    /// (2) peer deps from use/attr scanning in Core Patterns (name-only Pattern deps).
+    pub fn extract_structured_dependencies(
+        &self,
+        skill_md: &str,
+    ) -> Result<Vec<crate::pipeline::collector::StructuredDep>> {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // First: get all name-only deps from the existing extraction
+        let name_deps = self.extract_dependencies(skill_md)?;
+
+        // Then: try to parse a [dependencies] TOML block from ## Imports
+        let mut toml_specs: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        if let Ok(Some(imports_content)) = extract_section(skill_md, r"(?m)^##\s+Imports\s*$") {
+            // Find the [dependencies] block inside a toml fence
+            let mut in_toml_fence = false;
+            let mut toml_block = String::new();
+
+            for line in imports_content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("```toml") {
+                    in_toml_fence = true;
+                    continue;
+                }
+                if in_toml_fence && (trimmed == "```" || trimmed == "~~~") {
+                    in_toml_fence = false;
+                    continue;
+                }
+                if in_toml_fence {
+                    toml_block.push_str(line);
+                    toml_block.push('\n');
+                }
+            }
+
+            if !toml_block.is_empty() {
+                // Parse as TOML table
+                if let Ok(parsed) = toml_block.parse::<toml::Table>() {
+                    // Look for [dependencies] section within the parsed TOML
+                    let deps_table =
+                        if let Some(deps) = parsed.get("dependencies").and_then(|v| v.as_table()) {
+                            deps.clone()
+                        } else {
+                            // The block might be the deps directly (no [dependencies] header)
+                            parsed
+                                .iter()
+                                .filter(|(_, v)| {
+                                    !v.is_table() || {
+                                        // Skip [package] and other non-dep sections
+                                        let key = v.as_table().map(|t| t.contains_key("version"));
+                                        key.unwrap_or(false)
+                                    }
+                                })
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect()
+                        };
+
+                    for (name, value) in &deps_table {
+                        let raw = match value {
+                            toml::Value::String(s) => format!("\"{}\"", s),
+                            other => other.to_string(),
+                        };
+                        toml_specs.insert(name.clone(), raw);
+                    }
+                }
+            }
+        }
+
+        // Merge: upgrade name-only deps with TOML specs where available
+        let mut result: Vec<StructuredDep> = Vec::new();
+        for name in &name_deps {
+            if let Some(raw_spec) = toml_specs.remove(name.as_str()) {
+                result.push(StructuredDep {
+                    name: name.clone(),
+                    raw_spec: Some(raw_spec),
+                    source: DepSource::Manifest,
+                });
+            } else {
+                result.push(StructuredDep {
+                    name: name.clone(),
+                    raw_spec: None,
+                    source: DepSource::Pattern,
+                });
+            }
+        }
+
+        // Add any TOML deps that weren't in the name-only list
+        for (name, raw_spec) in toml_specs {
+            if !result.iter().any(|d| d.name == name) {
+                result.push(StructuredDep {
+                    name,
+                    raw_spec: Some(raw_spec),
+                    source: DepSource::Manifest,
+                });
+            }
+        }
+
+        debug!(
+            "Extracted {} structured deps ({} with specs)",
+            result.len(),
+            result.iter().filter(|d| d.raw_spec.is_some()).count()
+        );
+        Ok(result)
     }
 }
 

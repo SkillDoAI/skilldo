@@ -446,6 +446,104 @@ impl CargoExecutor {
         self.local_source = Some(path);
         self
     }
+
+    /// Set up Rust environment with structured deps (preserves version/features).
+    /// Called from the Rust-specific validator path instead of the trait method.
+    pub async fn setup_structured_environment(
+        &self,
+        deps: &[crate::pipeline::collector::StructuredDep],
+    ) -> Result<ExecutionEnv> {
+        info!(
+            "Setting up Rust/Cargo environment with {} structured dependencies",
+            deps.len()
+        );
+
+        if !is_tool_available("cargo", "--version").await {
+            bail!("cargo is not installed or not in PATH");
+        }
+
+        let temp_dir = TempDir::new().context("Failed to create temp directory")?;
+        let cargo_home = temp_dir.path().join(CARGO_HOME_DIR);
+        fs::create_dir_all(&cargo_home).context("Failed to create CARGO_HOME dir")?;
+
+        // Build Cargo.toml with structured deps (preserves versions and features)
+        let deps_section = if deps.is_empty() {
+            String::new()
+        } else {
+            let lines: Vec<String> = deps
+                .iter()
+                .map(|d| {
+                    // Local-install override for target package
+                    if let Some(ref source) = self.local_source {
+                        let cargo_path = std::path::Path::new(source).join("Cargo.toml");
+                        let is_local = std::fs::read_to_string(&cargo_path)
+                            .ok()
+                            .and_then(|content| {
+                                content.lines().find_map(|line| {
+                                    let t = line.trim();
+                                    if t.starts_with("name") && t.contains('=') {
+                                        let val = t.split('=').nth(1)?.trim().trim_matches('"');
+                                        Some(val == d.name)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                            .unwrap_or(false);
+                        if is_local {
+                            return format!("{} = {{ path = \"{}\" }}", d.name, source);
+                        }
+                    }
+                    // Use raw spec (preserves version + features)
+                    if let Some(ref spec) = d.raw_spec {
+                        format!("{} = {}", d.name, spec)
+                    } else {
+                        format!("{} = \"*\"", d.name)
+                    }
+                })
+                .collect();
+            format!("\n[dependencies]\n{}\n", lines.join("\n"))
+        };
+
+        let cargo_toml = format!(
+            r#"[package]
+name = "skilldo-test"
+version = "0.1.0"
+edition = "2021"
+{deps_section}"#
+        );
+
+        fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml)
+            .context("Failed to write Cargo.toml")?;
+
+        let src_dir = temp_dir.path().join("src");
+        fs::create_dir_all(&src_dir)?;
+        fs::write(src_dir.join("main.rs"), "fn main() {}\n")?;
+
+        if !deps.is_empty() {
+            info!("Fetching Rust dependencies...");
+            let mut fetch_cmd = Command::new("cargo");
+            fetch_cmd
+                .arg("fetch")
+                .env("CARGO_HOME", &cargo_home)
+                .current_dir(temp_dir.path());
+            let fetch_output =
+                run_cmd_with_timeout(fetch_cmd, Duration::from_secs(self.timeout_secs)).await?;
+            if !fetch_output.status.success() {
+                let stderr = String::from_utf8_lossy(&fetch_output.stderr);
+                bail!("cargo fetch failed: {}", stderr);
+            }
+        }
+
+        info!("Rust/Cargo structured environment setup complete");
+        let dep_names: Vec<String> = deps.iter().map(|d| d.name.clone()).collect();
+        Ok(ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: dep_names,
+        })
+    }
 }
 
 impl Default for CargoExecutor {
