@@ -982,6 +982,7 @@ mod tests {
             docs_content: "# Docs".to_string(),
             source_content: "class Foo: pass".to_string(),
             changelog_content: String::new(),
+            dependencies: Vec::new(),
         }
     }
 

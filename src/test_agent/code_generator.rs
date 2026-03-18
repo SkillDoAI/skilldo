@@ -48,7 +48,7 @@ Code from the SKILL.md:
 
 Environment:
 - This runs via {runner} in an isolated container with internet access but no TTY
-- Third-party packages are pre-installed
+- Dependencies from the Imports section are pre-installed
 - On success, print: ✓ Test passed: {name}
 - On failure, let it crash with a clear error — do not catch or suppress errors
 - Follow the SKILL.md exactly for imports and module paths — your training data may be outdated

@@ -359,19 +359,32 @@ impl LanguageExecutor for GoExecutor {
                 bail!("go get {} failed: {}", dep, stderr);
             }
 
-            // Local-install: redirect module to local source path
+            // Local-install: redirect only the target module to local source
             if let Some(ref source) = self.local_source {
-                info!("Replacing {} with local source: {}", dep, source);
-                let mut replace_cmd = Command::new("go");
-                replace_cmd
-                    .args(["mod", "edit", "-replace", &format!("{dep}={source}")])
-                    .current_dir(temp_dir.path());
-                Self::apply_go_env(&mut replace_cmd, temp_dir.path());
-                let replace_output =
-                    run_cmd_with_timeout(replace_cmd, Duration::from_secs(30)).await?;
-                if !replace_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&replace_output.stderr);
-                    warn!("go mod edit -replace failed for {}: {}", dep, stderr);
+                let go_mod = std::path::Path::new(source).join("go.mod");
+                let is_local = std::fs::read_to_string(&go_mod)
+                    .ok()
+                    .and_then(|content| {
+                        content.lines().find_map(|line| {
+                            line.trim()
+                                .strip_prefix("module ")
+                                .map(|module| dep.starts_with(module.trim()))
+                        })
+                    })
+                    .unwrap_or(false);
+                if is_local {
+                    info!("Replacing {} with local source: {}", dep, source);
+                    let mut replace_cmd = Command::new("go");
+                    replace_cmd
+                        .args(["mod", "edit", "-replace", &format!("{dep}={source}")])
+                        .current_dir(temp_dir.path());
+                    Self::apply_go_env(&mut replace_cmd, temp_dir.path());
+                    let replace_output =
+                        run_cmd_with_timeout(replace_cmd, Duration::from_secs(30)).await?;
+                    if !replace_output.status.success() {
+                        let stderr = String::from_utf8_lossy(&replace_output.stderr);
+                        warn!("go mod edit -replace failed for {}: {}", dep, stderr);
+                    }
                 }
             }
         }
@@ -473,10 +486,30 @@ impl LanguageExecutor for CargoExecutor {
                 .iter()
                 .map(|d| {
                     if let Some(ref source) = self.local_source {
-                        // Local-install: use path dependency
-                        format!("{d} = {{ path = \"{}\" }}", source)
+                        // Local-install: use path dep only for the target package.
+                        // Other deps (tokio, reqwest, etc.) come from the registry.
+                        let cargo_toml = std::path::Path::new(source).join("Cargo.toml");
+                        let is_local_pkg = std::fs::read_to_string(&cargo_toml)
+                            .ok()
+                            .and_then(|content| {
+                                content.lines().find_map(|line| {
+                                    let trimmed = line.trim();
+                                    if trimmed.starts_with("name") && trimmed.contains('=') {
+                                        let val =
+                                            trimmed.split('=').nth(1)?.trim().trim_matches('"');
+                                        Some(val == *d)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                            .unwrap_or(false);
+                        if is_local_pkg {
+                            format!("{d} = {{ path = \"{}\" }}", source)
+                        } else {
+                            format!("{d} = \"*\"")
+                        }
                     } else {
-                        // Registry: wildcard version
                         format!("{d} = \"*\"")
                     }
                 })
@@ -539,8 +572,8 @@ edition = "2021"
         // --offline: deps already fetched in setup_environment(); skip registry checks.
         // Safe for zero-dep projects too (no registry access needed).
         let mut cargo_cmd = Command::new("cargo");
+        cargo_cmd.args(["run", "--quiet", "--offline"]);
         cargo_cmd
-            .args(["run", "--quiet", "--offline"])
             .env("CARGO_HOME", &cargo_home)
             .current_dir(env.temp_dir.path());
 
@@ -621,13 +654,40 @@ impl LanguageExecutor for NodeExecutor {
                 sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             }
 
-            let install_args: Vec<&str> = if let Some(ref source) = self.local_source {
+            // For local-install: install local source (provides the target package),
+            // then remaining deps from registry. npm install handles both.
+            let install_args: Vec<String> = if let Some(ref source) = self.local_source {
+                let pkg_json = std::path::Path::new(source).join("package.json");
+                let local_name = std::fs::read_to_string(&pkg_json).ok().and_then(|c| {
+                    c.lines().find_map(|l| {
+                        let t = l.trim();
+                        if t.starts_with("\"name\"") {
+                            Some(
+                                t.split(':')
+                                    .nth(1)?
+                                    .trim()
+                                    .trim_matches(|c| c == '"' || c == ',')
+                                    .to_string(),
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                });
                 info!("Installing Node.js from local source: {}", source);
-                vec![source.as_str()]
+                let mut args = vec![source.clone()];
+                // Add non-local deps from registry
+                for d in deps {
+                    if local_name.as_deref() != Some(d.as_str()) {
+                        args.push(d.clone());
+                    }
+                }
+                args
             } else {
                 info!("Installing Node.js dependencies: {}", deps.join(", "));
-                deps.iter().map(|s| s.as_str()).collect()
+                deps.to_vec()
             };
+            let install_refs: Vec<&str> = install_args.iter().map(|s| s.as_str()).collect();
             let mut npm_cmd = Command::new("npm");
             npm_cmd
                 .args([
@@ -638,7 +698,7 @@ impl LanguageExecutor for NodeExecutor {
                     "--no-fund",
                     "--",
                 ])
-                .args(&install_args)
+                .args(&install_refs)
                 .env("npm_config_cache", &npm_cache)
                 .current_dir(temp_dir.path());
             let npm_output = run_cmd_with_timeout(npm_cmd, Duration::from_secs(120)).await?;

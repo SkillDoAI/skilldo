@@ -139,6 +139,7 @@ impl Collector {
             docs_content,
             source_content,
             changelog_content,
+            dependencies: Vec::new(),
         })
     }
 
@@ -204,6 +205,7 @@ impl Collector {
             docs_content,
             source_content,
             changelog_content,
+            dependencies: Vec::new(),
         })
     }
 
@@ -269,6 +271,7 @@ impl Collector {
             docs_content,
             source_content,
             changelog_content,
+            dependencies: Vec::new(),
         })
     }
 
@@ -334,6 +337,7 @@ impl Collector {
             docs_content,
             source_content,
             changelog_content,
+            dependencies: Vec::new(),
         })
     }
 
@@ -400,6 +404,7 @@ impl Collector {
             docs_content,
             source_content,
             changelog_content,
+            dependencies: Vec::new(),
         })
     }
 
@@ -2223,6 +2228,31 @@ setup(
     }
 }
 
+/// Where a dependency was discovered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // Used in Phase 2+ of v0.5.1
+pub enum DepSource {
+    /// From the package manifest (Cargo.toml [dependencies], pom.xml, etc.)
+    Manifest,
+    /// From `use`/`#[attr]` statements in Core Patterns code examples
+    Pattern,
+}
+
+/// A dependency with metadata. Rust deps preserve the raw TOML spec for lossless
+/// round-tripping (features, default-features, git, workspace). Other languages
+/// use `raw_spec` as a simple version string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuredDep {
+    /// Crate/package name (e.g., "tokio", "reqwest")
+    pub name: String,
+    /// Raw spec from the manifest. For Rust this is the full TOML value
+    /// (e.g., `{ version = "1", features = ["json"] }`). For other languages,
+    /// a simple version string (e.g., "2.10.1"). None means wildcard/"*".
+    pub raw_spec: Option<String>,
+    /// Where this dep was discovered
+    pub source: DepSource,
+}
+
 /// All data collected from a library project, ready for the pipeline agents.
 /// Fields are populated by language-specific collectors and capped by budget.
 #[derive(Debug, Clone)]
@@ -2238,4 +2268,8 @@ pub struct CollectedData {
     pub docs_content: String,
     pub source_content: String, // Moved to end - lowest priority
     pub changelog_content: String,
+    /// Structured dependencies from the package manifest + example evidence.
+    /// Populated by Rust collector (v0.5.1); empty for other languages until v0.5.2+.
+    #[allow(dead_code)] // Used in Phase 3+ of v0.5.1
+    pub dependencies: Vec<StructuredDep>,
 }

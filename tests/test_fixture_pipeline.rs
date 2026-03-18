@@ -181,6 +181,7 @@ fn fastapi_collected_data() -> CollectedData {
         source_content: "class FastAPI(Starlette):\n    def __init__(self, *, debug=False, routes=None, title='FastAPI', description='', version='0.1.0'):\n        ...\n".to_string(),
         changelog_content: "## 0.115.0\n- Add support for Pydantic v2\n- Performance improvements\n".to_string(),
         source_file_count: 42,
+        dependencies: Vec::new(),
     }
 }
 
