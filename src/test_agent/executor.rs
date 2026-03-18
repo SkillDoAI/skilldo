@@ -385,9 +385,10 @@ impl LanguageExecutor for GoExecutor {
                     .ok()
                     .and_then(|content| {
                         content.lines().find_map(|line| {
-                            line.trim()
-                                .strip_prefix("module ")
-                                .map(|module| dep.starts_with(module.trim()))
+                            line.trim().strip_prefix("module ").map(|module| {
+                                let m = module.trim();
+                                dep == m || dep.starts_with(&format!("{m}/"))
+                            })
                         })
                     })
                     .unwrap_or(false);
@@ -936,12 +937,35 @@ impl LanguageExecutor for JavaExecutor {
             }
         }
 
+        // When local-install is active, exclude the target package's coordinate
+        // from Maven fetch to avoid classpath collisions with the local jar.
+        // Reuse JavaHandler which handles parent POMs, settings.gradle, etc.
+        let local_artifact_id = self.local_source.as_ref().and_then(|source| {
+            let handler = crate::ecosystems::java::JavaHandler::new(std::path::Path::new(source));
+            handler.get_package_name().ok()
+        });
+
+        // Filter out the local package's coordinate from Maven deps
+        let fetch_deps: Vec<String> = if let Some(ref aid) = local_artifact_id {
+            deps.iter()
+                .filter(|d| {
+                    // Maven coordinate format: groupId:artifactId:version
+                    let parts: Vec<&str> = d.split(':').collect();
+                    let dep_aid = parts.get(1).unwrap_or(&"");
+                    dep_aid != aid
+                })
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            deps.to_vec()
+        };
+
         // Precompute POM before probing mvn — versionless coords are filtered here,
         // so we skip the mvn check entirely when there's nothing fetchable.
-        let pom = if deps.is_empty() {
+        let pom = if fetch_deps.is_empty() {
             None
         } else {
-            crate::util::build_maven_pom_xml(deps)
+            crate::util::build_maven_pom_xml(&fetch_deps)
         };
         if pom.is_some() {
             let has_mvn = is_tool_available("mvn", "--version").await;
