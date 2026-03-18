@@ -399,7 +399,11 @@ impl LanguageExecutor for GoExecutor {
                         run_cmd_with_timeout(replace_cmd, Duration::from_secs(30)).await?;
                     if !replace_output.status.success() {
                         let stderr = String::from_utf8_lossy(&replace_output.stderr);
-                        warn!("go mod edit -replace failed for {}: {}", dep, stderr);
+                        bail!(
+                            "go mod edit -replace failed for {} (local-install): {}",
+                            dep,
+                            stderr
+                        );
                     }
                 }
             }
@@ -795,22 +799,12 @@ impl LanguageExecutor for NodeExecutor {
             // then remaining deps from registry. npm install handles both.
             let install_args: Vec<String> = if let Some(ref source) = self.local_source {
                 let pkg_json = std::path::Path::new(source).join("package.json");
-                let local_name = std::fs::read_to_string(&pkg_json).ok().and_then(|c| {
-                    c.lines().find_map(|l| {
-                        let t = l.trim();
-                        if t.starts_with("\"name\"") {
-                            Some(
-                                t.split(':')
-                                    .nth(1)?
-                                    .trim()
-                                    .trim_matches(|c| c == '"' || c == ',')
-                                    .to_string(),
-                            )
-                        } else {
-                            None
-                        }
-                    })
-                });
+                let local_name: Option<String> =
+                    std::fs::read_to_string(&pkg_json).ok().and_then(|c| {
+                        serde_json::from_str::<serde_json::Value>(&c)
+                            .ok()
+                            .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
+                    });
                 info!("Installing Node.js from local source: {}", source);
                 let mut args = vec![source.clone()];
                 // Add non-local deps from registry
