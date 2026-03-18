@@ -433,7 +433,12 @@ impl RustHandler {
 
             // Drop path deps that survived workspace resolution
             // (workspace entry itself could be a path dep)
-            if resolved_raw.contains("path =") || resolved_raw.contains("path=") {
+            let is_path_dep = resolved_raw
+                .parse::<toml::Value>()
+                .ok()
+                .and_then(|v| v.as_table().map(|t| t.contains_key("path")))
+                .unwrap_or(false);
+            if is_path_dep {
                 debug!("Dropping resolved path dep: {}", name);
                 continue;
             }
