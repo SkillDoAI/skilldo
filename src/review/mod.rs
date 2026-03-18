@@ -172,10 +172,8 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                 );
             }
             // Conservative: treat parse failure as pass (don't block pipeline)
-            let lower = response.to_lowercase();
-            if !lower.contains("\"passed\": true") && !lower.contains("\"passed\":true") {
-                warn!("review: treating unparseable response as pass");
-            }
+            // but always flag as malformed so the caller knows.
+            warn!("review: treating unparseable response as pass (malformed)");
             return Ok(ReviewResult {
                 malformed: true,
                 ..ReviewResult::default()
@@ -188,25 +186,27 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|item| {
-                    Some(ReviewIssue {
-                        severity: item
-                            .get("severity")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| Severity::from_str(s).ok())
-                            .unwrap_or(Severity::Error),
-                        category: item
-                            .get("category")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("accuracy")
-                            .to_string(),
-                        complaint: item.get("complaint").and_then(|v| v.as_str())?.to_string(),
-                        evidence: item
-                            .get("evidence")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                    })
+                .map(|item| ReviewIssue {
+                    severity: item
+                        .get("severity")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| Severity::from_str(s).ok())
+                        .unwrap_or(Severity::Error),
+                    category: item
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("accuracy")
+                        .to_string(),
+                    complaint: item
+                        .get("complaint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(no description)")
+                        .to_string(),
+                    evidence: item
+                        .get("evidence")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 })
                 .collect()
         })
@@ -247,11 +247,15 @@ fn extract_json_block(text: &str) -> String {
         return body.clone();
     }
 
-    // Try: find first { and last }
+    // Try: find first { and last }, but validate it parses as JSON
+    // to avoid spanning unrelated objects separated by prose.
     if let Some(start) = trimmed.find('{') {
         if let Some(end) = trimmed.rfind('}') {
             if end > start {
-                return trimmed[start..=end].to_string();
+                let candidate = &trimmed[start..=end];
+                if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                    return candidate.to_string();
+                }
             }
         }
     }
@@ -346,12 +350,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_review_response_issues_without_complaint_skipped() {
+    fn test_parse_review_response_issues_without_complaint_get_default() {
         let json =
             r#"{"passed": false, "issues": [{"severity": "error"}, {"complaint": "real issue"}]}"#;
         let result = parse_review_response(json, false).unwrap();
-        assert_eq!(result.issues.len(), 1); // First issue skipped (no complaint)
-        assert_eq!(result.issues[0].complaint, "real issue");
+        assert_eq!(result.issues.len(), 2); // Both kept — missing complaint gets default
+        assert_eq!(result.issues[0].complaint, "(no description)");
+        assert_eq!(result.issues[1].complaint, "real issue");
+        assert!(!result.passed); // error-severity issue present → not passed
     }
 
     #[test]
