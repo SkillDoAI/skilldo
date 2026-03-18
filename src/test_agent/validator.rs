@@ -152,6 +152,22 @@ impl<'a> TestCodeValidator<'a> {
         } else {
             None
         };
+        // Container + local-install is only implemented for Python.
+        // For other languages, fall back to bare-metal so local_source is used.
+        let execution_mode = if execution_mode == ExecutionMode::Container
+            && install_source != InstallSource::Registry
+            && !matches!(language, Language::Python)
+        {
+            tracing::warn!(
+                "Container local-install is not yet supported for {} \
+                 — falling back to bare metal. \
+                 Set `execution_mode = \"bare-metal\"` to suppress this warning.",
+                language.as_str()
+            );
+            ExecutionMode::BareMetal
+        } else {
+            execution_mode
+        };
         match language {
             Language::Python => {
                 let executor: Box<dyn LanguageExecutor> = match execution_mode {

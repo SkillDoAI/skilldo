@@ -510,7 +510,9 @@ impl CargoExecutor {
                             })
                             .unwrap_or(false);
                         if is_local {
-                            return format!("{} = {{ path = \"{}\" }}", d.name, source);
+                            // Forward slashes work in TOML on all platforms
+                            let safe = source.replace('\\', "/");
+                            return format!("{} = {{ path = \"{}\" }}", d.name, safe);
                         }
                     }
                     // Use raw spec (preserves version + features)
@@ -629,7 +631,8 @@ impl LanguageExecutor for CargoExecutor {
                             })
                             .unwrap_or(false);
                         if is_local_pkg {
-                            format!("{d} = {{ path = \"{}\" }}", source)
+                            let safe = source.replace('\\', "/");
+                            format!("{d} = {{ path = \"{}\" }}", safe)
                         } else {
                             format!("{d} = \"*\"")
                         }
@@ -1000,13 +1003,23 @@ impl LanguageExecutor for JavaExecutor {
             );
         }
 
-        // Local-install: copy jars from source target/ into deps/
+        // Local-install: copy jars from source build output into deps/
+        // Supports both Maven (target/) and Gradle (build/libs/) layouts.
         if let Some(ref source) = self.local_source {
-            let target_dir = std::path::Path::new(source).join("target");
+            let source_path = std::path::Path::new(source);
+            let maven_dir = source_path.join("target");
+            let gradle_dir = source_path.join("build").join("libs");
+            let jar_dir = if maven_dir.is_dir() {
+                Some(maven_dir)
+            } else if gradle_dir.is_dir() {
+                Some(gradle_dir)
+            } else {
+                None
+            };
             let deps_dir = temp_dir.path().join("deps");
             fs::create_dir_all(&deps_dir)?;
-            if target_dir.is_dir() {
-                for entry in fs::read_dir(&target_dir)? {
+            if let Some(jar_dir) = jar_dir {
+                for entry in fs::read_dir(&jar_dir)? {
                     let entry = entry?;
                     let path = entry.path();
                     if path.extension().and_then(|e| e.to_str()) == Some("jar") {
@@ -1017,8 +1030,9 @@ impl LanguageExecutor for JavaExecutor {
                 }
             } else {
                 warn!(
-                    "Local source {}/target/ not found — run `mvn package` first",
-                    source
+                    "Local source {}/target/ and {}/build/libs/ not found — \
+                     run `mvn package` or `gradle build` first",
+                    source, source
                 );
             }
         }
