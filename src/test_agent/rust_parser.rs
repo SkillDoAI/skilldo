@@ -363,6 +363,7 @@ impl RustParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::collector::DepSource;
 
     const SAMPLE_SKILL: &str = r##"---
 name: serde
@@ -924,5 +925,139 @@ fn main() { println!("hello"); }
             "should parse deps under [dependencies] with inline comment: {:?}",
             deps
         );
+    }
+
+    // ── extract_structured_dependencies tests ─────────────────────────────
+
+    #[test]
+    fn structured_deps_with_toml_block() {
+        let parser = RustParser;
+        let skill = r#"---
+name: mylib
+version: 1.0.0
+---
+
+## Imports
+
+```rust
+use tokio::runtime::Runtime;
+use serde_json::Value;
+```
+
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        assert!(deps.len() >= 2, "should have at least 2 deps: {:?}", deps);
+
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert!(
+            tokio_dep.raw_spec.as_ref().unwrap().contains("features"),
+            "tokio should preserve features: {:?}",
+            tokio_dep.raw_spec
+        );
+        assert_eq!(tokio_dep.source, DepSource::Manifest);
+
+        let serde_dep = deps.iter().find(|d| d.name == "serde_json").unwrap();
+        assert!(serde_dep.raw_spec.is_some());
+    }
+
+    #[test]
+    fn structured_deps_without_toml_block_are_pattern() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```rust\nuse tokio::runtime::Runtime;\n```\n\n## Core Patterns\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert!(
+            tokio_dep.raw_spec.is_none(),
+            "without TOML block, raw_spec should be None"
+        );
+        assert_eq!(tokio_dep.source, DepSource::Pattern);
+    }
+
+    #[test]
+    fn structured_deps_merges_toml_and_names() {
+        let parser = RustParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```rust
+use tokio::runtime::Runtime;
+use reqwest::Client;
+```
+
+```toml
+tokio = { version = "1", features = ["full"] }
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // tokio should have Manifest spec, reqwest should be Pattern
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert_eq!(tokio_dep.source, DepSource::Manifest);
+        assert!(tokio_dep.raw_spec.is_some());
+
+        let reqwest_dep = deps.iter().find(|d| d.name == "reqwest").unwrap();
+        assert_eq!(reqwest_dep.source, DepSource::Pattern);
+        assert!(reqwest_dep.raw_spec.is_none());
+    }
+
+    #[test]
+    fn structured_deps_peer_dep_from_core_patterns() {
+        let parser = RustParser;
+        let skill = r#"---
+name: mylib
+---
+
+## Imports
+
+```rust
+use mylib::Client;
+```
+
+## Core Patterns
+
+### Basic Usage
+
+```rust
+use mylib::Client;
+use reqwest::blocking::get;
+
+#[tokio::main]
+async fn main() {
+    let client = Client::new();
+}
+```
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // reqwest discovered from Core Patterns use statement
+        assert!(
+            deps.iter().any(|d| d.name == "reqwest"),
+            "should discover reqwest from Core Patterns: {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        // tokio discovered from #[tokio::main] attribute
+        assert!(
+            deps.iter().any(|d| d.name == "tokio"),
+            "should discover tokio from attribute macro: {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn structured_deps_empty_skill() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Core Patterns\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        assert!(deps.is_empty());
     }
 }
