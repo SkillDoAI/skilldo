@@ -275,7 +275,7 @@ impl RustParser {
 
             for line in imports_content.lines() {
                 let trimmed = line.trim();
-                if trimmed.starts_with("```toml") {
+                if trimmed.starts_with("```toml") || trimmed.starts_with("~~~toml") {
                     in_toml_fence = true;
                     toml_block.clear(); // Reset for each fence to avoid concatenation
                     continue;

@@ -381,18 +381,51 @@ impl RustHandler {
             }
 
             // Resolve { workspace = true } — check structurally, not by substring
-            let resolved_raw = if value
-                .as_table()
-                .and_then(|t| t.get("workspace"))
-                .and_then(|v| v.as_bool())
-                == Some(true)
-            {
-                if let Some(ws_spec) = workspace_deps.get(name.as_str()) {
-                    debug!("Resolved workspace dep {}: {}", name, ws_spec);
-                    ws_spec.clone()
+            let resolved_raw = if let Some(child_tbl) = value.as_table() {
+                if child_tbl.get("workspace").and_then(|v| v.as_bool()) == Some(true) {
+                    if let Some(ws_spec) = workspace_deps.get(name.as_str()) {
+                        debug!("Resolved workspace dep {}: {}", name, ws_spec);
+                        // Merge child overrides (features, default-features, optional)
+                        // into the workspace-resolved spec.
+                        let child_overrides: Vec<(&str, &toml::Value)> = child_tbl
+                            .iter()
+                            .filter(|(k, _)| *k != "workspace")
+                            .map(|(k, v)| (k.as_str(), v))
+                            .collect();
+                        if child_overrides.is_empty() {
+                            ws_spec.clone()
+                        } else if let Ok(ws_tbl) = ws_spec.parse::<toml::Value>() {
+                            // Wrap simple "version" string as { version = "..." } table
+                            // so child overrides can be merged in.
+                            let mut tbl = match ws_tbl {
+                                toml::Value::String(ref s) => {
+                                    let mut t = toml::map::Map::new();
+                                    t.insert("version".to_string(), toml::Value::String(s.clone()));
+                                    t
+                                }
+                                toml::Value::Table(t) => t,
+                                _ => {
+                                    // Unexpected shape (int, bool, etc.) — skip merge
+                                    debug!("Workspace dep {} has non-table shape, skipping override merge", name);
+                                    let mut t = toml::map::Map::new();
+                                    t.insert("version".to_string(), ws_tbl);
+                                    t
+                                }
+                            };
+                            for (k, v) in child_overrides {
+                                tbl.insert(k.to_string(), v.clone());
+                            }
+                            toml::Value::Table(tbl).to_string()
+                        } else {
+                            // ws_spec didn't parse — use it as-is
+                            ws_spec.clone()
+                        }
+                    } else {
+                        debug!("Unresolvable workspace dep {}, degrading to wildcard", name);
+                        "\"*\"".to_string()
+                    }
                 } else {
-                    debug!("Unresolvable workspace dep {}, degrading to wildcard", name);
-                    "\"*\"".to_string()
+                    raw
                 }
             } else {
                 raw
@@ -421,9 +454,10 @@ impl RustHandler {
     fn load_workspace_deps(&self) -> std::collections::HashMap<String, String> {
         let mut map = std::collections::HashMap::new();
 
-        // Walk up to find the workspace root (has [workspace] section)
+        // Walk up to find the workspace root (has [workspace] section).
+        // No artificial depth limit — stop when we hit the filesystem root.
         let mut dir = self.repo_path.as_path();
-        for _ in 0..5 {
+        loop {
             let cargo_path = dir.join("Cargo.toml");
             if let Ok(content) = fs::read_to_string(&cargo_path) {
                 if let Ok(parsed) = content.parse::<toml::Table>() {

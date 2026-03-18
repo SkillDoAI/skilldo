@@ -217,7 +217,7 @@ dependencies = [
             info!("Installing local package from: {}", source);
             let mut pip_cmd = Command::new("uv");
             pip_cmd
-                .args(["pip", "install", "-e", source, "--no-deps"])
+                .args(["pip", "install", "-e", source])
                 .env("UV_CACHE_DIR", &uv_cache)
                 .env(
                     "VIRTUAL_ENV",

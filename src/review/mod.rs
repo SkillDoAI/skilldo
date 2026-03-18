@@ -186,27 +186,31 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|item| ReviewIssue {
-                    severity: item
-                        .get("severity")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| Severity::from_str(s).ok())
-                        .unwrap_or(Severity::Error),
-                    category: item
-                        .get("category")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("accuracy")
-                        .to_string(),
-                    complaint: item
-                        .get("complaint")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("(no description)")
-                        .to_string(),
-                    evidence: item
-                        .get("evidence")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
+                .filter_map(|item| {
+                    // Only process object entries — skip bare strings, numbers, etc.
+                    let obj = item.as_object()?;
+                    Some(ReviewIssue {
+                        severity: obj
+                            .get("severity")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| Severity::from_str(s).ok())
+                            .unwrap_or(Severity::Error),
+                        category: obj
+                            .get("category")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("accuracy")
+                            .to_string(),
+                        complaint: obj
+                            .get("complaint")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("(no description)")
+                            .to_string(),
+                        evidence: obj
+                            .get("evidence")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
                 })
                 .collect()
         })
@@ -221,12 +225,20 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
 
     // If the LLM said "passed: false" but provided no issues, treat as malformed —
     // something was detected but not articulated. Trigger a retry.
-    let llm_said_passed = parsed
-        .get("passed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let malformed = !llm_said_passed && issues.is_empty();
-    if malformed {
+    // Also treat non-boolean `passed` (e.g. "false" string) as malformed.
+    let passed_field = parsed.get("passed");
+    let (llm_said_passed, passed_type_invalid) = match passed_field {
+        Some(v) => match v.as_bool() {
+            Some(b) => (b, false),
+            None => {
+                warn!("review: `passed` field is not a boolean: {:?}", v);
+                (false, true)
+            }
+        },
+        None => (true, false), // missing field — assume pass, let issues decide
+    };
+    let malformed = passed_type_invalid || (!llm_said_passed && issues.is_empty());
+    if malformed && !passed_type_invalid {
         warn!("review: LLM said passed=false but provided no issues (malformed)");
     }
 
@@ -259,15 +271,19 @@ fn extract_json_block(text: &str) -> String {
         return body.clone();
     }
 
-    // Try: find first { and last }, but validate it parses as JSON
-    // to avoid spanning unrelated objects separated by prose.
+    // Try: find first { then scan } positions (last to first) to find
+    // the largest valid JSON object. This handles cases like
+    // `{valid JSON} extra text }` where first-{-to-last-} would fail.
     if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            if end > start {
-                let candidate = &trimmed[start..=end];
-                if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
-                    return candidate.to_string();
-                }
+        // Collect all } positions after start, try from last to first
+        let brace_positions: Vec<usize> = trimmed[start..]
+            .rmatch_indices('}')
+            .map(|(i, _)| start + i)
+            .collect();
+        for end in brace_positions {
+            let candidate = &trimmed[start..=end];
+            if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                return candidate.to_string();
             }
         }
     }
