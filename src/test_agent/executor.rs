@@ -946,16 +946,17 @@ impl LanguageExecutor for JavaExecutor {
         });
 
         // Filter out the local package's coordinate from Maven deps.
-        // JavaHandler returns artifactId (Maven/settings.gradle) or group
-        // (Gradle fallback), so check both coordinate parts.
+        // Only match on artifactId (parts[1]) to avoid over-filtering when
+        // JavaHandler falls back to group name for Gradle-only repos.
+        // For Gradle repos without settings.gradle, the group fallback won't
+        // match any artifactId, so nothing is excluded — same as pre-fix behavior.
         let fetch_deps: Vec<String> = if let Some(ref local_id) = local_artifact_id {
             deps.iter()
                 .filter(|d| {
                     // Maven coordinate format: groupId:artifactId:version
                     let parts: Vec<&str> = d.split(':').collect();
-                    let group_id = parts.first().unwrap_or(&"");
                     let artifact_id = parts.get(1).unwrap_or(&"");
-                    artifact_id != local_id && group_id != local_id
+                    artifact_id != local_id
                 })
                 .map(|s| s.to_string())
                 .collect()
