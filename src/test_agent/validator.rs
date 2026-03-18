@@ -141,11 +141,21 @@ impl<'a> TestCodeValidator<'a> {
     ) -> anyhow::Result<Self> {
         let install_source = config.install_source;
         let execution_mode = config.execution_mode;
+        // Extract local source path for bare-metal executors
+        let local_source = if install_source != InstallSource::Registry {
+            config.source_path.clone()
+        } else {
+            None
+        };
         match language {
             Language::Python => {
                 let executor: Box<dyn LanguageExecutor> = match execution_mode {
                     ExecutionMode::BareMetal => {
-                        Box::new(PythonUvExecutor::new().with_timeout(config.timeout))
+                        let mut exe = PythonUvExecutor::new().with_timeout(config.timeout);
+                        if let Some(ref src) = local_source {
+                            exe = exe.with_local_source(src.clone());
+                        }
+                        Box::new(exe)
                     }
                     ExecutionMode::Container => {
                         Box::new(ContainerExecutor::new(config, Language::Python))
@@ -167,7 +177,11 @@ impl<'a> TestCodeValidator<'a> {
             Language::Go => {
                 let executor: Box<dyn LanguageExecutor> = match execution_mode {
                     ExecutionMode::BareMetal => {
-                        Box::new(GoExecutor::new().with_timeout(config.timeout))
+                        let mut exe = GoExecutor::new().with_timeout(config.timeout);
+                        if let Some(ref src) = local_source {
+                            exe = exe.with_local_source(src.clone());
+                        }
+                        Box::new(exe)
                     }
                     ExecutionMode::Container => {
                         Box::new(ContainerExecutor::new(config, Language::Go))
@@ -189,7 +203,11 @@ impl<'a> TestCodeValidator<'a> {
             Language::JavaScript => {
                 let executor: Box<dyn LanguageExecutor> = match execution_mode {
                     ExecutionMode::BareMetal => {
-                        Box::new(NodeExecutor::new().with_timeout(config.timeout))
+                        let mut exe = NodeExecutor::new().with_timeout(config.timeout);
+                        if let Some(ref src) = local_source {
+                            exe = exe.with_local_source(src.clone());
+                        }
+                        Box::new(exe)
                     }
                     ExecutionMode::Container => {
                         Box::new(ContainerExecutor::new(config, Language::JavaScript))
@@ -211,10 +229,13 @@ impl<'a> TestCodeValidator<'a> {
             Language::Rust => {
                 let (executor, execution_mode): (Box<dyn LanguageExecutor>, ExecutionMode) =
                     match execution_mode {
-                        ExecutionMode::BareMetal => (
-                            Box::new(CargoExecutor::new().with_timeout(config.timeout)),
-                            ExecutionMode::BareMetal,
-                        ),
+                        ExecutionMode::BareMetal => {
+                            let mut exe = CargoExecutor::new().with_timeout(config.timeout);
+                            if let Some(ref src) = local_source {
+                                exe = exe.with_local_source(src.clone());
+                            }
+                            (Box::new(exe), ExecutionMode::BareMetal)
+                        }
                         ExecutionMode::Container => {
                             // Container mode for Rust uses bare `rustc` which can't resolve
                             // external dependencies. Fall back to BareMetal (CargoExecutor).
@@ -245,12 +266,15 @@ impl<'a> TestCodeValidator<'a> {
             Language::Java => {
                 let (executor, execution_mode): (Box<dyn LanguageExecutor>, ExecutionMode) =
                     match execution_mode {
-                        ExecutionMode::BareMetal => (
+                        ExecutionMode::BareMetal => {
                             // Java needs more time: Maven download + javac + java = 3× timeout.
                             // Floor at 120s to avoid cold-cache Maven timeouts.
-                            Box::new(JavaExecutor::new().with_timeout(config.timeout.max(120))),
-                            ExecutionMode::BareMetal,
-                        ),
+                            let mut exe = JavaExecutor::new().with_timeout(config.timeout.max(120));
+                            if let Some(ref src) = local_source {
+                                exe = exe.with_local_source(src.clone());
+                            }
+                            (Box::new(exe), ExecutionMode::BareMetal)
+                        }
                         ExecutionMode::Container => (
                             Box::new(ContainerExecutor::new(config.clone(), Language::Java)),
                             ExecutionMode::Container,

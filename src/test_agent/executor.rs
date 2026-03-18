@@ -112,15 +112,24 @@ impl ExecutionResult {
 /// Python executor using `uv` for fast environment setup
 pub struct PythonUvExecutor {
     timeout_secs: u64,
+    local_source: Option<String>,
 }
 
 impl PythonUvExecutor {
     pub fn new() -> Self {
-        Self { timeout_secs: 60 }
+        Self {
+            timeout_secs: 60,
+            local_source: None,
+        }
     }
 
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
+        self
+    }
+
+    pub fn with_local_source(mut self, path: String) -> Self {
+        self.local_source = Some(path);
         self
     }
 }
@@ -266,6 +275,7 @@ dependencies = [
 /// Go executor — runs `go run main.go` in a temp directory with `go mod init`
 pub struct GoExecutor {
     timeout_secs: u64,
+    local_source: Option<String>,
 }
 
 const GO_PATH_DIR: &str = "gopath";
@@ -274,7 +284,15 @@ const GO_MOD_CACHE_DIR: &str = "gomodcache";
 
 impl GoExecutor {
     pub fn new() -> Self {
-        Self { timeout_secs: 60 }
+        Self {
+            timeout_secs: 60,
+            local_source: None,
+        }
+    }
+
+    pub fn with_local_source(mut self, path: String) -> Self {
+        self.local_source = Some(path);
+        self
     }
 
     /// Apply isolated GOPATH/GOCACHE/GOMODCACHE env vars to a command.
@@ -340,6 +358,22 @@ impl LanguageExecutor for GoExecutor {
                 let stderr = String::from_utf8_lossy(&get_output.stderr);
                 bail!("go get {} failed: {}", dep, stderr);
             }
+
+            // Local-install: redirect module to local source path
+            if let Some(ref source) = self.local_source {
+                info!("Replacing {} with local source: {}", dep, source);
+                let mut replace_cmd = Command::new("go");
+                replace_cmd
+                    .args(["mod", "edit", "-replace", &format!("{dep}={source}")])
+                    .current_dir(temp_dir.path());
+                Self::apply_go_env(&mut replace_cmd, temp_dir.path());
+                let replace_output =
+                    run_cmd_with_timeout(replace_cmd, Duration::from_secs(30)).await?;
+                if !replace_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&replace_output.stderr);
+                    warn!("go mod edit -replace failed for {}: {}", dep, stderr);
+                }
+            }
         }
 
         info!("Go environment setup complete");
@@ -377,17 +411,26 @@ impl LanguageExecutor for GoExecutor {
 /// Cargo executor — runs `cargo run` in a temp directory with Cargo.toml deps
 pub struct CargoExecutor {
     timeout_secs: u64,
+    local_source: Option<String>,
 }
 
 const CARGO_HOME_DIR: &str = "cargo-home";
 
 impl CargoExecutor {
     pub fn new() -> Self {
-        Self { timeout_secs: 120 }
+        Self {
+            timeout_secs: 120,
+            local_source: None,
+        }
     }
 
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
+        self
+    }
+
+    pub fn with_local_source(mut self, path: String) -> Self {
+        self.local_source = Some(path);
         self
     }
 }
@@ -429,10 +472,13 @@ impl LanguageExecutor for CargoExecutor {
             let lines: Vec<String> = deps
                 .iter()
                 .map(|d| {
-                    // Deps arrive as bare crate names (sanitize_dep_name rejects
-                    // anything with `=` or spaces). Wildcard `"*"` matches npm's
-                    // approach; version pinning is a follow-up enhancement.
-                    format!("{d} = \"*\"")
+                    if let Some(ref source) = self.local_source {
+                        // Local-install: use path dependency
+                        format!("{d} = {{ path = \"{}\" }}", source)
+                    } else {
+                        // Registry: wildcard version
+                        format!("{d} = \"*\"")
+                    }
                 })
                 .collect();
             format!("\n[dependencies]\n{}\n", lines.join("\n"))
@@ -510,15 +556,24 @@ edition = "2021"
 /// Node.js executor — runs `node test.js` in a temp directory with `npm install`
 pub struct NodeExecutor {
     timeout_secs: u64,
+    local_source: Option<String>,
 }
 
 impl NodeExecutor {
     pub fn new() -> Self {
-        Self { timeout_secs: 60 }
+        Self {
+            timeout_secs: 60,
+            local_source: None,
+        }
     }
 
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
+        self
+    }
+
+    pub fn with_local_source(mut self, path: String) -> Self {
+        self.local_source = Some(path);
         self
     }
 }
@@ -566,7 +621,13 @@ impl LanguageExecutor for NodeExecutor {
                 sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             }
 
-            info!("Installing Node.js dependencies: {}", deps.join(", "));
+            let install_args: Vec<&str> = if let Some(ref source) = self.local_source {
+                info!("Installing Node.js from local source: {}", source);
+                vec![source.as_str()]
+            } else {
+                info!("Installing Node.js dependencies: {}", deps.join(", "));
+                deps.iter().map(|s| s.as_str()).collect()
+            };
             let mut npm_cmd = Command::new("npm");
             npm_cmd
                 .args([
@@ -577,7 +638,7 @@ impl LanguageExecutor for NodeExecutor {
                     "--no-fund",
                     "--",
                 ])
-                .args(deps)
+                .args(&install_args)
                 .env("npm_config_cache", &npm_cache)
                 .current_dir(temp_dir.path());
             let npm_output = run_cmd_with_timeout(npm_cmd, Duration::from_secs(120)).await?;
@@ -632,17 +693,26 @@ impl LanguageExecutor for NodeExecutor {
 /// Callers should set timeout_secs accordingly.
 pub struct JavaExecutor {
     timeout_secs: u64,
+    local_source: Option<String>,
 }
 
 pub(crate) const MAVEN_REPO_DIR: &str = "m2-repo";
 
 impl JavaExecutor {
     pub fn new() -> Self {
-        Self { timeout_secs: 120 }
+        Self {
+            timeout_secs: 120,
+            local_source: None,
+        }
     }
 
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
+        self
+    }
+
+    pub fn with_local_source(mut self, path: String) -> Self {
+        self.local_source = Some(path);
         self
     }
 }
@@ -744,6 +814,29 @@ impl LanguageExecutor for JavaExecutor {
                     "dependencies"
                 }
             );
+        }
+
+        // Local-install: copy jars from source target/ into deps/
+        if let Some(ref source) = self.local_source {
+            let target_dir = std::path::Path::new(source).join("target");
+            let deps_dir = temp_dir.path().join("deps");
+            fs::create_dir_all(&deps_dir)?;
+            if target_dir.is_dir() {
+                for entry in fs::read_dir(&target_dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+                        let dest = deps_dir.join(entry.file_name());
+                        fs::copy(&path, &dest)?;
+                        info!("Copied local jar: {}", entry.file_name().to_string_lossy());
+                    }
+                }
+            } else {
+                warn!(
+                    "Local source {}/target/ not found — run `mvn package` first",
+                    source
+                );
+            }
         }
 
         info!("Java environment setup complete");
