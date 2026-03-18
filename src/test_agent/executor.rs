@@ -945,14 +945,17 @@ impl LanguageExecutor for JavaExecutor {
             handler.get_package_name().ok()
         });
 
-        // Filter out the local package's coordinate from Maven deps
-        let fetch_deps: Vec<String> = if let Some(ref aid) = local_artifact_id {
+        // Filter out the local package's coordinate from Maven deps.
+        // JavaHandler returns artifactId (Maven/settings.gradle) or group
+        // (Gradle fallback), so check both coordinate parts.
+        let fetch_deps: Vec<String> = if let Some(ref local_id) = local_artifact_id {
             deps.iter()
                 .filter(|d| {
                     // Maven coordinate format: groupId:artifactId:version
                     let parts: Vec<&str> = d.split(':').collect();
-                    let dep_aid = parts.get(1).unwrap_or(&"");
-                    dep_aid != aid
+                    let group_id = parts.first().unwrap_or(&"");
+                    let artifact_id = parts.get(1).unwrap_or(&"");
+                    artifact_id != local_id && group_id != local_id
                 })
                 .map(|s| s.to_string())
                 .collect()
