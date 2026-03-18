@@ -277,6 +277,7 @@ impl RustParser {
                 let trimmed = line.trim();
                 if trimmed.starts_with("```toml") {
                     in_toml_fence = true;
+                    toml_block.clear(); // Reset for each fence to avoid concatenation
                     continue;
                 }
                 if in_toml_fence && (trimmed == "```" || trimmed == "~~~") {
@@ -297,16 +298,13 @@ impl RustParser {
                         if let Some(deps) = parsed.get("dependencies").and_then(|v| v.as_table()) {
                             deps.clone()
                         } else {
-                            // The block might be the deps directly (no [dependencies] header)
+                            // The block might be deps directly (no [dependencies] header).
+                            // Only promote entries whose name is already known from
+                            // name-only extraction to avoid including metadata keys
+                            // like "name", "version", "edition" as spurious deps.
                             parsed
                                 .iter()
-                                .filter(|(_, v)| {
-                                    !v.is_table() || {
-                                        // Skip [package] and other non-dep sections
-                                        let key = v.as_table().map(|t| t.contains_key("version"));
-                                        key.unwrap_or(false)
-                                    }
-                                })
+                                .filter(|(k, _)| name_deps.iter().any(|n| n == *k))
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect()
                         };

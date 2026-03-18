@@ -428,6 +428,8 @@ impl RustHandler {
             if let Ok(content) = fs::read_to_string(&cargo_path) {
                 if let Ok(parsed) = content.parse::<toml::Table>() {
                     if let Some(ws) = parsed.get("workspace").and_then(|v| v.as_table()) {
+                        // Stop here — this is the workspace root regardless of
+                        // whether [workspace.dependencies] exists.
                         if let Some(ws_deps) = ws.get("dependencies").and_then(|v| v.as_table()) {
                             for (name, value) in ws_deps {
                                 let raw = match value {
@@ -436,8 +438,8 @@ impl RustHandler {
                                 };
                                 map.insert(name.clone(), raw);
                             }
-                            return map;
                         }
+                        return map;
                     }
                 }
             }
