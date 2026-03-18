@@ -2952,4 +2952,200 @@ mod tests {
             docs
         );
     }
+
+    // ── get_dependencies tests ──────────────────────────────────────────
+
+    #[test]
+    fn get_dependencies_with_string_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1\"\nserde = \"1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 2);
+        assert!(deps.iter().any(|d| d.name == "tokio"));
+        assert!(deps.iter().any(|d| d.name == "serde"));
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert_eq!(tokio_dep.raw_spec.as_deref(), Some("\"1\""));
+    }
+
+    #[test]
+    fn get_dependencies_with_table_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = { version = \"1\", features = [\"full\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+        let tokio_dep = &deps[0];
+        assert_eq!(tokio_dep.name, "tokio");
+        let raw = tokio_dep.raw_spec.as_ref().unwrap();
+        assert!(
+            raw.contains("version"),
+            "raw_spec should contain version: {raw}"
+        );
+        assert!(
+            raw.contains("features"),
+            "raw_spec should contain features: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_drops_path_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[dependencies]\nmy-local = { path = \"../my-local\" }\nserde = \"1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1, "path dep should be dropped: {:?}", deps);
+        assert_eq!(deps[0].name, "serde");
+    }
+
+    #[test]
+    fn get_dependencies_resolves_workspace_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root with [workspace.dependencies]
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\ntokio = \"1.35\"\nserde = { version = \"1.0\", features = [\"derive\"] }\n",
+        )
+        .unwrap();
+
+        // Child crate
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = { workspace = true }\nserde = { workspace = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 2, "both deps should resolve: {:?}", deps);
+
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert_eq!(
+            tokio_dep.raw_spec.as_deref(),
+            Some("\"1.35\""),
+            "tokio should resolve to workspace version"
+        );
+
+        let serde_dep = deps.iter().find(|d| d.name == "serde").unwrap();
+        let serde_raw = serde_dep.raw_spec.as_ref().unwrap();
+        assert!(
+            serde_raw.contains("version") && serde_raw.contains("derive"),
+            "serde should resolve to workspace table spec: {serde_raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_true_with_child_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nreqwest = \"0.12\"\n",
+        )
+        .unwrap();
+
+        // Child crate adds features on top of workspace version
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nreqwest = { workspace = true, features = [\"json\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let reqwest_dep = &deps[0];
+        let raw = reqwest_dep.raw_spec.as_ref().unwrap();
+        assert!(
+            raw.contains("version") && raw.contains("json"),
+            "should merge workspace version with child features: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_drops_resolved_path_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root where the dep itself is a path dep
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nmy-local = { path = \"../my-local\" }\n",
+        )
+        .unwrap();
+
+        // Child crate inherits the path dep via workspace
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nmy-local = { workspace = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert!(
+            deps.is_empty(),
+            "resolved path dep should be dropped: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn load_workspace_deps_returns_empty_when_no_workspace_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // A plain crate with no [workspace] section anywhere up the tree
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"standalone\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let ws_deps = handler.load_workspace_deps();
+        assert!(
+            ws_deps.is_empty(),
+            "should return empty map without workspace root: {:?}",
+            ws_deps
+        );
+    }
+
+    #[test]
+    fn get_dependencies_returns_empty_when_no_cargo_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        // No Cargo.toml at all
+        let handler = RustHandler::new(dir.path());
+        let deps = handler.get_dependencies();
+        assert!(deps.is_empty());
+    }
 }
