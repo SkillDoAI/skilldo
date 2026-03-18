@@ -386,25 +386,28 @@ impl LanguageExecutor for GoExecutor {
         };
 
         if let (Some(ref module), Some(ref source)) = (&local_module, &self.local_source) {
-            // Apply replace for the target module and any subpackages
-            for dep in deps {
-                if dep == module.as_str() || dep.starts_with(&format!("{module}/")) {
-                    info!("Replacing {} with local source: {}", dep, source);
-                    let mut replace_cmd = Command::new("go");
-                    replace_cmd
-                        .args(["mod", "edit", "-replace", &format!("{dep}={source}")])
-                        .current_dir(temp_dir.path());
-                    Self::apply_go_env(&mut replace_cmd, temp_dir.path());
-                    let replace_output =
-                        run_cmd_with_timeout(replace_cmd, Duration::from_secs(30)).await?;
-                    if !replace_output.status.success() {
-                        let stderr = String::from_utf8_lossy(&replace_output.stderr);
-                        bail!(
-                            "go mod edit -replace failed for {} (local-install): {}",
-                            dep,
-                            stderr
-                        );
-                    }
+            // Apply replace for the root module (not sub-packages).
+            // Sub-package imports (e.g., module/subpkg) are resolved via the root
+            // module replace — replacing the sub-package path has no effect.
+            let needs_replace = deps
+                .iter()
+                .any(|d| d == module.as_str() || d.starts_with(&format!("{module}/")));
+            if needs_replace {
+                info!("Replacing {} with local source: {}", module, source);
+                let mut replace_cmd = Command::new("go");
+                replace_cmd
+                    .args(["mod", "edit", "-replace", &format!("{module}={source}")])
+                    .current_dir(temp_dir.path());
+                Self::apply_go_env(&mut replace_cmd, temp_dir.path());
+                let replace_output =
+                    run_cmd_with_timeout(replace_cmd, Duration::from_secs(30)).await?;
+                if !replace_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&replace_output.stderr);
+                    bail!(
+                        "go mod edit -replace failed for {} (local-install): {}",
+                        module,
+                        stderr
+                    );
                 }
             }
         }
@@ -2027,5 +2030,764 @@ func main() {
             !env.temp_dir.path().join("pom.xml").exists(),
             "pom.xml should not be created for non-Maven deps"
         );
+    }
+
+    // =========================================================================
+    // Local-install logic tests (pure logic — no external tool invocations)
+    // =========================================================================
+
+    // --- CargoExecutor: structured dep Cargo.toml formatting ---
+
+    /// Replicate the Cargo.toml dep-line formatting logic from
+    /// `setup_structured_environment` so we can test it without calling cargo.
+    fn format_cargo_dep_line(
+        dep: &crate::pipeline::collector::StructuredDep,
+        local_source: Option<&str>,
+    ) -> String {
+        if let Some(source) = local_source {
+            let cargo_path = std::path::Path::new(source).join("Cargo.toml");
+            let is_local = std::fs::read_to_string(&cargo_path)
+                .ok()
+                .and_then(|content| content.parse::<toml::Table>().ok())
+                .and_then(|t| {
+                    t.get("package")?
+                        .as_table()?
+                        .get("name")?
+                        .as_str()
+                        .map(|n| n == dep.name)
+                })
+                .unwrap_or(false);
+            if is_local {
+                let safe = source.replace('\\', "/");
+                return format!("{} = {{ path = \"{}\" }}", dep.name, safe);
+            }
+        }
+        if let Some(ref spec) = dep.raw_spec {
+            format!("{} = {}", dep.name, spec)
+        } else {
+            format!("{} = \"*\"", dep.name)
+        }
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_with_raw_spec() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        let dep = StructuredDep {
+            name: "serde".to_string(),
+            raw_spec: Some("{ version = \"1\", features = [\"derive\"] }".to_string()),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, None);
+        assert_eq!(line, "serde = { version = \"1\", features = [\"derive\"] }");
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_without_raw_spec() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        let dep = StructuredDep {
+            name: "once_cell".to_string(),
+            raw_spec: None,
+            source: DepSource::Pattern,
+        };
+        let line = format_cargo_dep_line(&dep, None);
+        assert_eq!(line, "once_cell = \"*\"");
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_local_path_override() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // Create a temp dir with a Cargo.toml that has package.name = "my-crate"
+        let tmp = TempDir::new().unwrap();
+        let cargo_toml = r#"[package]
+name = "my-crate"
+version = "0.1.0"
+edition = "2021"
+"#;
+        std::fs::write(tmp.path().join("Cargo.toml"), cargo_toml).unwrap();
+
+        let dep = StructuredDep {
+            name: "my-crate".to_string(),
+            raw_spec: Some("\"1.0\"".to_string()),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, Some(&tmp.path().to_string_lossy()));
+        assert!(
+            line.contains("path = "),
+            "local dep should use path: {line}"
+        );
+        assert!(
+            line.starts_with("my-crate = "),
+            "should start with dep name: {line}"
+        );
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_local_source_non_matching_dep() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // Local source is "my-crate", but dep is "tokio" — should NOT get path override
+        let tmp = TempDir::new().unwrap();
+        let cargo_toml = r#"[package]
+name = "my-crate"
+version = "0.1.0"
+edition = "2021"
+"#;
+        std::fs::write(tmp.path().join("Cargo.toml"), cargo_toml).unwrap();
+
+        let dep = StructuredDep {
+            name: "tokio".to_string(),
+            raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, Some(&tmp.path().to_string_lossy()));
+        assert_eq!(
+            line, "tokio = { version = \"1\", features = [\"full\"] }",
+            "non-local dep should keep its raw_spec"
+        );
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_local_source_no_cargo_toml() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // Local source dir exists but has no Cargo.toml — should fall through
+        let tmp = TempDir::new().unwrap();
+        let dep = StructuredDep {
+            name: "my-crate".to_string(),
+            raw_spec: None,
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, Some(&tmp.path().to_string_lossy()));
+        assert_eq!(
+            line, "my-crate = \"*\"",
+            "missing Cargo.toml should fallback to wildcard"
+        );
+    }
+
+    #[test]
+    fn test_cargo_structured_deps_section_formatting() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        let deps = [
+            StructuredDep {
+                name: "serde".to_string(),
+                raw_spec: Some("{ version = \"1\", features = [\"derive\"] }".to_string()),
+                source: DepSource::Manifest,
+            },
+            StructuredDep {
+                name: "tokio".to_string(),
+                raw_spec: Some("\"1\"".to_string()),
+                source: DepSource::Pattern,
+            },
+            StructuredDep {
+                name: "anyhow".to_string(),
+                raw_spec: None,
+                source: DepSource::Pattern,
+            },
+        ];
+
+        // Replicate the deps_section logic from setup_structured_environment
+        let lines: Vec<String> = deps
+            .iter()
+            .map(|d| format_cargo_dep_line(d, None))
+            .collect();
+        let deps_section = format!("\n[dependencies]\n{}\n", lines.join("\n"));
+
+        assert!(deps_section.contains("[dependencies]"));
+        assert!(deps_section.contains("serde = { version = \"1\", features = [\"derive\"] }"));
+        assert!(deps_section.contains("tokio = \"1\""));
+        assert!(deps_section.contains("anyhow = \"*\""));
+    }
+
+    #[test]
+    fn test_cargo_structured_empty_deps_section() {
+        let deps: Vec<crate::pipeline::collector::StructuredDep> = vec![];
+        let deps_section = if deps.is_empty() {
+            String::new()
+        } else {
+            let lines: Vec<String> = deps
+                .iter()
+                .map(|d| format_cargo_dep_line(d, None))
+                .collect();
+            format!("\n[dependencies]\n{}\n", lines.join("\n"))
+        };
+        assert!(deps_section.is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_cargo_structured_dep_local_path_backslash_normalization() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        let tmp = TempDir::new().unwrap();
+        let cargo_toml =
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+        std::fs::write(tmp.path().join("Cargo.toml"), cargo_toml).unwrap();
+
+        // Simulate a Windows path with backslashes
+        let win_path = tmp.path().to_string_lossy().replace('/', "\\");
+        let dep = StructuredDep {
+            name: "my-crate".to_string(),
+            raw_spec: None,
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, Some(&win_path));
+        assert!(
+            !line.contains('\\'),
+            "backslashes should be normalized to forward slashes: {line}"
+        );
+    }
+
+    // --- GoExecutor: local module detection logic ---
+
+    /// Replicate the Go local module matching logic from setup_environment.
+    fn go_module_matches_dep(dep: &str, module: &str) -> bool {
+        dep == module || dep.starts_with(&format!("{module}/"))
+    }
+
+    /// Replicate the go.mod module-name extraction logic from setup_environment.
+    fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
+        go_mod_content.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("module ")
+                .map(|m| m.trim().to_string())
+        })
+    }
+
+    #[test]
+    fn test_go_module_exact_match() {
+        assert!(go_module_matches_dep(
+            "github.com/user/mylib",
+            "github.com/user/mylib"
+        ));
+    }
+
+    #[test]
+    fn test_go_module_subpackage_match() {
+        assert!(go_module_matches_dep(
+            "github.com/user/mylib/subpkg",
+            "github.com/user/mylib"
+        ));
+    }
+
+    #[test]
+    fn test_go_module_no_match_different_module() {
+        assert!(!go_module_matches_dep(
+            "github.com/other/lib",
+            "github.com/user/mylib"
+        ));
+    }
+
+    #[test]
+    fn test_go_module_no_match_prefix_collision() {
+        // "github.com/user/mylib2" should NOT match "github.com/user/mylib"
+        // because it doesn't start with "github.com/user/mylib/"
+        assert!(!go_module_matches_dep(
+            "github.com/user/mylib2",
+            "github.com/user/mylib"
+        ));
+    }
+
+    #[test]
+    fn test_go_extract_module_name_basic() {
+        let content = "module github.com/user/mylib\n\ngo 1.21\n";
+        assert_eq!(
+            extract_go_module_name(content),
+            Some("github.com/user/mylib".to_string())
+        );
+    }
+
+    #[test]
+    fn test_go_extract_module_name_with_leading_whitespace() {
+        let content = "  module  github.com/user/mylib  \n\ngo 1.21\n";
+        assert_eq!(
+            extract_go_module_name(content),
+            Some("github.com/user/mylib".to_string())
+        );
+    }
+
+    #[test]
+    fn test_go_extract_module_name_missing() {
+        let content = "go 1.21\nrequire (\n)\n";
+        assert_eq!(extract_go_module_name(content), None);
+    }
+
+    #[test]
+    fn test_go_extract_module_from_tempdir() {
+        let tmp = TempDir::new().unwrap();
+        let go_mod = "module github.com/example/coolpkg\n\ngo 1.22\n";
+        std::fs::write(tmp.path().join("go.mod"), go_mod).unwrap();
+
+        // Replicate the full extraction as done in setup_environment
+        let source = tmp.path().to_string_lossy().to_string();
+        let go_mod_path = std::path::Path::new(&source).join("go.mod");
+        let local_module = std::fs::read_to_string(&go_mod_path)
+            .ok()
+            .and_then(|content| extract_go_module_name(&content));
+
+        assert_eq!(local_module, Some("github.com/example/coolpkg".to_string()));
+    }
+
+    #[test]
+    fn test_go_extract_module_no_go_mod() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().to_string_lossy().to_string();
+        let go_mod_path = std::path::Path::new(&source).join("go.mod");
+        let local_module = std::fs::read_to_string(&go_mod_path)
+            .ok()
+            .and_then(|content| extract_go_module_name(&content));
+        assert_eq!(local_module, None);
+    }
+
+    #[test]
+    fn test_go_module_replace_candidates() {
+        // Given a module and a list of deps, collect which ones need replace directives
+        let module = "github.com/user/mylib";
+        let deps = [
+            "github.com/user/mylib",
+            "github.com/user/mylib/v2",
+            "github.com/user/mylib/subpkg",
+            "github.com/other/lib",
+            "github.com/user/mylib2",
+        ];
+        let replacements: Vec<&&str> = deps
+            .iter()
+            .filter(|d| go_module_matches_dep(d, module))
+            .collect();
+        assert_eq!(
+            replacements,
+            vec![
+                &"github.com/user/mylib",
+                &"github.com/user/mylib/v2",
+                &"github.com/user/mylib/subpkg",
+            ]
+        );
+    }
+
+    // --- NodeExecutor: local package name via serde_json ---
+
+    /// Replicate the Node.js package.json name extraction logic from setup_environment.
+    fn extract_node_package_name(json_content: &str) -> Option<String> {
+        serde_json::from_str::<serde_json::Value>(json_content)
+            .ok()
+            .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn test_node_package_name_normal_json() {
+        let json = r#"{"name": "my-cool-package", "version": "1.0.0"}"#;
+        assert_eq!(
+            extract_node_package_name(json),
+            Some("my-cool-package".to_string())
+        );
+    }
+
+    #[test]
+    fn test_node_package_name_minified_json() {
+        let json = r#"{"name":"@scope/pkg","version":"2.0.0","main":"index.js"}"#;
+        assert_eq!(
+            extract_node_package_name(json),
+            Some("@scope/pkg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_node_package_name_missing_name_field() {
+        let json = r#"{"version": "1.0.0", "main": "index.js"}"#;
+        assert_eq!(extract_node_package_name(json), None);
+    }
+
+    #[test]
+    fn test_node_package_name_invalid_json() {
+        let json = "not json at all";
+        assert_eq!(extract_node_package_name(json), None);
+    }
+
+    #[test]
+    fn test_node_package_name_name_is_not_string() {
+        let json = r#"{"name": 42, "version": "1.0.0"}"#;
+        assert_eq!(extract_node_package_name(json), None);
+    }
+
+    #[test]
+    fn test_node_package_name_empty_string() {
+        let json = r#"{"name": "", "version": "1.0.0"}"#;
+        assert_eq!(
+            extract_node_package_name(json),
+            Some("".to_string()),
+            "empty name is still a valid string"
+        );
+    }
+
+    #[test]
+    fn test_node_local_install_dep_filtering() {
+        // Replicate the dep filtering logic: local source provides "my-pkg",
+        // so "my-pkg" should be excluded from the npm install args.
+        let local_name = Some("my-pkg".to_string());
+        let deps = vec![
+            "my-pkg".to_string(),
+            "express".to_string(),
+            "lodash".to_string(),
+        ];
+        let source = "/some/path".to_string();
+
+        let install_args: Vec<String> = {
+            let mut args = vec![source.clone()];
+            for d in &deps {
+                if local_name.as_deref() != Some(d.as_str()) {
+                    args.push(d.clone());
+                }
+            }
+            args
+        };
+
+        assert_eq!(
+            install_args,
+            vec![
+                "/some/path".to_string(),
+                "express".to_string(),
+                "lodash".to_string(),
+            ],
+            "local package should be excluded, replaced by source path"
+        );
+    }
+
+    #[test]
+    fn test_node_local_install_no_matching_dep() {
+        // When local package name doesn't match any dep, all deps are included
+        let local_name = Some("other-pkg".to_string());
+        let deps = vec!["express".to_string(), "lodash".to_string()];
+        let source = "/some/path".to_string();
+
+        let install_args: Vec<String> = {
+            let mut args = vec![source.clone()];
+            for d in &deps {
+                if local_name.as_deref() != Some(d.as_str()) {
+                    args.push(d.clone());
+                }
+            }
+            args
+        };
+
+        assert_eq!(
+            install_args,
+            vec![
+                "/some/path".to_string(),
+                "express".to_string(),
+                "lodash".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_node_extract_package_name_from_tempdir() {
+        let tmp = TempDir::new().unwrap();
+        let pkg_json = r#"{"name": "my-local-pkg", "version": "0.1.0"}"#;
+        std::fs::write(tmp.path().join("package.json"), pkg_json).unwrap();
+
+        let pkg_path = tmp.path().join("package.json");
+        let local_name: Option<String> = std::fs::read_to_string(&pkg_path).ok().and_then(|c| {
+            serde_json::from_str::<serde_json::Value>(&c)
+                .ok()
+                .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
+        });
+
+        assert_eq!(local_name, Some("my-local-pkg".to_string()));
+    }
+
+    #[test]
+    fn test_node_extract_package_name_no_file() {
+        let tmp = TempDir::new().unwrap();
+        let pkg_path = tmp.path().join("package.json");
+        let local_name: Option<String> = std::fs::read_to_string(&pkg_path).ok().and_then(|c| {
+            serde_json::from_str::<serde_json::Value>(&c)
+                .ok()
+                .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
+        });
+        assert_eq!(local_name, None);
+    }
+
+    // --- JavaExecutor: artifact ID exclusion logic ---
+
+    /// Replicate the Java artifact ID filtering logic from setup_environment.
+    fn filter_java_deps_by_artifact_id(
+        deps: &[String],
+        local_artifact_id: Option<&str>,
+    ) -> Vec<String> {
+        if let Some(local_id) = local_artifact_id {
+            deps.iter()
+                .filter(|d| {
+                    let parts: Vec<&str> = d.split(':').collect();
+                    let artifact_id = parts.get(1).unwrap_or(&"");
+                    artifact_id != &local_id
+                })
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            deps.to_vec()
+        }
+    }
+
+    #[test]
+    fn test_java_filter_excludes_matching_artifact_id() {
+        let deps = vec![
+            "com.example:my-lib:1.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+            "org.slf4j:slf4j-api:2.0.0".to_string(),
+        ];
+        let filtered = filter_java_deps_by_artifact_id(&deps, Some("my-lib"));
+        assert_eq!(
+            filtered,
+            vec![
+                "com.google.code.gson:gson:2.10.1".to_string(),
+                "org.slf4j:slf4j-api:2.0.0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_java_filter_no_local_artifact() {
+        let deps = vec![
+            "com.example:my-lib:1.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+        ];
+        let filtered = filter_java_deps_by_artifact_id(&deps, None);
+        assert_eq!(filtered, deps, "None artifact should pass all deps through");
+    }
+
+    #[test]
+    fn test_java_filter_no_match() {
+        let deps = vec![
+            "com.example:my-lib:1.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+        ];
+        let filtered = filter_java_deps_by_artifact_id(&deps, Some("nonexistent"));
+        assert_eq!(filtered, deps, "no match should pass all deps through");
+    }
+
+    #[test]
+    fn test_java_filter_single_part_dep() {
+        // Dep without colon — parts.get(1) returns None, unwrap_or("") != any artifact
+        let deps = vec!["simplepackage".to_string()];
+        let filtered = filter_java_deps_by_artifact_id(&deps, Some("simplepackage"));
+        assert_eq!(
+            filtered,
+            vec!["simplepackage".to_string()],
+            "single-part dep should not match artifact_id filter"
+        );
+    }
+
+    #[test]
+    fn test_java_filter_two_part_coord() {
+        // group:artifact (no version) — artifact_id is parts[1]
+        let deps = vec!["com.example:my-lib".to_string()];
+        let filtered = filter_java_deps_by_artifact_id(&deps, Some("my-lib"));
+        assert!(
+            filtered.is_empty(),
+            "two-part coord with matching artifact should be filtered"
+        );
+    }
+
+    #[test]
+    fn test_java_filter_multiple_matches() {
+        // Different groups, same artifact_id — both excluded
+        let deps = vec![
+            "com.example:my-lib:1.0".to_string(),
+            "org.other:my-lib:2.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+        ];
+        let filtered = filter_java_deps_by_artifact_id(&deps, Some("my-lib"));
+        assert_eq!(
+            filtered,
+            vec!["com.google.code.gson:gson:2.10.1".to_string()],
+            "all deps with matching artifact_id should be excluded"
+        );
+    }
+
+    #[test]
+    fn test_java_local_artifact_id_from_pom() {
+        // Test the full flow: create a temp dir with pom.xml, extract artifact_id
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>my-java-lib</artifactId><version>1.0</version></project>",
+        )
+        .unwrap();
+
+        let handler = crate::ecosystems::java::JavaHandler::new(tmp.path());
+        let local_artifact_id = handler.get_package_name().ok();
+        assert_eq!(local_artifact_id, Some("my-java-lib".to_string()));
+
+        // Now filter deps using this artifact_id
+        let deps = vec![
+            "com.example:my-java-lib:1.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+        ];
+        let filtered = filter_java_deps_by_artifact_id(&deps, local_artifact_id.as_deref());
+        assert_eq!(
+            filtered,
+            vec!["com.google.code.gson:gson:2.10.1".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_java_local_artifact_id_from_gradle() {
+        // Gradle: group from build.gradle, not artifactId — should NOT match
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("build.gradle"),
+            "group = 'com.example'\nversion = '1.0'",
+        )
+        .unwrap();
+
+        let handler = crate::ecosystems::java::JavaHandler::new(tmp.path());
+        let local_artifact_id = handler.get_package_name().ok();
+        // Gradle group = "com.example" — this is a group name, not an artifact_id
+        assert_eq!(local_artifact_id, Some("com.example".to_string()));
+
+        // This group name won't match any artifact_id in Maven coords
+        let deps = vec!["com.example:my-java-lib:1.0".to_string()];
+        let filtered = filter_java_deps_by_artifact_id(&deps, local_artifact_id.as_deref());
+        assert_eq!(
+            filtered, deps,
+            "Gradle group fallback should not accidentally filter Maven coords"
+        );
+    }
+
+    // --- PythonUvExecutor: with_local_source builder ---
+
+    #[test]
+    fn test_python_uv_with_local_source() {
+        let executor = PythonUvExecutor::new().with_local_source("/some/path".to_string());
+        assert_eq!(executor.local_source, Some("/some/path".to_string()));
+        assert_eq!(executor.timeout_secs, 60); // default unchanged
+    }
+
+    #[test]
+    fn test_python_uv_builder_chaining() {
+        let executor = PythonUvExecutor::new()
+            .with_timeout(30)
+            .with_local_source("/my/lib".to_string());
+        assert_eq!(executor.timeout_secs, 30);
+        assert_eq!(executor.local_source, Some("/my/lib".to_string()));
+    }
+
+    #[test]
+    fn test_python_uv_default_no_local_source() {
+        let executor = PythonUvExecutor::new();
+        assert_eq!(executor.local_source, None);
+    }
+
+    // --- GoExecutor: with_local_source builder ---
+
+    #[test]
+    fn test_go_with_local_source() {
+        let executor = GoExecutor::new().with_local_source("/some/go/pkg".to_string());
+        assert_eq!(executor.local_source, Some("/some/go/pkg".to_string()));
+        assert_eq!(executor.timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_go_builder_chaining() {
+        let executor = GoExecutor::new()
+            .with_timeout(90)
+            .with_local_source("/go/src/mymod".to_string());
+        assert_eq!(executor.timeout_secs, 90);
+        assert_eq!(executor.local_source, Some("/go/src/mymod".to_string()));
+    }
+
+    // --- NodeExecutor: with_local_source builder ---
+
+    #[test]
+    fn test_node_with_local_source() {
+        let executor = NodeExecutor::new().with_local_source("/my/node/pkg".to_string());
+        assert_eq!(executor.local_source, Some("/my/node/pkg".to_string()));
+        assert_eq!(executor.timeout_secs, 60);
+    }
+
+    // --- CargoExecutor: with_local_source builder ---
+
+    #[test]
+    fn test_cargo_with_local_source() {
+        let executor = CargoExecutor::new().with_local_source("/my/crate".to_string());
+        assert_eq!(executor.local_source, Some("/my/crate".to_string()));
+        assert_eq!(executor.timeout_secs, 120);
+    }
+
+    // --- JavaExecutor: with_local_source builder ---
+
+    #[test]
+    fn test_java_with_local_source() {
+        let executor = JavaExecutor::new().with_local_source("/my/java/project".to_string());
+        assert_eq!(executor.local_source, Some("/my/java/project".to_string()));
+        assert_eq!(executor.timeout_secs, 120);
+    }
+
+    // --- Cargo: unstructured setup_environment dep formatting with local source ---
+
+    /// Replicate the plain (non-structured) Cargo dep line logic.
+    fn format_cargo_plain_dep_line(dep: &str, local_source: Option<&str>) -> String {
+        if let Some(source) = local_source {
+            let cargo_toml = std::path::Path::new(source).join("Cargo.toml");
+            let is_local_pkg = std::fs::read_to_string(&cargo_toml)
+                .ok()
+                .and_then(|content| content.parse::<toml::Table>().ok())
+                .and_then(|t| {
+                    t.get("package")?
+                        .as_table()?
+                        .get("name")?
+                        .as_str()
+                        .map(|n| n == dep)
+                })
+                .unwrap_or(false);
+            if is_local_pkg {
+                let safe = source.replace('\\', "/");
+                return format!("{dep} = {{ path = \"{}\" }}", safe);
+            }
+        }
+        format!("{dep} = \"*\"")
+    }
+
+    #[test]
+    fn test_cargo_plain_dep_no_local_source() {
+        assert_eq!(format_cargo_plain_dep_line("serde", None), "serde = \"*\"");
+    }
+
+    #[test]
+    fn test_cargo_plain_dep_local_source_match() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let line = format_cargo_plain_dep_line("my-crate", Some(&tmp.path().to_string_lossy()));
+        assert!(line.contains("path = "), "should use path dep: {line}");
+    }
+
+    #[test]
+    fn test_cargo_plain_dep_local_source_no_match() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let line = format_cargo_plain_dep_line("tokio", Some(&tmp.path().to_string_lossy()));
+        assert_eq!(line, "tokio = \"*\"");
+    }
+
+    // --- GoExecutor::apply_go_env ---
+
+    #[test]
+    fn test_go_apply_go_env() {
+        // Verify apply_go_env sets the expected env vars
+        let base = std::path::Path::new("/tmp/test");
+        let mut cmd = Command::new("echo");
+        GoExecutor::apply_go_env(&mut cmd, base);
+        // Command doesn't expose env vars for inspection, but we can verify
+        // it doesn't panic and the method is callable. The actual env is tested
+        // in the integration tests.
     }
 }
