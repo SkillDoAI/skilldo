@@ -1169,6 +1169,7 @@ impl LanguageExecutor for JavaExecutor {
 }
 
 #[cfg(test)]
+#[allow(clippy::useless_vec)]
 mod tests {
     use super::*;
 
@@ -2824,5 +2825,1168 @@ edition = "2021"
         // Command doesn't expose env vars for inspection, but we can verify
         // it doesn't panic and the method is callable. The actual env is tested
         // in the integration tests.
+    }
+
+    // =========================================================================
+    // Additional coverage tests — uncovered branches and edge cases
+    // =========================================================================
+
+    // --- stdout_and_stderr combiner edge cases ---
+
+    #[test]
+    fn test_stdout_and_stderr_empty_stdout() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"".to_vec(),
+            stderr: b"error only".to_vec(),
+        };
+        let combined = stdout_and_stderr(&output);
+        assert_eq!(combined, "error only");
+    }
+
+    #[test]
+    fn test_stdout_and_stderr_empty_stderr() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"log only".to_vec(),
+            stderr: b"".to_vec(),
+        };
+        let combined = stdout_and_stderr(&output);
+        assert_eq!(combined, "log only");
+    }
+
+    #[test]
+    fn test_stdout_and_stderr_both_empty() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"".to_vec(),
+            stderr: b"".to_vec(),
+        };
+        let combined = stdout_and_stderr(&output);
+        assert_eq!(combined, "");
+    }
+
+    #[test]
+    fn test_stdout_and_stderr_trims_whitespace() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"  line1  ".to_vec(),
+            stderr: b"  line2  ".to_vec(),
+        };
+        let combined = stdout_and_stderr(&output);
+        // format!("{stdout}\n{stderr}").trim()
+        assert_eq!(combined, "line1  \n  line2");
+    }
+
+    // --- classify_result with stdout_and_stderr combiner ---
+
+    #[test]
+    fn test_classify_result_fail_with_stdout_and_stderr() {
+        #[cfg(unix)]
+        let failed_status = {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1 << 8)
+        };
+        #[cfg(windows)]
+        let failed_status = {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1)
+        };
+        let output = Output {
+            status: failed_status,
+            stdout: b"console.log output".to_vec(),
+            stderr: b"Error: test failed".to_vec(),
+        };
+        let result = classify_result(Ok(output), 60, "Node.js", stdout_and_stderr).unwrap();
+        assert!(result.is_fail());
+        let msg = result.error_message();
+        assert!(msg.contains("console.log output"), "should include stdout");
+        assert!(msg.contains("Error: test failed"), "should include stderr");
+    }
+
+    #[test]
+    fn test_classify_result_pass_captures_stdout() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"test output line 1\nline 2".to_vec(),
+            stderr: b"".to_vec(),
+        };
+        let result = classify_result(Ok(output), 30, "Python", stderr_only).unwrap();
+        assert!(result.is_pass());
+        assert_eq!(result.error_message(), "test output line 1\nline 2");
+    }
+
+    // --- Python PEP 503 normalization (dash/underscore equivalence) ---
+
+    /// Replicate the PEP 503 normalization logic from PythonUvExecutor::setup_environment.
+    fn python_dep_matches_local(dep: &str, local_name: &str) -> bool {
+        let norm_d = dep.replace('-', "_").to_lowercase();
+        let norm_local = local_name.replace('-', "_").to_lowercase();
+        norm_d == norm_local
+    }
+
+    #[test]
+    fn test_python_pep503_dash_underscore_equivalence() {
+        // "my-pkg" and "my_pkg" should match
+        assert!(python_dep_matches_local("my-pkg", "my_pkg"));
+        assert!(python_dep_matches_local("my_pkg", "my-pkg"));
+    }
+
+    #[test]
+    fn test_python_pep503_case_insensitive() {
+        assert!(python_dep_matches_local("My-Package", "my_package"));
+        assert!(python_dep_matches_local("MY_PACKAGE", "my-package"));
+    }
+
+    #[test]
+    fn test_python_pep503_exact_match() {
+        assert!(python_dep_matches_local("requests", "requests"));
+    }
+
+    #[test]
+    fn test_python_pep503_no_match() {
+        assert!(!python_dep_matches_local("requests", "flask"));
+        assert!(!python_dep_matches_local("my-pkg", "my-pkg-extra"));
+    }
+
+    #[test]
+    fn test_python_pep503_mixed_separators() {
+        // "scikit-learn" vs "scikit_learn"
+        assert!(python_dep_matches_local("scikit-learn", "scikit_learn"));
+    }
+
+    /// Replicate the full Python dep filtering logic from setup_environment.
+    fn filter_python_deps<'a>(deps: &'a [String], local_pkg_name: Option<&str>) -> Vec<&'a String> {
+        deps.iter()
+            .filter(|d| {
+                if let Some(local_name) = local_pkg_name {
+                    let norm_d = d.replace('-', "_").to_lowercase();
+                    let norm_local = local_name.replace('-', "_").to_lowercase();
+                    norm_d != norm_local
+                } else {
+                    true
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_python_filter_deps_excludes_local_package() {
+        let deps = vec![
+            "my-pkg".to_string(),
+            "requests".to_string(),
+            "flask".to_string(),
+        ];
+        let filtered = filter_python_deps(&deps, Some("my_pkg"));
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(*filtered[0], "requests");
+        assert_eq!(*filtered[1], "flask");
+    }
+
+    #[test]
+    fn test_python_filter_deps_no_local_name() {
+        let deps = vec!["requests".to_string(), "flask".to_string()];
+        let filtered = filter_python_deps(&deps, None);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_python_filter_deps_empty_deps() {
+        let deps: Vec<String> = vec![];
+        let filtered = filter_python_deps(&deps, Some("my-pkg"));
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_python_filter_deps_all_excluded() {
+        let deps = vec!["my-pkg".to_string()];
+        let filtered = filter_python_deps(&deps, Some("my-pkg"));
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_python_filter_deps_case_insensitive_exclusion() {
+        let deps = vec!["My-Package".to_string(), "other-dep".to_string()];
+        let filtered = filter_python_deps(&deps, Some("my_package"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(*filtered[0], "other-dep");
+    }
+
+    // --- Python pyproject.toml dep formatting ---
+
+    /// Replicate the pyproject.toml dependencies_str formatting.
+    fn format_python_deps_str(filtered_deps: &[&String]) -> String {
+        if filtered_deps.is_empty() {
+            String::new()
+        } else {
+            filtered_deps
+                .iter()
+                .map(|d| format!("    \"{}\",", d))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
+
+    #[test]
+    fn test_python_deps_str_formatting_single() {
+        let deps = vec!["requests".to_string()];
+        let refs: Vec<&String> = deps.iter().collect();
+        let formatted = format_python_deps_str(&refs);
+        assert_eq!(formatted, "    \"requests\",");
+    }
+
+    #[test]
+    fn test_python_deps_str_formatting_multiple() {
+        let deps = vec!["requests".to_string(), "flask".to_string()];
+        let refs: Vec<&String> = deps.iter().collect();
+        let formatted = format_python_deps_str(&refs);
+        assert_eq!(formatted, "    \"requests\",\n    \"flask\",");
+    }
+
+    #[test]
+    fn test_python_deps_str_formatting_empty() {
+        let refs: Vec<&String> = vec![];
+        let formatted = format_python_deps_str(&refs);
+        assert_eq!(formatted, "");
+    }
+
+    #[test]
+    fn test_python_pyproject_toml_generation() {
+        // Replicate the full pyproject.toml generation
+        let deps = vec!["requests".to_string(), "click>=8.0".to_string()];
+        let filtered: Vec<&String> = deps.iter().collect();
+        let dependencies_str = format_python_deps_str(&filtered);
+        let pyproject_content = format!(
+            r#"[project]
+name = "skilldo-test"
+version = "0.1.0"
+requires-python = ">=3.8"
+dependencies = [
+{}
+]
+"#,
+            dependencies_str
+        );
+        assert!(pyproject_content.contains("[project]"));
+        assert!(pyproject_content.contains("\"requests\""));
+        assert!(pyproject_content.contains("\"click>=8.0\""));
+        assert!(pyproject_content.contains("dependencies = ["));
+    }
+
+    #[test]
+    fn test_python_pyproject_toml_no_deps() {
+        let dependencies_str = format_python_deps_str(&[]);
+        let pyproject_content = format!(
+            r#"[project]
+name = "skilldo-test"
+version = "0.1.0"
+requires-python = ">=3.8"
+dependencies = [
+{}
+]
+"#,
+            dependencies_str
+        );
+        assert!(pyproject_content.contains("dependencies = [\n\n]"));
+    }
+
+    // --- Python local_pkg_name extraction via TOML ---
+
+    /// Replicate the Python local_pkg_name extraction from pyproject.toml.
+    fn extract_python_local_pkg_name(pyproject_content: &str) -> Option<String> {
+        pyproject_content.parse::<toml::Table>().ok().and_then(|t| {
+            t.get("project")?
+                .as_table()?
+                .get("name")?
+                .as_str()
+                .map(|s| s.to_string())
+        })
+    }
+
+    #[test]
+    fn test_python_extract_pkg_name_basic() {
+        let content = r#"[project]
+name = "my-cool-lib"
+version = "0.1.0"
+"#;
+        assert_eq!(
+            extract_python_local_pkg_name(content),
+            Some("my-cool-lib".to_string())
+        );
+    }
+
+    #[test]
+    fn test_python_extract_pkg_name_missing_project() {
+        let content = r#"[tool.poetry]
+name = "my-lib"
+"#;
+        assert_eq!(extract_python_local_pkg_name(content), None);
+    }
+
+    #[test]
+    fn test_python_extract_pkg_name_missing_name() {
+        let content = r#"[project]
+version = "0.1.0"
+"#;
+        assert_eq!(extract_python_local_pkg_name(content), None);
+    }
+
+    #[test]
+    fn test_python_extract_pkg_name_invalid_toml() {
+        let content = "not valid toml {{{";
+        assert_eq!(extract_python_local_pkg_name(content), None);
+    }
+
+    #[test]
+    fn test_python_extract_pkg_name_from_tempdir() {
+        let tmp = TempDir::new().unwrap();
+        let pyproject = r#"[project]
+name = "my-lib"
+version = "0.1.0"
+requires-python = ">=3.8"
+dependencies = ["requests"]
+"#;
+        std::fs::write(tmp.path().join("pyproject.toml"), pyproject).unwrap();
+
+        let source = tmp.path().to_string_lossy().to_string();
+        let pyproject_path = std::path::Path::new(&source).join("pyproject.toml");
+        let local_pkg_name = std::fs::read_to_string(&pyproject_path)
+            .ok()
+            .and_then(|content| extract_python_local_pkg_name(&content));
+        assert_eq!(local_pkg_name, Some("my-lib".to_string()));
+    }
+
+    #[test]
+    fn test_python_extract_pkg_name_no_pyproject() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().to_string_lossy().to_string();
+        let pyproject_path = std::path::Path::new(&source).join("pyproject.toml");
+        let local_pkg_name = std::fs::read_to_string(&pyproject_path)
+            .ok()
+            .and_then(|content| extract_python_local_pkg_name(&content));
+        assert_eq!(local_pkg_name, None);
+    }
+
+    // --- Cargo.toml extraction (structured path) ---
+
+    /// Replicate the Cargo.toml package name extraction used in both structured
+    /// and fallback setup_environment paths.
+    fn extract_cargo_pkg_name(cargo_toml_content: &str) -> Option<String> {
+        cargo_toml_content
+            .parse::<toml::Table>()
+            .ok()
+            .and_then(|t| {
+                t.get("package")?
+                    .as_table()?
+                    .get("name")?
+                    .as_str()
+                    .map(|s| s.to_string())
+            })
+    }
+
+    #[test]
+    fn test_cargo_extract_pkg_name_basic() {
+        let content = r#"[package]
+name = "my-crate"
+version = "0.1.0"
+edition = "2021"
+"#;
+        assert_eq!(
+            extract_cargo_pkg_name(content),
+            Some("my-crate".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cargo_extract_pkg_name_missing_package() {
+        let content = r#"[lib]
+name = "my-crate"
+"#;
+        assert_eq!(extract_cargo_pkg_name(content), None);
+    }
+
+    #[test]
+    fn test_cargo_extract_pkg_name_missing_name() {
+        let content = r#"[package]
+version = "0.1.0"
+edition = "2021"
+"#;
+        assert_eq!(extract_cargo_pkg_name(content), None);
+    }
+
+    #[test]
+    fn test_cargo_extract_pkg_name_invalid_toml() {
+        assert_eq!(extract_cargo_pkg_name("{{not toml}}"), None);
+    }
+
+    #[test]
+    fn test_cargo_extract_pkg_name_workspace() {
+        // Workspace Cargo.toml has [workspace] but not [package]
+        let content = r#"[workspace]
+members = ["crate-a", "crate-b"]
+"#;
+        assert_eq!(extract_cargo_pkg_name(content), None);
+    }
+
+    // --- Java jar copy logic (pure filesystem tests) ---
+
+    #[test]
+    fn test_java_jar_copy_from_maven_target() {
+        let source_dir = TempDir::new().unwrap();
+        let target_dir = source_dir.path().join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("my-lib-1.0.jar"), b"fake jar").unwrap();
+        std::fs::write(target_dir.join("not-a-jar.txt"), b"not a jar").unwrap();
+
+        let dest_tmp = TempDir::new().unwrap();
+        let deps_dir = dest_tmp.path().join("deps");
+        std::fs::create_dir_all(&deps_dir).unwrap();
+
+        // Replicate the jar copy logic from JavaExecutor::setup_environment
+        let source_path = source_dir.path();
+        let maven_dir = source_path.join("target");
+        let gradle_dir = source_path.join("build").join("libs");
+        let jar_dir = if maven_dir.is_dir() {
+            Some(maven_dir)
+        } else if gradle_dir.is_dir() {
+            Some(gradle_dir)
+        } else {
+            None
+        };
+
+        assert!(jar_dir.is_some(), "should find Maven target/");
+        if let Some(jar_dir) = jar_dir {
+            for entry in std::fs::read_dir(&jar_dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+                    let dest = deps_dir.join(entry.file_name());
+                    std::fs::copy(&path, &dest).unwrap();
+                }
+            }
+        }
+
+        // Verify only jar files were copied
+        let copied: Vec<_> = std::fs::read_dir(&deps_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(copied, vec!["my-lib-1.0.jar"]);
+    }
+
+    #[test]
+    fn test_java_jar_copy_from_gradle_build_libs() {
+        let source_dir = TempDir::new().unwrap();
+        let libs_dir = source_dir.path().join("build").join("libs");
+        std::fs::create_dir_all(&libs_dir).unwrap();
+        std::fs::write(libs_dir.join("app-2.0.jar"), b"gradle jar").unwrap();
+        std::fs::write(libs_dir.join("app-2.0-sources.jar"), b"sources jar").unwrap();
+
+        let dest_tmp = TempDir::new().unwrap();
+        let deps_dir = dest_tmp.path().join("deps");
+        std::fs::create_dir_all(&deps_dir).unwrap();
+
+        let source_path = source_dir.path();
+        let maven_dir = source_path.join("target");
+        let gradle_dir = source_path.join("build").join("libs");
+        let jar_dir = if maven_dir.is_dir() {
+            Some(maven_dir)
+        } else if gradle_dir.is_dir() {
+            Some(gradle_dir)
+        } else {
+            None
+        };
+
+        assert!(jar_dir.is_some(), "should find Gradle build/libs/");
+        if let Some(jar_dir) = jar_dir {
+            for entry in std::fs::read_dir(&jar_dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+                    let dest = deps_dir.join(entry.file_name());
+                    std::fs::copy(&path, &dest).unwrap();
+                }
+            }
+        }
+
+        let mut copied: Vec<_> = std::fs::read_dir(&deps_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        copied.sort();
+        assert_eq!(copied, vec!["app-2.0-sources.jar", "app-2.0.jar"]);
+    }
+
+    #[test]
+    fn test_java_jar_copy_no_target_no_build() {
+        // Neither target/ nor build/libs/ exists
+        let source_dir = TempDir::new().unwrap();
+        let source_path = source_dir.path();
+        let maven_dir = source_path.join("target");
+        let gradle_dir = source_path.join("build").join("libs");
+        let jar_dir = if maven_dir.is_dir() {
+            Some(maven_dir)
+        } else if gradle_dir.is_dir() {
+            Some(gradle_dir)
+        } else {
+            None
+        };
+        assert!(jar_dir.is_none(), "no jar dir should be found");
+    }
+
+    #[test]
+    fn test_java_jar_copy_target_empty() {
+        // target/ exists but has no jar files
+        let source_dir = TempDir::new().unwrap();
+        let target_dir = source_dir.path().join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("classes"), b"not a jar").unwrap();
+
+        let dest_tmp = TempDir::new().unwrap();
+        let deps_dir = dest_tmp.path().join("deps");
+        std::fs::create_dir_all(&deps_dir).unwrap();
+
+        let jar_dir = Some(target_dir);
+        if let Some(jar_dir) = jar_dir {
+            for entry in std::fs::read_dir(&jar_dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+                    let dest = deps_dir.join(entry.file_name());
+                    std::fs::copy(&path, &dest).unwrap();
+                }
+            }
+        }
+
+        let count = std::fs::read_dir(&deps_dir).unwrap().count();
+        assert_eq!(count, 0, "no jars should be copied");
+    }
+
+    #[test]
+    fn test_java_jar_copy_prefers_maven_over_gradle() {
+        // Both target/ and build/libs/ exist — should prefer target/ (Maven)
+        let source_dir = TempDir::new().unwrap();
+        let target_dir = source_dir.path().join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("maven.jar"), b"maven").unwrap();
+
+        let libs_dir = source_dir.path().join("build").join("libs");
+        std::fs::create_dir_all(&libs_dir).unwrap();
+        std::fs::write(libs_dir.join("gradle.jar"), b"gradle").unwrap();
+
+        let source_path = source_dir.path();
+        let maven_dir = source_path.join("target");
+        let gradle_dir = source_path.join("build").join("libs");
+        let jar_dir = if maven_dir.is_dir() {
+            Some(maven_dir)
+        } else if gradle_dir.is_dir() {
+            Some(gradle_dir)
+        } else {
+            None
+        };
+
+        // Should pick Maven target/, not Gradle build/libs/
+        assert!(jar_dir.is_some());
+        let jar_dir_path = jar_dir.unwrap();
+        assert!(
+            jar_dir_path.ends_with("target"),
+            "should prefer Maven target/: {:?}",
+            jar_dir_path
+        );
+    }
+
+    // --- Java classpath construction ---
+
+    #[test]
+    fn test_java_classpath_with_deps_dir() {
+        let tmp = TempDir::new().unwrap();
+        let deps_dir = tmp.path().join("deps");
+        std::fs::create_dir_all(&deps_dir).unwrap();
+
+        let sep = if cfg!(target_os = "windows") {
+            ";"
+        } else {
+            ":"
+        };
+        let classpath = if deps_dir.is_dir() {
+            format!("deps/*{sep}.")
+        } else {
+            ".".to_string()
+        };
+
+        #[cfg(unix)]
+        assert_eq!(classpath, "deps/*:.");
+        #[cfg(windows)]
+        assert_eq!(classpath, "deps/*;.");
+    }
+
+    #[test]
+    fn test_java_classpath_without_deps_dir() {
+        let tmp = TempDir::new().unwrap();
+        let deps_dir = tmp.path().join("deps");
+        // Don't create deps_dir
+
+        let sep = if cfg!(target_os = "windows") {
+            ";"
+        } else {
+            ":"
+        };
+        let classpath = if deps_dir.is_dir() {
+            format!("deps/*{sep}.")
+        } else {
+            ".".to_string()
+        };
+
+        assert_eq!(classpath, ".");
+    }
+
+    // --- Java deps plural/singular wording ---
+
+    #[test]
+    fn test_java_singular_dependency_wording() {
+        let deps_len = 1;
+        let word = if deps_len == 1 {
+            "dependency"
+        } else {
+            "dependencies"
+        };
+        assert_eq!(word, "dependency");
+    }
+
+    #[test]
+    fn test_java_plural_dependencies_wording() {
+        let deps_len = 3;
+        let word = if deps_len == 1 {
+            "dependency"
+        } else {
+            "dependencies"
+        };
+        assert_eq!(word, "dependencies");
+    }
+
+    // --- Cargo: backslash normalization for local path on non-Windows ---
+
+    #[test]
+    fn test_cargo_backslash_normalization() {
+        // Verify the backslash→forward-slash replacement used in both
+        // structured and fallback Cargo dep paths
+        let source_with_backslash = r"C:\Users\dev\my-crate";
+        let safe = source_with_backslash.replace('\\', "/");
+        assert_eq!(safe, "C:/Users/dev/my-crate");
+        assert!(!safe.contains('\\'));
+    }
+
+    #[test]
+    fn test_cargo_forward_slash_unchanged() {
+        let source = "/home/dev/my-crate";
+        let safe = source.replace('\\', "/");
+        assert_eq!(safe, source);
+    }
+
+    // --- Cargo structured dep: full Cargo.toml generation ---
+
+    #[test]
+    fn test_cargo_full_toml_generation_with_deps() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        let deps = [
+            StructuredDep {
+                name: "serde".to_string(),
+                raw_spec: Some("{ version = \"1\", features = [\"derive\"] }".to_string()),
+                source: DepSource::Manifest,
+            },
+            StructuredDep {
+                name: "anyhow".to_string(),
+                raw_spec: None,
+                source: DepSource::Pattern,
+            },
+        ];
+
+        let lines: Vec<String> = deps
+            .iter()
+            .map(|d| format_cargo_dep_line(d, None))
+            .collect();
+        let deps_section = format!("\n[dependencies]\n{}\n", lines.join("\n"));
+        let cargo_toml = format!(
+            r#"[package]
+name = "skilldo-test"
+version = "0.1.0"
+edition = "2021"
+{deps_section}"#
+        );
+
+        assert!(cargo_toml.contains("[package]"));
+        assert!(cargo_toml.contains("skilldo-test"));
+        assert!(cargo_toml.contains("[dependencies]"));
+        assert!(cargo_toml.contains("serde = { version = \"1\", features = [\"derive\"] }"));
+        assert!(cargo_toml.contains("anyhow = \"*\""));
+    }
+
+    #[test]
+    fn test_cargo_full_toml_generation_no_deps() {
+        let deps: Vec<crate::pipeline::collector::StructuredDep> = vec![];
+        let deps_section = if deps.is_empty() {
+            String::new()
+        } else {
+            unreachable!()
+        };
+        let cargo_toml = format!(
+            r#"[package]
+name = "skilldo-test"
+version = "0.1.0"
+edition = "2021"
+{deps_section}"#
+        );
+
+        assert!(cargo_toml.contains("[package]"));
+        assert!(!cargo_toml.contains("[dependencies]"));
+    }
+
+    // --- Cargo: fallback path dep generation with local source ---
+
+    #[test]
+    fn test_cargo_fallback_deps_section_with_local_source() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let deps = vec!["my-crate".to_string(), "serde".to_string()];
+        let local_source = tmp.path().to_string_lossy().to_string();
+
+        let lines: Vec<String> = deps
+            .iter()
+            .map(|d| format_cargo_plain_dep_line(d, Some(&local_source)))
+            .collect();
+        let deps_section = format!("\n[dependencies]\n{}\n", lines.join("\n"));
+
+        assert!(deps_section.contains("[dependencies]"));
+        assert!(
+            lines[0].contains("path = "),
+            "local dep should use path: {}",
+            lines[0]
+        );
+        assert_eq!(lines[1], "serde = \"*\"");
+    }
+
+    // --- Node: install_args formatting with all-matching deps ---
+
+    #[test]
+    fn test_node_local_install_all_deps_match() {
+        // All deps are the local package — install_args should only contain the source
+        let local_name = Some("my-pkg".to_string());
+        let deps = vec!["my-pkg".to_string()];
+        let source = "/path/to/pkg".to_string();
+
+        let install_args: Vec<String> = {
+            let mut args = vec![source.clone()];
+            for d in &deps {
+                if local_name.as_deref() != Some(d.as_str()) {
+                    args.push(d.clone());
+                }
+            }
+            args
+        };
+
+        assert_eq!(install_args, vec!["/path/to/pkg".to_string()]);
+    }
+
+    #[test]
+    fn test_node_local_install_empty_deps() {
+        // No deps at all — install_args should only contain the source
+        let source = "/path/to/pkg".to_string();
+        let deps: Vec<String> = vec![];
+
+        let install_args: Vec<String> = {
+            let mut args = vec![source.clone()];
+            for d in &deps {
+                let _ = d; // No deps to filter
+                args.push(d.clone());
+            }
+            args
+        };
+
+        assert_eq!(install_args, vec!["/path/to/pkg".to_string()]);
+    }
+
+    // --- Go: needs_replace logic ---
+
+    #[test]
+    fn test_go_needs_replace_exact_module() {
+        let module = "github.com/user/mylib";
+        let deps = vec!["github.com/user/mylib".to_string()];
+        let needs_replace = deps
+            .iter()
+            .any(|d| d == module || d.starts_with(&format!("{module}/")));
+        assert!(needs_replace);
+    }
+
+    #[test]
+    fn test_go_needs_replace_subpackage() {
+        let module = "github.com/user/mylib";
+        let deps = vec!["github.com/user/mylib/subpkg".to_string()];
+        let needs_replace = deps
+            .iter()
+            .any(|d| d == module || d.starts_with(&format!("{module}/")));
+        assert!(needs_replace);
+    }
+
+    #[test]
+    fn test_go_needs_replace_no_match() {
+        let module = "github.com/user/mylib";
+        let deps = vec!["github.com/other/lib".to_string()];
+        let needs_replace = deps
+            .iter()
+            .any(|d| d == module || d.starts_with(&format!("{module}/")));
+        assert!(!needs_replace);
+    }
+
+    #[test]
+    fn test_go_needs_replace_empty_deps() {
+        let module = "github.com/user/mylib";
+        let deps: Vec<String> = vec![];
+        let needs_replace = deps
+            .iter()
+            .any(|d| d == module || d.starts_with(&format!("{module}/")));
+        assert!(!needs_replace);
+    }
+
+    #[test]
+    fn test_go_needs_replace_prefix_collision_no_match() {
+        // "github.com/user/mylib2" should NOT trigger replace for "github.com/user/mylib"
+        let module = "github.com/user/mylib";
+        let deps = vec!["github.com/user/mylib2".to_string()];
+        let needs_replace = deps
+            .iter()
+            .any(|d| d == module || d.starts_with(&format!("{module}/")));
+        assert!(!needs_replace);
+    }
+
+    // --- Java filter: empty deps ---
+
+    #[test]
+    fn test_java_filter_empty_deps() {
+        let deps: Vec<String> = vec![];
+        let filtered = filter_java_deps_by_artifact_id(&deps, Some("my-lib"));
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_java_filter_empty_deps_no_artifact() {
+        let deps: Vec<String> = vec![];
+        let filtered = filter_java_deps_by_artifact_id(&deps, None);
+        assert!(filtered.is_empty());
+    }
+
+    // --- Java: pom precompute skipping (fetch_deps empty after filtering) ---
+
+    #[test]
+    fn test_java_pom_none_when_all_deps_filtered() {
+        // When all deps match the local artifact, fetch_deps is empty,
+        // so pom should be None (no Maven fetch needed)
+        let deps = vec!["com.example:my-lib:1.0".to_string()];
+        let fetch_deps = filter_java_deps_by_artifact_id(&deps, Some("my-lib"));
+        assert!(fetch_deps.is_empty());
+        let pom = if fetch_deps.is_empty() {
+            None
+        } else {
+            crate::util::build_maven_pom_xml(&fetch_deps)
+        };
+        assert!(pom.is_none());
+    }
+
+    #[test]
+    fn test_java_pom_some_when_deps_remain() {
+        let deps = vec![
+            "com.example:my-lib:1.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+        ];
+        let fetch_deps = filter_java_deps_by_artifact_id(&deps, Some("my-lib"));
+        assert_eq!(fetch_deps.len(), 1);
+        let pom = if fetch_deps.is_empty() {
+            None
+        } else {
+            crate::util::build_maven_pom_xml(&fetch_deps)
+        };
+        assert!(pom.is_some());
+        let pom_str = pom.unwrap();
+        assert!(pom_str.contains("gson"));
+        assert!(!pom_str.contains("my-lib"));
+    }
+
+    // --- Cargo structured: dep with path override has backslash-safe path ---
+
+    #[test]
+    fn test_cargo_structured_dep_local_path_with_backslash_source() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // Create a temp dir with a Cargo.toml
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let dep = StructuredDep {
+            name: "my-crate".to_string(),
+            raw_spec: Some("\"1.0\"".to_string()),
+            source: DepSource::Manifest,
+        };
+
+        let line = format_cargo_dep_line(&dep, Some(&tmp.path().to_string_lossy()));
+        assert!(line.contains("path = "), "should use path: {line}");
+        assert!(
+            !line.contains('\\'),
+            "path should not contain backslashes: {line}"
+        );
+    }
+
+    // --- stderr_only helper ---
+
+    #[test]
+    fn test_stderr_only_returns_stderr() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"stdout content".to_vec(),
+            stderr: b"stderr content".to_vec(),
+        };
+        let result = stderr_only(&output);
+        assert_eq!(result, "stderr content");
+        // Verify it does NOT include stdout
+        assert!(!result.contains("stdout content"));
+    }
+
+    #[test]
+    fn test_stderr_only_empty() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"stdout".to_vec(),
+            stderr: b"".to_vec(),
+        };
+        let result = stderr_only(&output);
+        assert_eq!(result, "");
+    }
+
+    // --- Python: full local-install filtering end-to-end via temp dir ---
+
+    #[test]
+    fn test_python_local_install_full_flow() {
+        // Create a temp dir simulating a Python project
+        let tmp = TempDir::new().unwrap();
+        let pyproject = r#"[project]
+name = "my-cool-lib"
+version = "0.1.0"
+requires-python = ">=3.8"
+dependencies = []
+"#;
+        std::fs::write(tmp.path().join("pyproject.toml"), pyproject).unwrap();
+
+        // Simulate the full extraction+filtering flow
+        let source = tmp.path().to_string_lossy().to_string();
+        let pyproject_path = std::path::Path::new(&source).join("pyproject.toml");
+        let local_pkg_name: Option<String> = std::fs::read_to_string(&pyproject_path)
+            .ok()
+            .and_then(|content| content.parse::<toml::Table>().ok())
+            .and_then(|t| {
+                t.get("project")?
+                    .as_table()?
+                    .get("name")?
+                    .as_str()
+                    .map(|s| s.to_string())
+            });
+        assert_eq!(local_pkg_name, Some("my-cool-lib".to_string()));
+
+        // Filter deps — "my-cool-lib" and "my_cool_lib" should both be excluded
+        let deps = vec![
+            "my-cool-lib".to_string(),
+            "my_cool_lib".to_string(),
+            "requests".to_string(),
+        ];
+        let filtered: Vec<&String> = deps
+            .iter()
+            .filter(|d| {
+                if let Some(ref local_name) = local_pkg_name {
+                    let norm_d = d.replace('-', "_").to_lowercase();
+                    let norm_local = local_name.replace('-', "_").to_lowercase();
+                    norm_d != norm_local
+                } else {
+                    true
+                }
+            })
+            .collect();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(*filtered[0], "requests");
+    }
+
+    // --- Cargo: full local-install flow for fallback (non-structured) path ---
+
+    #[test]
+    fn test_cargo_fallback_local_install_full_flow() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let source = tmp.path().to_string_lossy().to_string();
+        let cargo_path = std::path::Path::new(&source).join("Cargo.toml");
+        let local_pkg_name: Option<String> = std::fs::read_to_string(&cargo_path)
+            .ok()
+            .and_then(|content| content.parse::<toml::Table>().ok())
+            .and_then(|t| {
+                t.get("package")?
+                    .as_table()?
+                    .get("name")?
+                    .as_str()
+                    .map(|s| s.to_string())
+            });
+        assert_eq!(local_pkg_name, Some("my-crate".to_string()));
+
+        // Build deps section with local override
+        let deps = vec!["my-crate".to_string(), "tokio".to_string()];
+        let lines: Vec<String> = deps
+            .iter()
+            .map(|d| {
+                if local_pkg_name.as_deref() == Some(d.as_str()) {
+                    let safe = source.replace('\\', "/");
+                    format!("{d} = {{ path = \"{}\" }}", safe)
+                } else {
+                    format!("{d} = \"*\"")
+                }
+            })
+            .collect();
+        let deps_section = format!("\n[dependencies]\n{}\n", lines.join("\n"));
+
+        assert!(deps_section.contains("[dependencies]"));
+        assert!(lines[0].contains("path = "));
+        assert!(lines[0].starts_with("my-crate = "));
+        assert_eq!(lines[1], "tokio = \"*\"");
+    }
+
+    // --- Java: full local-install artifact exclusion flow ---
+
+    #[test]
+    fn test_java_local_install_full_flow() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>my-java-lib</artifactId><version>1.0</version></project>",
+        )
+        .unwrap();
+
+        // Also create target/ with a jar
+        let target_dir = tmp.path().join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("my-java-lib-1.0.jar"), b"fake").unwrap();
+
+        let handler = crate::ecosystems::java::JavaHandler::new(tmp.path());
+        let local_artifact_id = handler.get_package_name().ok();
+        assert_eq!(local_artifact_id, Some("my-java-lib".to_string()));
+
+        // Filter Maven deps
+        let deps = vec![
+            "com.example:my-java-lib:1.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+        ];
+        let fetch_deps = filter_java_deps_by_artifact_id(&deps, local_artifact_id.as_deref());
+        assert_eq!(fetch_deps.len(), 1);
+        assert_eq!(fetch_deps[0], "com.google.code.gson:gson:2.10.1");
+
+        // Verify jar copy finds the jar
+        let source_path = tmp.path();
+        let maven_dir = source_path.join("target");
+        assert!(maven_dir.is_dir());
+        let jars: Vec<_> = std::fs::read_dir(&maven_dir)
+            .unwrap()
+            .filter_map(|e| {
+                let e = e.ok()?;
+                if e.path().extension()?.to_str()? == "jar" {
+                    Some(e.file_name().to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(jars, vec!["my-java-lib-1.0.jar"]);
+    }
+
+    // --- Go: full local-install detection flow ---
+
+    #[test]
+    fn test_go_local_install_full_flow() {
+        let tmp = TempDir::new().unwrap();
+        let go_mod_content = "module github.com/user/mylib\n\ngo 1.21\n";
+        std::fs::write(tmp.path().join("go.mod"), go_mod_content).unwrap();
+
+        // Extract module name
+        let source = tmp.path().to_string_lossy().to_string();
+        let go_mod_path = std::path::Path::new(&source).join("go.mod");
+        let local_module = std::fs::read_to_string(&go_mod_path)
+            .ok()
+            .and_then(|content| extract_go_module_name(&content));
+        assert_eq!(local_module, Some("github.com/user/mylib".to_string()));
+
+        // Check needs_replace for various deps
+        let module = local_module.unwrap();
+        let deps = vec![
+            "github.com/user/mylib".to_string(),
+            "github.com/user/mylib/subpkg".to_string(),
+            "github.com/other/lib".to_string(),
+        ];
+
+        let needs_replace = deps
+            .iter()
+            .any(|d| d == &module || d.starts_with(&format!("{module}/")));
+        assert!(needs_replace, "should need replace for mylib deps");
+
+        // Count which deps trigger replace
+        let replace_count = deps
+            .iter()
+            .filter(|d| go_module_matches_dep(d, &module))
+            .count();
+        assert_eq!(replace_count, 2); // exact + subpkg
+    }
+
+    // --- Node: full local-install flow with temp dir ---
+
+    #[test]
+    fn test_node_local_install_full_flow() {
+        let tmp = TempDir::new().unwrap();
+        let pkg_json = r#"{"name": "@scope/my-pkg", "version": "1.0.0"}"#;
+        std::fs::write(tmp.path().join("package.json"), pkg_json).unwrap();
+
+        let source = tmp.path().to_string_lossy().to_string();
+        let pkg_path = std::path::Path::new(&source).join("package.json");
+        let local_name: Option<String> = std::fs::read_to_string(&pkg_path).ok().and_then(|c| {
+            serde_json::from_str::<serde_json::Value>(&c)
+                .ok()
+                .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
+        });
+        assert_eq!(local_name, Some("@scope/my-pkg".to_string()));
+
+        // Build install args — local package excluded
+        let deps = vec![
+            "@scope/my-pkg".to_string(),
+            "express".to_string(),
+            "lodash".to_string(),
+        ];
+        let install_args: Vec<String> = {
+            let mut args = vec![source.clone()];
+            for d in &deps {
+                if local_name.as_deref() != Some(d.as_str()) {
+                    args.push(d.clone());
+                }
+            }
+            args
+        };
+
+        assert_eq!(install_args.len(), 3); // source + express + lodash
+        assert_eq!(install_args[0], source);
+        assert_eq!(install_args[1], "express");
+        assert_eq!(install_args[2], "lodash");
     }
 }

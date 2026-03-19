@@ -2228,6 +2228,300 @@ setup(
             "Expected changelog content"
         );
     }
+
+    // -- collect_python: additional branch coverage --
+
+    #[tokio::test]
+    async fn test_collect_python_no_changelog() {
+        // Arrange: minimal Python project WITHOUT a changelog file
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("mylib")).unwrap();
+        fs::write(dir.path().join("mylib").join("__init__.py"), "").unwrap();
+        fs::write(
+            dir.path().join("setup.py"),
+            "from setuptools import setup\nsetup(name='mylib')\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("tests")).unwrap();
+        fs::write(
+            dir.path().join("tests").join("test_basic.py"),
+            "def test_hello():\n    assert True\n",
+        )
+        .unwrap();
+
+        // Act
+        let c = Collector::new(dir.path(), Language::Python);
+        let data = c.collect().await.unwrap();
+
+        // Assert: changelog_content should be empty (no changelog file)
+        assert!(
+            data.changelog_content.is_empty(),
+            "Expected empty changelog when no changelog file exists"
+        );
+        assert_eq!(data.package_name, "mylib");
+    }
+
+    #[tokio::test]
+    async fn test_collect_python_invalid_package_name_falls_back() {
+        // Arrange: Python project whose detected name fails sanitize_dep_name
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("mylib")).unwrap();
+        fs::write(dir.path().join("mylib").join("__init__.py"), "").unwrap();
+        // pyproject.toml with name starting with '-' (rejected by sanitize_dep_name)
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname = \"-badname\"\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("tests")).unwrap();
+        fs::write(
+            dir.path().join("tests").join("test_basic.py"),
+            "def test_hello():\n    assert True\n",
+        )
+        .unwrap();
+
+        // Act
+        let c = Collector::new(dir.path(), Language::Python);
+        let data = c.collect().await.unwrap();
+
+        // Assert: invalid name falls back to "unknown"
+        assert_eq!(data.package_name, "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_collect_go_invalid_package_name_falls_back() {
+        // Arrange: Go project whose module name fails sanitize_dep_name
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("go.mod"),
+            "module github.com/org/-badname\n\ngo 1.21\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("main.go"),
+            "package badname\n\nfunc Hello() string { return \"hello\" }\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("main_test.go"),
+            "package badname\n\nimport \"testing\"\n\nfunc TestHello(t *testing.T) {}\n",
+        )
+        .unwrap();
+
+        // Act
+        let c = Collector::new(dir.path(), Language::Go);
+        let data = c.collect().await.unwrap();
+
+        // Assert: "-badname" starts with '-', sanitize_dep_name rejects => "unknown"
+        assert_eq!(data.package_name, "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_collect_javascript_invalid_package_name_falls_back() {
+        // Arrange: JS project whose package name fails sanitize_dep_name
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"-bad-pkg","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("index.js"),
+            "module.exports = function() {};\n",
+        )
+        .unwrap();
+
+        // Act
+        let c = Collector::new(dir.path(), Language::JavaScript);
+        let data = c.collect().await.unwrap();
+
+        // Assert: "-bad-pkg" starts with '-', sanitize_dep_name rejects => "unknown"
+        assert_eq!(data.package_name, "unknown");
+    }
+
+    // -- read_files: budget too small for truncation header --
+
+    #[test]
+    fn test_read_files_budget_too_small_for_header() {
+        // Arrange: budget is positive but too small for even the truncated header.
+        // This exercises the else-break at line 443 in read_files.
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("big.py");
+        fs::write(&file_path, "x".repeat(1000)).unwrap();
+
+        // The truncated header is "\n\n// File: <path> (truncated)\n" which is
+        // typically 50-80+ chars depending on tmpdir path. Budget of 5 is
+        // enough to pass the `total_chars >= max_chars` check (0 < 5) but
+        // too small for any header, so the else-break fires.
+        let result = Collector::read_files(&[file_path], 5).unwrap();
+
+        // Assert: should produce empty string (budget too small for any file)
+        assert_eq!(
+            result, "",
+            "Budget smaller than header should yield empty result"
+        );
+    }
+
+    // -- collect_rust: with changelog --
+
+    #[tokio::test]
+    async fn test_collect_rust_with_changelog() {
+        // Arrange: Rust project with a CHANGELOG.md
+        let dir = TempDir::new().unwrap();
+        create_rust_project(dir.path());
+        fs::write(
+            dir.path().join("CHANGELOG.md"),
+            "# Changelog\n\n## 0.1.0\n- Initial release\n",
+        )
+        .unwrap();
+
+        // Act
+        let c = Collector::new(dir.path(), Language::Rust);
+        let data = c.collect().await.unwrap();
+
+        // Assert: changelog should be populated
+        assert!(
+            data.changelog_content.contains("Changelog"),
+            "Expected changelog content, got: '{}'",
+            data.changelog_content
+        );
+    }
+
+    // -- detect_package_name: empty path triggers "unknown" fallback --
+
+    #[test]
+    fn test_detect_package_name_nonexistent_path_returns_name() {
+        // Arrange: path that does not exist on disk. canonicalize() will fail,
+        // but file_name() still returns something, so we get the last component.
+        let result =
+            Collector::detect_package_name(Path::new("/nonexistent/fake-project")).unwrap();
+
+        // Assert: canonicalize fails but file_name returns "fake-project"
+        // (Strategy 4: file_name fallback)
+        assert_eq!(result, "fake-project");
+    }
+
+    // -- collect_python: custom budget exercises with_max_source_chars path --
+
+    #[tokio::test]
+    async fn test_collect_python_respects_budget() {
+        // Arrange: Python project with enough source to test budget constraint
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("mylib");
+        fs::create_dir(&pkg).unwrap();
+        fs::write(pkg.join("__init__.py"), "").unwrap();
+        fs::write(pkg.join("core.py"), "x".repeat(5000)).unwrap();
+        fs::write(
+            dir.path().join("setup.py"),
+            "from setuptools import setup\nsetup(name='mylib')\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("tests")).unwrap();
+        fs::write(
+            dir.path().join("tests").join("test_core.py"),
+            "def test():\n    assert True\n",
+        )
+        .unwrap();
+
+        // Act: small vs large budget
+        let small = Collector::new(dir.path(), Language::Python).with_max_source_chars(200);
+        let large = Collector::new(dir.path(), Language::Python).with_max_source_chars(50_000);
+
+        let small_data = small.collect().await.unwrap();
+        let large_data = large.collect().await.unwrap();
+
+        // Assert: smaller budget should yield less total content
+        let small_total = small_data.source_content.len()
+            + small_data.examples_content.len()
+            + small_data.test_content.len()
+            + small_data.docs_content.len();
+        let large_total = large_data.source_content.len()
+            + large_data.examples_content.len()
+            + large_data.test_content.len()
+            + large_data.docs_content.len();
+        assert!(
+            small_total <= large_total,
+            "budget should constrain content: small={} large={}",
+            small_total,
+            large_total
+        );
+    }
+
+    // -- collect_go: no changelog branch --
+
+    #[tokio::test]
+    async fn test_collect_go_no_changelog() {
+        // Arrange: Go project without CHANGELOG.md
+        let dir = TempDir::new().unwrap();
+        create_go_project(dir.path());
+        // Explicitly verify no changelog file
+        assert!(!dir.path().join("CHANGELOG.md").exists());
+
+        // Act
+        let c = Collector::new(dir.path(), Language::Go);
+        let data = c.collect().await.unwrap();
+
+        // Assert: changelog should be empty
+        assert!(
+            data.changelog_content.is_empty(),
+            "Expected empty changelog when no file exists"
+        );
+    }
+
+    // -- collect_rust: no changelog (already implicit in test_collect_rust_basic,
+    // but this makes it explicit) --
+
+    #[tokio::test]
+    async fn test_collect_rust_no_changelog() {
+        // Arrange: Rust project without CHANGELOG.md
+        let dir = TempDir::new().unwrap();
+        create_rust_project(dir.path());
+        assert!(!dir.path().join("CHANGELOG.md").exists());
+
+        // Act
+        let c = Collector::new(dir.path(), Language::Rust);
+        let data = c.collect().await.unwrap();
+
+        // Assert
+        assert!(
+            data.changelog_content.is_empty(),
+            "Expected empty changelog when no file exists"
+        );
+    }
+
+    // -- read_files_smart: multiple files with mixed priorities --
+
+    #[test]
+    fn test_read_files_smart_sorts_by_priority() {
+        // Arrange: files with different priorities should be read in priority order
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path();
+        let pkg = repo.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+
+        // Low priority: private file (priority 100)
+        let priv_path = pkg.join("_private.py");
+        fs::write(&priv_path, "private_content").unwrap();
+
+        // High priority: __init__.py (priority 0)
+        let init_path = pkg.join("__init__.py");
+        fs::write(&init_path, "init_content").unwrap();
+
+        // Act: provide both files in reverse priority order
+        let result = Collector::read_files_smart(&[priv_path, init_path], 100_000, repo).unwrap();
+
+        // Assert: __init__.py (critical) should appear before _private.py (low priority)
+        let init_pos = result
+            .find("init_content")
+            .expect("init_content should be present");
+        let priv_pos = result
+            .find("private_content")
+            .expect("private_content should be present");
+        assert!(
+            init_pos < priv_pos,
+            "Critical file should be read before low-priority file"
+        );
+    }
 }
 
 /// Where a dependency was discovered.

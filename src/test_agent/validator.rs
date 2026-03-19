@@ -1855,4 +1855,222 @@ mod tests {
         };
         assert!(result.generate_feedback(&Language::Python).is_none());
     }
+
+    // --- Container + local-install fallback (non-Python falls back to BareMetal) ---
+
+    #[test]
+    fn test_new_go_container_local_install_falls_back_to_bare_metal() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/go-project".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None).unwrap();
+        // Container + non-Registry + non-Python should fall back to BareMetal
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+    }
+
+    #[test]
+    fn test_new_javascript_container_local_install_falls_back_to_bare_metal() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/js-project".to_string()),
+            ..Default::default()
+        };
+        let validator =
+            TestCodeValidator::new(&Language::JavaScript, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+    }
+
+    #[test]
+    fn test_new_java_container_local_install_falls_back_to_bare_metal() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/java-project".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Java, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+    }
+
+    // --- BareMetal + local_source (with_local_source branch) ---
+
+    #[test]
+    fn test_new_go_baremetal_with_local_source() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/go-src".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+        assert_eq!(
+            validator.local_source.as_deref(),
+            Some("/tmp/go-src"),
+            "local_source should be set from config"
+        );
+    }
+
+    #[test]
+    fn test_new_javascript_baremetal_with_local_source() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/js-src".to_string()),
+            ..Default::default()
+        };
+        let validator =
+            TestCodeValidator::new(&Language::JavaScript, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+        assert_eq!(validator.local_source.as_deref(), Some("/tmp/js-src"));
+    }
+
+    #[test]
+    fn test_new_rust_baremetal_with_local_source() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/rust-src".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Rust, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+        assert_eq!(validator.local_source.as_deref(), Some("/tmp/rust-src"));
+    }
+
+    #[test]
+    fn test_new_java_baremetal_with_local_source() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/java-src".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Java, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+        assert_eq!(validator.local_source.as_deref(), Some("/tmp/java-src"));
+    }
+
+    // --- Successful retry path (first run fails, retry succeeds) ---
+
+    /// Executor that returns Fail on the first run_code, then Pass on the second.
+    /// Covers the successful retry path (lines 542-544, 562-567).
+    struct FailThenPassExecutor {
+        call_count: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl FailThenPassExecutor {
+        fn new() -> Self {
+            Self {
+                call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LanguageExecutor for FailThenPassExecutor {
+        async fn setup_environment(&self, _deps: &[String]) -> Result<ExecutionEnv> {
+            let temp_dir = tempfile::TempDir::new()?;
+            Ok(ExecutionEnv {
+                temp_dir,
+                interpreter_path: None,
+                container_name: None,
+                dependencies: vec![],
+            })
+        }
+
+        async fn run_code(&self, _env: &ExecutionEnv, _code: &str) -> Result<ExecutionResult> {
+            let n = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                Ok(ExecutionResult::Fail("first run compile error".to_string()))
+            } else {
+                Ok(ExecutionResult::Pass("retry succeeded".to_string()))
+            }
+        }
+
+        async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_retry_succeeds_after_initial_failure() {
+        let patterns = vec![basic_pattern()];
+        let validator = make_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("print('ok')")),
+            Box::new(FailThenPassExecutor::new()),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+        );
+        let result = validator.validate("# SKILL.md").await.unwrap();
+        // First run_code returns Fail, retry_test_code (default impl) succeeds,
+        // second run_code returns Pass
+        assert_eq!(result.passed, 1);
+        assert_eq!(result.failed, 0);
+        assert!(result.all_passed());
+    }
+
+    // --- Python container + local-install should NOT fall back ---
+
+    #[test]
+    fn test_new_python_container_local_install_stays_container() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/py-project".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Python, &client, config, None).unwrap();
+        // Python is the exception: container + local-install should NOT fall back
+        assert_eq!(validator.execution_mode(), ExecutionMode::Container);
+    }
+
+    // --- Python bare-metal with local source ---
+
+    #[test]
+    fn test_new_python_baremetal_with_local_source() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/py-src".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Python, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+        assert_eq!(validator.local_source.as_deref(), Some("/tmp/py-src"));
+    }
 }
