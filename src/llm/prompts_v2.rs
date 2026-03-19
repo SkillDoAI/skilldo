@@ -973,6 +973,7 @@ Now generate the SKILL.md content for {} v{}:
 }
 
 /// Update prompt for create stage: patches an existing SKILL.md with new data
+#[allow(clippy::too_many_arguments)]
 pub fn create_update_prompt(
     package_name: &str,
     version: &str,
@@ -981,6 +982,7 @@ pub fn create_update_prompt(
     patterns: &str,
     context: &str,
     language: &Language,
+    deps: &[crate::pipeline::collector::StructuredDep],
 ) -> String {
     let ecosystem_term = language.ecosystem_term();
     let lang_str = language.as_str();
@@ -1050,6 +1052,20 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
         ecosystem_term = ecosystem_term
     );
     prompt.push_str(language_hints(language, "create"));
+
+    // Same structured deps injection as create mode
+    if matches!(language, Language::Rust) && !deps.is_empty() {
+        prompt.push_str("\n\n## Known Dependencies (from Cargo.toml — include in ## Imports)\n\nThe ## Imports section for Rust must include both `use` statements AND a fenced ```toml [dependencies] block with exact versions and features.\n\n```toml\n[dependencies]\n");
+        for dep in deps {
+            if let Some(ref spec) = dep.raw_spec {
+                prompt.push_str(&format!("{} = {}\n", dep.name, spec));
+            } else {
+                prompt.push_str(&format!("{} = \"*\"\n", dep.name));
+            }
+        }
+        prompt.push_str("```\n");
+    }
+
     prompt
 }
 

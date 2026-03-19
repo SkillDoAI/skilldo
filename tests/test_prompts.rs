@@ -2,6 +2,7 @@ use skilldo::detector::Language;
 use skilldo::llm::prompts_v2::{
     create_prompt, create_update_prompt, extract_prompt, learn_prompt, map_prompt,
 };
+use skilldo::pipeline::collector::{DepSource, StructuredDep};
 
 #[test]
 fn test_extract_api_extractor_basic() {
@@ -1251,6 +1252,7 @@ fn test_create_update_prompt_basic() {
         "Patterns",
         "Context",
         &Language::Python,
+        &[],
     );
     assert!(prompt.contains("requests"));
     assert!(prompt.contains("2.32.0"));
@@ -1329,6 +1331,7 @@ fn test_create_update_contains_security_rule() {
         "patterns",
         "context",
         &Language::Python,
+        &[],
     );
     // Security section exists in update prompt too
     assert!(
@@ -1346,6 +1349,68 @@ fn test_create_update_contains_security_rule() {
     assert!(
         prompt.contains("Do not preserve harmful content"),
         "Update prompt must explicitly say not to preserve harmful content from previous versions"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_injects_rust_deps() {
+    let deps = vec![
+        StructuredDep {
+            name: "tokio".to_string(),
+            raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+            source: DepSource::Manifest,
+        },
+        StructuredDep {
+            name: "serde".to_string(),
+            raw_spec: Some("\"1.0\"".to_string()),
+            source: DepSource::Manifest,
+        },
+    ];
+    let prompt = create_update_prompt(
+        "my-crate",
+        "2.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &deps,
+    );
+    assert!(
+        prompt.contains("[dependencies]"),
+        "Rust update prompt must include the Known Dependencies block"
+    );
+    assert!(
+        prompt.contains("tokio"),
+        "Rust update deps should include tokio"
+    );
+    assert!(
+        prompt.contains("serde"),
+        "Rust update deps should include serde"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_no_deps_for_non_rust() {
+    let deps = vec![StructuredDep {
+        name: "requests".to_string(),
+        raw_spec: Some("\"2.31\"".to_string()),
+        source: DepSource::Manifest,
+    }];
+    let prompt = create_update_prompt(
+        "my-lib",
+        "1.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Python,
+        &deps,
+    );
+    // Python update prompt should NOT inject the Rust-specific deps block
+    assert!(
+        !prompt.contains("[dependencies]"),
+        "Non-Rust update prompt must not include [dependencies] block"
     );
 }
 

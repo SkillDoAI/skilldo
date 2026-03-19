@@ -387,6 +387,7 @@ impl Generator {
                 &patterns,
                 &context,
                 &data.language,
+                &data.dependencies,
             );
             self.get_client("create").complete(&update_prompt).await?
         } else {

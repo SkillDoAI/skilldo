@@ -161,11 +161,42 @@ impl LanguageExecutor for PythonUvExecutor {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
         }
 
-        // Create pyproject.toml
-        let dependencies_str = if deps.is_empty() {
+        // Determine local package name so we can exclude it from registry deps.
+        // Without this, uv sync fails for unpublished/local-only packages.
+        let local_pkg_name: Option<String> = self.local_source.as_ref().and_then(|source| {
+            let pyproject = std::path::Path::new(source).join("pyproject.toml");
+            std::fs::read_to_string(&pyproject)
+                .ok()
+                .and_then(|content| content.parse::<toml::Table>().ok())
+                .and_then(|t| {
+                    t.get("project")?
+                        .as_table()?
+                        .get("name")?
+                        .as_str()
+                        .map(|s| s.to_string())
+                })
+        });
+
+        // Create pyproject.toml — exclude the local package (installed via editable later)
+        let filtered_deps: Vec<&String> = deps
+            .iter()
+            .filter(|d| {
+                if let Some(ref local_name) = local_pkg_name {
+                    // Normalize: PEP 503 says - and _ are equivalent
+                    let norm_d = d.replace('-', "_").to_lowercase();
+                    let norm_local = local_name.replace('-', "_").to_lowercase();
+                    norm_d != norm_local
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        let dependencies_str = if filtered_deps.is_empty() {
             String::new()
         } else {
-            deps.iter()
+            filtered_deps
+                .iter()
                 .map(|d| format!("    \"{}\",", d))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -503,6 +534,21 @@ impl CargoExecutor {
         fs::create_dir_all(&cargo_home).context("Failed to create CARGO_HOME dir")?;
 
         // Build Cargo.toml with structured deps (preserves versions and features)
+        // Hoist local package name outside the loop to avoid re-reading Cargo.toml per dep.
+        let local_pkg_name: Option<String> = self.local_source.as_ref().and_then(|source| {
+            let cargo_path = std::path::Path::new(source).join("Cargo.toml");
+            std::fs::read_to_string(&cargo_path)
+                .ok()
+                .and_then(|content| content.parse::<toml::Table>().ok())
+                .and_then(|t| {
+                    t.get("package")?
+                        .as_table()?
+                        .get("name")?
+                        .as_str()
+                        .map(|s| s.to_string())
+                })
+        });
+
         let deps_section = if deps.is_empty() {
             String::new()
         } else {
@@ -511,20 +557,7 @@ impl CargoExecutor {
                 .map(|d| {
                     // Local-install override for target package
                     if let Some(ref source) = self.local_source {
-                        let cargo_path = std::path::Path::new(source).join("Cargo.toml");
-                        let is_local = std::fs::read_to_string(&cargo_path)
-                            .ok()
-                            .and_then(|content| content.parse::<toml::Table>().ok())
-                            .and_then(|t| {
-                                t.get("package")?
-                                    .as_table()?
-                                    .get("name")?
-                                    .as_str()
-                                    .map(|n| n == d.name)
-                            })
-                            .unwrap_or(false);
-                        if is_local {
-                            // Forward slashes work in TOML on all platforms
+                        if local_pkg_name.as_deref() == Some(&d.name) {
                             let safe = source.replace('\\', "/");
                             return format!("{} = {{ path = \"{}\" }}", d.name, safe);
                         }
@@ -618,6 +651,22 @@ impl LanguageExecutor for CargoExecutor {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
         }
 
+        // Hoist local package name outside loop (same pattern as structured path)
+        let local_pkg_name_fallback: Option<String> =
+            self.local_source.as_ref().and_then(|source| {
+                let cargo_path = std::path::Path::new(source).join("Cargo.toml");
+                std::fs::read_to_string(&cargo_path)
+                    .ok()
+                    .and_then(|content| content.parse::<toml::Table>().ok())
+                    .and_then(|t| {
+                        t.get("package")?
+                            .as_table()?
+                            .get("name")?
+                            .as_str()
+                            .map(|s| s.to_string())
+                    })
+            });
+
         // Build Cargo.toml with dependencies
         let deps_section = if deps.is_empty() {
             String::new()
@@ -626,21 +675,7 @@ impl LanguageExecutor for CargoExecutor {
                 .iter()
                 .map(|d| {
                     if let Some(ref source) = self.local_source {
-                        // Local-install: use path dep only for the target package.
-                        // Other deps (tokio, reqwest, etc.) come from the registry.
-                        let cargo_toml = std::path::Path::new(source).join("Cargo.toml");
-                        let is_local_pkg = std::fs::read_to_string(&cargo_toml)
-                            .ok()
-                            .and_then(|content| content.parse::<toml::Table>().ok())
-                            .and_then(|t| {
-                                t.get("package")?
-                                    .as_table()?
-                                    .get("name")?
-                                    .as_str()
-                                    .map(|n| n == *d)
-                            })
-                            .unwrap_or(false);
-                        if is_local_pkg {
+                        if local_pkg_name_fallback.as_deref() == Some(d.as_str()) {
                             let safe = source.replace('\\', "/");
                             format!("{d} = {{ path = \"{}\" }}", safe)
                         } else {

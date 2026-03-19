@@ -413,7 +413,25 @@ impl RustHandler {
                                 }
                             };
                             for (k, v) in child_overrides {
-                                tbl.insert(k.to_string(), v.clone());
+                                if k == "features" {
+                                    // Cargo: inherited features are additive — union, don't replace
+                                    if let (Some(ws_arr), Some(child_arr)) = (
+                                        tbl.get("features").and_then(|f| f.as_array()).cloned(),
+                                        v.as_array(),
+                                    ) {
+                                        let mut merged = ws_arr;
+                                        for f in child_arr {
+                                            if !merged.contains(f) {
+                                                merged.push(f.clone());
+                                            }
+                                        }
+                                        tbl.insert(k.to_string(), toml::Value::Array(merged));
+                                    } else {
+                                        tbl.insert(k.to_string(), v.clone());
+                                    }
+                                } else {
+                                    tbl.insert(k.to_string(), v.clone());
+                                }
                             }
                             toml::Value::Table(tbl).to_string()
                         } else {
@@ -3086,6 +3104,39 @@ mod tests {
         assert!(
             raw.contains("version") && raw.contains("json"),
             "should merge workspace version with child features: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_features_union_not_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: reqwest with features = ["rustls-tls"]
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nreqwest = { version = \"0.12\", features = [\"rustls-tls\"] }\n",
+        )
+        .unwrap();
+
+        // Child crate adds "json" feature on top of workspace features
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nreqwest = { workspace = true, features = [\"json\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // Both workspace ("rustls-tls") AND child ("json") features must be present
+        assert!(
+            raw.contains("rustls-tls") && raw.contains("json"),
+            "features must be additive (union), not replaced: {raw}"
         );
     }
 
