@@ -2074,4 +2074,197 @@ mod tests {
         assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
         assert_eq!(validator.local_source.as_deref(), Some("/tmp/py-src"));
     }
+
+    // --- Helper: make_validator with configurable language ---
+
+    fn make_rust_validator<'a>(
+        parser: Box<dyn LanguageParser>,
+        code_generator: Box<dyn LanguageCodeGenerator + 'a>,
+        executor: Box<dyn LanguageExecutor>,
+        mode: ValidationMode,
+        install_source: InstallSource,
+        local_source: Option<String>,
+    ) -> TestCodeValidator<'a> {
+        TestCodeValidator {
+            language: Language::Rust,
+            parser,
+            code_generator,
+            executor,
+            execution_mode: ExecutionMode::BareMetal,
+            mode,
+            install_source,
+            executor_timeout: 30,
+            local_source,
+        }
+    }
+
+    // --- validate() Rust-specific structured deps path ---
+
+    #[tokio::test]
+    async fn test_validate_rust_uses_structured_deps_path() {
+        // Exercises the Rust-specific env setup in validate() (lines 476-498).
+        // Uses a SKILL.md with no deps so CargoExecutor skips `cargo fetch`.
+        let patterns = vec![basic_pattern()];
+        let validator = make_rust_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("fn main() {}")),
+            Box::new(MockExecutor::passing("ok")),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+            None,
+        );
+        // Minimal SKILL.md — RustParser will find no structured deps
+        let result = validator.validate("# No deps SKILL.md\n").await.unwrap();
+        assert_eq!(result.passed, 1);
+        assert_eq!(result.failed, 0);
+        assert!(result.all_passed());
+    }
+
+    #[tokio::test]
+    async fn test_validate_rust_with_local_source_wires_into_cargo_executor() {
+        // Covers the `if let Some(ref src) = self.local_source` branch at line 490
+        let patterns = vec![basic_pattern()];
+        let validator = make_rust_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("fn main() {}")),
+            Box::new(MockExecutor::passing("ok")),
+            ValidationMode::Minimal,
+            InstallSource::LocalInstall,
+            Some("/tmp/nonexistent-rust-src".to_string()),
+        );
+        let result = validator.validate("# No deps SKILL.md\n").await.unwrap();
+        assert_eq!(result.passed, 1);
+        assert!(result.all_passed());
+    }
+
+    // --- LocalMount keeps container mode for non-Python ---
+
+    #[test]
+    fn test_new_go_container_local_mount_stays_container() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalMount,
+            source_path: Some("/tmp/go-mount".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None).unwrap();
+        // LocalMount should NOT trigger the BareMetal fallback, even for non-Python
+        assert_eq!(validator.execution_mode(), ExecutionMode::Container);
+    }
+
+    #[test]
+    fn test_new_javascript_container_local_mount_stays_container() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalMount,
+            source_path: Some("/tmp/js-mount".to_string()),
+            ..Default::default()
+        };
+        let validator =
+            TestCodeValidator::new(&Language::JavaScript, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::Container);
+    }
+
+    #[test]
+    fn test_new_java_container_local_mount_stays_container() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalMount,
+            source_path: Some("/tmp/java-mount".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Java, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::Container);
+    }
+
+    #[test]
+    fn test_new_rust_container_local_mount_falls_back_to_bare_metal() {
+        // Rust container always falls back to BareMetal (even with LocalMount),
+        // but via the Rust-specific fallback at lines 267-278, NOT the early fallback.
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalMount,
+            source_path: Some("/tmp/rust-mount".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Rust, &client, config, None).unwrap();
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+        // LocalMount is non-Registry, so local_source should be set
+        assert_eq!(validator.local_source.as_deref(), Some("/tmp/rust-mount"));
+    }
+
+    // --- Rust container + LocalInstall early fallback ---
+
+    #[test]
+    fn test_new_rust_container_local_install_uses_early_fallback() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::Container,
+            install_source: InstallSource::LocalInstall,
+            source_path: Some("/tmp/rust-local".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Rust, &client, config, None).unwrap();
+        // Both the early fallback (non-Python + Container + LocalInstall) and the
+        // Rust container fallback would apply; the early one fires first.
+        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
+        assert_eq!(validator.local_source.as_deref(), Some("/tmp/rust-local"));
+    }
+
+    // --- Registry install_source yields None local_source ---
+
+    #[test]
+    fn test_new_registry_source_has_no_local_source() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            install_source: InstallSource::Registry,
+            source_path: Some("/tmp/should-be-ignored".to_string()),
+            ..Default::default()
+        };
+        let validator = TestCodeValidator::new(&Language::Go, &client, config, None).unwrap();
+        // Registry source: local_source should be None even if source_path is set
+        assert!(
+            validator.local_source.is_none(),
+            "Registry install should not populate local_source"
+        );
+    }
+
+    // --- LocalMount extracts local_source ---
+
+    #[test]
+    fn test_new_local_mount_extracts_local_source() {
+        use crate::llm::client::MockLlmClient;
+
+        let client = MockLlmClient;
+        let config = ContainerConfig {
+            execution_mode: ExecutionMode::BareMetal,
+            install_source: InstallSource::LocalMount,
+            source_path: Some("/tmp/mount-src".to_string()),
+            ..Default::default()
+        };
+        let validator =
+            TestCodeValidator::new(&Language::JavaScript, &client, config, None).unwrap();
+        assert_eq!(
+            validator.local_source.as_deref(),
+            Some("/tmp/mount-src"),
+            "LocalMount should extract local_source from config"
+        );
+    }
 }

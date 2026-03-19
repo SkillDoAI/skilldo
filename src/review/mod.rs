@@ -574,6 +574,82 @@ mod tests {
         assert!(result.issues.is_empty());
     }
 
+    /// Non-boolean `passed` (e.g. a string "false") with valid error issues:
+    /// issues are trusted, malformed should be false, passed should be false.
+    #[test]
+    fn test_parse_passed_non_boolean_with_issues_not_malformed() {
+        let json = r#"{
+            "passed": "false",
+            "issues": [
+                {
+                    "severity": "error",
+                    "category": "accuracy",
+                    "complaint": "Version mismatch",
+                    "evidence": "pip says 3.10, SKILL.md says 3.9"
+                }
+            ]
+        }"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(
+            !result.malformed,
+            "non-boolean passed with valid issues should NOT be malformed"
+        );
+        assert!(
+            !result.passed,
+            "error-severity issue present means not passed"
+        );
+        assert_eq!(result.issues.len(), 1);
+    }
+
+    /// Non-boolean `passed` (e.g. a string) with NO issues:
+    /// should be malformed (we can't trust the verdict without issues).
+    #[test]
+    fn test_parse_passed_non_boolean_without_issues_is_malformed() {
+        let json = r#"{"passed": "yes", "issues": []}"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(
+            result.malformed,
+            "non-boolean passed with no issues should be malformed"
+        );
+        // malformed results are treated as non-passing
+        assert!(!result.passed);
+    }
+
+    /// Missing `passed` field entirely: assume pass, let issues decide.
+    #[test]
+    fn test_parse_missing_passed_field_defaults_to_pass() {
+        let json = r#"{"issues": []}"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(result.passed, "missing passed field assumes pass");
+        assert!(!result.malformed, "missing passed field is not malformed");
+    }
+
+    /// Non-boolean `passed` with only warning-severity issues:
+    /// not malformed (issues exist), and passed (no error-severity).
+    #[test]
+    fn test_parse_passed_non_boolean_with_warning_issues() {
+        let json = r#"{
+            "passed": "true",
+            "issues": [
+                {
+                    "severity": "warning",
+                    "category": "consistency",
+                    "complaint": "Minor formatting issue",
+                    "evidence": "line 42"
+                }
+            ]
+        }"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(
+            !result.malformed,
+            "non-boolean passed with issues is not malformed"
+        );
+        assert!(
+            result.passed,
+            "only warning-severity issues means still passed"
+        );
+    }
+
     #[tokio::test]
     async fn test_review_agent_basic_pass() {
         use crate::llm::client::MockLlmClient;
