@@ -558,7 +558,11 @@ impl CargoExecutor {
                 .map(|d| {
                     // Local-install override for target package
                     if let Some(ref source) = self.local_source {
-                        if local_pkg_name.as_deref() == Some(&d.name) {
+                        // Cargo: dash/underscore are equivalent in crate names
+                        if local_pkg_name
+                            .as_deref()
+                            .is_some_and(|n| n.replace('-', "_") == d.name.replace('-', "_"))
+                        {
                             let safe = source.replace('\\', "/");
                             // Preserve features/default-features from raw_spec
                             let extras = d
@@ -700,7 +704,11 @@ impl LanguageExecutor for CargoExecutor {
                 .iter()
                 .map(|d| {
                     if let Some(ref source) = self.local_source {
-                        if local_pkg_name_fallback.as_deref() == Some(d.as_str()) {
+                        // Cargo: dash/underscore are equivalent in crate names
+                        if local_pkg_name_fallback
+                            .as_deref()
+                            .is_some_and(|n| n.replace('-', "_") == d.replace('-', "_"))
+                        {
                             let safe = source.replace('\\', "/");
                             format!("{d} = {{ path = \"{}\" }}", safe)
                         } else {
