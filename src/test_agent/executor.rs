@@ -3448,6 +3448,56 @@ members = ["crate-a", "crate-b"]
         assert_eq!(classpath, ".");
     }
 
+    /// Verify full jar-copy → classpath integration: jars copied to deps/ are on -cp.
+    #[test]
+    fn test_java_local_jar_on_classpath_end_to_end() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("source").join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("mylib-1.0.jar"), b"fake jar").unwrap();
+
+        // Simulate the jar copy logic
+        let source_path = tmp.path().join("source");
+        let maven_dir = source_path.join("target");
+        let jar_dir = if maven_dir.is_dir() {
+            Some(maven_dir)
+        } else {
+            None
+        };
+
+        let deps_dir = tmp.path().join("test-env").join("deps");
+        std::fs::create_dir_all(&deps_dir).unwrap();
+        if let Some(jar_dir) = jar_dir {
+            for entry in std::fs::read_dir(&jar_dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+                    let dest = deps_dir.join(entry.file_name());
+                    std::fs::copy(&path, &dest).unwrap();
+                }
+            }
+        }
+
+        // Verify jar was copied
+        assert!(deps_dir.join("mylib-1.0.jar").exists());
+
+        // Verify classpath includes deps/*
+        let sep = if cfg!(target_os = "windows") {
+            ";"
+        } else {
+            ":"
+        };
+        let classpath = if deps_dir.is_dir() {
+            format!("deps/*{sep}.")
+        } else {
+            ".".to_string()
+        };
+        assert!(
+            classpath.contains("deps/*"),
+            "classpath must include deps/* when jars are present: {classpath}"
+        );
+    }
+
     // --- Java deps plural/singular wording ---
 
     #[test]

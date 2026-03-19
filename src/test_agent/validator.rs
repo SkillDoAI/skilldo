@@ -485,6 +485,9 @@ impl<'a> TestCodeValidator<'a> {
                     .filter(|d| d.raw_spec.is_some())
                     .count()
             );
+            // Fresh CargoExecutor (not self.executor) because the Rust path needs
+            // setup_structured_environment which isn't on the LanguageExecutor trait.
+            // This must stay in sync with CargoExecutor::new() defaults.
             let mut cargo_exec =
                 super::executor::CargoExecutor::new().with_timeout(self.executor_timeout);
             if let Some(ref src) = self.local_source {
