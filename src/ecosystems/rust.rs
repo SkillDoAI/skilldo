@@ -3199,4 +3199,272 @@ mod tests {
         let deps = handler.get_dependencies();
         assert!(deps.is_empty());
     }
+
+    #[test]
+    fn get_dependencies_returns_empty_for_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Write invalid TOML that cannot be parsed
+        fs::write(root.join("Cargo.toml"), "this is [not valid {{{ toml").unwrap();
+
+        let handler = RustHandler::new(root);
+        let deps = handler.get_dependencies();
+        assert!(deps.is_empty(), "invalid TOML should return empty deps");
+    }
+
+    #[test]
+    fn get_dependencies_unresolvable_workspace_dep_degrades_to_wildcard() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root WITHOUT the dep in [workspace.dependencies]
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\n# no entries\n",
+        )
+        .unwrap();
+
+        // Child references a workspace dep that doesn't exist in root
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nmissing-dep = { workspace = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, "missing-dep");
+        assert_eq!(
+            deps[0].raw_spec.as_deref(),
+            Some("\"*\""),
+            "unresolvable workspace dep should degrade to wildcard"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_child_default_features_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: serde with default features
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nserde = { version = \"1.0\", features = [\"derive\"] }\n",
+        )
+        .unwrap();
+
+        // Child crate overrides with default-features = false
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = { workspace = true, default-features = false }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        assert!(
+            raw.contains("default-features") && raw.contains("false"),
+            "should include default-features = false override: {raw}"
+        );
+        assert!(
+            raw.contains("version") && raw.contains("1.0"),
+            "should preserve workspace version: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_child_optional_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: simple version string
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\ntokio = \"1.35\"\n",
+        )
+        .unwrap();
+
+        // Child marks it optional
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = { workspace = true, optional = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        assert!(
+            raw.contains("optional") && raw.contains("true"),
+            "should include optional = true override: {raw}"
+        );
+        assert!(
+            raw.contains("version") && raw.contains("1.35"),
+            "should preserve workspace version: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_child_features_and_default_features() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: serde with features
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nserde = { version = \"1.0\", features = [\"derive\"] }\n",
+        )
+        .unwrap();
+
+        // Child adds features AND default-features = false simultaneously
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = { workspace = true, features = [\"alloc\"], default-features = false }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // Features should be unioned: derive (from ws) + alloc (from child)
+        assert!(
+            raw.contains("derive") && raw.contains("alloc"),
+            "features should be unioned: {raw}"
+        );
+        // default-features override should be present
+        assert!(
+            raw.contains("default-features") && raw.contains("false"),
+            "default-features override should be merged: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_string_dep_child_adds_features_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: simple string version (no features array)
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\ntokio = \"1.35\"\n",
+        )
+        .unwrap();
+
+        // Child adds features to a workspace dep that has no features
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = { workspace = true, features = [\"full\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // The ws dep had no features, child sets features = ["full"]
+        // This hits the else branch at line 429-430 (ws has no features array)
+        assert!(
+            raw.contains("full"),
+            "child features should be added to string ws dep: {raw}"
+        );
+        assert!(
+            raw.contains("version") && raw.contains("1.35"),
+            "workspace version should be preserved: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_non_table_non_string_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: dep with integer value (unusual but valid TOML)
+        // This hits the `_` arm in the match on ws_tbl shape (lines 407-413)
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nweird-dep = 42\n",
+        )
+        .unwrap();
+
+        // Child overrides with features — forces merge path through the `_` arm
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nweird-dep = { workspace = true, optional = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // The integer 42 gets wrapped as { version = 42 } and optional = true merged in
+        assert!(
+            raw.contains("optional"),
+            "child override should be merged even with unexpected ws shape: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_features_dedup_on_union() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: reqwest with "json" feature
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nreqwest = { version = \"0.12\", features = [\"json\", \"rustls-tls\"] }\n",
+        )
+        .unwrap();
+
+        // Child also requests "json" (duplicate) plus "stream"
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nreqwest = { workspace = true, features = [\"json\", \"stream\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // All three unique features should be present
+        assert!(raw.contains("json"), "should contain json: {raw}");
+        assert!(
+            raw.contains("rustls-tls"),
+            "should contain rustls-tls: {raw}"
+        );
+        assert!(raw.contains("stream"), "should contain stream: {raw}");
+
+        // "json" should appear only once (deduped)
+        let json_count = raw.matches("json").count();
+        assert_eq!(
+            json_count, 1,
+            "json should appear exactly once (deduped), found {json_count} times in: {raw}"
+        );
+    }
 }
