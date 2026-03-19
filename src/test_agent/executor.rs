@@ -182,9 +182,9 @@ impl LanguageExecutor for PythonUvExecutor {
             .iter()
             .filter(|d| {
                 if let Some(ref local_name) = local_pkg_name {
-                    // Normalize: PEP 503 says - and _ are equivalent
-                    let norm_d = d.replace('-', "_").to_lowercase();
-                    let norm_local = local_name.replace('-', "_").to_lowercase();
+                    // PEP 503: -, _, and . are all equivalent in project names
+                    let norm_d = d.replace(['-', '.'], "_").to_lowercase();
+                    let norm_local = local_name.replace(['-', '.'], "_").to_lowercase();
                     norm_d != norm_local
                 } else {
                     true
@@ -559,7 +559,31 @@ impl CargoExecutor {
                     if let Some(ref source) = self.local_source {
                         if local_pkg_name.as_deref() == Some(&d.name) {
                             let safe = source.replace('\\', "/");
-                            return format!("{} = {{ path = \"{}\" }}", d.name, safe);
+                            // Preserve features/default-features from raw_spec
+                            let extras = d
+                                .raw_spec
+                                .as_ref()
+                                .and_then(|s| s.parse::<toml::Value>().ok())
+                                .and_then(|v| {
+                                    let t = v.as_table()?;
+                                    let mut parts = Vec::new();
+                                    if let Some(f) = t.get("features") {
+                                        parts.push(format!("features = {}", f));
+                                    }
+                                    if let Some(df) = t.get("default-features") {
+                                        parts.push(format!("default-features = {}", df));
+                                    }
+                                    if parts.is_empty() {
+                                        None
+                                    } else {
+                                        Some(parts.join(", "))
+                                    }
+                                });
+                            return if let Some(extras) = extras {
+                                format!("{} = {{ path = \"{}\", {} }}", d.name, safe, extras)
+                            } else {
+                                format!("{} = {{ path = \"{}\" }}", d.name, safe)
+                            };
                         }
                     }
                     // Use raw spec (preserves version + features)

@@ -237,7 +237,10 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         },
         None => (true, false), // missing field — assume pass, let issues decide
     };
-    let malformed = passed_type_invalid || (!llm_said_passed && issues.is_empty());
+    // Only mark as malformed if we have NO usable issues. A non-boolean `passed`
+    // field is unusual but the issues themselves may still be valid.
+    let malformed =
+        (passed_type_invalid && issues.is_empty()) || (!llm_said_passed && issues.is_empty());
     if malformed && !passed_type_invalid {
         warn!("review: LLM said passed=false but provided no issues (malformed)");
     }

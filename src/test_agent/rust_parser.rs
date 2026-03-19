@@ -338,9 +338,11 @@ impl RustParser {
             }
         }
 
-        // Add any TOML deps that weren't in the name-only list
+        // Add any TOML deps that weren't in the name-only list.
+        // Normalize dash/underscore: Cargo treats foo-bar and foo_bar as the same crate.
         for (name, raw_spec) in toml_specs {
-            if !result.iter().any(|d| d.name == name) {
+            let norm_name = name.replace('-', "_");
+            if !result.iter().any(|d| d.name.replace('-', "_") == norm_name) {
                 result.push(StructuredDep {
                     name,
                     raw_spec: Some(raw_spec),

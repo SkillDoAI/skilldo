@@ -154,8 +154,9 @@ impl<'a> TestCodeValidator<'a> {
         };
         // Container + local-install is only implemented for Python.
         // For other languages, fall back to bare-metal so local_source is used.
+        // LocalMount keeps container mode (uses volume mount semantics).
         let execution_mode = if execution_mode == ExecutionMode::Container
-            && install_source != InstallSource::Registry
+            && install_source == InstallSource::LocalInstall
             && !matches!(language, Language::Python)
         {
             tracing::warn!(
