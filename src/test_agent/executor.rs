@@ -2101,6 +2101,7 @@ func main() {
 
     /// Replicate the Cargo.toml dep-line formatting logic from
     /// `setup_structured_environment` so we can test it without calling cargo.
+    /// Mirrors the production code including feature/default-features preservation.
     fn format_cargo_dep_line(
         dep: &crate::pipeline::collector::StructuredDep,
         local_source: Option<&str>,
@@ -2120,7 +2121,31 @@ func main() {
                 .unwrap_or(false);
             if is_local {
                 let safe = source.replace('\\', "/");
-                return format!("{} = {{ path = \"{}\" }}", dep.name, safe);
+                // Preserve features/default-features from raw_spec (mirrors production)
+                let extras = dep
+                    .raw_spec
+                    .as_ref()
+                    .and_then(|s| s.parse::<toml::Value>().ok())
+                    .and_then(|v| {
+                        let t = v.as_table()?;
+                        let mut parts = Vec::new();
+                        if let Some(f) = t.get("features") {
+                            parts.push(format!("features = {}", f));
+                        }
+                        if let Some(df) = t.get("default-features") {
+                            parts.push(format!("default-features = {}", df));
+                        }
+                        if parts.is_empty() {
+                            None
+                        } else {
+                            Some(parts.join(", "))
+                        }
+                    });
+                return if let Some(extras) = extras {
+                    format!("{} = {{ path = \"{}\", {} }}", dep.name, safe, extras)
+                } else {
+                    format!("{} = {{ path = \"{}\" }}", dep.name, safe)
+                };
             }
         }
         if let Some(ref spec) = dep.raw_spec {
@@ -2180,6 +2205,40 @@ edition = "2021"
         assert!(
             line.starts_with("my-crate = "),
             "should start with dep name: {line}"
+        );
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_local_path_preserves_features() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let dep = StructuredDep {
+            name: "my-crate".to_string(),
+            raw_spec: Some(
+                "{ version = \"1\", features = [\"json\", \"tls\"], default-features = false }"
+                    .to_string(),
+            ),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, Some(&tmp.path().to_string_lossy()));
+        assert!(
+            line.contains("path = "),
+            "local dep should use path: {line}"
+        );
+        assert!(
+            line.contains("features = [\"json\", \"tls\"]"),
+            "features must be preserved on path dep: {line}"
+        );
+        assert!(
+            line.contains("default-features = false"),
+            "default-features must be preserved on path dep: {line}"
         );
     }
 

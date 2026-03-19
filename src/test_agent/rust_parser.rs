@@ -261,8 +261,14 @@ impl RustParser {
     ) -> Result<Vec<crate::pipeline::collector::StructuredDep>> {
         use crate::pipeline::collector::{DepSource, StructuredDep};
 
-        // First: get all name-only deps from the existing extraction
-        let name_deps = self.extract_dependencies(skill_md)?;
+        // First: get all name-only deps from the existing extraction.
+        // Dedup by normalized form (Cargo treats foo-bar and foo_bar as identical).
+        let raw_name_deps = self.extract_dependencies(skill_md)?;
+        let mut seen_norm = std::collections::HashSet::new();
+        let name_deps: Vec<String> = raw_name_deps
+            .into_iter()
+            .filter(|n| seen_norm.insert(n.replace('-', "_")))
+            .collect();
 
         // Then: try to parse a [dependencies] TOML block from ## Imports
         let mut toml_specs: std::collections::HashMap<String, String> =
@@ -320,10 +326,17 @@ impl RustParser {
             }
         }
 
-        // Merge: upgrade name-only deps with TOML specs where available
+        // Merge: upgrade name-only deps with TOML specs where available.
+        // Normalize dash/underscore in the lookup — `use env_logger` should
+        // match `env-logger = "0.11"` in the TOML block (Cargo equivalence).
         let mut result: Vec<StructuredDep> = Vec::new();
         for name in &name_deps {
-            if let Some(raw_spec) = toml_specs.remove(name.as_str()) {
+            let norm = name.replace('-', "_");
+            let matched_key = toml_specs
+                .keys()
+                .find(|k| k.replace('-', "_") == norm)
+                .cloned();
+            if let Some(raw_spec) = matched_key.and_then(|k| toml_specs.remove(&k)) {
                 result.push(StructuredDep {
                     name: name.clone(),
                     raw_spec: Some(raw_spec),
@@ -1050,6 +1063,45 @@ async fn main() {
             deps.iter().any(|d| d.name == "tokio"),
             "should discover tokio from attribute macro: {:?}",
             deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn structured_deps_dash_underscore_merge_no_duplicates() {
+        let parser = RustParser;
+        // `use env_logger` produces "env_logger" in name_deps.
+        // TOML block has "env-logger" as the key. Both are the same crate.
+        let skill = r#"---
+name: mylib
+---
+
+## Imports
+
+```rust
+use env_logger;
+```
+
+```toml
+[dependencies]
+env-logger = "0.11"
+```
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // Should have exactly ONE entry for env_logger, not two
+        let env_deps: Vec<_> = deps
+            .iter()
+            .filter(|d| d.name.replace('-', "_") == "env_logger")
+            .collect();
+        assert_eq!(
+            env_deps.len(),
+            1,
+            "env_logger/env-logger should be deduplicated: {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        // And it should have the TOML spec
+        assert!(
+            env_deps[0].raw_spec.is_some(),
+            "merged entry should have TOML spec"
         );
     }
 
