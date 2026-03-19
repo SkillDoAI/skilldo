@@ -1230,7 +1230,26 @@ fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
 
 /// Check whether a single dependency matches or is a sub-package of the given Go module.
 fn go_module_matches_dep(dep: &str, module: &str) -> bool {
-    dep == module || dep.starts_with(&format!("{module}/"))
+    if dep == module {
+        return true;
+    }
+    // Sub-package match: dep starts with "module/" but NOT "module/vN..." (major version path).
+    // In Go, /v2, /v2/subpkg etc. belong to a DIFFERENT module (major version),
+    // so they should NOT be replaced by the root module's local source.
+    if let Some(suffix) = dep.strip_prefix(&format!("{module}/")) {
+        // Go major version paths: /v2, /v2/subpkg, /v10, etc.
+        // NOT /v2client (that's a real sub-package name).
+        // Pattern: vN where the char after the digits is '/' or end-of-string.
+        let is_major_version = suffix.starts_with('v') && {
+            let after_v = &suffix[1..];
+            let digit_end = after_v
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(after_v.len());
+            digit_end > 0 && (digit_end == after_v.len() || after_v.as_bytes()[digit_end] == b'/')
+        };
+        return !is_major_version;
+    }
+    false
 }
 
 /// Check whether **any** dependency in `deps` matches or is a sub-package of `module`.
@@ -2482,10 +2501,33 @@ edition = "2021"
             replacements,
             vec![
                 &"github.com/user/mylib",
-                &"github.com/user/mylib/v2",
+                // /v2 is a major version path, not a sub-package — excluded
                 &"github.com/user/mylib/subpkg",
             ]
         );
+    }
+
+    #[test]
+    fn test_go_module_major_version_not_subpackage() {
+        // /v2, /v3 etc. are major version paths in Go, not sub-packages
+        assert!(!go_module_matches_dep(
+            "github.com/user/mylib/v2",
+            "github.com/user/mylib"
+        ));
+        assert!(!go_module_matches_dep(
+            "github.com/user/mylib/v10",
+            "github.com/user/mylib"
+        ));
+        // But /v2/subpkg IS a sub-package of the /v2 module (not of the root)
+        assert!(!go_module_matches_dep(
+            "github.com/user/mylib/v2/subpkg",
+            "github.com/user/mylib"
+        ));
+        // "v2something" is a real sub-package (not /vN pattern)
+        assert!(go_module_matches_dep(
+            "github.com/user/mylib/v2client",
+            "github.com/user/mylib"
+        ));
     }
 
     #[test]
@@ -3434,27 +3476,22 @@ members = ["crate-a", "crate-b"]
 
     // --- Java deps plural/singular wording ---
 
+    fn dep_word(count: usize) -> &'static str {
+        if count == 1 {
+            "dependency"
+        } else {
+            "dependencies"
+        }
+    }
+
     #[test]
     fn test_java_singular_dependency_wording() {
-        // Production logic uses: if deps.len() == 1 { "dependency" } else { "dependencies" }
-        assert_eq!(
-            match 1_usize {
-                1 => "dependency",
-                _ => "dependencies",
-            },
-            "dependency"
-        );
+        assert_eq!(dep_word(1), "dependency");
     }
 
     #[test]
     fn test_java_plural_dependencies_wording() {
-        assert_eq!(
-            match 3_usize {
-                1 => "dependency",
-                _ => "dependencies",
-            },
-            "dependencies"
-        );
+        assert_eq!(dep_word(3), "dependencies");
     }
 
     // --- Cargo: backslash normalization for local path on non-Windows ---
