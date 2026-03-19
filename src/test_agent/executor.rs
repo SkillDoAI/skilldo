@@ -109,6 +109,51 @@ impl ExecutionResult {
     }
 }
 
+/// Extract the Python package name from pyproject.toml content.
+fn extract_python_package_name(content: &str) -> Option<String> {
+    content.parse::<toml::Table>().ok().and_then(|t| {
+        t.get("project")?
+            .as_table()?
+            .get("name")?
+            .as_str()
+            .map(|s| s.to_string())
+    })
+}
+
+/// Filter Python deps, excluding the local package (PEP 503 normalization).
+fn filter_python_deps<'a>(deps: &'a [String], local_pkg_name: Option<&str>) -> Vec<&'a String> {
+    deps.iter()
+        .filter(|d| {
+            if let Some(local_name) = local_pkg_name {
+                let norm_d = d.replace(['-', '.'], "_").to_lowercase();
+                let norm_local = local_name.replace(['-', '.'], "_").to_lowercase();
+                norm_d != norm_local
+            } else {
+                true
+            }
+        })
+        .collect()
+}
+
+/// Filter Java deps by artifact ID, excluding the local package.
+fn filter_java_deps_by_artifact_id(
+    deps: &[String],
+    local_artifact_id: Option<&str>,
+) -> Vec<String> {
+    if let Some(local_id) = local_artifact_id {
+        deps.iter()
+            .filter(|d| {
+                let parts: Vec<&str> = d.split(':').collect();
+                let artifact_id = parts.get(1).unwrap_or(&"");
+                artifact_id != &local_id
+            })
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        deps.to_vec()
+    }
+}
+
 /// Python executor using `uv` for fast environment setup
 pub struct PythonUvExecutor {
     timeout_secs: u64,
@@ -167,30 +212,11 @@ impl LanguageExecutor for PythonUvExecutor {
             let pyproject = std::path::Path::new(source).join("pyproject.toml");
             std::fs::read_to_string(&pyproject)
                 .ok()
-                .and_then(|content| content.parse::<toml::Table>().ok())
-                .and_then(|t| {
-                    t.get("project")?
-                        .as_table()?
-                        .get("name")?
-                        .as_str()
-                        .map(|s| s.to_string())
-                })
+                .and_then(|content| extract_python_package_name(&content))
         });
 
         // Create pyproject.toml — exclude the local package (installed via editable later)
-        let filtered_deps: Vec<&String> = deps
-            .iter()
-            .filter(|d| {
-                if let Some(ref local_name) = local_pkg_name {
-                    // PEP 503: -, _, and . are all equivalent in project names
-                    let norm_d = d.replace(['-', '.'], "_").to_lowercase();
-                    let norm_local = local_name.replace(['-', '.'], "_").to_lowercase();
-                    norm_d != norm_local
-                } else {
-                    true
-                }
-            })
-            .collect();
+        let filtered_deps = filter_python_deps(deps, local_pkg_name.as_deref());
 
         let dependencies_str = if filtered_deps.is_empty() {
             String::new()
@@ -406,13 +432,9 @@ impl LanguageExecutor for GoExecutor {
         // modules resolve from local source instead of failing on the registry.
         let local_module = if let Some(ref source) = self.local_source {
             let go_mod = std::path::Path::new(source).join("go.mod");
-            std::fs::read_to_string(&go_mod).ok().and_then(|content| {
-                content.lines().find_map(|line| {
-                    line.trim()
-                        .strip_prefix("module ")
-                        .map(|m| m.trim().to_string())
-                })
-            })
+            std::fs::read_to_string(&go_mod)
+                .ok()
+                .and_then(|content| extract_go_module_name(&content))
         } else {
             None
         };
@@ -421,10 +443,7 @@ impl LanguageExecutor for GoExecutor {
             // Apply replace for the root module (not sub-packages).
             // Sub-package imports (e.g., module/subpkg) are resolved via the root
             // module replace — replacing the sub-package path has no effect.
-            let needs_replace = deps
-                .iter()
-                .any(|d| d == module.as_str() || d.starts_with(&format!("{module}/")));
-            if needs_replace {
+            if go_dep_needs_replace(deps, module) {
                 info!("Replacing {} with local source: {}", module, source);
                 let mut replace_cmd = Command::new("go");
                 replace_cmd
@@ -497,6 +516,85 @@ pub struct CargoExecutor {
 
 const CARGO_HOME_DIR: &str = "cargo-home";
 
+/// Extract the package name from a Cargo.toml at the given source directory.
+/// Returns `None` if the file is missing, unreadable, or lacks `[package] name`.
+fn extract_cargo_package_name(source: &str) -> Option<String> {
+    let cargo_path = std::path::Path::new(source).join("Cargo.toml");
+    std::fs::read_to_string(&cargo_path)
+        .ok()
+        .and_then(|content| content.parse::<toml::Table>().ok())
+        .and_then(|t| {
+            t.get("package")?
+                .as_table()?
+                .get("name")?
+                .as_str()
+                .map(|s| s.to_string())
+        })
+}
+
+/// Format a single structured Cargo.toml dependency line.
+/// If the dep matches the local package (dash/underscore normalized), emits a
+/// `path = "..."` override preserving any features/default-features from `raw_spec`.
+fn format_cargo_structured_dep_line(
+    dep: &crate::pipeline::collector::StructuredDep,
+    local_source: Option<&str>,
+    local_pkg_name: Option<&str>,
+) -> String {
+    if let Some(source) = local_source {
+        if local_pkg_name.is_some_and(|n| n.replace('-', "_") == dep.name.replace('-', "_")) {
+            let safe = source.replace('\\', "/");
+            // Preserve features/default-features from raw_spec
+            let extras = dep
+                .raw_spec
+                .as_ref()
+                .and_then(|s| s.parse::<toml::Value>().ok())
+                .and_then(|v| {
+                    let t = v.as_table()?;
+                    let mut parts = Vec::new();
+                    if let Some(f) = t.get("features") {
+                        parts.push(format!("features = {}", f));
+                    }
+                    if let Some(df) = t.get("default-features") {
+                        parts.push(format!("default-features = {}", df));
+                    }
+                    if parts.is_empty() {
+                        None
+                    } else {
+                        Some(parts.join(", "))
+                    }
+                });
+            return if let Some(extras) = extras {
+                format!("{} = {{ path = \"{}\", {} }}", dep.name, safe, extras)
+            } else {
+                format!("{} = {{ path = \"{}\" }}", dep.name, safe)
+            };
+        }
+    }
+    // Use raw spec (preserves version + features)
+    if let Some(ref spec) = dep.raw_spec {
+        format!("{} = {}", dep.name, spec)
+    } else {
+        format!("{} = \"*\"", dep.name)
+    }
+}
+
+/// Format a single plain (fallback) Cargo.toml dependency line.
+/// If the dep matches the local package (dash/underscore normalized), emits a
+/// `path = "..."` override; otherwise emits `dep = "*"`.
+fn format_cargo_plain_dep_line(
+    dep: &str,
+    local_source: Option<&str>,
+    local_pkg_name: Option<&str>,
+) -> String {
+    if let Some(source) = local_source {
+        if local_pkg_name.is_some_and(|n| n.replace('-', "_") == dep.replace('-', "_")) {
+            let safe = source.replace('\\', "/");
+            return format!("{dep} = {{ path = \"{}\" }}", safe);
+        }
+    }
+    format!("{dep} = \"*\"")
+}
+
 impl CargoExecutor {
     pub fn new() -> Self {
         Self {
@@ -536,19 +634,10 @@ impl CargoExecutor {
 
         // Build Cargo.toml with structured deps (preserves versions and features)
         // Hoist local package name outside the loop to avoid re-reading Cargo.toml per dep.
-        let local_pkg_name: Option<String> = self.local_source.as_ref().and_then(|source| {
-            let cargo_path = std::path::Path::new(source).join("Cargo.toml");
-            std::fs::read_to_string(&cargo_path)
-                .ok()
-                .and_then(|content| content.parse::<toml::Table>().ok())
-                .and_then(|t| {
-                    t.get("package")?
-                        .as_table()?
-                        .get("name")?
-                        .as_str()
-                        .map(|s| s.to_string())
-                })
-        });
+        let local_pkg_name: Option<String> = self
+            .local_source
+            .as_deref()
+            .and_then(extract_cargo_package_name);
 
         let deps_section = if deps.is_empty() {
             String::new()
@@ -556,47 +645,11 @@ impl CargoExecutor {
             let lines: Vec<String> = deps
                 .iter()
                 .map(|d| {
-                    // Local-install override for target package
-                    if let Some(ref source) = self.local_source {
-                        // Cargo: dash/underscore are equivalent in crate names
-                        if local_pkg_name
-                            .as_deref()
-                            .is_some_and(|n| n.replace('-', "_") == d.name.replace('-', "_"))
-                        {
-                            let safe = source.replace('\\', "/");
-                            // Preserve features/default-features from raw_spec
-                            let extras = d
-                                .raw_spec
-                                .as_ref()
-                                .and_then(|s| s.parse::<toml::Value>().ok())
-                                .and_then(|v| {
-                                    let t = v.as_table()?;
-                                    let mut parts = Vec::new();
-                                    if let Some(f) = t.get("features") {
-                                        parts.push(format!("features = {}", f));
-                                    }
-                                    if let Some(df) = t.get("default-features") {
-                                        parts.push(format!("default-features = {}", df));
-                                    }
-                                    if parts.is_empty() {
-                                        None
-                                    } else {
-                                        Some(parts.join(", "))
-                                    }
-                                });
-                            return if let Some(extras) = extras {
-                                format!("{} = {{ path = \"{}\", {} }}", d.name, safe, extras)
-                            } else {
-                                format!("{} = {{ path = \"{}\" }}", d.name, safe)
-                            };
-                        }
-                    }
-                    // Use raw spec (preserves version + features)
-                    if let Some(ref spec) = d.raw_spec {
-                        format!("{} = {}", d.name, spec)
-                    } else {
-                        format!("{} = \"*\"", d.name)
-                    }
+                    format_cargo_structured_dep_line(
+                        d,
+                        self.local_source.as_deref(),
+                        local_pkg_name.as_deref(),
+                    )
                 })
                 .collect();
             format!("\n[dependencies]\n{}\n", lines.join("\n"))
@@ -681,20 +734,10 @@ impl LanguageExecutor for CargoExecutor {
         }
 
         // Hoist local package name outside loop (same pattern as structured path)
-        let local_pkg_name_fallback: Option<String> =
-            self.local_source.as_ref().and_then(|source| {
-                let cargo_path = std::path::Path::new(source).join("Cargo.toml");
-                std::fs::read_to_string(&cargo_path)
-                    .ok()
-                    .and_then(|content| content.parse::<toml::Table>().ok())
-                    .and_then(|t| {
-                        t.get("package")?
-                            .as_table()?
-                            .get("name")?
-                            .as_str()
-                            .map(|s| s.to_string())
-                    })
-            });
+        let local_pkg_name_fallback: Option<String> = self
+            .local_source
+            .as_deref()
+            .and_then(extract_cargo_package_name);
 
         // Build Cargo.toml with dependencies
         let deps_section = if deps.is_empty() {
@@ -703,20 +746,11 @@ impl LanguageExecutor for CargoExecutor {
             let lines: Vec<String> = deps
                 .iter()
                 .map(|d| {
-                    if let Some(ref source) = self.local_source {
-                        // Cargo: dash/underscore are equivalent in crate names
-                        if local_pkg_name_fallback
-                            .as_deref()
-                            .is_some_and(|n| n.replace('-', "_") == d.replace('-', "_"))
-                        {
-                            let safe = source.replace('\\', "/");
-                            format!("{d} = {{ path = \"{}\" }}", safe)
-                        } else {
-                            format!("{d} = \"*\"")
-                        }
-                    } else {
-                        format!("{d} = \"*\"")
-                    }
+                    format_cargo_plain_dep_line(
+                        d,
+                        self.local_source.as_deref(),
+                        local_pkg_name_fallback.as_deref(),
+                    )
                 })
                 .collect();
             format!("\n[dependencies]\n{}\n", lines.join("\n"))
@@ -862,22 +896,12 @@ impl LanguageExecutor for NodeExecutor {
             // For local-install: install local source (provides the target package),
             // then remaining deps from registry. npm install handles both.
             let install_args: Vec<String> = if let Some(ref source) = self.local_source {
-                let pkg_json = std::path::Path::new(source).join("package.json");
-                let local_name: Option<String> =
-                    std::fs::read_to_string(&pkg_json).ok().and_then(|c| {
-                        serde_json::from_str::<serde_json::Value>(&c)
-                            .ok()
-                            .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
-                    });
+                let pkg_json_path = std::path::Path::new(source).join("package.json");
+                let local_name: Option<String> = std::fs::read_to_string(&pkg_json_path)
+                    .ok()
+                    .and_then(|c| extract_node_package_name(&c));
                 info!("Installing Node.js from local source: {}", source);
-                let mut args = vec![source.clone()];
-                // Add non-local deps from registry
-                for d in deps {
-                    if local_name.as_deref() != Some(d.as_str()) {
-                        args.push(d.clone());
-                    }
-                }
-                args
+                build_node_install_args(deps, source, local_name.as_deref())
             } else {
                 info!("Installing Node.js dependencies: {}", deps.join(", "));
                 deps.to_vec()
@@ -1013,23 +1037,7 @@ impl LanguageExecutor for JavaExecutor {
         });
 
         // Filter out the local package's coordinate from Maven deps.
-        // Only match on artifactId (parts[1]) to avoid over-filtering when
-        // JavaHandler falls back to group name for Gradle-only repos.
-        // For Gradle repos without settings.gradle, the group fallback won't
-        // match any artifactId, so nothing is excluded — same as pre-fix behavior.
-        let fetch_deps: Vec<String> = if let Some(ref local_id) = local_artifact_id {
-            deps.iter()
-                .filter(|d| {
-                    // Maven coordinate format: groupId:artifactId:version
-                    let parts: Vec<&str> = d.split(':').collect();
-                    let artifact_id = parts.get(1).unwrap_or(&"");
-                    artifact_id != local_id
-                })
-                .map(|s| s.to_string())
-                .collect()
-        } else {
-            deps.to_vec()
-        };
+        let fetch_deps = filter_java_deps_by_artifact_id(deps, local_artifact_id.as_deref());
 
         // Precompute POM before probing mvn — versionless coords are filtered here,
         // so we skip the mvn check entirely when there's nothing fetchable.
@@ -1199,6 +1207,50 @@ impl LanguageExecutor for JavaExecutor {
     async fn cleanup(&self, _env: &ExecutionEnv) -> Result<()> {
         Ok(())
     }
+}
+
+/// Extract the module name from a `go.mod` file's content.
+/// Returns `None` if no `module` directive is found.
+fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
+    go_mod_content.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("module ")
+            .map(|m| m.trim().to_string())
+    })
+}
+
+/// Check whether a single dependency matches or is a sub-package of the given Go module.
+fn go_module_matches_dep(dep: &str, module: &str) -> bool {
+    dep == module || dep.starts_with(&format!("{module}/"))
+}
+
+/// Check whether **any** dependency in `deps` matches or is a sub-package of `module`.
+fn go_dep_needs_replace(deps: &[String], module: &str) -> bool {
+    deps.iter().any(|d| go_module_matches_dep(d, module))
+}
+
+/// Extract the package name from a `package.json` file's content.
+/// Returns `None` if the JSON is invalid or has no string `name` field.
+fn extract_node_package_name(json_content: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(json_content)
+        .ok()
+        .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
+}
+
+/// Build the npm install argument list for a Node local-install.
+/// Puts `local_source` first, then appends any dep that doesn't match `local_name`.
+fn build_node_install_args(
+    deps: &[String],
+    local_source: &str,
+    local_name: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![local_source.to_string()];
+    for d in deps {
+        if local_name != Some(d.as_str()) {
+            args.push(d.clone());
+        }
+    }
+    args
 }
 
 #[cfg(test)]
@@ -2107,60 +2159,14 @@ func main() {
 
     // --- CargoExecutor: structured dep Cargo.toml formatting ---
 
-    /// Replicate the Cargo.toml dep-line formatting logic from
-    /// `setup_structured_environment` so we can test it without calling cargo.
-    /// Mirrors the production code including feature/default-features preservation.
+    /// Convenience wrapper: extracts package name from local_source, then
+    /// delegates to the production `format_cargo_structured_dep_line`.
     fn format_cargo_dep_line(
         dep: &crate::pipeline::collector::StructuredDep,
         local_source: Option<&str>,
     ) -> String {
-        if let Some(source) = local_source {
-            let cargo_path = std::path::Path::new(source).join("Cargo.toml");
-            let is_local = std::fs::read_to_string(&cargo_path)
-                .ok()
-                .and_then(|content| content.parse::<toml::Table>().ok())
-                .and_then(|t| {
-                    t.get("package")?
-                        .as_table()?
-                        .get("name")?
-                        .as_str()
-                        .map(|n| n == dep.name)
-                })
-                .unwrap_or(false);
-            if is_local {
-                let safe = source.replace('\\', "/");
-                // Preserve features/default-features from raw_spec (mirrors production)
-                let extras = dep
-                    .raw_spec
-                    .as_ref()
-                    .and_then(|s| s.parse::<toml::Value>().ok())
-                    .and_then(|v| {
-                        let t = v.as_table()?;
-                        let mut parts = Vec::new();
-                        if let Some(f) = t.get("features") {
-                            parts.push(format!("features = {}", f));
-                        }
-                        if let Some(df) = t.get("default-features") {
-                            parts.push(format!("default-features = {}", df));
-                        }
-                        if parts.is_empty() {
-                            None
-                        } else {
-                            Some(parts.join(", "))
-                        }
-                    });
-                return if let Some(extras) = extras {
-                    format!("{} = {{ path = \"{}\", {} }}", dep.name, safe, extras)
-                } else {
-                    format!("{} = {{ path = \"{}\" }}", dep.name, safe)
-                };
-            }
-        }
-        if let Some(ref spec) = dep.raw_spec {
-            format!("{} = {}", dep.name, spec)
-        } else {
-            format!("{} = \"*\"", dep.name)
-        }
+        let local_pkg_name = local_source.and_then(extract_cargo_package_name);
+        format_cargo_structured_dep_line(dep, local_source, local_pkg_name.as_deref())
     }
 
     #[test]
@@ -2368,20 +2374,8 @@ edition = "2021"
     }
 
     // --- GoExecutor: local module detection logic ---
-
-    /// Replicate the Go local module matching logic from setup_environment.
-    fn go_module_matches_dep(dep: &str, module: &str) -> bool {
-        dep == module || dep.starts_with(&format!("{module}/"))
-    }
-
-    /// Replicate the go.mod module-name extraction logic from setup_environment.
-    fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
-        go_mod_content.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix("module ")
-                .map(|m| m.trim().to_string())
-        })
-    }
+    // Helpers: extract_go_module_name, go_module_matches_dep, go_dep_needs_replace
+    // are defined at module scope and available here via `use super::*`.
 
     #[test]
     fn test_go_module_exact_match() {
@@ -2493,15 +2487,6 @@ edition = "2021"
         );
     }
 
-    // --- NodeExecutor: local package name via serde_json ---
-
-    /// Replicate the Node.js package.json name extraction logic from setup_environment.
-    fn extract_node_package_name(json_content: &str) -> Option<String> {
-        serde_json::from_str::<serde_json::Value>(json_content)
-            .ok()
-            .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
-    }
-
     #[test]
     fn test_node_package_name_normal_json() {
         let json = r#"{"name": "my-cool-package", "version": "1.0.0"}"#;
@@ -2550,25 +2535,13 @@ edition = "2021"
 
     #[test]
     fn test_node_local_install_dep_filtering() {
-        // Replicate the dep filtering logic: local source provides "my-pkg",
-        // so "my-pkg" should be excluded from the npm install args.
-        let local_name = Some("my-pkg".to_string());
+        // local source provides "my-pkg", so "my-pkg" should be excluded
         let deps = vec![
             "my-pkg".to_string(),
             "express".to_string(),
             "lodash".to_string(),
         ];
-        let source = "/some/path".to_string();
-
-        let install_args: Vec<String> = {
-            let mut args = vec![source.clone()];
-            for d in &deps {
-                if local_name.as_deref() != Some(d.as_str()) {
-                    args.push(d.clone());
-                }
-            }
-            args
-        };
+        let install_args = build_node_install_args(&deps, "/some/path", Some("my-pkg"));
 
         assert_eq!(
             install_args,
@@ -2584,19 +2557,8 @@ edition = "2021"
     #[test]
     fn test_node_local_install_no_matching_dep() {
         // When local package name doesn't match any dep, all deps are included
-        let local_name = Some("other-pkg".to_string());
         let deps = vec!["express".to_string(), "lodash".to_string()];
-        let source = "/some/path".to_string();
-
-        let install_args: Vec<String> = {
-            let mut args = vec![source.clone()];
-            for d in &deps {
-                if local_name.as_deref() != Some(d.as_str()) {
-                    args.push(d.clone());
-                }
-            }
-            args
-        };
+        let install_args = build_node_install_args(&deps, "/some/path", Some("other-pkg"));
 
         assert_eq!(
             install_args,
@@ -2615,11 +2577,9 @@ edition = "2021"
         std::fs::write(tmp.path().join("package.json"), pkg_json).unwrap();
 
         let pkg_path = tmp.path().join("package.json");
-        let local_name: Option<String> = std::fs::read_to_string(&pkg_path).ok().and_then(|c| {
-            serde_json::from_str::<serde_json::Value>(&c)
-                .ok()
-                .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
-        });
+        let local_name: Option<String> = std::fs::read_to_string(&pkg_path)
+            .ok()
+            .and_then(|c| extract_node_package_name(&c));
 
         assert_eq!(local_name, Some("my-local-pkg".to_string()));
     }
@@ -2628,11 +2588,9 @@ edition = "2021"
     fn test_node_extract_package_name_no_file() {
         let tmp = TempDir::new().unwrap();
         let pkg_path = tmp.path().join("package.json");
-        let local_name: Option<String> = std::fs::read_to_string(&pkg_path).ok().and_then(|c| {
-            serde_json::from_str::<serde_json::Value>(&c)
-                .ok()
-                .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
-        });
+        let local_name: Option<String> = std::fs::read_to_string(&pkg_path)
+            .ok()
+            .and_then(|c| extract_node_package_name(&c));
         assert_eq!(local_name, None);
     }
 
@@ -2854,27 +2812,11 @@ edition = "2021"
 
     // --- Cargo: unstructured setup_environment dep formatting with local source ---
 
-    /// Replicate the plain (non-structured) Cargo dep line logic.
+    /// Convenience wrapper: extracts package name from local_source, then
+    /// delegates to the production `format_cargo_plain_dep_line`.
     fn format_cargo_plain_dep_line(dep: &str, local_source: Option<&str>) -> String {
-        if let Some(source) = local_source {
-            let cargo_toml = std::path::Path::new(source).join("Cargo.toml");
-            let is_local_pkg = std::fs::read_to_string(&cargo_toml)
-                .ok()
-                .and_then(|content| content.parse::<toml::Table>().ok())
-                .and_then(|t| {
-                    t.get("package")?
-                        .as_table()?
-                        .get("name")?
-                        .as_str()
-                        .map(|n| n == dep)
-                })
-                .unwrap_or(false);
-            if is_local_pkg {
-                let safe = source.replace('\\', "/");
-                return format!("{dep} = {{ path = \"{}\" }}", safe);
-            }
-        }
-        format!("{dep} = \"*\"")
+        let local_pkg_name = local_source.and_then(extract_cargo_package_name);
+        super::format_cargo_plain_dep_line(dep, local_source, local_pkg_name.as_deref())
     }
 
     #[test]
@@ -3047,21 +2989,6 @@ edition = "2021"
         assert!(python_dep_matches_local("scikit-learn", "scikit_learn"));
     }
 
-    /// Replicate the full Python dep filtering logic from setup_environment.
-    fn filter_python_deps<'a>(deps: &'a [String], local_pkg_name: Option<&str>) -> Vec<&'a String> {
-        deps.iter()
-            .filter(|d| {
-                if let Some(local_name) = local_pkg_name {
-                    let norm_d = d.replace('-', "_").to_lowercase();
-                    let norm_local = local_name.replace('-', "_").to_lowercase();
-                    norm_d != norm_local
-                } else {
-                    true
-                }
-            })
-            .collect()
-    }
-
     #[test]
     fn test_python_filter_deps_excludes_local_package() {
         let deps = vec![
@@ -3184,17 +3111,6 @@ dependencies = [
 
     // --- Python local_pkg_name extraction via TOML ---
 
-    /// Replicate the Python local_pkg_name extraction from pyproject.toml.
-    fn extract_python_local_pkg_name(pyproject_content: &str) -> Option<String> {
-        pyproject_content.parse::<toml::Table>().ok().and_then(|t| {
-            t.get("project")?
-                .as_table()?
-                .get("name")?
-                .as_str()
-                .map(|s| s.to_string())
-        })
-    }
-
     #[test]
     fn test_python_extract_pkg_name_basic() {
         let content = r#"[project]
@@ -3202,7 +3118,7 @@ name = "my-cool-lib"
 version = "0.1.0"
 "#;
         assert_eq!(
-            extract_python_local_pkg_name(content),
+            extract_python_package_name(content),
             Some("my-cool-lib".to_string())
         );
     }
@@ -3212,7 +3128,7 @@ version = "0.1.0"
         let content = r#"[tool.poetry]
 name = "my-lib"
 "#;
-        assert_eq!(extract_python_local_pkg_name(content), None);
+        assert_eq!(extract_python_package_name(content), None);
     }
 
     #[test]
@@ -3220,13 +3136,13 @@ name = "my-lib"
         let content = r#"[project]
 version = "0.1.0"
 "#;
-        assert_eq!(extract_python_local_pkg_name(content), None);
+        assert_eq!(extract_python_package_name(content), None);
     }
 
     #[test]
     fn test_python_extract_pkg_name_invalid_toml() {
         let content = "not valid toml {{{";
-        assert_eq!(extract_python_local_pkg_name(content), None);
+        assert_eq!(extract_python_package_name(content), None);
     }
 
     #[test]
@@ -3244,7 +3160,7 @@ dependencies = ["requests"]
         let pyproject_path = std::path::Path::new(&source).join("pyproject.toml");
         let local_pkg_name = std::fs::read_to_string(&pyproject_path)
             .ok()
-            .and_then(|content| extract_python_local_pkg_name(&content));
+            .and_then(|content| extract_python_package_name(&content));
         assert_eq!(local_pkg_name, Some("my-lib".to_string()));
     }
 
@@ -3255,7 +3171,7 @@ dependencies = ["requests"]
         let pyproject_path = std::path::Path::new(&source).join("pyproject.toml");
         let local_pkg_name = std::fs::read_to_string(&pyproject_path)
             .ok()
-            .and_then(|content| extract_python_local_pkg_name(&content));
+            .and_then(|content| extract_python_package_name(&content));
         assert_eq!(local_pkg_name, None);
     }
 
@@ -3668,19 +3584,8 @@ edition = "2021"
     #[test]
     fn test_node_local_install_all_deps_match() {
         // All deps are the local package — install_args should only contain the source
-        let local_name = Some("my-pkg".to_string());
         let deps = vec!["my-pkg".to_string()];
-        let source = "/path/to/pkg".to_string();
-
-        let install_args: Vec<String> = {
-            let mut args = vec![source.clone()];
-            for d in &deps {
-                if local_name.as_deref() != Some(d.as_str()) {
-                    args.push(d.clone());
-                }
-            }
-            args
-        };
+        let install_args = build_node_install_args(&deps, "/path/to/pkg", Some("my-pkg"));
 
         assert_eq!(install_args, vec!["/path/to/pkg".to_string()]);
     }
@@ -3688,72 +3593,43 @@ edition = "2021"
     #[test]
     fn test_node_local_install_empty_deps() {
         // No deps at all — install_args should only contain the source
-        let source = "/path/to/pkg".to_string();
         let deps: Vec<String> = vec![];
-
-        let install_args: Vec<String> = {
-            let mut args = vec![source.clone()];
-            for d in &deps {
-                let _ = d; // No deps to filter
-                args.push(d.clone());
-            }
-            args
-        };
+        let install_args = build_node_install_args(&deps, "/path/to/pkg", None);
 
         assert_eq!(install_args, vec!["/path/to/pkg".to_string()]);
     }
 
-    // --- Go: needs_replace logic ---
+    // --- Go: needs_replace logic (via go_dep_needs_replace helper) ---
 
     #[test]
     fn test_go_needs_replace_exact_module() {
-        let module = "github.com/user/mylib";
         let deps = vec!["github.com/user/mylib".to_string()];
-        let needs_replace = deps
-            .iter()
-            .any(|d| d == module || d.starts_with(&format!("{module}/")));
-        assert!(needs_replace);
+        assert!(go_dep_needs_replace(&deps, "github.com/user/mylib"));
     }
 
     #[test]
     fn test_go_needs_replace_subpackage() {
-        let module = "github.com/user/mylib";
         let deps = vec!["github.com/user/mylib/subpkg".to_string()];
-        let needs_replace = deps
-            .iter()
-            .any(|d| d == module || d.starts_with(&format!("{module}/")));
-        assert!(needs_replace);
+        assert!(go_dep_needs_replace(&deps, "github.com/user/mylib"));
     }
 
     #[test]
     fn test_go_needs_replace_no_match() {
-        let module = "github.com/user/mylib";
         let deps = vec!["github.com/other/lib".to_string()];
-        let needs_replace = deps
-            .iter()
-            .any(|d| d == module || d.starts_with(&format!("{module}/")));
-        assert!(!needs_replace);
+        assert!(!go_dep_needs_replace(&deps, "github.com/user/mylib"));
     }
 
     #[test]
     fn test_go_needs_replace_empty_deps() {
-        let module = "github.com/user/mylib";
         let deps: Vec<String> = vec![];
-        let needs_replace = deps
-            .iter()
-            .any(|d| d == module || d.starts_with(&format!("{module}/")));
-        assert!(!needs_replace);
+        assert!(!go_dep_needs_replace(&deps, "github.com/user/mylib"));
     }
 
     #[test]
     fn test_go_needs_replace_prefix_collision_no_match() {
         // "github.com/user/mylib2" should NOT trigger replace for "github.com/user/mylib"
-        let module = "github.com/user/mylib";
         let deps = vec!["github.com/user/mylib2".to_string()];
-        let needs_replace = deps
-            .iter()
-            .any(|d| d == module || d.starts_with(&format!("{module}/")));
-        assert!(!needs_replace);
+        assert!(!go_dep_needs_replace(&deps, "github.com/user/mylib"));
     }
 
     // --- Java filter: empty deps ---
@@ -4030,10 +3906,10 @@ dependencies = []
             "github.com/other/lib".to_string(),
         ];
 
-        let needs_replace = deps
-            .iter()
-            .any(|d| d == &module || d.starts_with(&format!("{module}/")));
-        assert!(needs_replace, "should need replace for mylib deps");
+        assert!(
+            go_dep_needs_replace(&deps, &module),
+            "should need replace for mylib deps"
+        );
 
         // Count which deps trigger replace
         let replace_count = deps
@@ -4048,16 +3924,15 @@ dependencies = []
     #[test]
     fn test_node_local_install_full_flow() {
         let tmp = TempDir::new().unwrap();
-        let pkg_json = r#"{"name": "@scope/my-pkg", "version": "1.0.0"}"#;
-        std::fs::write(tmp.path().join("package.json"), pkg_json).unwrap();
+        let pkg_json_content = r#"{"name": "@scope/my-pkg", "version": "1.0.0"}"#;
+        std::fs::write(tmp.path().join("package.json"), pkg_json_content).unwrap();
 
+        // Read + extract using the real helpers
         let source = tmp.path().to_string_lossy().to_string();
         let pkg_path = std::path::Path::new(&source).join("package.json");
-        let local_name: Option<String> = std::fs::read_to_string(&pkg_path).ok().and_then(|c| {
-            serde_json::from_str::<serde_json::Value>(&c)
-                .ok()
-                .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
-        });
+        let local_name: Option<String> = std::fs::read_to_string(&pkg_path)
+            .ok()
+            .and_then(|c| extract_node_package_name(&c));
         assert_eq!(local_name, Some("@scope/my-pkg".to_string()));
 
         // Build install args — local package excluded
@@ -4066,15 +3941,7 @@ dependencies = []
             "express".to_string(),
             "lodash".to_string(),
         ];
-        let install_args: Vec<String> = {
-            let mut args = vec![source.clone()];
-            for d in &deps {
-                if local_name.as_deref() != Some(d.as_str()) {
-                    args.push(d.clone());
-                }
-            }
-            args
-        };
+        let install_args = build_node_install_args(&deps, &source, local_name.as_deref());
 
         assert_eq!(install_args.len(), 3); // source + express + lodash
         assert_eq!(install_args[0], source);
