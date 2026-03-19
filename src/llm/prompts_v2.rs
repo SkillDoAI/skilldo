@@ -945,22 +945,7 @@ Now generate the SKILL.md content for {} v{}:
 
     prompt.push_str(language_hints(language, "create"));
 
-    // Inject structured deps for Rust so the LLM can emit a [dependencies] block
-    if matches!(language, Language::Rust) {
-        if !deps.is_empty() {
-            prompt.push_str("\n\n## Known Dependencies (from Cargo.toml — include in ## Imports)\n\nThe ## Imports section for Rust must include both `use` statements AND a fenced ```toml [dependencies] block with exact versions and features.\n\n```toml\n[dependencies]\n");
-            for dep in deps {
-                if let Some(ref spec) = dep.raw_spec {
-                    prompt.push_str(&format!("{} = {}\n", dep.name, spec));
-                } else {
-                    prompt.push_str(&format!("{} = \"*\"\n", dep.name));
-                }
-            }
-            prompt.push_str("```\n");
-        } else {
-            prompt.push_str("\n\n## Dependencies Note\n\nNo dependencies were extracted from the project's Cargo.toml. Do NOT invent or guess dependency versions. If the ## Imports section needs a ```toml [dependencies] block, only include crates that are directly evident from the source code and use `\"*\"` as the version.\n");
-        }
-    }
+    append_rust_deps_section(&mut prompt, language, deps);
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
@@ -1053,24 +1038,33 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
     );
     prompt.push_str(language_hints(language, "create"));
 
-    // Same structured deps injection as create mode (including empty-deps guidance)
-    if matches!(language, Language::Rust) {
-        if !deps.is_empty() {
-            prompt.push_str("\n\n## Known Dependencies (from Cargo.toml — include in ## Imports)\n\nThe ## Imports section for Rust must include both `use` statements AND a fenced ```toml [dependencies] block with exact versions and features.\n\n```toml\n[dependencies]\n");
-            for dep in deps {
-                if let Some(ref spec) = dep.raw_spec {
-                    prompt.push_str(&format!("{} = {}\n", dep.name, spec));
-                } else {
-                    prompt.push_str(&format!("{} = \"*\"\n", dep.name));
-                }
-            }
-            prompt.push_str("```\n");
-        } else {
-            prompt.push_str("\n\n## Dependencies Note\n\nNo dependencies were extracted from the project's Cargo.toml. Do NOT invent or guess dependency versions. If the ## Imports section needs a ```toml [dependencies] block, only include crates that are directly evident from the source code and use `\"*\"` as the version.\n");
-        }
-    }
+    append_rust_deps_section(&mut prompt, language, deps);
 
     prompt
+}
+
+/// Shared helper: inject structured Rust dependencies or empty-deps guidance.
+fn append_rust_deps_section(
+    prompt: &mut String,
+    language: &Language,
+    deps: &[crate::pipeline::collector::StructuredDep],
+) {
+    if !matches!(language, Language::Rust) {
+        return;
+    }
+    if !deps.is_empty() {
+        prompt.push_str("\n\n## Known Dependencies (from Cargo.toml — include in ## Imports)\n\nThe ## Imports section for Rust must include both `use` statements AND a fenced ```toml [dependencies] block with exact versions and features.\n\n```toml\n[dependencies]\n");
+        for dep in deps {
+            if let Some(ref spec) = dep.raw_spec {
+                prompt.push_str(&format!("{} = {}\n", dep.name, spec));
+            } else {
+                prompt.push_str(&format!("{} = \"*\"\n", dep.name));
+            }
+        }
+        prompt.push_str("```\n");
+    } else {
+        prompt.push_str("\n\n## Dependencies Note\n\nNo dependencies were extracted from the project's Cargo.toml. Do NOT invent or guess dependency versions. If the ## Imports section needs a ```toml [dependencies] block, only include crates that are directly evident from the source code and use `\"*\"` as the version.\n");
+    }
 }
 
 /// Review agent: evaluate SKILL.md for accuracy, safety, and consistency.
