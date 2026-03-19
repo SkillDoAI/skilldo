@@ -1053,17 +1053,21 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
     );
     prompt.push_str(language_hints(language, "create"));
 
-    // Same structured deps injection as create mode
-    if matches!(language, Language::Rust) && !deps.is_empty() {
-        prompt.push_str("\n\n## Known Dependencies (from Cargo.toml — include in ## Imports)\n\nThe ## Imports section for Rust must include both `use` statements AND a fenced ```toml [dependencies] block with exact versions and features.\n\n```toml\n[dependencies]\n");
-        for dep in deps {
-            if let Some(ref spec) = dep.raw_spec {
-                prompt.push_str(&format!("{} = {}\n", dep.name, spec));
-            } else {
-                prompt.push_str(&format!("{} = \"*\"\n", dep.name));
+    // Same structured deps injection as create mode (including empty-deps guidance)
+    if matches!(language, Language::Rust) {
+        if !deps.is_empty() {
+            prompt.push_str("\n\n## Known Dependencies (from Cargo.toml — include in ## Imports)\n\nThe ## Imports section for Rust must include both `use` statements AND a fenced ```toml [dependencies] block with exact versions and features.\n\n```toml\n[dependencies]\n");
+            for dep in deps {
+                if let Some(ref spec) = dep.raw_spec {
+                    prompt.push_str(&format!("{} = {}\n", dep.name, spec));
+                } else {
+                    prompt.push_str(&format!("{} = \"*\"\n", dep.name));
+                }
             }
+            prompt.push_str("```\n");
+        } else {
+            prompt.push_str("\n\n## Dependencies Note\n\nNo dependencies were extracted from the project's Cargo.toml. Do NOT invent or guess dependency versions. If the ## Imports section needs a ```toml [dependencies] block, only include crates that are directly evident from the source code and use `\"*\"` as the version.\n");
         }
-        prompt.push_str("```\n");
     }
 
     prompt

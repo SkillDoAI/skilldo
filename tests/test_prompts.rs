@@ -1391,6 +1391,24 @@ fn test_create_update_prompt_injects_rust_deps() {
 }
 
 #[test]
+fn test_create_update_prompt_empty_deps_rust_guidance() {
+    let prompt = create_update_prompt(
+        "my-crate",
+        "2.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &[],
+    );
+    assert!(
+        prompt.contains("Do NOT invent or guess dependency versions"),
+        "Empty-deps Rust update prompt must include guidance against fabrication"
+    );
+}
+
+#[test]
 fn test_create_update_prompt_no_deps_for_non_rust() {
     let deps = vec![StructuredDep {
         name: "requests".to_string(),

@@ -255,7 +255,8 @@ dependencies = [
                     temp_dir.path().join(".venv").to_string_lossy().as_ref(),
                 )
                 .current_dir(temp_dir.path());
-            let pip_output = run_cmd_with_timeout(pip_cmd, Duration::from_secs(60)).await?;
+            let pip_output =
+                run_cmd_with_timeout(pip_cmd, Duration::from_secs(self.timeout_secs)).await?;
             if !pip_output.status.success() {
                 let stderr = String::from_utf8_lossy(&pip_output.stderr);
                 bail!("Failed to install local package: {}", stderr);
