@@ -275,46 +275,28 @@ impl RustParser {
             std::collections::HashMap::new();
 
         if let Ok(Some(imports_content)) = extract_section(skill_md, r"(?m)^##\s+Imports\s*$") {
-            // Find the [dependencies] block inside a toml fence
+            // Parse each TOML fence individually — accumulate specs from all of them.
             let mut in_toml_fence = false;
             let mut toml_block = String::new();
 
-            for line in imports_content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("```toml") || trimmed.starts_with("~~~toml") {
-                    in_toml_fence = true;
-                    toml_block.clear(); // Reset for each fence to avoid concatenation
-                    continue;
-                }
-                if in_toml_fence && (trimmed == "```" || trimmed == "~~~") {
-                    in_toml_fence = false;
-                    continue;
-                }
-                if in_toml_fence {
-                    toml_block.push_str(line);
-                    toml_block.push('\n');
-                }
-            }
-
-            if !toml_block.is_empty() {
-                // Parse as TOML table
+            /// Parse a TOML block and accumulate structured dep specs.
+            fn parse_toml_fence(
+                toml_block: &str,
+                name_deps: &[String],
+                toml_specs: &mut std::collections::HashMap<String, String>,
+            ) {
                 if let Ok(parsed) = toml_block.parse::<toml::Table>() {
-                    // Look for [dependencies] section within the parsed TOML
                     let deps_table =
                         if let Some(deps) = parsed.get("dependencies").and_then(|v| v.as_table()) {
                             deps.clone()
                         } else {
-                            // The block might be deps directly (no [dependencies] header).
-                            // Only promote entries whose name is already known from
-                            // name-only extraction to avoid including metadata keys
-                            // like "name", "version", "edition" as spurious deps.
+                            // Only promote entries whose name is already known
                             parsed
                                 .iter()
                                 .filter(|(k, _)| name_deps.iter().any(|n| n == *k))
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect()
                         };
-
                     for (name, value) in &deps_table {
                         let raw = match value {
                             toml::Value::String(s) => format!("\"{}\"", s),
@@ -323,6 +305,31 @@ impl RustParser {
                         toml_specs.insert(name.clone(), raw);
                     }
                 }
+            }
+
+            for line in imports_content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("```toml") || trimmed.starts_with("~~~toml") {
+                    in_toml_fence = true;
+                    toml_block.clear();
+                    continue;
+                }
+                if in_toml_fence && (trimmed == "```" || trimmed == "~~~") {
+                    in_toml_fence = false;
+                    // Parse each fence as it closes
+                    if !toml_block.is_empty() {
+                        parse_toml_fence(&toml_block, &name_deps, &mut toml_specs);
+                    }
+                    continue;
+                }
+                if in_toml_fence {
+                    toml_block.push_str(line);
+                    toml_block.push('\n');
+                }
+            }
+            // Handle unclosed fence at EOF
+            if !toml_block.is_empty() {
+                parse_toml_fence(&toml_block, &name_deps, &mut toml_specs);
             }
         }
 
@@ -1275,6 +1282,48 @@ async fn main() {
             1,
             "tokio from attr macro should not duplicate use-import: {:?}",
             deps
+        );
+    }
+
+    /// Multiple TOML fences should all contribute specs (not just the last one).
+    #[test]
+    fn structured_deps_multiple_toml_fences_accumulated() {
+        let parser = RustParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```rust
+use serde::Serialize;
+use tokio::runtime;
+```
+
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let serde_dep = deps.iter().find(|d| d.name == "serde").unwrap();
+        assert!(
+            serde_dep.raw_spec.as_ref().unwrap().contains("derive"),
+            "serde from first fence must be preserved: {:?}",
+            serde_dep.raw_spec
+        );
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert!(
+            tokio_dep.raw_spec.as_ref().unwrap().contains("full"),
+            "tokio from second fence must also be captured: {:?}",
+            tokio_dep.raw_spec
         );
     }
 
