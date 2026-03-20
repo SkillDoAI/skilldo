@@ -297,9 +297,9 @@ impl SkillLinter {
                         issues.push(LintIssue {
                             severity: Severity::Error,
                             category: "content".to_string(),
-                            message: "Body is wrapped in a ```markdown fence".to_string(),
+                            message: "Body is wrapped in a markdown fence".to_string(),
                             suggestion: Some(
-                                "Remove the wrapping ```markdown fence. The normalizer should have caught this."
+                                "Remove the wrapping markdown fence (```markdown or ~~~markdown). The normalizer should have caught this."
                                     .to_string(),
                             ),
                         });
