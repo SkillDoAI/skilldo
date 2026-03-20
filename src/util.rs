@@ -697,7 +697,9 @@ mod tests {
 
         // Shell script: touch a marker, then sleep forever.
         // The shell is the child; sleep is the grandchild.
-        let script = format!("touch {} && sleep 999", marker.display());
+        // Use a unique duration (98765) to avoid collisions with other tests
+        // that also spawn `sleep` (e.g., test_run_cmd_with_timeout_expires uses 999).
+        let script = format!("touch {} && sleep 98765", marker.display());
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(&script);
 
@@ -713,19 +715,27 @@ mod tests {
         // Give the OS a moment to reap the killed processes.
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        // Verify no `sleep 999` processes survive. Use pgrep to search.
-        // We check that our specific sleep-999 is gone by scanning /proc or
-        // using ps. pgrep -f matches the full command line.
+        // Verify no `sleep 98765` processes survive.
         let ps_output = std::process::Command::new("ps")
             .args(["ax", "-o", "pid,command"])
             .output()
             .expect("ps should work");
         let ps_text = String::from_utf8_lossy(&ps_output.stdout);
 
-        // Count lines containing "sleep 999" that are NOT the ps command itself.
+        // Match only actual sleep processes, not commands that mention the
+        // duration in other context (e.g., git commit messages in ps output).
         let orphaned: Vec<&str> = ps_text
             .lines()
-            .filter(|line| line.contains("sleep 999") && !line.contains("ps "))
+            .filter(|line| {
+                let trimmed = line.trim();
+                // Match "sleep 98765" as the actual command, not as a substring
+                // of a larger command. The ps command column shows the binary name.
+                (trimmed.ends_with("sleep 98765") || trimmed.contains("sleep 98765 "))
+                    && !trimmed.contains("ps ")
+                    && !trimmed.contains("grep ")
+                    && !trimmed.contains("git ")
+                    && !trimmed.contains("cargo ")
+            })
             .collect();
 
         assert!(
