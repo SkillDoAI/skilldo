@@ -112,6 +112,18 @@ timeout = 60
 # Auto-remove containers after execution (default: true)
 cleanup = true
 
+# Library install source for test validation:
+#   "registry"      — install from package registry (default)
+#   "local-install" — mount local repo at /src, wire into import resolution
+#   "local-mount"   — mount local repo at /src (same wiring as local-install)
+# All 5 languages supported: Python, Go, JavaScript, Java, Rust.
+# See docs/languages.md for per-language details.
+# install_source = "registry"
+
+# Path to local source repo for local-install or local-mount modes.
+# Defaults to the PATH argument passed to `skilldo generate`.
+# source_path = "/path/to/local/repo"
+
 # Container images per language (defaults shown — override for specific versions)
 # python_image = "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
 # javascript_image = "node:24-alpine"
