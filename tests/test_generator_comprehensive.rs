@@ -265,6 +265,7 @@ fn create_test_data() -> CollectedData {
         source_content: "# Source code\nclass MyClass: pass".to_string(),
         changelog_content: "# Changelog\n## 1.0.0\n- Initial release".to_string(),
         source_file_count: 1,
+        dependencies: Vec::new(),
     }
 }
 
@@ -281,6 +282,7 @@ fn create_minimal_data() -> CollectedData {
         source_content: "def hello(): pass".to_string(),
         changelog_content: String::new(),
         source_file_count: 1,
+        dependencies: Vec::new(),
     }
 }
 

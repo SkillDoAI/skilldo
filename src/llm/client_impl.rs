@@ -164,7 +164,24 @@ struct OpenAIRequest {
 #[derive(Debug, Serialize, Deserialize)]
 struct OpenAIMessage {
     role: String,
-    content: String,
+    // Option: reasoning models (o1, zai, DeepSeek-R1) may return null content
+    // when reasoning tokens exhaust max_tokens before generating a response.
+    #[serde(default)]
+    content: Option<String>,
+    // Reasoning models return chain-of-thought here (ignored for output,
+    // useful for debugging). Not present on standard models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning: Option<String>,
+}
+
+impl OpenAIMessage {
+    fn user(prompt: &str) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: Some(prompt.to_string()),
+            reasoning: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,10 +249,7 @@ impl LlmClient for OpenAIClient {
 
         let request = OpenAIRequest {
             model: self.model.clone(),
-            messages: vec![OpenAIMessage {
-                role: "user".to_string(),
-                content: prompt.to_string(),
-            }],
+            messages: vec![OpenAIMessage::user(prompt)],
             temperature: 0.7,
             max_tokens,
             max_completion_tokens,
@@ -310,11 +324,25 @@ impl LlmClient for OpenAIClient {
             .await
             .context("Failed to parse OpenAI API response")?;
 
-        api_response
+        let choice = api_response
             .choices
             .first()
-            .map(|c| c.message.content.clone())
-            .context("No choices in OpenAI response")
+            .context("No choices in OpenAI response")?;
+
+        match &choice.message.content {
+            Some(content) if !content.is_empty() => Ok(content.clone()),
+            _ => {
+                // Reasoning model exhausted max_tokens on reasoning before generating content
+                if choice.message.reasoning.is_some() {
+                    bail!(
+                        "Reasoning model returned no content (reasoning exhausted max_tokens). \
+                         Increase max_tokens in your config."
+                    )
+                } else {
+                    bail!("OpenAI response contained no content")
+                }
+            }
+        }
     }
 }
 
@@ -709,10 +737,7 @@ mod tests {
     async fn test_openai_request_structure() {
         let request = OpenAIRequest {
             model: "gpt-4".to_string(),
-            messages: vec![OpenAIMessage {
-                role: "user".to_string(),
-                content: "test".to_string(),
-            }],
+            messages: vec![OpenAIMessage::user("test")],
             temperature: 0.7,
             max_tokens: Some(4096),
             max_completion_tokens: None,
@@ -753,17 +778,17 @@ mod tests {
         }"#;
 
         let response: OpenAIResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.choices[0].message.content, "Hello, world!");
+        assert_eq!(
+            response.choices[0].message.content.as_deref(),
+            Some("Hello, world!")
+        );
     }
 
     #[tokio::test]
     async fn test_openai_request_with_extra_body() {
         let request = OpenAIRequest {
             model: "openai/gpt-5.1-codex".to_string(),
-            messages: vec![OpenAIMessage {
-                role: "user".to_string(),
-                content: "test".to_string(),
-            }],
+            messages: vec![OpenAIMessage::user("test")],
             temperature: 0.7,
             max_tokens: Some(4096),
             max_completion_tokens: None,
@@ -879,10 +904,7 @@ mod tests {
 
         let request = OpenAIRequest {
             model: model.to_string(),
-            messages: vec![OpenAIMessage {
-                role: "user".to_string(),
-                content: "test".to_string(),
-            }],
+            messages: vec![OpenAIMessage::user("test")],
             temperature: 0.7,
             max_tokens,
             max_completion_tokens,
@@ -907,10 +929,7 @@ mod tests {
 
         let request = OpenAIRequest {
             model: model.to_string(),
-            messages: vec![OpenAIMessage {
-                role: "user".to_string(),
-                content: "test".to_string(),
-            }],
+            messages: vec![OpenAIMessage::user("test")],
             temperature: 0.7,
             max_tokens,
             max_completion_tokens,
@@ -995,10 +1014,7 @@ mod tests {
     fn test_openai_extra_body_empty_no_merge() {
         let request = OpenAIRequest {
             model: "gpt-4".to_string(),
-            messages: vec![OpenAIMessage {
-                role: "user".to_string(),
-                content: "test".to_string(),
-            }],
+            messages: vec![OpenAIMessage::user("test")],
             temperature: 0.7,
             max_tokens: Some(4096),
             max_completion_tokens: None,

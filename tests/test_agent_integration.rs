@@ -771,9 +771,11 @@ func main() {
 async fn test_go_validator_with_mock_fmt_skill() -> Result<()> {
     use skilldo::test_agent::TestCodeValidator;
 
-    // Mock LLM returns valid Go programs for each pattern
+    // Mock LLM returns valid Go programs for each pattern.
+    // Order matches Thorough selection: BasicUsage → ErrorHandling → Other
+    // = Basic Printing, Error Formatting, String Formatting
     let mock_client = MockLlmClient::new(vec![
-        // Pattern 1: Basic Printing
+        // Pattern 1 (BasicUsage): Basic Printing
         r#"```go
 package main
 
@@ -786,26 +788,7 @@ func main() {
 }
 ```"#
             .to_string(),
-        // Pattern 2: String Formatting
-        r#"```go
-package main
-
-import (
-    "fmt"
-    "log"
-)
-
-func main() {
-    s := fmt.Sprintf("Hello, %s! You are %d years old.", "Bob", 25)
-    if s == "" {
-        log.Fatal("expected non-empty string")
-    }
-    fmt.Println(s)
-    fmt.Println("✓ Test passed: String Formatting")
-}
-```"#
-            .to_string(),
-        // Pattern 3: Error Formatting
+        // Pattern 2 (ErrorHandling): Error Formatting
         r#"```go
 package main
 
@@ -822,6 +805,25 @@ func main() {
     }
     fmt.Println(err)
     fmt.Println("✓ Test passed: Error Formatting")
+}
+```"#
+            .to_string(),
+        // Pattern 3 (Other): String Formatting
+        r#"```go
+package main
+
+import (
+    "fmt"
+    "log"
+)
+
+func main() {
+    s := fmt.Sprintf("Hello, %s! You are %d years old.", "Bob", 25)
+    if s == "" {
+        log.Fatal("expected non-empty string")
+    }
+    fmt.Println(s)
+    fmt.Println("✓ Test passed: String Formatting")
 }
 ```"#
             .to_string(),

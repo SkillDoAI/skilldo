@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn test_explicit_version_priority() {
         let result = extract_version(
-            Path::new("/tmp"),
+            &std::env::temp_dir(),
             Some("explicit-1.0.0".to_string()),
             Some(VersionStrategy::GitTag),
         );

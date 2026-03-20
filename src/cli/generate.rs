@@ -158,16 +158,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         info!("CLI override: execution_mode = container");
         config.generation.container.execution_mode = crate::config::ExecutionMode::Container;
     }
-    // Auto-upgrade: local-install/local-mount require container mode
-    if config.generation.container.install_source != InstallSource::Registry
-        && config.generation.container.execution_mode == crate::config::ExecutionMode::BareMetal
-    {
-        tracing::warn!(
-            "install_source={:?} requires container mode; auto-switching to --container",
-            config.generation.container.install_source
-        );
-        config.generation.container.execution_mode = crate::config::ExecutionMode::Container;
-    }
+    // local-install/local-mount now works with both bare-metal and container modes.
+    // No auto-switch needed — bare-metal executors handle path deps natively.
     // Warn if --runtime passed without --container
     if runtime_override.is_some()
         && config.generation.container.execution_mode == crate::config::ExecutionMode::BareMetal
@@ -198,20 +190,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         config.generation.container.source_path = Some(abs_path.to_string_lossy().to_string());
     }
 
-    // Local-install/local-mount is only implemented for Python. Other languages
-    // silently do nothing useful, so fail early with a clear message.
-    // Skip when test agent is disabled — install_source only affects tests.
-    if config.generation.enable_test
-        && config.generation.container.install_source != InstallSource::Registry
-        && !matches!(detected_language, Language::Python)
-    {
-        anyhow::bail!(
-            "install_source '{}' is only supported for Python. \
-             For {}, use the default registry install.",
-            config.generation.container.install_source,
-            detected_language.as_str()
-        );
-    }
+    // Local-install/local-mount requires source_path to be set (done above).
+    // All languages now support local-install for bare-metal execution.
 
     // Test agent model/provider CLI overrides (skip if test agent is disabled)
     if config.generation.enable_test
@@ -329,9 +309,17 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     // Otherwise, keep the language-specific version from the collector (GoHandler, etc.).
     let version_strategy = version_from.or(config.generation.version_from);
     if version_override.is_some() || version_strategy.is_some() {
-        let final_version =
-            version::extract_version(repo_path, version_override, version_strategy)?;
-        collected_data.version = final_version;
+        // For --version-from package: prefer the ecosystem handler's version (already in
+        // collected_data.version) over the Python-specific fallback chain in version.rs.
+        // Only call extract_version for non-package strategies or explicit overrides.
+        let skip_extract = version_override.is_none()
+            && version_strategy == Some(crate::config::VersionStrategy::Package)
+            && collected_data.version != "unknown";
+        if !skip_extract {
+            let final_version =
+                version::extract_version(repo_path, version_override, version_strategy)?;
+            collected_data.version = final_version;
+        }
     }
 
     info!(
@@ -857,7 +845,8 @@ setup(name="testpkg", version="1.0.0")
     }
 
     #[tokio::test]
-    async fn test_run_rejects_local_install_for_non_python() {
+    async fn test_run_accepts_local_install_for_non_python() {
+        // local-install is now supported for all languages (v0.5.1)
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
         let result = run(GenerateOptions {
@@ -867,12 +856,14 @@ setup(name="testpkg", version="1.0.0")
             ..test_opts(&repo, &output)
         })
         .await;
-        assert!(result.is_err(), "non-Python local-install should fail");
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("install_source"),
-            "error should mention install_source: {err}"
-        );
+        // Dry run should succeed (or fail for unrelated reasons like missing LLM)
+        // but NOT fail with "install_source not supported"
+        if let Err(ref e) = result {
+            assert!(
+                !e.to_string().contains("install_source"),
+                "local-install should be accepted for Go: {e}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1448,7 +1439,8 @@ parallel_extraction = true
     }
 
     #[tokio::test]
-    async fn test_run_java_rejects_local_install() {
+    async fn test_run_java_accepts_local_install() {
+        // local-install is now supported for all languages (v0.5.1)
         let repo = make_java_test_repo();
         let output = repo.path().join("SKILL.md");
         let result = run(GenerateOptions {
@@ -1460,12 +1452,12 @@ parallel_extraction = true
             ..Default::default()
         })
         .await;
-        assert!(result.is_err(), "Java local-install should fail");
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("install_source"),
-            "error should mention install_source: {err}"
-        );
+        if let Err(ref e) = result {
+            assert!(
+                !e.to_string().contains("install_source"),
+                "local-install should be accepted for Java: {e}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1682,8 +1674,11 @@ base_url = "http://localhost:11434/v1"
     #[tokio::test]
     async fn test_run_output_defaults_to_skill_md_path() {
         let repo = make_test_repo();
+        // Use a temp-dir output so this test never overwrites the repo's SKILL.md
+        let output = repo.path().join("SKILL.md");
         let result = run(GenerateOptions {
             path: repo.path().to_str().unwrap().to_string(),
+            output: Some(output.to_str().unwrap().to_string()),
             language: Some("python".to_string()),
             dry_run: true,
             ..Default::default()

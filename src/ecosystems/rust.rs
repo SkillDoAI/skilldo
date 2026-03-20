@@ -341,6 +341,173 @@ impl RustHandler {
         urls
     }
 
+    /// Extract structured dependencies from Cargo.toml [dependencies] section.
+    /// Preserves raw TOML value specs losslessly. Drops path deps (non-portable).
+    /// Resolves `workspace = true` against root [workspace.dependencies] if available.
+    pub fn get_dependencies(&self) -> Vec<crate::pipeline::collector::StructuredDep> {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        let cargo_toml = self.repo_path.join("Cargo.toml");
+        let Ok(content) = fs::read_to_string(&cargo_toml) else {
+            return Vec::new();
+        };
+
+        let Ok(parsed) = content.parse::<toml::Table>() else {
+            debug!("Failed to parse Cargo.toml as TOML");
+            return Vec::new();
+        };
+
+        // Try to load workspace deps for resolving { workspace = true }
+        let workspace_deps = self.load_workspace_deps();
+
+        let Some(deps_table) = parsed.get("dependencies").and_then(|v| v.as_table()) else {
+            return Vec::new();
+        };
+
+        let mut result = Vec::new();
+        for (name, value) in deps_table {
+            let raw = match value {
+                toml::Value::String(s) => format!("\"{}\"", s),
+                other => other.to_string(),
+            };
+
+            // Drop ALL path deps — non-portable for SKILL.md and temp Cargo projects.
+            // The target crate's path dep is handled by local-install in the executor.
+            if let Some(tbl) = value.as_table() {
+                if tbl.contains_key("path") {
+                    debug!("Dropping path dep: {}", name);
+                    continue;
+                }
+            }
+
+            // Resolve { workspace = true } — check structurally, not by substring
+            let resolved_raw = if let Some(child_tbl) = value.as_table() {
+                if child_tbl.get("workspace").and_then(|v| v.as_bool()) == Some(true) {
+                    if let Some(ws_spec) = workspace_deps.get(name.as_str()) {
+                        debug!("Resolved workspace dep {}: {}", name, ws_spec);
+                        // Merge child overrides (features, default-features, optional)
+                        // into the workspace-resolved spec.
+                        let child_overrides: Vec<(&str, &toml::Value)> = child_tbl
+                            .iter()
+                            .filter(|(k, _)| *k != "workspace")
+                            .map(|(k, v)| (k.as_str(), v))
+                            .collect();
+                        if child_overrides.is_empty() {
+                            ws_spec.clone()
+                        } else if let Ok(ws_tbl) = ws_spec.parse::<toml::Value>() {
+                            // Wrap simple "version" string as { version = "..." } table
+                            // so child overrides can be merged in.
+                            let mut tbl = match ws_tbl {
+                                toml::Value::String(ref s) => {
+                                    let mut t = toml::map::Map::new();
+                                    t.insert("version".to_string(), toml::Value::String(s.clone()));
+                                    t
+                                }
+                                toml::Value::Table(t) => t,
+                                _ => {
+                                    // Unexpected shape (int, bool, etc.) — skip merge
+                                    debug!("Workspace dep {} has non-table shape, skipping override merge", name);
+                                    let mut t = toml::map::Map::new();
+                                    t.insert("version".to_string(), ws_tbl);
+                                    t
+                                }
+                            };
+                            for (k, v) in child_overrides {
+                                if k == "features" {
+                                    // Cargo: inherited features are additive — union, don't replace
+                                    if let (Some(ws_arr), Some(child_arr)) = (
+                                        tbl.get("features").and_then(|f| f.as_array()).cloned(),
+                                        v.as_array(),
+                                    ) {
+                                        let mut merged = ws_arr;
+                                        for f in child_arr {
+                                            if !merged.contains(f) {
+                                                merged.push(f.clone());
+                                            }
+                                        }
+                                        tbl.insert(k.to_string(), toml::Value::Array(merged));
+                                    } else {
+                                        tbl.insert(k.to_string(), v.clone());
+                                    }
+                                } else {
+                                    tbl.insert(k.to_string(), v.clone());
+                                }
+                            }
+                            toml::Value::Table(tbl).to_string()
+                        } else {
+                            // ws_spec didn't parse — use it as-is
+                            ws_spec.clone()
+                        }
+                    } else {
+                        debug!("Unresolvable workspace dep {}, degrading to wildcard", name);
+                        "\"*\"".to_string()
+                    }
+                } else {
+                    raw
+                }
+            } else {
+                raw
+            };
+
+            // Drop path deps that survived workspace resolution
+            // (workspace entry itself could be a path dep)
+            let is_path_dep = resolved_raw
+                .parse::<toml::Value>()
+                .ok()
+                .and_then(|v| v.as_table().map(|t| t.contains_key("path")))
+                .unwrap_or(false);
+            if is_path_dep {
+                debug!("Dropping resolved path dep: {}", name);
+                continue;
+            }
+
+            result.push(StructuredDep {
+                name: name.clone(),
+                raw_spec: Some(resolved_raw),
+                source: DepSource::Manifest,
+            });
+        }
+
+        debug!("Extracted {} dependencies from Cargo.toml", result.len());
+        result
+    }
+
+    /// Load [workspace.dependencies] from the root Cargo.toml for resolving
+    /// `{ workspace = true }` entries. Returns name → raw TOML spec pairs.
+    fn load_workspace_deps(&self) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+
+        // Walk up to find the workspace root (has [workspace] section).
+        // No artificial depth limit — stop when we hit the filesystem root.
+        let mut dir = self.repo_path.as_path();
+        loop {
+            let cargo_path = dir.join("Cargo.toml");
+            if let Ok(content) = fs::read_to_string(&cargo_path) {
+                if let Ok(parsed) = content.parse::<toml::Table>() {
+                    if let Some(ws) = parsed.get("workspace").and_then(|v| v.as_table()) {
+                        // Stop here — this is the workspace root regardless of
+                        // whether [workspace.dependencies] exists.
+                        if let Some(ws_deps) = ws.get("dependencies").and_then(|v| v.as_table()) {
+                            for (name, value) in ws_deps {
+                                let raw = match value {
+                                    toml::Value::String(s) => format!("\"{}\"", s),
+                                    other => other.to_string(),
+                                };
+                                map.insert(name.clone(), raw);
+                            }
+                        }
+                        return map;
+                    }
+                }
+            }
+            match dir.parent() {
+                Some(p) if p != dir => dir = p,
+                _ => break,
+            }
+        }
+        map
+    }
+
     // ── Private helpers ────────────────────────────────────────────────
 
     /// Collect .rs source files (not tests, not in excluded dirs).
@@ -2801,6 +2968,503 @@ mod tests {
                 .any(|p| p.file_name().unwrap() == "CHANGELOG.md"),
             "should exclude CHANGELOG.md: {:?}",
             docs
+        );
+    }
+
+    // ── get_dependencies tests ──────────────────────────────────────────
+
+    #[test]
+    fn get_dependencies_with_string_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1\"\nserde = \"1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 2);
+        assert!(deps.iter().any(|d| d.name == "tokio"));
+        assert!(deps.iter().any(|d| d.name == "serde"));
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert_eq!(tokio_dep.raw_spec.as_deref(), Some("\"1\""));
+    }
+
+    #[test]
+    fn get_dependencies_with_table_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = { version = \"1\", features = [\"full\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+        let tokio_dep = &deps[0];
+        assert_eq!(tokio_dep.name, "tokio");
+        let raw = tokio_dep.raw_spec.as_ref().unwrap();
+        assert!(
+            raw.contains("version"),
+            "raw_spec should contain version: {raw}"
+        );
+        assert!(
+            raw.contains("features"),
+            "raw_spec should contain features: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_drops_path_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[dependencies]\nmy-local = { path = \"../my-local\" }\nserde = \"1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1, "path dep should be dropped: {:?}", deps);
+        assert_eq!(deps[0].name, "serde");
+    }
+
+    #[test]
+    fn get_dependencies_resolves_workspace_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root with [workspace.dependencies]
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\ntokio = \"1.35\"\nserde = { version = \"1.0\", features = [\"derive\"] }\n",
+        )
+        .unwrap();
+
+        // Child crate
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = { workspace = true }\nserde = { workspace = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 2, "both deps should resolve: {:?}", deps);
+
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert_eq!(
+            tokio_dep.raw_spec.as_deref(),
+            Some("\"1.35\""),
+            "tokio should resolve to workspace version"
+        );
+
+        let serde_dep = deps.iter().find(|d| d.name == "serde").unwrap();
+        let serde_raw = serde_dep.raw_spec.as_ref().unwrap();
+        assert!(
+            serde_raw.contains("version") && serde_raw.contains("derive"),
+            "serde should resolve to workspace table spec: {serde_raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_true_with_child_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nreqwest = \"0.12\"\n",
+        )
+        .unwrap();
+
+        // Child crate adds features on top of workspace version
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nreqwest = { workspace = true, features = [\"json\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let reqwest_dep = &deps[0];
+        let raw = reqwest_dep.raw_spec.as_ref().unwrap();
+        assert!(
+            raw.contains("version") && raw.contains("json"),
+            "should merge workspace version with child features: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_features_union_not_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: reqwest with features = ["rustls-tls"]
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nreqwest = { version = \"0.12\", features = [\"rustls-tls\"] }\n",
+        )
+        .unwrap();
+
+        // Child crate adds "json" feature on top of workspace features
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nreqwest = { workspace = true, features = [\"json\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // Both workspace ("rustls-tls") AND child ("json") features must be present
+        assert!(
+            raw.contains("rustls-tls") && raw.contains("json"),
+            "features must be additive (union), not replaced: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_drops_resolved_path_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root where the dep itself is a path dep
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nmy-local = { path = \"../my-local\" }\n",
+        )
+        .unwrap();
+
+        // Child crate inherits the path dep via workspace
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nmy-local = { workspace = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert!(
+            deps.is_empty(),
+            "resolved path dep should be dropped: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn load_workspace_deps_returns_empty_when_no_workspace_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // A plain crate with no [workspace] section anywhere up the tree
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"standalone\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(root);
+        let ws_deps = handler.load_workspace_deps();
+        assert!(
+            ws_deps.is_empty(),
+            "should return empty map without workspace root: {:?}",
+            ws_deps
+        );
+    }
+
+    #[test]
+    fn get_dependencies_returns_empty_when_no_cargo_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        // No Cargo.toml at all
+        let handler = RustHandler::new(dir.path());
+        let deps = handler.get_dependencies();
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn get_dependencies_returns_empty_for_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Write invalid TOML that cannot be parsed
+        fs::write(root.join("Cargo.toml"), "this is [not valid {{{ toml").unwrap();
+
+        let handler = RustHandler::new(root);
+        let deps = handler.get_dependencies();
+        assert!(deps.is_empty(), "invalid TOML should return empty deps");
+    }
+
+    #[test]
+    fn get_dependencies_unresolvable_workspace_dep_degrades_to_wildcard() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root WITHOUT the dep in [workspace.dependencies]
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\n# no entries\n",
+        )
+        .unwrap();
+
+        // Child references a workspace dep that doesn't exist in root
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nmissing-dep = { workspace = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, "missing-dep");
+        assert_eq!(
+            deps[0].raw_spec.as_deref(),
+            Some("\"*\""),
+            "unresolvable workspace dep should degrade to wildcard"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_child_default_features_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: serde with default features
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nserde = { version = \"1.0\", features = [\"derive\"] }\n",
+        )
+        .unwrap();
+
+        // Child crate overrides with default-features = false
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = { workspace = true, default-features = false }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        assert!(
+            raw.contains("default-features") && raw.contains("false"),
+            "should include default-features = false override: {raw}"
+        );
+        assert!(
+            raw.contains("version") && raw.contains("1.0"),
+            "should preserve workspace version: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_child_optional_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: simple version string
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\ntokio = \"1.35\"\n",
+        )
+        .unwrap();
+
+        // Child marks it optional
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = { workspace = true, optional = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        assert!(
+            raw.contains("optional") && raw.contains("true"),
+            "should include optional = true override: {raw}"
+        );
+        assert!(
+            raw.contains("version") && raw.contains("1.35"),
+            "should preserve workspace version: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_child_features_and_default_features() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: serde with features
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nserde = { version = \"1.0\", features = [\"derive\"] }\n",
+        )
+        .unwrap();
+
+        // Child adds features AND default-features = false simultaneously
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = { workspace = true, features = [\"alloc\"], default-features = false }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // Features should be unioned: derive (from ws) + alloc (from child)
+        assert!(
+            raw.contains("derive") && raw.contains("alloc"),
+            "features should be unioned: {raw}"
+        );
+        // default-features override should be present
+        assert!(
+            raw.contains("default-features") && raw.contains("false"),
+            "default-features override should be merged: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_string_dep_child_adds_features_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: simple string version (no features array)
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\ntokio = \"1.35\"\n",
+        )
+        .unwrap();
+
+        // Child adds features to a workspace dep that has no features
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = { workspace = true, features = [\"full\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // The ws dep had no features, child sets features = ["full"]
+        // This hits the else branch at line 429-430 (ws has no features array)
+        assert!(
+            raw.contains("full"),
+            "child features should be added to string ws dep: {raw}"
+        );
+        assert!(
+            raw.contains("version") && raw.contains("1.35"),
+            "workspace version should be preserved: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_non_table_non_string_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: dep with integer value (unusual but valid TOML)
+        // This hits the `_` arm in the match on ws_tbl shape (lines 407-413)
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nweird-dep = 42\n",
+        )
+        .unwrap();
+
+        // Child overrides with features — forces merge path through the `_` arm
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nweird-dep = { workspace = true, optional = true }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // The integer 42 gets wrapped as { version = 42 } and optional = true merged in
+        assert!(
+            raw.contains("optional"),
+            "child override should be merged even with unexpected ws shape: {raw}"
+        );
+    }
+
+    #[test]
+    fn get_dependencies_workspace_features_dedup_on_union() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Workspace root: reqwest with "json" feature
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"child\"]\n\n[workspace.dependencies]\nreqwest = { version = \"0.12\", features = [\"json\", \"rustls-tls\"] }\n",
+        )
+        .unwrap();
+
+        // Child also requests "json" (duplicate) plus "stream"
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(
+            child.join("Cargo.toml"),
+            "[package]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nreqwest = { workspace = true, features = [\"json\", \"stream\"] }\n",
+        )
+        .unwrap();
+
+        let handler = RustHandler::new(&child);
+        let deps = handler.get_dependencies();
+        assert_eq!(deps.len(), 1);
+
+        let raw = deps[0].raw_spec.as_ref().unwrap();
+        // All three unique features should be present
+        assert!(raw.contains("json"), "should contain json: {raw}");
+        assert!(
+            raw.contains("rustls-tls"),
+            "should contain rustls-tls: {raw}"
+        );
+        assert!(raw.contains("stream"), "should contain stream: {raw}");
+
+        // "json" should appear only once (deduped)
+        let json_count = raw.matches("json").count();
+        assert_eq!(
+            json_count, 1,
+            "json should appear exactly once (deduped), found {json_count} times in: {raw}"
         );
     }
 }

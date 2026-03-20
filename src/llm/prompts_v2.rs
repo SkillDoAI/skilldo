@@ -710,6 +710,7 @@ pub fn create_prompt(
     context: &str,
     custom_instructions: Option<&str>,
     overwrite: bool,
+    deps: &[crate::pipeline::collector::StructuredDep],
 ) -> String {
     // If overwrite mode and custom provided, use it directly
     if overwrite {
@@ -944,6 +945,8 @@ Now generate the SKILL.md content for {} v{}:
 
     prompt.push_str(language_hints(language, "create"));
 
+    append_rust_deps_section(&mut prompt, language, deps);
+
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
             "\n## CUSTOM INSTRUCTIONS FOR THIS REPO\n\n{}\n",
@@ -955,6 +958,7 @@ Now generate the SKILL.md content for {} v{}:
 }
 
 /// Update prompt for create stage: patches an existing SKILL.md with new data
+#[allow(clippy::too_many_arguments)]
 pub fn create_update_prompt(
     package_name: &str,
     version: &str,
@@ -963,6 +967,7 @@ pub fn create_update_prompt(
     patterns: &str,
     context: &str,
     language: &Language,
+    deps: &[crate::pipeline::collector::StructuredDep],
 ) -> String {
     let ecosystem_term = language.ecosystem_term();
     let lang_str = language.as_str();
@@ -1032,7 +1037,34 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
         ecosystem_term = ecosystem_term
     );
     prompt.push_str(language_hints(language, "create"));
+
+    append_rust_deps_section(&mut prompt, language, deps);
+
     prompt
+}
+
+/// Shared helper: inject structured Rust dependencies or empty-deps guidance.
+fn append_rust_deps_section(
+    prompt: &mut String,
+    language: &Language,
+    deps: &[crate::pipeline::collector::StructuredDep],
+) {
+    if !matches!(language, Language::Rust) {
+        return;
+    }
+    if !deps.is_empty() {
+        prompt.push_str("\n\n## Known Dependencies (from Cargo.toml — include in ## Imports)\n\nThe ## Imports section for Rust must include both `use` statements AND a fenced ```toml [dependencies] block with exact versions and features.\n\n```toml\n[dependencies]\n");
+        for dep in deps {
+            if let Some(ref spec) = dep.raw_spec {
+                prompt.push_str(&format!("{} = {}\n", dep.name, spec));
+            } else {
+                prompt.push_str(&format!("{} = \"*\"\n", dep.name));
+            }
+        }
+        prompt.push_str("```\n");
+    } else {
+        prompt.push_str("\n\n## Dependencies Note\n\nNo dependencies were extracted from the project's Cargo.toml. Do NOT invent or guess dependency versions. If the ## Imports section needs a ```toml [dependencies] block, only include crates that are directly evident from the source code and use `\"*\"` as the version.\n");
+    }
 }
 
 /// Review agent: evaluate SKILL.md for accuracy, safety, and consistency.
@@ -1316,7 +1348,10 @@ fn rust_hints(stage: &str) -> &'static str {
 - Use Rust import conventions: `use crate_name::module::Type;`\n\
 - Always show error handling with `Result<T, E>` and the `?` operator\n\
 - Use `fn main() -> Result<(), Box<dyn std::error::Error>>` in runnable examples\n\
-- Follow Rust conventions: snake_case functions, CamelCase types, SCREAMING_SNAKE_CASE constants"
+- Follow Rust conventions: snake_case functions, CamelCase types, SCREAMING_SNAKE_CASE constants\n\
+- The ## Imports section MUST include: (1) `use` statements for public API paths, \
+(2) a fenced ```toml block with [dependencies] listing exact versions and features \
+from the Known Dependencies input. The tool uses this block to write Cargo.toml."
         }
         "review_verdict" => {
             "\
@@ -1486,6 +1521,7 @@ mod tests {
             "context",
             None,
             false,
+            &[],
         );
         assert!(
             prompt.contains("PEP 8"),
@@ -1506,6 +1542,7 @@ mod tests {
             "context",
             None,
             false,
+            &[],
         );
         assert!(
             !prompt.contains("PEP 8"),
@@ -1833,6 +1870,7 @@ mod tests {
             "context",
             Some(custom),
             true,
+            &[],
         );
         assert_eq!(
             prompt, custom,
@@ -1854,6 +1892,7 @@ mod tests {
             "context",
             Some(custom),
             false,
+            &[],
         );
         assert!(
             prompt.contains("CUSTOM INSTRUCTIONS FOR THIS REPO"),
@@ -1908,6 +1947,7 @@ mod tests {
             "context",
             None,
             true,
+            &[],
         );
         assert!(prompt.contains("click"));
     }
@@ -1958,6 +1998,7 @@ mod tests {
             "context",
             None,
             false,
+            &[],
         );
         assert!(
             prompt.contains("GO-SPECIFIC"),
@@ -1982,5 +2023,149 @@ mod tests {
         assert!(ts.contains("UTC"), "should contain UTC: {ts}");
         assert!(ts.contains("202"), "should contain a 202x year: {ts}");
         assert!(!ts.contains("epoch"), "should not contain raw epoch: {ts}");
+    }
+
+    // --- create_update_prompt coverage (lib-internal for CI --lib) ---
+
+    #[test]
+    fn test_update_prompt_rust_deps_block() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        let deps = vec![
+            StructuredDep {
+                name: "tokio".to_string(),
+                raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+                source: DepSource::Manifest,
+            },
+            StructuredDep {
+                name: "serde".to_string(),
+                raw_spec: Some("\"1.0\"".to_string()),
+                source: DepSource::Manifest,
+            },
+        ];
+        let prompt = create_update_prompt(
+            "my-crate",
+            "2.0.0",
+            "existing",
+            "apis",
+            "patterns",
+            "context",
+            &Language::Rust,
+            &deps,
+        );
+        assert!(prompt.contains("[dependencies]"));
+        assert!(prompt.contains("tokio = { version = \"1\", features = [\"full\"] }"));
+        assert!(prompt.contains("serde = \"1.0\""));
+    }
+
+    #[test]
+    fn test_update_prompt_rust_empty_deps_guidance() {
+        use crate::pipeline::collector::StructuredDep;
+        let deps: Vec<StructuredDep> = vec![];
+        let prompt = create_update_prompt(
+            "my-crate",
+            "2.0.0",
+            "existing",
+            "apis",
+            "patterns",
+            "context",
+            &Language::Rust,
+            &deps,
+        );
+        assert!(prompt.contains("Do NOT invent or guess dependency versions"));
+        assert!(prompt.contains("Dependencies Note"));
+    }
+
+    #[test]
+    fn test_update_prompt_rust_wildcard_for_none_spec() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        let deps = vec![StructuredDep {
+            name: "rand".to_string(),
+            raw_spec: None,
+            source: DepSource::Pattern,
+        }];
+        let prompt = create_update_prompt(
+            "my-crate",
+            "1.0.0",
+            "existing",
+            "apis",
+            "patterns",
+            "context",
+            &Language::Rust,
+            &deps,
+        );
+        assert!(prompt.contains("rand = \"*\""));
+    }
+
+    #[test]
+    fn test_update_prompt_python_no_deps_block() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        let deps = vec![StructuredDep {
+            name: "requests".to_string(),
+            raw_spec: Some("\"2.31\"".to_string()),
+            source: DepSource::Manifest,
+        }];
+        let prompt = create_update_prompt(
+            "requests",
+            "2.32.0",
+            "existing",
+            "apis",
+            "patterns",
+            "context",
+            &Language::Python,
+            &deps,
+        );
+        assert!(!prompt.contains("[dependencies]"));
+    }
+
+    #[test]
+    fn test_update_prompt_has_language_hints() {
+        use crate::pipeline::collector::StructuredDep;
+        let deps: Vec<StructuredDep> = vec![];
+        let prompt = create_update_prompt(
+            "tokio",
+            "2.0.0",
+            "existing",
+            "apis",
+            "patterns",
+            "context",
+            &Language::Rust,
+            &deps,
+        );
+        assert!(prompt.contains("RUST-SPECIFIC HINTS"));
+    }
+
+    #[test]
+    fn test_update_prompt_contains_security_section() {
+        use crate::pipeline::collector::StructuredDep;
+        let deps: Vec<StructuredDep> = vec![];
+        let prompt = create_update_prompt(
+            "test",
+            "1.0",
+            "existing",
+            "apis",
+            "patterns",
+            "context",
+            &Language::Python,
+            &deps,
+        );
+        assert!(prompt.contains("Security (CRITICAL)"));
+    }
+
+    #[test]
+    fn test_update_prompt_embeds_existing_skill() {
+        use crate::pipeline::collector::StructuredDep;
+        let deps: Vec<StructuredDep> = vec![];
+        let prompt = create_update_prompt(
+            "test",
+            "2.0",
+            "## Core Patterns\nold content here",
+            "apis",
+            "patterns",
+            "context",
+            &Language::Go,
+            &deps,
+        );
+        assert!(prompt.contains("old content here"));
+        assert!(prompt.contains("GO-SPECIFIC HINTS"));
     }
 }

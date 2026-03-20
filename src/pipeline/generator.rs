@@ -387,6 +387,7 @@ impl Generator {
                 &patterns,
                 &context,
                 &data.language,
+                &data.dependencies,
             );
             self.get_client("create").complete(&update_prompt).await?
         } else {
@@ -403,6 +404,7 @@ impl Generator {
                 &context,
                 self.prompts_config.create_custom.as_deref(),
                 self.prompts_config.is_overwrite("create"),
+                &data.dependencies,
             );
             self.get_client("create")
                 .complete(&synthesis_prompt)
@@ -982,6 +984,7 @@ mod tests {
             docs_content: "# Docs".to_string(),
             source_content: "class Foo: pass".to_string(),
             changelog_content: String::new(),
+            dependencies: Vec::new(),
         }
     }
 

@@ -30,6 +30,9 @@ static EXTERN_CRATE_RE: Lazy<Regex> = Lazy::new(|| {
 });
 static CARGO_ADD_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"cargo\s+add\s+([a-zA-Z_][a-zA-Z0-9_\-]*)").unwrap());
+// Matches #[crate_name::macro] attribute usage (e.g., #[tokio::main], #[tokio::test])
+static ATTR_CRATE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"#\[([a-zA-Z_][a-zA-Z0-9_]*)::").unwrap());
 static CARGO_TOML_DEP_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?m)^([a-zA-Z_][a-zA-Z0-9_\-]*)\s*="#).unwrap());
 
@@ -206,6 +209,31 @@ impl LanguageParser for RustParser {
             }
         }
 
+        // Also scan Core Patterns code blocks for `use` statements to catch
+        // peer deps (tokio, reqwest, serde_json) that appear in examples but
+        // not in the Imports section. Models often list only the target crate
+        // in Imports but use peer deps in code examples.
+        if let Ok(Some(patterns_content)) =
+            extract_section(skill_md, r"(?mi)^##\s+Core\s+Patterns\s*$")
+        {
+            // `use crate_name::...` statements
+            for cap in USE_IMPORT_RE.captures_iter(patterns_content) {
+                let crate_name = cap[1].to_string();
+                if !Self::is_stdlib_crate(&crate_name) && !dependencies.contains(&crate_name) {
+                    debug!("Found peer dep in Core Patterns (use): {}", crate_name);
+                    dependencies.push(crate_name);
+                }
+            }
+            // `#[crate_name::macro]` attribute macros (e.g., #[tokio::main])
+            for cap in ATTR_CRATE_RE.captures_iter(patterns_content) {
+                let crate_name = cap[1].to_string();
+                if !Self::is_stdlib_crate(&crate_name) && !dependencies.contains(&crate_name) {
+                    debug!("Found peer dep in Core Patterns (attr): {}", crate_name);
+                    dependencies.push(crate_name);
+                }
+            }
+        }
+
         dependencies.retain(|dep| match sanitize_dep_name(dep) {
             Ok(_) => true,
             Err(e) => {
@@ -222,9 +250,140 @@ impl LanguageParser for RustParser {
     }
 }
 
+/// Structured dependency extraction — non-trait method for Rust-specific path.
+impl RustParser {
+    /// Extract structured dependencies from SKILL.md, preserving raw TOML specs.
+    /// Merges: (1) TOML [dependencies] block in ## Imports (authoritative, with features),
+    /// (2) peer deps from use/attr scanning in Core Patterns (name-only Pattern deps).
+    pub fn extract_structured_dependencies(
+        &self,
+        skill_md: &str,
+    ) -> Result<Vec<crate::pipeline::collector::StructuredDep>> {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // First: get all name-only deps from the existing extraction.
+        // Dedup by normalized form (Cargo treats foo-bar and foo_bar as identical).
+        let raw_name_deps = self.extract_dependencies(skill_md)?;
+        let mut seen_norm = std::collections::HashSet::new();
+        let name_deps: Vec<String> = raw_name_deps
+            .into_iter()
+            .filter(|n| seen_norm.insert(n.replace('-', "_")))
+            .collect();
+
+        // Then: try to parse a [dependencies] TOML block from ## Imports
+        let mut toml_specs: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        if let Ok(Some(imports_content)) = extract_section(skill_md, r"(?m)^##\s+Imports\s*$") {
+            // Parse each TOML fence individually — accumulate specs from all of them.
+            let mut in_toml_fence = false;
+            let mut toml_block = String::new();
+
+            /// Parse a TOML block and accumulate structured dep specs.
+            fn parse_toml_fence(
+                toml_block: &str,
+                name_deps: &[String],
+                toml_specs: &mut std::collections::HashMap<String, String>,
+            ) {
+                if let Ok(parsed) = toml_block.parse::<toml::Table>() {
+                    let deps_table =
+                        if let Some(deps) = parsed.get("dependencies").and_then(|v| v.as_table()) {
+                            deps.clone()
+                        } else {
+                            // Only promote entries whose name is already known
+                            parsed
+                                .iter()
+                                .filter(|(k, _)| name_deps.iter().any(|n| n == *k))
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect()
+                        };
+                    for (name, value) in &deps_table {
+                        let raw = match value {
+                            toml::Value::String(s) => format!("\"{}\"", s),
+                            other => other.to_string(),
+                        };
+                        toml_specs.insert(name.clone(), raw);
+                    }
+                }
+            }
+
+            for line in imports_content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("```toml") || trimmed.starts_with("~~~toml") {
+                    in_toml_fence = true;
+                    toml_block.clear();
+                    continue;
+                }
+                if in_toml_fence && (trimmed == "```" || trimmed == "~~~") {
+                    in_toml_fence = false;
+                    // Parse each fence as it closes
+                    if !toml_block.is_empty() {
+                        parse_toml_fence(&toml_block, &name_deps, &mut toml_specs);
+                    }
+                    continue;
+                }
+                if in_toml_fence {
+                    toml_block.push_str(line);
+                    toml_block.push('\n');
+                }
+            }
+            // Handle unclosed fence at EOF
+            if !toml_block.is_empty() {
+                parse_toml_fence(&toml_block, &name_deps, &mut toml_specs);
+            }
+        }
+
+        // Merge: upgrade name-only deps with TOML specs where available.
+        // Normalize dash/underscore in the lookup — `use env_logger` should
+        // match `env-logger = "0.11"` in the TOML block (Cargo equivalence).
+        let mut result: Vec<StructuredDep> = Vec::new();
+        for name in &name_deps {
+            let norm = name.replace('-', "_");
+            let matched_key = toml_specs
+                .keys()
+                .find(|k| k.replace('-', "_") == norm)
+                .cloned();
+            if let Some(raw_spec) = matched_key.and_then(|k| toml_specs.remove(&k)) {
+                result.push(StructuredDep {
+                    name: name.clone(),
+                    raw_spec: Some(raw_spec),
+                    source: DepSource::Manifest,
+                });
+            } else {
+                result.push(StructuredDep {
+                    name: name.clone(),
+                    raw_spec: None,
+                    source: DepSource::Pattern,
+                });
+            }
+        }
+
+        // Add any TOML deps that weren't in the name-only list.
+        // Normalize dash/underscore: Cargo treats foo-bar and foo_bar as the same crate.
+        for (name, raw_spec) in toml_specs {
+            let norm_name = name.replace('-', "_");
+            if !result.iter().any(|d| d.name.replace('-', "_") == norm_name) {
+                result.push(StructuredDep {
+                    name,
+                    raw_spec: Some(raw_spec),
+                    source: DepSource::Manifest,
+                });
+            }
+        }
+
+        debug!(
+            "Extracted {} structured deps ({} with specs)",
+            result.len(),
+            result.iter().filter(|d| d.raw_spec.is_some()).count()
+        );
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::collector::DepSource;
 
     const SAMPLE_SKILL: &str = r##"---
 name: serde
@@ -784,6 +943,435 @@ fn main() { println!("hello"); }
         assert!(
             deps.contains(&"tokio".to_string()),
             "should parse deps under [dependencies] with inline comment: {:?}",
+            deps
+        );
+    }
+
+    // ── extract_structured_dependencies tests ─────────────────────────────
+
+    #[test]
+    fn structured_deps_with_toml_block() {
+        let parser = RustParser;
+        let skill = r#"---
+name: mylib
+version: 1.0.0
+---
+
+## Imports
+
+```rust
+use tokio::runtime::Runtime;
+use serde_json::Value;
+```
+
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        assert!(deps.len() >= 2, "should have at least 2 deps: {:?}", deps);
+
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert!(
+            tokio_dep.raw_spec.as_ref().unwrap().contains("features"),
+            "tokio should preserve features: {:?}",
+            tokio_dep.raw_spec
+        );
+        assert_eq!(tokio_dep.source, DepSource::Manifest);
+
+        let serde_dep = deps.iter().find(|d| d.name == "serde_json").unwrap();
+        assert!(serde_dep.raw_spec.is_some());
+    }
+
+    #[test]
+    fn structured_deps_without_toml_block_are_pattern() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```rust\nuse tokio::runtime::Runtime;\n```\n\n## Core Patterns\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert!(
+            tokio_dep.raw_spec.is_none(),
+            "without TOML block, raw_spec should be None"
+        );
+        assert_eq!(tokio_dep.source, DepSource::Pattern);
+    }
+
+    #[test]
+    fn structured_deps_merges_toml_and_names() {
+        let parser = RustParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```rust
+use tokio::runtime::Runtime;
+use reqwest::Client;
+```
+
+```toml
+tokio = { version = "1", features = ["full"] }
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // tokio should have Manifest spec, reqwest should be Pattern
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert_eq!(tokio_dep.source, DepSource::Manifest);
+        assert!(tokio_dep.raw_spec.is_some());
+
+        let reqwest_dep = deps.iter().find(|d| d.name == "reqwest").unwrap();
+        assert_eq!(reqwest_dep.source, DepSource::Pattern);
+        assert!(reqwest_dep.raw_spec.is_none());
+    }
+
+    #[test]
+    fn structured_deps_peer_dep_from_core_patterns() {
+        let parser = RustParser;
+        let skill = r#"---
+name: mylib
+---
+
+## Imports
+
+```rust
+use mylib::Client;
+```
+
+## Core Patterns
+
+### Basic Usage
+
+```rust
+use mylib::Client;
+use reqwest::blocking::get;
+
+#[tokio::main]
+async fn main() {
+    let client = Client::new();
+}
+```
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // reqwest discovered from Core Patterns use statement
+        assert!(
+            deps.iter().any(|d| d.name == "reqwest"),
+            "should discover reqwest from Core Patterns: {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        // tokio discovered from #[tokio::main] attribute
+        assert!(
+            deps.iter().any(|d| d.name == "tokio"),
+            "should discover tokio from attribute macro: {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn structured_deps_dash_underscore_merge_no_duplicates() {
+        let parser = RustParser;
+        // `use env_logger` produces "env_logger" in name_deps.
+        // TOML block has "env-logger" as the key. Both are the same crate.
+        let skill = r#"---
+name: mylib
+---
+
+## Imports
+
+```rust
+use env_logger;
+```
+
+```toml
+[dependencies]
+env-logger = "0.11"
+```
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // Should have exactly ONE entry for env_logger, not two
+        let env_deps: Vec<_> = deps
+            .iter()
+            .filter(|d| d.name.replace('-', "_") == "env_logger")
+            .collect();
+        assert_eq!(
+            env_deps.len(),
+            1,
+            "env_logger/env-logger should be deduplicated: {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        // And it should have the TOML spec
+        assert!(
+            env_deps[0].raw_spec.is_some(),
+            "merged entry should have TOML spec"
+        );
+    }
+
+    #[test]
+    fn structured_deps_empty_skill() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Core Patterns\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        assert!(deps.is_empty());
+    }
+
+    /// Regression: `tokio = { workspace = true }` in a direct TOML block (no
+    /// [dependencies] header) should only be promoted if `tokio` already appears
+    /// in name-only extraction (use/cargo-add). Unknown entries like `edition`
+    /// or bare `workspace = true` deps not seen in imports must be filtered out.
+    #[test]
+    fn structured_deps_workspace_true_in_direct_toml_only_promotes_known() {
+        let parser = RustParser;
+        let skill = r#"---
+name: mylib
+---
+
+## Imports
+
+```rust
+use tokio::runtime::Runtime;
+```
+
+```toml
+tokio = { workspace = true }
+edition = "2021"
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // tokio is known from `use tokio::...`, so it should be promoted with its TOML spec
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio");
+        assert!(
+            tokio_dep.is_some(),
+            "tokio should be promoted (known from use import): {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        assert!(
+            tokio_dep.unwrap().raw_spec.is_some(),
+            "tokio should have raw_spec from TOML block"
+        );
+        // edition is NOT a real dep — it should be filtered out
+        assert!(
+            !deps.iter().any(|d| d.name == "edition"),
+            "edition should be filtered out (not in name_deps): {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+    }
+
+    /// A TOML dep with leading whitespace bypasses the regex-based scanner in
+    /// extract_dependencies but is still parsed by the TOML parser in
+    /// extract_structured_dependencies.  The merge loop at lines 342-349 should
+    /// add it as an extra Manifest dep.
+    #[test]
+    fn structured_deps_toml_indented_dep_added_as_extra_manifest() {
+        let parser = RustParser;
+        // The indented `  anyhow = "1"` line will NOT match CARGO_TOML_DEP_RE
+        // (requires ^[a-zA-Z_]), but the TOML parser handles it fine.
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```rust\nuse serde::Serialize;\n```\n\n```toml\n[dependencies]\nserde = \"1\"\n  anyhow = \"1\"\n```\n\n## Core Patterns\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // serde is in both use-imports and TOML → Manifest
+        let serde_dep = deps.iter().find(|d| d.name == "serde").unwrap();
+        assert_eq!(serde_dep.source, DepSource::Manifest);
+
+        // anyhow is ONLY in TOML (missed by regex), not in name_deps → extra Manifest
+        let anyhow_dep = deps.iter().find(|d| d.name == "anyhow");
+        assert!(
+            anyhow_dep.is_some(),
+            "indented TOML dep should be added as extra manifest: {:?}",
+            deps.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        assert_eq!(anyhow_dep.unwrap().source, DepSource::Manifest);
+        assert!(anyhow_dep.unwrap().raw_spec.is_some());
+    }
+
+    /// Malformed TOML in a ```toml fence should be silently ignored.
+    #[test]
+    fn structured_deps_malformed_toml_ignored() {
+        let parser = RustParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```rust
+use serde::Serialize;
+```
+
+```toml
+[dependencies
+this is = not { valid toml
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        // serde should still be extracted from use-import, just without TOML spec
+        let serde_dep = deps.iter().find(|d| d.name == "serde").unwrap();
+        assert_eq!(serde_dep.source, DepSource::Pattern);
+        assert!(
+            serde_dep.raw_spec.is_none(),
+            "malformed TOML should not produce a raw_spec"
+        );
+    }
+
+    /// A duplicate dep name in the [dependencies] section should be deduplicated.
+    #[test]
+    fn cargo_toml_duplicate_in_deps_section_deduplicated() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```toml\n[dependencies]\ntokio = \"1\"\ntokio = \"2\"\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert_eq!(
+            deps.iter().filter(|d| d.as_str() == "tokio").count(),
+            1,
+            "duplicate deps in [dependencies] should be deduplicated: {:?}",
+            deps
+        );
+    }
+
+    /// A stdlib crate appearing in [dependencies] should be filtered out.
+    #[test]
+    fn cargo_toml_stdlib_in_deps_section_filtered() {
+        let parser = RustParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```toml\n[dependencies]\nstd = \"1\"\ntokio = \"1\"\n```\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            !deps.iter().any(|d| d == "std"),
+            "stdlib crate in [dependencies] should be filtered: {:?}",
+            deps
+        );
+        assert!(deps.contains(&"tokio".to_string()));
+    }
+
+    /// When a crate from #[attr::macro] in Core Patterns is already in deps
+    /// from the Imports section, it should not be duplicated.
+    #[test]
+    fn attr_crate_already_in_deps_not_duplicated() {
+        let parser = RustParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```rust
+use tokio::runtime::Runtime;
+```
+
+## Core Patterns
+
+### Async Main
+
+```rust
+#[tokio::main]
+async fn main() {
+    println!("hello");
+}
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert_eq!(
+            deps.iter().filter(|d| d.as_str() == "tokio").count(),
+            1,
+            "tokio from attr macro should not duplicate use-import: {:?}",
+            deps
+        );
+    }
+
+    /// Multiple TOML fences should all contribute specs (not just the last one).
+    #[test]
+    fn structured_deps_multiple_toml_fences_accumulated() {
+        let parser = RustParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```rust
+use serde::Serialize;
+use tokio::runtime;
+```
+
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+```
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let serde_dep = deps.iter().find(|d| d.name == "serde").unwrap();
+        assert!(
+            serde_dep.raw_spec.as_ref().unwrap().contains("derive"),
+            "serde from first fence must be preserved: {:?}",
+            serde_dep.raw_spec
+        );
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert!(
+            tokio_dep.raw_spec.as_ref().unwrap().contains("full"),
+            "tokio from second fence must also be captured: {:?}",
+            tokio_dep.raw_spec
+        );
+    }
+
+    /// Tilde-fenced TOML block (~~~toml) should be parsed for structured deps.
+    #[test]
+    fn structured_deps_tilde_toml_fence() {
+        let parser = RustParser;
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```rust
+use serde::Serialize;
+```
+
+~~~toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+~~~
+
+## Core Patterns
+"#;
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let serde_dep = deps.iter().find(|d| d.name == "serde").unwrap();
+        assert_eq!(serde_dep.source, DepSource::Manifest);
+        assert!(
+            serde_dep.raw_spec.as_ref().unwrap().contains("features"),
+            "tilde-fenced TOML should preserve features: {:?}",
+            serde_dep.raw_spec
+        );
+    }
+
+    /// [dependencies] section should exit on ~~~ fence close.
+    #[test]
+    fn deps_section_exits_on_tilde_fence_close() {
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n~~~toml\n[dependencies]\ntokio = \"1\"\n~~~\n\nNot a dep: fake_crate = \"nope\"\n";
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"tokio".to_string()),
+            "should find tokio before ~~~ close: {:?}",
+            deps
+        );
+        assert!(
+            !deps.contains(&"fake_crate".to_string()),
+            "should stop after ~~~ fence close: {:?}",
             deps
         );
     }

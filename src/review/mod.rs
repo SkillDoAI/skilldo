@@ -172,10 +172,8 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                 );
             }
             // Conservative: treat parse failure as pass (don't block pipeline)
-            let lower = response.to_lowercase();
-            if !lower.contains("\"passed\": true") && !lower.contains("\"passed\":true") {
-                warn!("review: treating unparseable response as pass");
-            }
+            // but always flag as malformed so the caller knows.
+            warn!("review: treating unparseable response as pass (malformed)");
             return Ok(ReviewResult {
                 malformed: true,
                 ..ReviewResult::default()
@@ -189,19 +187,25 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         .map(|arr| {
             arr.iter()
                 .filter_map(|item| {
+                    // Only process object entries — skip bare strings, numbers, etc.
+                    let obj = item.as_object()?;
                     Some(ReviewIssue {
-                        severity: item
+                        severity: obj
                             .get("severity")
                             .and_then(|v| v.as_str())
                             .and_then(|s| Severity::from_str(s).ok())
                             .unwrap_or(Severity::Error),
-                        category: item
+                        category: obj
                             .get("category")
                             .and_then(|v| v.as_str())
                             .unwrap_or("accuracy")
                             .to_string(),
-                        complaint: item.get("complaint").and_then(|v| v.as_str())?.to_string(),
-                        evidence: item
+                        complaint: obj
+                            .get("complaint")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("(no description)")
+                            .to_string(),
+                        evidence: obj
                             .get("evidence")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
@@ -218,12 +222,35 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
     let has_errors = issues
         .iter()
         .any(|i| i.severity != Severity::Warning && i.severity != Severity::Info);
-    let passed = !has_errors;
+
+    // If the LLM said "passed: false" but provided no issues, treat as malformed —
+    // something was detected but not articulated. Trigger a retry.
+    // Also treat non-boolean `passed` (e.g. "false" string) as malformed.
+    let passed_field = parsed.get("passed");
+    let (llm_said_passed, passed_type_invalid) = match passed_field {
+        Some(v) => match v.as_bool() {
+            Some(b) => (b, false),
+            None => {
+                warn!("review: `passed` field is not a boolean: {:?}", v);
+                (false, true)
+            }
+        },
+        None => (true, false), // missing field — assume pass, let issues decide
+    };
+    // Only mark as malformed if we have NO usable issues. A non-boolean `passed`
+    // field is unusual but the issues themselves may still be valid.
+    let malformed =
+        (passed_type_invalid && issues.is_empty()) || (!llm_said_passed && issues.is_empty());
+    if malformed && !passed_type_invalid {
+        warn!("review: LLM said passed=false but provided no issues (malformed)");
+    }
+
+    let passed = !has_errors && !malformed;
 
     Ok(ReviewResult {
         passed,
         issues,
-        malformed: false,
+        malformed,
     })
 }
 
@@ -247,11 +274,19 @@ fn extract_json_block(text: &str) -> String {
         return body.clone();
     }
 
-    // Try: find first { and last }
+    // Try: find first { then scan } positions (last to first) to find
+    // the largest valid JSON object. This handles cases like
+    // `{valid JSON} extra text }` where first-{-to-last-} would fail.
     if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            if end > start {
-                return trimmed[start..=end].to_string();
+        // Collect all } positions after start, try from last to first
+        let brace_positions: Vec<usize> = trimmed[start..]
+            .rmatch_indices('}')
+            .map(|(i, _)| start + i)
+            .collect();
+        for end in brace_positions {
+            let candidate = &trimmed[start..=end];
+            if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                return candidate.to_string();
             }
         }
     }
@@ -346,12 +381,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_review_response_issues_without_complaint_skipped() {
+    fn test_parse_review_response_issues_without_complaint_get_default() {
         let json =
             r#"{"passed": false, "issues": [{"severity": "error"}, {"complaint": "real issue"}]}"#;
         let result = parse_review_response(json, false).unwrap();
-        assert_eq!(result.issues.len(), 1); // First issue skipped (no complaint)
-        assert_eq!(result.issues[0].complaint, "real issue");
+        assert_eq!(result.issues.len(), 2); // Both kept — missing complaint gets default
+        assert_eq!(result.issues[0].complaint, "(no description)");
+        assert_eq!(result.issues[1].complaint, "real issue");
+        assert!(!result.passed); // error-severity issue present → not passed
     }
 
     #[test]
@@ -535,6 +572,82 @@ mod tests {
         let result = ReviewResult::default();
         assert!(result.passed);
         assert!(result.issues.is_empty());
+    }
+
+    /// Non-boolean `passed` (e.g. a string "false") with valid error issues:
+    /// issues are trusted, malformed should be false, passed should be false.
+    #[test]
+    fn test_parse_passed_non_boolean_with_issues_not_malformed() {
+        let json = r#"{
+            "passed": "false",
+            "issues": [
+                {
+                    "severity": "error",
+                    "category": "accuracy",
+                    "complaint": "Version mismatch",
+                    "evidence": "pip says 3.10, SKILL.md says 3.9"
+                }
+            ]
+        }"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(
+            !result.malformed,
+            "non-boolean passed with valid issues should NOT be malformed"
+        );
+        assert!(
+            !result.passed,
+            "error-severity issue present means not passed"
+        );
+        assert_eq!(result.issues.len(), 1);
+    }
+
+    /// Non-boolean `passed` (e.g. a string) with NO issues:
+    /// should be malformed (we can't trust the verdict without issues).
+    #[test]
+    fn test_parse_passed_non_boolean_without_issues_is_malformed() {
+        let json = r#"{"passed": "yes", "issues": []}"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(
+            result.malformed,
+            "non-boolean passed with no issues should be malformed"
+        );
+        // malformed results are treated as non-passing
+        assert!(!result.passed);
+    }
+
+    /// Missing `passed` field entirely: assume pass, let issues decide.
+    #[test]
+    fn test_parse_missing_passed_field_defaults_to_pass() {
+        let json = r#"{"issues": []}"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(result.passed, "missing passed field assumes pass");
+        assert!(!result.malformed, "missing passed field is not malformed");
+    }
+
+    /// Non-boolean `passed` with only warning-severity issues:
+    /// not malformed (issues exist), and passed (no error-severity).
+    #[test]
+    fn test_parse_passed_non_boolean_with_warning_issues() {
+        let json = r#"{
+            "passed": "true",
+            "issues": [
+                {
+                    "severity": "warning",
+                    "category": "consistency",
+                    "complaint": "Minor formatting issue",
+                    "evidence": "line 42"
+                }
+            ]
+        }"#;
+        let result = parse_review_response(json, false).unwrap();
+        assert!(
+            !result.malformed,
+            "non-boolean passed with issues is not malformed"
+        );
+        assert!(
+            result.passed,
+            "only warning-severity issues means still passed"
+        );
     }
 
     #[tokio::test]

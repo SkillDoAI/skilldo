@@ -92,6 +92,7 @@ pub fn run(language_str: &str, stage_filter: Option<&str>) -> anyhow::Result<()>
                     "<MAP_OUTPUT>",
                     None,
                     false,
+                    &[],
                 );
                 println!("{prompt}");
             }

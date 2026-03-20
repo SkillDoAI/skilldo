@@ -2,6 +2,7 @@ use skilldo::detector::Language;
 use skilldo::llm::prompts_v2::{
     create_prompt, create_update_prompt, extract_prompt, learn_prompt, map_prompt,
 };
+use skilldo::pipeline::collector::{DepSource, StructuredDep};
 
 #[test]
 fn test_extract_api_extractor_basic() {
@@ -296,6 +297,7 @@ fn test_create_synthesizer_basic() {
         "Context data",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("requests"));
@@ -319,6 +321,7 @@ fn test_create_license_field_with_value() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("license: BSD-3-Clause"));
@@ -337,6 +340,7 @@ fn test_create_license_field_without_value() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("license: MIT"));
@@ -355,6 +359,7 @@ fn test_create_project_urls_empty() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("[Official Documentation](search for official docs)"));
@@ -379,6 +384,7 @@ fn test_create_project_urls_single() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("- [Documentation](https://docs.example.com)"));
@@ -413,6 +419,7 @@ fn test_create_project_urls_multiple() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("- [Documentation](https://docs.example.com)"));
@@ -433,6 +440,7 @@ fn test_create_custom_instructions_none() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(!prompt.contains("CUSTOM INSTRUCTIONS FOR THIS REPO"));
@@ -453,6 +461,7 @@ fn test_create_custom_instructions_present() {
         "",
         Some(custom),
         false,
+        &[],
     );
 
     assert!(prompt.contains("CUSTOM INSTRUCTIONS FOR THIS REPO"));
@@ -473,6 +482,7 @@ fn test_create_includes_skill_md_structure() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("## Imports"));
@@ -497,6 +507,7 @@ fn test_create_includes_library_specific_sections() {
         "",
         None,
         false,
+        &[],
     );
 
     // Library-specific guidance now lives in <instructions> block
@@ -520,6 +531,7 @@ fn test_create_includes_validation_rules() {
         "",
         None,
         false,
+        &[],
     );
 
     // Validation rules now in <instructions> block with new wording
@@ -542,6 +554,7 @@ fn test_create_includes_pitfall_requirements() {
         "",
         None,
         false,
+        &[],
     );
 
     // Pitfall requirements in <instructions> and output structure
@@ -563,6 +576,7 @@ fn test_create_includes_references_requirement() {
         "",
         None,
         false,
+        &[],
     );
 
     // References requirement now in <instructions> block
@@ -583,6 +597,7 @@ fn test_create_web_framework_patterns() {
         "",
         None,
         false,
+        &[],
     );
 
     // Web framework guidance now in <instructions> block
@@ -604,6 +619,7 @@ fn test_create_cli_patterns() {
         "",
         None,
         false,
+        &[],
     );
 
     // CLI guidance now in <instructions> block
@@ -625,6 +641,7 @@ fn test_create_orm_patterns() {
         "",
         None,
         false,
+        &[],
     );
 
     // ORM guidance now in <instructions> block
@@ -647,6 +664,7 @@ fn test_create_http_client_patterns() {
         "",
         None,
         false,
+        &[],
     );
 
     // HTTP client guidance now in <instructions> block
@@ -669,6 +687,7 @@ fn test_create_async_framework_patterns() {
         "",
         None,
         false,
+        &[],
     );
 
     // Async guidance now in <instructions> block
@@ -692,6 +711,7 @@ fn test_create_parameter_order() {
         "Context",
         Some("Custom"),
         false,
+        &[],
     );
 
     assert!(prompt.contains("mypackage"));
@@ -724,6 +744,7 @@ fn test_all_agents_include_package_name_and_version() {
         "",
         None,
         false,
+        &[],
     );
     for prompt in [p1, p2, p3, p4] {
         assert!(prompt.contains(package));
@@ -752,6 +773,7 @@ fn test_create_escapes_braces_in_format_string() {
         "",
         None,
         false,
+        &[],
     );
 
     // Verify the prompt doesn't have broken format string escaping
@@ -775,6 +797,7 @@ fn test_create_references_section_formatting() {
         "",
         None,
         false,
+        &[],
     );
 
     // Check markdown link format
@@ -794,6 +817,7 @@ fn test_create_includes_ecosystem_in_frontmatter() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("ecosystem: python"));
@@ -812,6 +836,7 @@ fn test_create_includes_version_in_frontmatter() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("version: \"2.5.8\""));
@@ -833,6 +858,7 @@ fn test_empty_inputs_handled_gracefully() {
         "",
         None,
         false,
+        &[],
     );
     // All should produce valid strings without panicking
     assert!(!p1.is_empty());
@@ -881,6 +907,7 @@ fn test_create_default_license_is_mit() {
         "",
         None,
         false,
+        &[],
     );
 
     assert!(prompt.contains("license: MIT"));
@@ -986,6 +1013,7 @@ fn test_comprehensive_coverage_create() {
         "context",
         None,
         false,
+        &[],
     );
 
     let required_sections = [
@@ -1097,6 +1125,7 @@ fn test_create_overwrite_with_custom() {
         "",
         Some(custom),
         true,
+        &[],
     );
     assert_eq!(prompt, custom);
 }
@@ -1205,6 +1234,7 @@ fn test_create_prompt_uses_ecosystem_term() {
         "",
         None,
         false,
+        &[],
     );
     assert!(prompt.contains("go module \"mymod\""));
     assert!(!prompt.contains("Python package"));
@@ -1222,6 +1252,7 @@ fn test_create_update_prompt_basic() {
         "Patterns",
         "Context",
         &Language::Python,
+        &[],
     );
     assert!(prompt.contains("requests"));
     assert!(prompt.contains("2.32.0"));
@@ -1246,6 +1277,7 @@ fn test_create_synthesizer_contains_security_rule() {
         "context",
         None,
         false,
+        &[],
     );
     // Core security rule exists
     assert!(
@@ -1299,6 +1331,7 @@ fn test_create_update_contains_security_rule() {
         "patterns",
         "context",
         &Language::Python,
+        &[],
     );
     // Security section exists in update prompt too
     assert!(
@@ -1320,6 +1353,86 @@ fn test_create_update_contains_security_rule() {
 }
 
 #[test]
+fn test_create_update_prompt_injects_rust_deps() {
+    let deps = vec![
+        StructuredDep {
+            name: "tokio".to_string(),
+            raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+            source: DepSource::Manifest,
+        },
+        StructuredDep {
+            name: "serde".to_string(),
+            raw_spec: Some("\"1.0\"".to_string()),
+            source: DepSource::Manifest,
+        },
+    ];
+    let prompt = create_update_prompt(
+        "my-crate",
+        "2.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &deps,
+    );
+    assert!(
+        prompt.contains("[dependencies]"),
+        "Rust update prompt must include the Known Dependencies block"
+    );
+    assert!(
+        prompt.contains("tokio"),
+        "Rust update deps should include tokio"
+    );
+    assert!(
+        prompt.contains("serde"),
+        "Rust update deps should include serde"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_empty_deps_rust_guidance() {
+    let prompt = create_update_prompt(
+        "my-crate",
+        "2.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &[],
+    );
+    assert!(
+        prompt.contains("Do NOT invent or guess dependency versions"),
+        "Empty-deps Rust update prompt must include guidance against fabrication"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_no_deps_for_non_rust() {
+    let deps = vec![StructuredDep {
+        name: "requests".to_string(),
+        raw_spec: Some("\"2.31\"".to_string()),
+        source: DepSource::Manifest,
+    }];
+    let prompt = create_update_prompt(
+        "my-lib",
+        "1.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Python,
+        &deps,
+    );
+    // Python update prompt should NOT inject the Rust-specific deps block
+    assert!(
+        !prompt.contains("[dependencies]"),
+        "Non-Rust update prompt must not include [dependencies] block"
+    );
+}
+
+#[test]
 fn test_create_overwrite_mode_bypasses_security() {
     // Document the known limitation: overwrite mode replaces the entire prompt
     let prompt = create_prompt(
@@ -1333,6 +1446,7 @@ fn test_create_overwrite_mode_bypasses_security() {
         "context",
         Some("custom prompt"),
         true,
+        &[],
     );
     // In overwrite mode, the security rules are NOT present (by design)
     assert!(
@@ -1358,6 +1472,7 @@ fn test_create_synthesizer_security_in_verify_checklist() {
         "context",
         None,
         false,
+        &[],
     );
     assert!(
         prompt
@@ -1379,6 +1494,7 @@ fn test_create_security_behavior_not_filename_based() {
         "context",
         None,
         false,
+        &[],
     );
     // Ensure the prompt uses behavior-level rules, not just filename lists
     assert!(
@@ -1388,5 +1504,521 @@ fn test_create_security_behavior_not_filename_based() {
     assert!(
         prompt.contains("Reading any file outside the project directory"),
         "Must have broad file access rule, not just specific paths"
+    );
+}
+
+// ============================================================================
+// create_update_prompt: LANGUAGE HINTS AND DEPS COVERAGE
+// ============================================================================
+
+#[test]
+fn test_create_update_prompt_rust_has_language_hints() {
+    let prompt = create_update_prompt(
+        "my-crate",
+        "2.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &[],
+    );
+    assert!(
+        prompt.contains("RUST-SPECIFIC HINTS"),
+        "Rust update prompt must include Rust-specific language hints"
+    );
+    assert!(
+        prompt.contains("Result"),
+        "Rust create hints should mention Result type"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_python_has_language_hints() {
+    let prompt = create_update_prompt(
+        "requests",
+        "2.32.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Python,
+        &[],
+    );
+    assert!(
+        prompt.contains("PYTHON-SPECIFIC HINTS"),
+        "Python update prompt must include Python-specific language hints"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_go_has_language_hints() {
+    let prompt = create_update_prompt(
+        "cobra",
+        "1.9.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Go,
+        &[],
+    );
+    assert!(
+        prompt.contains("GO-SPECIFIC HINTS"),
+        "Go update prompt must include Go-specific language hints"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_js_no_language_hints() {
+    let prompt = create_update_prompt(
+        "lodash",
+        "5.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::JavaScript,
+        &[],
+    );
+    // JavaScript has no specific hints yet
+    assert!(
+        !prompt.contains("PYTHON-SPECIFIC"),
+        "JS update should not contain Python hints"
+    );
+    assert!(
+        !prompt.contains("RUST-SPECIFIC"),
+        "JS update should not contain Rust hints"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_deps_block_format() {
+    let deps = vec![
+        StructuredDep {
+            name: "tokio".to_string(),
+            raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+            source: DepSource::Manifest,
+        },
+        StructuredDep {
+            name: "serde".to_string(),
+            raw_spec: Some("\"1.0\"".to_string()),
+            source: DepSource::Manifest,
+        },
+    ];
+    let prompt = create_update_prompt(
+        "my-crate",
+        "2.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &deps,
+    );
+    // Verify the toml block structure
+    assert!(
+        prompt.contains("```toml\n[dependencies]\n"),
+        "Deps block must start with ```toml fenced [dependencies]"
+    );
+    assert!(
+        prompt.contains("tokio = { version = \"1\", features = [\"full\"] }\n"),
+        "tokio dep should preserve full TOML spec"
+    );
+    assert!(
+        prompt.contains("serde = \"1.0\"\n"),
+        "serde dep should use raw_spec value"
+    );
+    assert!(
+        prompt.contains("```\n"),
+        "Deps block must be closed with ```"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_dep_none_raw_spec_gets_wildcard() {
+    let deps = vec![StructuredDep {
+        name: "rand".to_string(),
+        raw_spec: None,
+        source: DepSource::Manifest,
+    }];
+    let prompt = create_update_prompt(
+        "my-crate",
+        "1.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &deps,
+    );
+    assert!(
+        prompt.contains("rand = \"*\"\n"),
+        "Dep with None raw_spec must use wildcard \"*\""
+    );
+}
+
+#[test]
+fn test_create_update_prompt_mixed_deps_some_none_raw_spec() {
+    let deps = vec![
+        StructuredDep {
+            name: "tokio".to_string(),
+            raw_spec: Some("\"1.0\"".to_string()),
+            source: DepSource::Manifest,
+        },
+        StructuredDep {
+            name: "unknown-crate".to_string(),
+            raw_spec: None,
+            source: DepSource::Manifest,
+        },
+    ];
+    let prompt = create_update_prompt(
+        "my-crate",
+        "1.0.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &deps,
+    );
+    assert!(
+        prompt.contains("tokio = \"1.0\"\n"),
+        "tokio should use its raw_spec"
+    );
+    assert!(
+        prompt.contains("unknown-crate = \"*\"\n"),
+        "unknown-crate with None raw_spec should use wildcard"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_uses_ecosystem_term() {
+    let prompt = create_update_prompt(
+        "tokio",
+        "2.0.0",
+        "existing",
+        "api",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &[],
+    );
+    assert!(
+        prompt.contains("crate \"tokio\""),
+        "Rust update prompt must use ecosystem term 'crate'"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_uses_lang_str_in_instructions() {
+    let prompt = create_update_prompt(
+        "tokio",
+        "2.0.0",
+        "existing",
+        "api",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &[],
+    );
+    assert!(
+        prompt.contains("rust code examples"),
+        "Instructions should reference language name for code examples"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_version_in_instructions() {
+    let prompt = create_update_prompt(
+        "serde",
+        "3.5.0",
+        "existing",
+        "api",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &[],
+    );
+    // version appears twice: once in the header and once in instruction #2
+    assert!(
+        prompt.contains("Update metadata.version in frontmatter to 3.5.0"),
+        "Instructions must reference the target version"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_preserves_existing_skill_content() {
+    let existing = "---\nname: my-crate\nversion: 1.0.0\n---\n## Core Patterns\nold pattern here";
+    let prompt = create_update_prompt(
+        "my-crate",
+        "2.0.0",
+        existing,
+        "api",
+        "patterns",
+        "context",
+        &Language::Rust,
+        &[],
+    );
+    assert!(
+        prompt.contains("old pattern here"),
+        "Existing skill content must be embedded in the prompt"
+    );
+}
+
+// ============================================================================
+// create_prompt: RUST DEPS INJECTION (create mode, not just update mode)
+// ============================================================================
+
+#[test]
+fn test_create_prompt_rust_with_deps() {
+    let deps = vec![
+        StructuredDep {
+            name: "reqwest".to_string(),
+            raw_spec: Some("{ version = \"0.12\", features = [\"json\"] }".to_string()),
+            source: DepSource::Manifest,
+        },
+        StructuredDep {
+            name: "tokio".to_string(),
+            raw_spec: Some("\"1\"".to_string()),
+            source: DepSource::Manifest,
+        },
+    ];
+    let prompt = create_prompt(
+        "my-crate",
+        "1.0.0",
+        None,
+        &[],
+        &Language::Rust,
+        "api",
+        "patterns",
+        "context",
+        None,
+        false,
+        &deps,
+    );
+    assert!(
+        prompt.contains("[dependencies]"),
+        "Rust create prompt with deps must include [dependencies] block"
+    );
+    assert!(
+        prompt.contains("reqwest = { version = \"0.12\", features = [\"json\"] }"),
+        "reqwest dep must appear with full spec"
+    );
+    assert!(
+        prompt.contains("tokio = \"1\""),
+        "tokio dep must appear with its version"
+    );
+}
+
+#[test]
+fn test_create_prompt_rust_empty_deps_guidance() {
+    let prompt = create_prompt(
+        "my-crate",
+        "1.0.0",
+        None,
+        &[],
+        &Language::Rust,
+        "api",
+        "patterns",
+        "context",
+        None,
+        false,
+        &[],
+    );
+    assert!(
+        prompt.contains("Dependencies Note"),
+        "Empty-deps Rust create prompt must include Dependencies Note"
+    );
+    assert!(
+        prompt.contains("Do NOT invent or guess dependency versions"),
+        "Empty-deps guidance must warn against fabrication"
+    );
+}
+
+#[test]
+fn test_create_prompt_rust_dep_none_raw_spec_wildcard() {
+    let deps = vec![StructuredDep {
+        name: "anyhow".to_string(),
+        raw_spec: None,
+        source: DepSource::Manifest,
+    }];
+    let prompt = create_prompt(
+        "my-crate",
+        "1.0.0",
+        None,
+        &[],
+        &Language::Rust,
+        "api",
+        "patterns",
+        "context",
+        None,
+        false,
+        &deps,
+    );
+    assert!(
+        prompt.contains("anyhow = \"*\""),
+        "Rust dep with None raw_spec in create mode must use wildcard"
+    );
+}
+
+#[test]
+fn test_create_prompt_python_ignores_deps() {
+    let deps = vec![StructuredDep {
+        name: "requests".to_string(),
+        raw_spec: Some("\"2.31\"".to_string()),
+        source: DepSource::Manifest,
+    }];
+    let prompt = create_prompt(
+        "my-lib",
+        "1.0.0",
+        None,
+        &[],
+        &Language::Python,
+        "api",
+        "patterns",
+        "context",
+        None,
+        false,
+        &deps,
+    );
+    assert!(
+        !prompt.contains("[dependencies]"),
+        "Python create prompt must not include Rust [dependencies] block"
+    );
+    assert!(
+        !prompt.contains("Dependencies Note"),
+        "Python create prompt must not include Rust deps guidance"
+    );
+}
+
+// ============================================================================
+// Java language hints coverage
+// ============================================================================
+
+#[test]
+fn test_create_prompt_java_has_language_hints() {
+    let prompt = create_prompt(
+        "jackson-core",
+        "2.15.0",
+        None,
+        &[],
+        &Language::Java,
+        "api",
+        "patterns",
+        "context",
+        None,
+        false,
+        &[],
+    );
+    assert!(
+        prompt.contains("JAVA-SPECIFIC HINTS"),
+        "Java create prompt must include Java-specific hints"
+    );
+    assert!(
+        prompt.contains("import com.example"),
+        "Java create hints should mention import conventions"
+    );
+}
+
+#[test]
+fn test_extract_prompt_java_has_language_hints() {
+    let prompt = extract_prompt(
+        "jackson-core",
+        "2.15.0",
+        "public class Foo {}",
+        1,
+        None,
+        false,
+        &Language::Java,
+    );
+    assert!(
+        prompt.contains("JAVA-SPECIFIC HINTS"),
+        "Java extract prompt must include Java-specific hints"
+    );
+    assert!(
+        prompt.contains("pom.xml"),
+        "Java extract hints should mention pom.xml"
+    );
+}
+
+#[test]
+fn test_map_prompt_java_has_language_hints() {
+    let prompt = map_prompt(
+        "jackson-core",
+        "2.15.0",
+        "test code",
+        None,
+        false,
+        &Language::Java,
+    );
+    assert!(
+        prompt.contains("JAVA-SPECIFIC HINTS"),
+        "Java map prompt must include Java-specific hints"
+    );
+    assert!(
+        prompt.contains("JUnit"),
+        "Java map hints should mention JUnit"
+    );
+}
+
+#[test]
+fn test_learn_prompt_java_has_language_hints() {
+    let prompt = learn_prompt(
+        "jackson-core",
+        "2.15.0",
+        "docs",
+        None,
+        false,
+        &Language::Java,
+    );
+    assert!(
+        prompt.contains("JAVA-SPECIFIC HINTS"),
+        "Java learn prompt must include Java-specific hints"
+    );
+    assert!(
+        prompt.contains("Javadoc"),
+        "Java learn hints should mention Javadoc"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_java_has_language_hints() {
+    let prompt = create_update_prompt(
+        "jackson-core",
+        "2.15.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Java,
+        &[],
+    );
+    assert!(
+        prompt.contains("JAVA-SPECIFIC HINTS"),
+        "Java update prompt must include Java-specific hints"
+    );
+}
+
+#[test]
+fn test_create_update_prompt_java_no_deps_block() {
+    let deps = vec![StructuredDep {
+        name: "guava".to_string(),
+        raw_spec: Some("\"31.1-jre\"".to_string()),
+        source: DepSource::Manifest,
+    }];
+    let prompt = create_update_prompt(
+        "jackson-core",
+        "2.15.0",
+        "existing skill",
+        "apis",
+        "patterns",
+        "context",
+        &Language::Java,
+        &deps,
+    );
+    assert!(
+        !prompt.contains("[dependencies]"),
+        "Java update prompt must not include Rust [dependencies] block"
     );
 }
