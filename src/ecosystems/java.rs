@@ -180,45 +180,52 @@ impl JavaHandler {
     /// directory name rather than the group namespace.
     pub fn get_artifact_id(&self) -> Result<String> {
         // pom.xml artifactId — authoritative
-        let pom = self.repo_path.join("pom.xml");
-        if pom.is_file() {
-            if let Ok(content) = fs::read_to_string(&pom) {
-                if let Some(name) = parse_pom_artifact_id(&content) {
-                    let cleaned = name.strip_suffix("-parent").unwrap_or(&name);
-                    if !cleaned.is_empty() {
-                        return Ok(cleaned.to_string());
-                    }
-                }
-            }
+        let pom_name = self
+            .repo_path
+            .join("pom.xml")
+            .is_file()
+            .then(|| fs::read_to_string(self.repo_path.join("pom.xml")).ok())
+            .flatten()
+            .and_then(|c| parse_pom_artifact_id(&c))
+            .and_then(|n| {
+                let cleaned = n.strip_suffix("-parent").unwrap_or(&n).to_string();
+                (!cleaned.is_empty()).then_some(cleaned)
+            });
+        if let Some(name) = pom_name {
+            return Ok(name);
         }
 
         // settings.gradle rootProject.name — project name, not namespace
+        // Convention: multi-module projects name the root "foo-root"
+        // but the artifact is "foo". Only strip trailing "-root".
         for settings_name in &["settings.gradle", "settings.gradle.kts"] {
-            let settings = self.repo_path.join(settings_name);
-            if settings.is_file() {
-                if let Ok(content) = fs::read_to_string(&settings) {
-                    if let Some(name) = parse_settings_gradle_name(&content) {
-                        // Convention: multi-module projects name the root "foo-root"
-                        // but the artifact is "foo". Only strip trailing "-root",
-                        // not embedded (e.g., "rootfinder" stays "rootfinder").
-                        let cleaned = name.strip_suffix("-root").unwrap_or(&name);
-                        if !cleaned.is_empty() {
-                            return Ok(cleaned.to_string());
-                        }
-                    }
-                }
+            let name = self
+                .repo_path
+                .join(settings_name)
+                .is_file()
+                .then(|| fs::read_to_string(self.repo_path.join(settings_name)).ok())
+                .flatten()
+                .and_then(|c| parse_settings_gradle_name(&c))
+                .and_then(|n| {
+                    let cleaned = n.strip_suffix("-root").unwrap_or(&n).to_string();
+                    (!cleaned.is_empty()).then_some(cleaned)
+                });
+            if let Some(name) = name {
+                return Ok(name);
             }
         }
 
         // build.gradle archivesBaseName — the actual jar filename base
         for gradle_name in &["build.gradle", "build.gradle.kts"] {
-            let gradle = self.repo_path.join(gradle_name);
-            if gradle.is_file() {
-                if let Ok(content) = fs::read_to_string(&gradle) {
-                    if let Some(name) = parse_gradle_archives_base_name(&content) {
-                        return Ok(name);
-                    }
-                }
+            let name = self
+                .repo_path
+                .join(gradle_name)
+                .is_file()
+                .then(|| fs::read_to_string(self.repo_path.join(gradle_name)).ok())
+                .flatten()
+                .and_then(|c| parse_gradle_archives_base_name(&c));
+            if let Some(name) = name {
+                return Ok(name);
             }
         }
 
