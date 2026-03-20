@@ -703,6 +703,10 @@ fn extract_gradle_quoted(rhs: &str) -> Option<String> {
 fn parse_gradle_archives_base_name(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
+        // Skip comments
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+            continue;
+        }
         // archivesBaseName = 'my-lib' or archivesBaseName = "my-lib"
         // Also: base.archivesName.set("my-lib") (Gradle 7+ convention)
         if trimmed.starts_with("archivesBaseName") {
@@ -2578,6 +2582,21 @@ dependencies {
     #[test]
     fn parse_archives_base_name_not_present() {
         let content = "group = 'com.example'\nversion = '1.0'\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    #[test]
+    fn parse_archives_base_name_skips_comments() {
+        let content = "// archivesBaseName = 'old-name'\narchivesBaseName = 'real-name'\n";
+        assert_eq!(
+            parse_gradle_archives_base_name(content),
+            Some("real-name".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_archives_name_skips_block_comments() {
+        let content = "/* archivesName = 'old' */\n* archivesName = 'star-prefix'\n";
         assert_eq!(parse_gradle_archives_base_name(content), None);
     }
 }
