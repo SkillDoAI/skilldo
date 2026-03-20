@@ -2745,7 +2745,7 @@ edition = "2021"
         .unwrap();
 
         let handler = crate::ecosystems::java::JavaHandler::new(tmp.path());
-        let local_artifact_id = handler.get_package_name().ok();
+        let local_artifact_id = handler.get_artifact_id().ok();
         assert_eq!(local_artifact_id, Some("my-java-lib".to_string()));
 
         // Now filter deps using this artifact_id
@@ -2762,7 +2762,8 @@ edition = "2021"
 
     #[test]
     fn test_java_local_artifact_id_from_gradle() {
-        // Gradle: group from build.gradle, not artifactId — should NOT match
+        // Gradle-only (no pom.xml, no settings.gradle): get_artifact_id() returns
+        // the dir name, not the group namespace. This prevents accidental filtering.
         let tmp = TempDir::new().unwrap();
         std::fs::write(
             tmp.path().join("build.gradle"),
@@ -2771,16 +2772,20 @@ edition = "2021"
         .unwrap();
 
         let handler = crate::ecosystems::java::JavaHandler::new(tmp.path());
-        let local_artifact_id = handler.get_package_name().ok();
-        // Gradle group = "com.example" — this is a group name, not an artifact_id
-        assert_eq!(local_artifact_id, Some("com.example".to_string()));
+        let local_artifact_id = handler.get_artifact_id().ok();
+        // Should be the dir name, NOT "com.example" (group namespace)
+        assert_ne!(
+            local_artifact_id.as_deref(),
+            Some("com.example"),
+            "get_artifact_id must not return Gradle group namespace"
+        );
 
-        // This group name won't match any artifact_id in Maven coords
+        // Dir name won't match any artifact_id in Maven coords — safe
         let deps = vec!["com.example:my-java-lib:1.0".to_string()];
         let filtered = filter_java_deps_by_artifact_id(&deps, local_artifact_id.as_deref());
         assert_eq!(
             filtered, deps,
-            "Gradle group fallback should not accidentally filter Maven coords"
+            "Gradle dir-name fallback should not accidentally filter Maven coords"
         );
     }
 
@@ -3854,7 +3859,7 @@ dependencies = []
         std::fs::write(target_dir.join("classes.txt"), b"not a jar").unwrap();
 
         let handler = crate::ecosystems::java::JavaHandler::new(tmp.path());
-        let local_artifact_id = handler.get_package_name().ok();
+        let local_artifact_id = handler.get_artifact_id().ok();
         assert_eq!(local_artifact_id, Some("my-java-lib".to_string()));
 
         // Filter Maven deps
