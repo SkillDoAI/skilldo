@@ -3269,8 +3269,23 @@ Issues
     assert!(
         !issues
             .iter()
-            .any(|i| i.message.contains("```markdown fence")),
+            .any(|i| i.message.contains("markdown fence") && i.severity == Severity::Error),
         "Normal content should not trigger fence error. Issues: {:?}",
+        issues
+    );
+}
+
+#[test]
+fn test_body_wrapped_in_tilde_markdown_fence_should_error() {
+    let linter = SkillLinter::new();
+    let content = "---\nname: test\ndescription: test\nversion: 1.0\necosystem: python\nlicense: MIT\n---\n\n~~~markdown\n## Imports\n```python\nimport test\n```\n\n## Core Patterns\nExample\n\n## Pitfalls\nIssues\n~~~\n";
+
+    let issues = linter.lint(content).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("markdown fence") && i.severity == Severity::Error),
+        "Should error on body wrapped in ~~~markdown fence. Issues: {:?}",
         issues
     );
 }

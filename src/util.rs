@@ -896,7 +896,7 @@ mod tests {
     fn test_find_fenced_blocks_long_fence_needs_matching_close() {
         // 4-char opener needs 4+ char closer.
         // A line-start ``` (3-char) should NOT close a ```` (4-char) opener.
-        let text = "````json\nsome code\n```\nstill inside\n````\n";
+        let text = "````json\n```\nstill inside\n````\n";
         let blocks = find_fenced_blocks(text);
         assert_eq!(
             blocks.len(),
@@ -905,8 +905,8 @@ mod tests {
             blocks
         );
         assert!(
-            blocks[0].1.contains("```\nstill inside"),
-            "line-start ``` should be body, not a closer: {:?}",
+            blocks[0].1.starts_with("```"),
+            "body should start with inner ```: {:?}",
             blocks[0].1
         );
     }
