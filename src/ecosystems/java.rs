@@ -27,12 +27,12 @@ impl JavaHandler {
         let mut files = Vec::new();
         self.collect_java_files(&self.repo_path, &mut files, 0, false)?;
 
+        files.sort();
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
+
         if files.is_empty() {
             bail!("No Java source files found in {}", self.repo_path.display());
         }
-
-        files.sort();
-        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} Java source files", files.len());
         Ok(files)
     }
@@ -180,11 +180,10 @@ impl JavaHandler {
     /// directory name rather than the group namespace.
     pub fn get_artifact_id(&self) -> Result<String> {
         // pom.xml artifactId — authoritative
-        let pom_name = self
-            .repo_path
-            .join("pom.xml")
+        let pom_path = self.repo_path.join("pom.xml");
+        let pom_name = pom_path
             .is_file()
-            .then(|| fs::read_to_string(self.repo_path.join("pom.xml")).ok())
+            .then(|| fs::read_to_string(&pom_path).ok())
             .flatten()
             .and_then(|c| parse_pom_artifact_id(&c))
             .and_then(|n| {
@@ -199,11 +198,10 @@ impl JavaHandler {
         // Convention: multi-module projects name the root "foo-root"
         // but the artifact is "foo". Only strip trailing "-root".
         for settings_name in &["settings.gradle", "settings.gradle.kts"] {
-            let name = self
-                .repo_path
-                .join(settings_name)
+            let settings_path = self.repo_path.join(settings_name);
+            let name = settings_path
                 .is_file()
-                .then(|| fs::read_to_string(self.repo_path.join(settings_name)).ok())
+                .then(|| fs::read_to_string(&settings_path).ok())
                 .flatten()
                 .and_then(|c| parse_settings_gradle_name(&c))
                 .and_then(|n| {
@@ -217,11 +215,10 @@ impl JavaHandler {
 
         // build.gradle archivesBaseName — the actual jar filename base
         for gradle_name in &["build.gradle", "build.gradle.kts"] {
-            let name = self
-                .repo_path
-                .join(gradle_name)
+            let gradle_path = self.repo_path.join(gradle_name);
+            let name = gradle_path
                 .is_file()
-                .then(|| fs::read_to_string(self.repo_path.join(gradle_name)).ok())
+                .then(|| fs::read_to_string(&gradle_path).ok())
                 .flatten()
                 .and_then(|c| parse_gradle_archives_base_name(&c));
             if let Some(name) = name {
@@ -618,7 +615,7 @@ fn parse_pom_license(content: &str) -> Option<String> {
     let content = strip_xml_comments(content);
     let start = content.find("<licenses>")?;
     let end = content[start..].find("</licenses>")?;
-    let section = &content[start..start + end];
+    let section = &content[start..start + end + "</licenses>".len()];
     extract_xml_tag(section, "name")
 }
 
@@ -2604,6 +2601,13 @@ dependencies {
     #[test]
     fn parse_archives_name_skips_block_comments() {
         let content = "/* archivesName = 'old' */\n* archivesName = 'star-prefix'\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    #[test]
+    fn parse_archives_name_rejects_set_archives_name_prefix() {
+        // Non-standard property — should not match our tightened pattern
+        let content = "setArchivesNamePrefix = 'wrong'\n";
         assert_eq!(parse_gradle_archives_base_name(content), None);
     }
 
