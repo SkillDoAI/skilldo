@@ -102,6 +102,7 @@ impl RustHandler {
         }
 
         files.sort_by_key(|p| self.file_priority(p));
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} Rust source files", files.len());
         Ok(files)
     }
@@ -121,6 +122,7 @@ impl RustHandler {
 
         files.sort();
         files.dedup();
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
 
         if files.is_empty() {
             // Not fatal for Rust: inline #[cfg(test)] modules are captured
@@ -146,6 +148,7 @@ impl RustHandler {
         }
 
         files.sort();
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} Rust example files", files.len());
         Ok(files)
     }
@@ -196,6 +199,7 @@ impl RustHandler {
 
         docs.sort();
         docs.dedup();
+        let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
         info!("Found {} documentation files", docs.len());
         Ok(docs)
     }

@@ -32,6 +32,7 @@ impl GoHandler {
         }
 
         files.sort_by_key(|p| self.file_priority(p));
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} Go source files", files.len());
         Ok(files)
     }
@@ -40,6 +41,8 @@ impl GoHandler {
     pub fn find_test_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         self.collect_go_files(&self.repo_path, &mut files, 0, true)?;
+
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
 
         if files.is_empty() {
             bail!(
@@ -69,6 +72,7 @@ impl GoHandler {
 
         files.sort();
         files.dedup();
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} Go example files", files.len());
         Ok(files)
     }
@@ -98,6 +102,7 @@ impl GoHandler {
             }
         }
 
+        let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
         info!("Found {} documentation files", docs.len());
         Ok(docs)
     }

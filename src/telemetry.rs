@@ -164,12 +164,20 @@ pub fn append_run(record: &RunRecord, path: Option<PathBuf>) -> std::io::Result<
     Ok(())
 }
 
-/// Write `data` to `path` atomically: write to a sibling temp file, then rename.
-/// Prevents data loss if the process is killed mid-write.
+/// Write `data` to `path` atomically: write to a sibling temp file, then persist.
+/// Uses `tempfile::NamedTempFile::persist()` which handles platform differences
+/// (on Windows pre-10 1607, `fs::rename` fails if dest exists).
 fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, data)?;
-    fs::rename(&tmp, path)
+    let dir = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path has no parent directory",
+        )
+    })?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(data)?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 /// Count CSV columns respecting RFC 4180 quoting (commas inside quotes don't count).
@@ -492,8 +500,26 @@ mod tests {
         fs::write(&path, "original").unwrap();
         write_atomic(&path, b"replaced").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "replaced");
-        // Temp file should not linger
-        assert!(!dir.path().join("atomic.tmp").exists());
+        // No temp files should linger (NamedTempFile is consumed by persist)
+        let remaining: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "only the target file should remain, found: {:?}",
+            remaining.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_write_atomic_creates_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new_file.txt");
+        assert!(!path.exists());
+        write_atomic(&path, b"fresh content").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "fresh content");
     }
 
     #[test]

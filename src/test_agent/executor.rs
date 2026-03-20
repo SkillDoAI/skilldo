@@ -1033,7 +1033,7 @@ impl LanguageExecutor for JavaExecutor {
         // Reuse JavaHandler which handles parent POMs, settings.gradle, etc.
         let local_artifact_id = self.local_source.as_ref().and_then(|source| {
             let handler = crate::ecosystems::java::JavaHandler::new(std::path::Path::new(source));
-            handler.get_package_name().ok()
+            handler.get_artifact_id().ok()
         });
 
         // Filter out the local package's coordinate from Maven deps.

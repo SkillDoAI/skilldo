@@ -107,6 +107,8 @@ impl PythonHandler {
         // Sort by priority for large codebases (read most important files first)
         source_files.sort_by_key(|path| self.file_priority(path));
 
+        let source_files = crate::util::filter_within_boundary(source_files, &self.repo_path);
+
         info!("Found {} Python source files", source_files.len());
         Ok(source_files)
     }
@@ -126,6 +128,8 @@ impl PythonHandler {
         // - **/*_test.py (TensorFlow, PyTorch pattern)
         // - **/test_*.py (pytest convention)
         self.collect_test_files(&self.repo_path, &mut test_files)?;
+
+        let test_files = crate::util::filter_within_boundary(test_files, &self.repo_path);
 
         if test_files.is_empty() {
             bail!(
@@ -201,6 +205,8 @@ impl PythonHandler {
             }
         }
 
+        let example_files = crate::util::filter_within_boundary(example_files, &self.repo_path);
+
         info!("Found {} Python example files", example_files.len());
         Ok(example_files)
     }
@@ -225,6 +231,8 @@ impl PythonHandler {
                 self.collect_docs_recursive(&docs_dir, &mut docs, 0)?;
             }
         }
+
+        let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
 
         info!("Found {} documentation files", docs.len());
         Ok(docs)
@@ -2131,6 +2139,103 @@ mod tests {
         assert!(
             !names.contains(&"deep.py"),
             "should not find files beyond MAX_DEPTH"
+        );
+    }
+
+    // -- symlink boundary tests --
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_source_files_skips_symlink_escaping_repo() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        // Create a .py file outside the repo
+        fs::write(outside.path().join("secret.py"), "# secret").unwrap();
+
+        // Create a symlink inside the repo pointing outside
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("src")).unwrap();
+
+        // Also create a real file so find_source_files doesn't bail
+        fs::write(dir.path().join("real.py"), "# real").unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let files = handler.find_source_files().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"real.py"), "should keep real files");
+        assert!(
+            !names.contains(&"secret.py"),
+            "should skip files via symlink escaping repo"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_test_files_skips_symlink_escaping_repo() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        // Create a test file outside the repo
+        fs::write(outside.path().join("test_secret.py"), "# secret test").unwrap();
+
+        // Symlink tests/ → outside dir
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("tests")).unwrap();
+
+        // Create a real test file
+        fs::write(dir.path().join("test_real.py"), "# real test").unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let files = handler.find_test_files().unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"test_real.py"));
+        assert!(!names.contains(&"test_secret.py"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_docs_skips_symlink_escaping_repo() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        // Create a doc file outside
+        fs::write(outside.path().join("secret.md"), "# secret").unwrap();
+
+        // Symlink docs/ → outside dir
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("docs")).unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let docs = handler.find_docs().unwrap();
+        assert!(
+            !docs.iter().any(|p| p.ends_with("secret.md")),
+            "should skip docs via symlink escaping repo"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_examples_skips_symlink_escaping_repo() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        // Create an example file outside
+        fs::write(outside.path().join("demo.py"), "# demo").unwrap();
+
+        // Symlink examples/ → outside dir
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("examples")).unwrap();
+
+        let handler = PythonHandler::new(dir.path());
+        let examples = handler.find_examples().unwrap();
+        assert!(
+            !examples.iter().any(|p| p.ends_with("demo.py")),
+            "should skip examples via symlink escaping repo"
         );
     }
 }
