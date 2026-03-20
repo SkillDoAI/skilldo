@@ -312,7 +312,14 @@ pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
 pub fn filter_within_boundary(paths: Vec<PathBuf>, boundary: &Path) -> Vec<PathBuf> {
     let canonical_boundary = match boundary.canonicalize() {
         Ok(p) => p,
-        Err(_) => return paths, // If we can't canonicalize the boundary, pass through
+        Err(e) => {
+            tracing::warn!(
+                "Cannot canonicalize repo boundary {}: {} — symlink guard disabled",
+                boundary.display(),
+                e
+            );
+            return paths;
+        }
     };
 
     paths

@@ -198,6 +198,9 @@ impl JavaHandler {
             if settings.is_file() {
                 if let Ok(content) = fs::read_to_string(&settings) {
                     if let Some(name) = parse_settings_gradle_name(&content) {
+                        // Convention: multi-module projects name the root "foo-root"
+                        // but the artifact is "foo". Only strip trailing "-root",
+                        // not embedded (e.g., "rootfinder" stays "rootfinder").
                         let cleaned = name.strip_suffix("-root").unwrap_or(&name);
                         if !cleaned.is_empty() {
                             return Ok(cleaned.to_string());
@@ -708,8 +711,7 @@ fn parse_gradle_archives_base_name(content: &str) -> Option<String> {
                     return Some(v);
                 }
             }
-        }
-        if trimmed.contains("archivesName") {
+        } else if trimmed.contains("archivesName") {
             // archivesName = "my-lib"
             if let Some((_, rhs)) = trimmed.split_once('=') {
                 if let Some(v) = extract_gradle_quoted(rhs.trim()) {
