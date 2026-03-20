@@ -715,8 +715,8 @@ fn parse_gradle_archives_base_name(content: &str) -> Option<String> {
                     return Some(v);
                 }
             }
-        } else if trimmed.contains("archivesName") {
-            // archivesName = "my-lib"
+        } else if trimmed.starts_with("archivesName") || trimmed.contains(".archivesName") {
+            // archivesName = "my-lib" or base.archivesName.set("my-lib")
             if let Some((_, rhs)) = trimmed.split_once('=') {
                 if let Some(v) = extract_gradle_quoted(rhs.trim()) {
                     return Some(v);
