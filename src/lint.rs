@@ -411,17 +411,10 @@ impl SkillLinter {
 
             let pitfalls_content = &pitfalls_section[..pitfalls_end];
 
-            // Extract all code blocks
-            let code_blocks: Vec<&str> = pitfalls_content
-                .split("```")
-                .skip(1) // Skip text before first block
-                .step_by(2) // Take every other element (the code blocks)
-                .map(|block| {
-                    // Remove language identifier (e.g., "python\n")
-                    block
-                        .trim_start_matches(|c: char| c.is_alphanumeric() || c == '-')
-                        .trim()
-                })
+            // Extract all code blocks (backtick and tilde fences)
+            let code_blocks: Vec<String> = crate::util::find_fenced_blocks(pitfalls_content)
+                .into_iter()
+                .map(|(_, body)| body)
                 .collect();
 
             // Check for consecutive identical code blocks (Wrong vs Right pattern)
