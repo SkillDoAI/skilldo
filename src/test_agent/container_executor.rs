@@ -188,7 +188,7 @@ fi"#
     /// Generate the Rust install/setup commands when local source is mounted.
     /// Reads the crate name from `source_path`'s Cargo.toml and generates a
     /// Cargo.toml in /workspace with a path dep to `/src`.
-    fn generate_rust_local_install(&self, deps: &[String]) -> String {
+    fn generate_rust_local_install(&self, deps: &[String]) -> Result<String> {
         let crate_name = self
             .config
             .source_path
@@ -196,15 +196,18 @@ fi"#
             .and_then(extract_cargo_package_name);
 
         if let Some(name) = crate_name {
+            // Validate dep names before embedding in shell script
+            for d in deps {
+                sanitize_dep_name(d).map_err(|e| anyhow::anyhow!(e))?;
+            }
             // Generate a Cargo.toml with local crate at /src + registry deps.
             let mut dep_lines = format!("{name} = {{ path = \"/src\" }}\n");
             for d in deps {
-                // Skip the local package itself (already added as path dep)
                 if d != &name {
                     dep_lines.push_str(&format!("{d} = \"*\"\n"));
                 }
             }
-            format!(
+            Ok(format!(
                 r#"mkdir -p src
 cp main.rs src/main.rs
 cat > Cargo.toml << 'SKILLDO_EOF'
@@ -215,9 +218,9 @@ edition = "2021"
 
 [dependencies]
 {dep_lines}SKILLDO_EOF"#
-            )
+            ))
         } else {
-            String::new()
+            Ok(String::new())
         }
     }
 
@@ -228,7 +231,7 @@ edition = "2021"
             Language::JavaScript => self.generate_node_install_script(deps)?,
             Language::Go => self.generate_go_install_script(deps)?,
             Language::Java => self.generate_java_install_script(deps)?,
-            Language::Rust if self.has_local_source() => self.generate_rust_local_install(deps),
+            Language::Rust if self.has_local_source() => self.generate_rust_local_install(deps)?,
             _ => String::new(),
         };
 
@@ -1784,7 +1787,7 @@ edition = "2021"
         .unwrap();
         let config = make_local_config(&tmp.path().to_string_lossy());
         let executor = ContainerExecutor::new(config, Language::Rust);
-        let script = executor.generate_rust_local_install(&[]);
+        let script = executor.generate_rust_local_install(&[]).unwrap();
         assert!(
             script.contains(r#"my-crate = { path = "/src" }"#),
             "should add path dep to Cargo.toml: {script}"
@@ -1814,7 +1817,7 @@ edition = "2021"
         let config = make_local_config(&tmp.path().to_string_lossy());
         let executor = ContainerExecutor::new(config, Language::Rust);
         let deps = vec!["serde".to_string(), "tokio".to_string()];
-        let script = executor.generate_rust_local_install(&deps);
+        let script = executor.generate_rust_local_install(&deps).unwrap();
         assert!(
             script.contains(r#"my-crate = { path = "/src" }"#),
             "should have local path dep: {script}"
@@ -1865,7 +1868,7 @@ edition = "2021"
         // No Cargo.toml in source — can't extract crate name
         let config = make_local_config(&tmp.path().to_string_lossy());
         let executor = ContainerExecutor::new(config, Language::Rust);
-        let script = executor.generate_rust_local_install(&[]);
+        let script = executor.generate_rust_local_install(&[]).unwrap();
         assert!(
             script.is_empty(),
             "should return empty when Cargo.toml is missing: {script}"
