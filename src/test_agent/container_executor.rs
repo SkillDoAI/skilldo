@@ -147,9 +147,9 @@ impl ContainerExecutor {
         // Local source: copy pre-built jars from /src into deps/.
         // Supports Maven (target/) and Gradle (build/libs/) layouts.
         if self.has_local_source() {
-            lines.push("mkdir -p deps".to_string());
             lines.push(
-                r#"if [ -d /src/target ]; then
+                r#"mkdir -p deps
+if [ -d /src/target ]; then
   find /src/target -maxdepth 1 -name '*.jar' -exec cp {} deps/ \;
 elif [ -d /src/build/libs ]; then
   find /src/build/libs -maxdepth 1 -name '*.jar' -exec cp {} deps/ \;
@@ -188,7 +188,7 @@ fi"#
     /// Generate the Rust install/setup commands when local source is mounted.
     /// Reads the crate name from `source_path`'s Cargo.toml and generates a
     /// Cargo.toml in /workspace with a path dep to `/src`.
-    fn generate_rust_local_install(&self) -> String {
+    fn generate_rust_local_install(&self, deps: &[String]) -> String {
         let crate_name = self
             .config
             .source_path
@@ -196,8 +196,14 @@ fi"#
             .and_then(extract_cargo_package_name);
 
         if let Some(name) = crate_name {
-            // Generate a Cargo.toml that depends on the local crate at /src.
-            // The test code goes in src/main.rs (cargo convention).
+            // Generate a Cargo.toml with local crate at /src + registry deps.
+            let mut dep_lines = format!("{name} = {{ path = \"/src\" }}\n");
+            for d in deps {
+                // Skip the local package itself (already added as path dep)
+                if d != &name {
+                    dep_lines.push_str(&format!("{d} = \"*\"\n"));
+                }
+            }
             format!(
                 r#"mkdir -p src
 cp main.rs src/main.rs
@@ -208,8 +214,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-{name} = {{ path = "/src" }}
-SKILLDO_EOF"#
+{dep_lines}SKILLDO_EOF"#
             )
         } else {
             String::new()
@@ -223,7 +228,7 @@ SKILLDO_EOF"#
             Language::JavaScript => self.generate_node_install_script(deps)?,
             Language::Go => self.generate_go_install_script(deps)?,
             Language::Java => self.generate_java_install_script(deps)?,
-            Language::Rust if self.has_local_source() => self.generate_rust_local_install(),
+            Language::Rust if self.has_local_source() => self.generate_rust_local_install(deps),
             _ => String::new(),
         };
 
@@ -1779,7 +1784,7 @@ edition = "2021"
         .unwrap();
         let config = make_local_config(&tmp.path().to_string_lossy());
         let executor = ContainerExecutor::new(config, Language::Rust);
-        let script = executor.generate_rust_local_install();
+        let script = executor.generate_rust_local_install(&[]);
         assert!(
             script.contains(r#"my-crate = { path = "/src" }"#),
             "should add path dep to Cargo.toml: {script}"
@@ -1795,6 +1800,37 @@ edition = "2021"
         assert!(
             script.contains("cp main.rs src/main.rs"),
             "should move code to src/main.rs"
+        );
+    }
+
+    #[test]
+    fn test_rust_local_mount_includes_registry_deps() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Rust);
+        let deps = vec!["serde".to_string(), "tokio".to_string()];
+        let script = executor.generate_rust_local_install(&deps);
+        assert!(
+            script.contains(r#"my-crate = { path = "/src" }"#),
+            "should have local path dep: {script}"
+        );
+        assert!(
+            script.contains("serde = \"*\""),
+            "should include registry dep serde: {script}"
+        );
+        assert!(
+            script.contains("tokio = \"*\""),
+            "should include registry dep tokio: {script}"
+        );
+        // my-crate should NOT appear as a registry dep
+        assert!(
+            !script.contains("my-crate = \"*\""),
+            "local crate should not be duplicated as registry dep: {script}"
         );
     }
 
@@ -1829,7 +1865,7 @@ edition = "2021"
         // No Cargo.toml in source — can't extract crate name
         let config = make_local_config(&tmp.path().to_string_lossy());
         let executor = ContainerExecutor::new(config, Language::Rust);
-        let script = executor.generate_rust_local_install();
+        let script = executor.generate_rust_local_install(&[]);
         assert!(
             script.is_empty(),
             "should return empty when Cargo.toml is missing: {script}"

@@ -477,7 +477,14 @@ pub async fn run_cmd_with_timeout(
                 // SAFETY: sending a signal to a process group is safe.
                 // Negative pid means kill the whole process group.
                 unsafe {
-                    libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                    let ret = libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                    if ret == -1 {
+                        tracing::debug!(
+                            "Process group kill failed (pid={}): {}",
+                            pid,
+                            std::io::Error::last_os_error()
+                        );
+                    }
                 }
             }
             // On all platforms, tokio kill_on_drop handles the direct child
