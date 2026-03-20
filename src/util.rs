@@ -59,24 +59,36 @@ pub fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
     let mut blocks = Vec::new();
     let mut pos = 0;
     while pos < text.len() {
-        let (fence, start) = match find_next_line_fence(text, pos) {
+        let (fence_char, start, fence_len) = match find_next_line_fence(text, pos) {
             Some(result) => result,
             None => break,
         };
 
-        let after = start + fence.len();
-        // Closing fence must also be at a line boundary
-        if let Some(close_offset) = find_closing_fence(text, after, fence) {
-            let raw = &text[after..after + close_offset];
-            let (tag, body) = if let Some(nl) = raw.find('\n') {
-                let tag_part = raw[..nl].trim().to_ascii_lowercase();
-                let body = raw[nl + 1..].trim().to_string();
-                (tag_part, body)
-            } else {
-                (String::new(), raw.trim().to_string())
-            };
+        let after = start + fence_len;
+        // Extract tag from the opener line (text after the fence chars)
+        let line_end = text[after..]
+            .find('\n')
+            .map(|i| after + i)
+            .unwrap_or(text.len());
+        let tag = text[after..line_end].trim().to_ascii_lowercase();
+        let body_start = if line_end < text.len() {
+            line_end + 1
+        } else {
+            line_end
+        };
+
+        // Closing fence must use same char, at least same length, at line boundary
+        if let Some(close_offset) = find_closing_fence(text, body_start, fence_char, fence_len) {
+            let body = text[body_start..body_start + close_offset]
+                .trim()
+                .to_string();
             blocks.push((tag, body));
-            pos = after + close_offset + fence.len();
+            // Skip past the closing fence line
+            let close_abs = body_start + close_offset;
+            pos = text[close_abs..]
+                .find('\n')
+                .map(|i| close_abs + i + 1)
+                .unwrap_or(text.len());
         } else {
             break;
         }
@@ -85,49 +97,64 @@ pub fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
 }
 
 /// Find the next fence (``` or ~~~) that starts at a line boundary.
-fn find_next_line_fence(text: &str, from: usize) -> Option<(&str, usize)> {
+/// Returns the fence character, its position, and the full fence length (3+).
+fn find_next_line_fence(text: &str, from: usize) -> Option<(char, usize, usize)> {
     let mut search_pos = from;
     loop {
         let backtick = text[search_pos..].find("```").map(|i| search_pos + i);
         let tilde = text[search_pos..].find("~~~").map(|i| search_pos + i);
 
-        let (fence, candidate) = match (backtick, tilde) {
+        let (fence_char, candidate) = match (backtick, tilde) {
             (Some(b), Some(t)) => {
                 if t < b {
-                    ("~~~", t)
+                    ('~', t)
                 } else {
-                    ("```", b)
+                    ('`', b)
                 }
             }
-            (Some(b), None) => ("```", b),
-            (None, Some(t)) => ("~~~", t),
+            (Some(b), None) => ('`', b),
+            (None, Some(t)) => ('~', t),
             (None, None) => return None,
         };
 
         // Check line-boundary: position 0 or preceded by newline
         if candidate == 0 || text.as_bytes()[candidate - 1] == b'\n' {
-            return Some((fence, candidate));
+            // Count the full fence length (3 or more consecutive fence chars)
+            let fence_len = text[candidate..]
+                .chars()
+                .take_while(|&c| c == fence_char)
+                .count();
+            return Some((fence_char, candidate, fence_len));
         }
 
         // Not at line boundary — skip past this occurrence
-        search_pos = candidate + fence.len();
+        search_pos = candidate + 3;
     }
 }
 
 /// Find the closing fence that matches the opener, at a line boundary.
-fn find_closing_fence(text: &str, from: usize, fence: &str) -> Option<usize> {
+/// Per CommonMark, the closing fence must use the same char and be at least
+/// as long as the opening fence.
+fn find_closing_fence(text: &str, from: usize, fence_char: char, min_len: usize) -> Option<usize> {
+    let base_fence: String = std::iter::repeat_n(fence_char, 3).collect();
     let mut search_pos = 0;
     let slice = &text[from..];
     loop {
-        match slice[search_pos..].find(fence) {
+        match slice[search_pos..].find(&base_fence) {
             Some(offset) => {
                 let abs = search_pos + offset;
-                // Check line-boundary: preceded by newline (closing fences are never at pos 0
-                // of the slice because there's at least the tag/body before them)
+                // Check line-boundary
                 if abs == 0 || slice.as_bytes()[abs - 1] == b'\n' {
-                    return Some(abs);
+                    // Count fence length at this position
+                    let len = slice[abs..]
+                        .chars()
+                        .take_while(|&c| c == fence_char)
+                        .count();
+                    if len >= min_len {
+                        return Some(abs);
+                    }
                 }
-                search_pos = abs + fence.len();
+                search_pos = abs + 3;
             }
             None => return None,
         }
@@ -763,12 +790,22 @@ mod tests {
 
     #[test]
     fn test_find_fenced_blocks_empty_block_no_newline() {
-        // Adjacent opening+closing fences with no content or newline between them
+        // 6 consecutive backticks = a single 6-char opener with no closer (unclosed)
         let text = "``````";
         let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 0, "6-char fence with no closer is unclosed");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_long_fence_needs_matching_close() {
+        // 4-char opener needs 4+ char closer — inner ``` should NOT close it
+        let text = "````json\ninner ```\nstill inside\n````\n";
+        let blocks = find_fenced_blocks(text);
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].0, "");
-        assert_eq!(blocks[0].1, "");
+        assert!(
+            blocks[0].1.contains("inner ```"),
+            "inner ``` should be part of the body, not a closer"
+        );
     }
 
     // ── xml_escape tests ──
