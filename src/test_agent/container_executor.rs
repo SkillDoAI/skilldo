@@ -247,9 +247,11 @@ edition = "2021"
         };
 
         let run_line = match self.language {
-            // With local source, Rust uses cargo (Cargo.toml with path dep)
-            // instead of plain rustc (which can't resolve crate dependencies).
-            Language::Rust if self.has_local_source() => "cargo run 2>&1",
+            // With local source AND a valid crate name, Rust uses cargo.
+            // If install_cmd is empty (no Cargo.toml found), fall back to rustc.
+            Language::Rust if self.has_local_source() && !install_cmd.is_empty() => {
+                "cargo run 2>&1"
+            }
             Language::JavaScript => "node test.js",
             Language::Rust => "rustc main.rs -o main && ./main",
             Language::Go => "go run main.go",
@@ -1887,15 +1889,16 @@ edition = "2021"
     }
 
     #[test]
-    fn test_rust_local_mount_no_cargo_toml_container_script_still_uses_cargo_run() {
+    fn test_rust_local_mount_no_cargo_toml_falls_back_to_rustc() {
         let tmp = TempDir::new().unwrap();
-        // No Cargo.toml — install section is empty, but run line is still cargo run
+        // No Cargo.toml — can't extract crate name, so install is empty.
+        // Should fall back to rustc instead of broken cargo run.
         let config = make_local_config(&tmp.path().to_string_lossy());
         let executor = ContainerExecutor::new(config, Language::Rust);
         let script = executor.generate_container_script(&[]).unwrap();
         assert!(
-            script.contains("cargo run"),
-            "local-mount Rust should still use cargo run: {script}"
+            script.contains("rustc main.rs"),
+            "local-mount without Cargo.toml should fall back to rustc: {script}"
         );
     }
 

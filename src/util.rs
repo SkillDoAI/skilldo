@@ -38,9 +38,10 @@ pub fn compute_code_block_lines(lines: &[&str]) -> Vec<bool> {
         if let Some(ch) = detect_fence_char(line) {
             let run_len = line.trim_start().chars().take_while(|&c| c == ch).count();
             if let Some((open_ch, open_len)) = open_fence {
-                // Inside a block -- only close if same fence character
-                // and closing fence is at least as long as the opening fence
-                if ch == open_ch && run_len >= open_len {
+                // Inside a block — close if same char, >= length, and no info text
+                // (per CommonMark, closing fences have only fence chars + whitespace)
+                let after_fence = line.trim_start().get(run_len..).unwrap_or("").trim();
+                if ch == open_ch && run_len >= open_len && after_fence.is_empty() {
                     open_fence = None;
                 }
             } else {
