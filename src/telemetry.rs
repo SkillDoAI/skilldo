@@ -540,4 +540,38 @@ mod tests {
         assert_eq!(lines.len(), 3); // header + 2 rows
         assert_eq!(lines[0], before.lines().next().unwrap());
     }
+
+    #[test]
+    fn test_write_atomic_empty_path_no_parent() {
+        // An empty path has no parent directory — should return InvalidInput error
+        use std::path::Path;
+        let result = write_atomic(Path::new(""), b"data");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_migrate_header_only_no_data_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+
+        // Write a stale header with no data rows
+        let old_header = "language,library,library_version,provider,model,test_provider,test_model,review_provider,review_model,max_retries,retries_used,review_retries_used,passed,failed_stage,failure_reason,duration_secs,timestamp,skilldo_version,review_degraded";
+        fs::write(&csv_path, format!("{old_header}\n")).unwrap();
+
+        // Migrate should replace header and produce no data rows
+        migrate_header_if_stale(&csv_path).unwrap();
+
+        let content = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 1, "should have only the new header");
+        assert_eq!(lines[0], RunRecord::csv_header());
+    }
+
+    #[test]
+    fn test_csv_escape_carriage_return() {
+        let escaped = csv_escape("line1\rline2");
+        assert_eq!(escaped, "\"line1\rline2\"");
+    }
 }

@@ -904,4 +904,55 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], real_file);
     }
+
+    #[test]
+    fn filter_within_boundary_empty_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = filter_within_boundary(vec![], dir.path());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_within_boundary_noncanonicalize_boundary_returns_all() {
+        // If the boundary itself can't be canonicalized, guard is disabled
+        let nonexistent_boundary = Path::new("/nonexistent_dir_abc123");
+        let paths = vec![PathBuf::from("/some/path")];
+        let result = filter_within_boundary(paths.clone(), nonexistent_boundary);
+        assert_eq!(
+            result, paths,
+            "should return all paths when boundary is not canonicalizable"
+        );
+    }
+
+    #[test]
+    fn build_maven_pom_strips_classifier() {
+        // 4-part Maven coordinate: group:artifact:version:classifier
+        let deps = vec!["com.google.code.gson:gson:2.10.1:javadoc".into()];
+        let pom = build_maven_pom_xml(&deps).unwrap();
+        assert!(
+            pom.contains("<version>2.10.1</version>"),
+            "classifier should be stripped"
+        );
+        assert!(
+            !pom.contains("javadoc"),
+            "classifier should not appear in POM"
+        );
+    }
+
+    #[test]
+    fn build_maven_pom_skips_empty_version() {
+        // group:artifact: (trailing colon, empty version)
+        let deps = vec!["com.example:lib:".into()];
+        assert!(
+            build_maven_pom_xml(&deps).is_none(),
+            "empty version after colon should be skipped"
+        );
+    }
+
+    #[test]
+    fn build_maven_pom_skips_non_maven_dep() {
+        // Single token with no colon separator
+        let deps = vec!["just-a-name".into()];
+        assert!(build_maven_pom_xml(&deps).is_none());
+    }
 }

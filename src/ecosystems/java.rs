@@ -2599,4 +2599,93 @@ dependencies {
         let content = "/* archivesName = 'old' */\n* archivesName = 'star-prefix'\n";
         assert_eq!(parse_gradle_archives_base_name(content), None);
     }
+
+    // ── get_artifact_id edge cases ──
+
+    #[test]
+    fn get_artifact_id_pom_parent_suffix_stripped_to_empty() {
+        // artifactId is exactly "-parent" → stripped to empty → falls through
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>-parent</artifactId></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let id = handler.get_artifact_id().unwrap();
+        // Should fall through to dir name, not return empty
+        assert!(!id.is_empty());
+    }
+
+    #[test]
+    fn get_artifact_id_settings_gradle_root_suffix_stripped_to_empty() {
+        // rootProject.name = "-root" → stripped to empty → falls through
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle"),
+            "rootProject.name = '-root'\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let id = handler.get_artifact_id().unwrap();
+        assert!(!id.is_empty());
+    }
+
+    #[test]
+    fn get_artifact_id_settings_gradle_kts() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle.kts"),
+            "rootProject.name = \"my-kts-artifact\"\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_artifact_id().unwrap(), "my-kts-artifact");
+    }
+
+    #[test]
+    fn get_artifact_id_archives_base_name_kts() {
+        // archivesBaseName in .kts file via the gradle_name loop second iteration
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("build.gradle.kts"),
+            "archivesBaseName = \"my-kts-jar\"\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_artifact_id().unwrap(), "my-kts-jar");
+    }
+
+    #[test]
+    fn get_artifact_id_fallback_dir_name() {
+        // No pom.xml, no settings.gradle, no build.gradle → dir name
+        let tmp = TempDir::new().unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let id = handler.get_artifact_id().unwrap();
+        assert!(!id.is_empty());
+        assert_ne!(id, "unknown");
+    }
+
+    // ── parse_gradle_archives_base_name edge cases ──
+
+    #[test]
+    fn parse_archives_base_name_no_equals_sign() {
+        // archivesBaseName without '=' should return None (no split_once match)
+        let content = "archivesBaseName 'my-lib'\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    #[test]
+    fn parse_archives_name_constant_not_quoted() {
+        // archivesName = someVariable (not a quoted string) should return None
+        let content = "archivesName = someVariable\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    #[test]
+    fn parse_archives_name_set_with_variable() {
+        // base.archivesName.set(someVariable) — no quotes, should return None
+        let content = "base.archivesName.set(someVariable)\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
 }
