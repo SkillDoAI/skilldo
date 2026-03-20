@@ -3236,8 +3236,8 @@ fn test_body_wrapped_in_markdown_fence_should_error() {
     assert!(
         issues
             .iter()
-            .any(|i| i.message.contains("```markdown fence") && i.severity == Severity::Error),
-        "Should error on body wrapped in ```markdown fence. Issues: {:?}",
+            .any(|i| i.message.contains("markdown fence") && i.severity == Severity::Error),
+        "Should error on body wrapped in markdown fence. Issues: {:?}",
         issues
     );
 }

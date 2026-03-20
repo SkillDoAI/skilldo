@@ -136,7 +136,7 @@ fn filter_python_deps<'a>(deps: &'a [String], local_pkg_name: Option<&str>) -> V
 }
 
 /// Filter Java deps by artifact ID, excluding the local package.
-fn filter_java_deps_by_artifact_id(
+pub(crate) fn filter_java_deps_by_artifact_id(
     deps: &[String],
     local_artifact_id: Option<&str>,
 ) -> Vec<String> {

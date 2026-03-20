@@ -12,7 +12,8 @@ use tracing::{debug, info, warn};
 
 use super::executor::{
     build_node_install_args, extract_cargo_package_name, extract_go_module_name,
-    extract_node_package_name, go_dep_needs_replace, ExecutionEnv, ExecutionResult, MAVEN_REPO_DIR,
+    extract_node_package_name, filter_java_deps_by_artifact_id, go_dep_needs_replace, ExecutionEnv,
+    ExecutionResult, MAVEN_REPO_DIR,
 };
 use super::LanguageExecutor;
 use crate::config::{ContainerConfig, InstallSource};
@@ -159,7 +160,23 @@ fi"#
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
         }
 
-        let pom = match crate::util::build_maven_pom_xml(deps) {
+        // Filter out the local artifact from Maven deps to avoid classpath collision
+        // (same local jar + registry jar on deps/*). Mirrors bare-metal JavaExecutor.
+        let fetch_deps = if self.has_local_source() {
+            let local_artifact = self.config.source_path.as_ref().and_then(|p| {
+                let handler = crate::ecosystems::java::JavaHandler::new(std::path::Path::new(p));
+                handler.get_artifact_id().ok()
+            });
+            filter_java_deps_by_artifact_id(deps, local_artifact.as_deref())
+        } else {
+            deps.to_vec()
+        };
+
+        if fetch_deps.is_empty() {
+            return Ok(lines.join("\n"));
+        }
+
+        let pom = match crate::util::build_maven_pom_xml(&fetch_deps) {
             Some(p) => p,
             None => {
                 warn!(
