@@ -150,8 +150,15 @@ fn find_closing_fence(text: &str, from: usize, fence_char: char, min_len: usize)
                         .chars()
                         .take_while(|&c| c == fence_char)
                         .count();
+                    // Per CommonMark, closing fence = only fence chars + optional
+                    // whitespace on the line. Reject lines with trailing info text
+                    // (e.g., ```json is an opener, not a closer).
                     if len >= min_len {
-                        return Some(abs);
+                        let after_fence = &slice[abs + len..];
+                        let rest = after_fence.split('\n').next().unwrap_or("").trim();
+                        if rest.is_empty() {
+                            return Some(abs);
+                        }
                     }
                 }
                 search_pos = abs + 3;
@@ -886,13 +893,34 @@ mod tests {
 
     #[test]
     fn test_find_fenced_blocks_long_fence_needs_matching_close() {
-        // 4-char opener needs 4+ char closer — inner ``` should NOT close it
-        let text = "````json\ninner ```\nstill inside\n````\n";
+        // 4-char opener needs 4+ char closer.
+        // A line-start ``` (3-char) should NOT close a ```` (4-char) opener.
+        let text = "````json\nsome code\n```\nstill inside\n````\n";
         let blocks = find_fenced_blocks(text);
-        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks.len(),
+            1,
+            "should find exactly one block: {:?}",
+            blocks
+        );
         assert!(
-            blocks[0].1.contains("inner ```"),
-            "inner ``` should be part of the body, not a closer"
+            blocks[0].1.contains("```\nstill inside"),
+            "line-start ``` should be body, not a closer: {:?}",
+            blocks[0].1
+        );
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_closing_fence_rejects_info_text() {
+        // A closing fence must be only fence chars + whitespace.
+        // ```json at line start is an opener, not a closer.
+        let text = "```\ncode\n```json\nmore code\n```\n";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 1, "should find one block: {:?}", blocks);
+        assert!(
+            blocks[0].1.contains("```json\nmore code"),
+            "```json should be body, not a closer: {:?}",
+            blocks[0].1
         );
     }
 
