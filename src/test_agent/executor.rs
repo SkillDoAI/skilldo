@@ -518,7 +518,7 @@ const CARGO_HOME_DIR: &str = "cargo-home";
 
 /// Extract the package name from a Cargo.toml at the given source directory.
 /// Returns `None` if the file is missing, unreadable, or lacks `[package] name`.
-fn extract_cargo_package_name(source: &str) -> Option<String> {
+pub(crate) fn extract_cargo_package_name(source: &str) -> Option<String> {
     let cargo_path = std::path::Path::new(source).join("Cargo.toml");
     std::fs::read_to_string(&cargo_path)
         .ok()
@@ -1220,7 +1220,7 @@ impl LanguageExecutor for JavaExecutor {
 
 /// Extract the module name from a `go.mod` file's content.
 /// Returns `None` if no `module` directive is found.
-fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
+pub(crate) fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
     go_mod_content.lines().find_map(|line| {
         line.trim()
             .strip_prefix("module ")
@@ -1253,13 +1253,13 @@ fn go_module_matches_dep(dep: &str, module: &str) -> bool {
 }
 
 /// Check whether **any** dependency in `deps` matches or is a sub-package of `module`.
-fn go_dep_needs_replace(deps: &[String], module: &str) -> bool {
+pub(crate) fn go_dep_needs_replace(deps: &[String], module: &str) -> bool {
     deps.iter().any(|d| go_module_matches_dep(d, module))
 }
 
 /// Extract the package name from a `package.json` file's content.
 /// Returns `None` if the JSON is invalid or has no string `name` field.
-fn extract_node_package_name(json_content: &str) -> Option<String> {
+pub(crate) fn extract_node_package_name(json_content: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(json_content)
         .ok()
         .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))

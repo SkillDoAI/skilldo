@@ -431,18 +431,32 @@ pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
     50
 }
 
-/// Run a command with a timeout, killing the child on expiry.
-/// Uses `tokio::process` with `kill_on_drop(true)` — no orphaned threads,
-/// no setsid/process-group gymnastics, no LLVM-profdata deadlocks.
+/// Run a command with a timeout, killing the child (and its descendants) on expiry.
 ///
-/// **Note:** `kill_on_drop` sends SIGKILL only to the direct child process,
-/// not to any grandchildren it may have spawned. For container workloads this
-/// is mitigated by explicit `runtime kill <container>` in the caller's error
-/// path. For non-container workloads, grandchild processes may be orphaned.
+/// On Unix: spawns the child in a new process group via `setpgid(0, 0)`.
+/// On timeout, sends `SIGKILL` to the entire process group (`kill(-pgid, SIGKILL)`),
+/// ensuring compilers, package managers, and other grandchildren are cleaned up.
+///
+/// On Windows: relies on `kill_on_drop(true)` which kills only the direct child.
+/// Full process-tree cleanup on Windows requires `TerminateJobObject`, which is
+/// not yet implemented.
 pub async fn run_cmd_with_timeout(
     mut cmd: Command,
     timeout: Duration,
 ) -> Result<std::process::Output> {
+    // On Unix, put the child in its own process group so we can kill the whole
+    // tree on timeout.
+    #[cfg(unix)]
+    // SAFETY: setpgid is async-signal-safe per POSIX.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
     let child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -450,11 +464,24 @@ pub async fn run_cmd_with_timeout(
         .spawn()
         .context("Failed to spawn command")?;
 
+    // Grab the pid before moving child into wait_with_output.
+    #[cfg(unix)]
+    let child_pid = child.id();
+
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(result) => result.context("Failed to execute command"),
         Err(_) => {
-            // Timeout expired. `child` was moved into `wait_with_output(self)`,
-            // so tokio drops it when cancelling the inner future → SIGKILL.
+            // Timeout expired. Kill the entire process group on Unix.
+            #[cfg(unix)]
+            if let Some(pid) = child_pid {
+                // SAFETY: sending a signal to a process group is safe.
+                // Negative pid means kill the whole process group.
+                unsafe {
+                    libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                }
+            }
+            // On all platforms, tokio kill_on_drop handles the direct child
+            // when the future is cancelled and child is dropped.
             Err(crate::error::SkillDoError::Timeout(timeout).into())
         }
     }
@@ -637,6 +664,60 @@ mod tests {
             err_msg.contains("timed out"),
             "Expected timeout error, got: {}",
             err_msg
+        );
+    }
+
+    /// Verify that timeout kills grandchild processes via process-group kill.
+    ///
+    /// Spawns a shell that launches a background `sleep 999` grandchild, then
+    /// verifies that after timeout both the shell and the sleep are gone.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_run_cmd_with_timeout_kills_process_group() {
+        use std::path::Path;
+
+        // Create a marker file that the grandchild will write to prove it started.
+        let marker_dir = tempfile::tempdir().unwrap();
+        let marker = marker_dir.path().join("grandchild_started");
+
+        // Shell script: touch a marker, then sleep forever.
+        // The shell is the child; sleep is the grandchild.
+        let script = format!("touch {} && sleep 999", marker.display());
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(&script);
+
+        let result = run_cmd_with_timeout(cmd, Duration::from_millis(500)).await;
+        assert!(result.is_err(), "should have timed out");
+
+        // The marker proves the grandchild started running before timeout.
+        assert!(
+            Path::new(&marker).exists(),
+            "grandchild should have started (marker file missing)"
+        );
+
+        // Give the OS a moment to reap the killed processes.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Verify no `sleep 999` processes survive. Use pgrep to search.
+        // We check that our specific sleep-999 is gone by scanning /proc or
+        // using ps. pgrep -f matches the full command line.
+        let ps_output = std::process::Command::new("ps")
+            .args(["ax", "-o", "pid,command"])
+            .output()
+            .expect("ps should work");
+        let ps_text = String::from_utf8_lossy(&ps_output.stdout);
+
+        // Count lines containing "sleep 999" that are NOT the ps command itself.
+        let orphaned: Vec<&str> = ps_text
+            .lines()
+            .filter(|line| line.contains("sleep 999") && !line.contains("ps "))
+            .collect();
+
+        assert!(
+            orphaned.is_empty(),
+            "grandchild sleep processes should have been killed by process-group SIGKILL, \
+             but found: {:?}",
+            orphaned
         );
     }
 
