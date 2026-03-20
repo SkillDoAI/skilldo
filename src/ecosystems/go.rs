@@ -27,12 +27,12 @@ impl GoHandler {
         let mut files = Vec::new();
         self.collect_go_files(&self.repo_path, &mut files, 0, false)?;
 
+        files.sort_by_key(|p| self.file_priority(p));
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
+
         if files.is_empty() {
             bail!("No Go source files found in {}", self.repo_path.display());
         }
-
-        files.sort_by_key(|p| self.file_priority(p));
-        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} Go source files", files.len());
         Ok(files)
     }

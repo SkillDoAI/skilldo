@@ -97,12 +97,12 @@ impl RustHandler {
         };
         self.collect_rs_files(start, &mut files, 0)?;
 
+        files.sort_by_key(|p| self.file_priority(p));
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
+
         if files.is_empty() {
             bail!("No Rust source files found in {}", self.repo_path.display());
         }
-
-        files.sort_by_key(|p| self.file_priority(p));
-        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} Rust source files", files.len());
         Ok(files)
     }

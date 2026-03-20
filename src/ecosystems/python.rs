@@ -97,17 +97,16 @@ impl PythonHandler {
         source_files.sort();
         source_files.dedup();
 
+        // Sort by priority for large codebases (read most important files first)
+        source_files.sort_by_key(|path| self.file_priority(path));
+        let source_files = crate::util::filter_within_boundary(source_files, &self.repo_path);
+
         if source_files.is_empty() {
             bail!(
                 "No Python source files found in {}",
                 self.repo_path.display()
             );
         }
-
-        // Sort by priority for large codebases (read most important files first)
-        source_files.sort_by_key(|path| self.file_priority(path));
-
-        let source_files = crate::util::filter_within_boundary(source_files, &self.repo_path);
 
         info!("Found {} Python source files", source_files.len());
         Ok(source_files)

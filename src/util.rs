@@ -314,11 +314,11 @@ pub fn filter_within_boundary(paths: Vec<PathBuf>, boundary: &Path) -> Vec<PathB
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(
-                "Cannot canonicalize repo boundary {}: {} — symlink guard disabled",
+                "Cannot canonicalize repo boundary {}: {} — rejecting all paths",
                 boundary.display(),
                 e
             );
-            return paths;
+            return Vec::new();
         }
     };
 
@@ -913,14 +913,14 @@ mod tests {
     }
 
     #[test]
-    fn filter_within_boundary_noncanonicalize_boundary_returns_all() {
-        // If the boundary itself can't be canonicalized, guard is disabled
+    fn filter_within_boundary_noncanonicalize_boundary_rejects_all() {
+        // If the boundary itself can't be canonicalized, fail closed (reject all)
         let nonexistent_boundary = Path::new("/nonexistent_dir_abc123");
         let paths = vec![PathBuf::from("/some/path")];
-        let result = filter_within_boundary(paths.clone(), nonexistent_boundary);
-        assert_eq!(
-            result, paths,
-            "should return all paths when boundary is not canonicalizable"
+        let result = filter_within_boundary(paths, nonexistent_boundary);
+        assert!(
+            result.is_empty(),
+            "should reject all paths when boundary is not canonicalizable"
         );
     }
 
