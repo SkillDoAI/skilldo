@@ -938,7 +938,7 @@ impl Default for Config {
             llm: LlmConfig {
                 provider: Provider::Anthropic,
                 provider_name: None,
-                model: "claude-sonnet-4-20250514".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
                 api_key_env: None, // Inferred from provider in get_api_key()
                 base_url: None,
                 max_tokens: None, // Use provider default (8192 for anthropic)

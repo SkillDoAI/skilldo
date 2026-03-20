@@ -27,11 +27,12 @@ impl JavaHandler {
         let mut files = Vec::new();
         self.collect_java_files(&self.repo_path, &mut files, 0, false)?;
 
+        files.sort();
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
+
         if files.is_empty() {
             bail!("No Java source files found in {}", self.repo_path.display());
         }
-
-        files.sort();
         info!("Found {} Java source files", files.len());
         Ok(files)
     }
@@ -40,6 +41,8 @@ impl JavaHandler {
     pub fn find_test_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         self.collect_java_files(&self.repo_path, &mut files, 0, true)?;
+
+        let mut files = crate::util::filter_within_boundary(files, &self.repo_path);
 
         if files.is_empty() {
             bail!(
@@ -66,6 +69,7 @@ impl JavaHandler {
 
         files.sort();
         files.dedup();
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} Java example files", files.len());
         Ok(files)
     }
@@ -91,6 +95,7 @@ impl JavaHandler {
 
         docs.sort();
         docs.dedup();
+        let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
         info!("Found {} documentation files", docs.len());
         Ok(docs)
     }
@@ -159,6 +164,69 @@ impl JavaHandler {
         }
 
         // Last fallback: directory name
+        let name = self
+            .repo_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        Ok(name.to_string())
+    }
+
+    /// Extract the artifact-level identity for local-install dep filtering.
+    ///
+    /// Unlike `get_package_name()` which may return a Gradle `group` namespace
+    /// (e.g., `com.example`), this returns the actual artifact name that appears
+    /// in Maven coordinates as the artifactId component. Falls back to the
+    /// directory name rather than the group namespace.
+    pub fn get_artifact_id(&self) -> Result<String> {
+        // pom.xml artifactId — authoritative
+        let pom_path = self.repo_path.join("pom.xml");
+        let pom_name = pom_path
+            .is_file()
+            .then(|| fs::read_to_string(&pom_path).ok())
+            .flatten()
+            .and_then(|c| parse_pom_artifact_id(&c))
+            .and_then(|n| {
+                let cleaned = n.strip_suffix("-parent").unwrap_or(&n).to_string();
+                (!cleaned.is_empty()).then_some(cleaned)
+            });
+        if let Some(name) = pom_name {
+            return Ok(name);
+        }
+
+        // settings.gradle rootProject.name — project name, not namespace
+        // Convention: multi-module projects name the root "foo-root"
+        // but the artifact is "foo". Only strip trailing "-root".
+        for settings_name in &["settings.gradle", "settings.gradle.kts"] {
+            let settings_path = self.repo_path.join(settings_name);
+            let name = settings_path
+                .is_file()
+                .then(|| fs::read_to_string(&settings_path).ok())
+                .flatten()
+                .and_then(|c| parse_settings_gradle_name(&c))
+                .and_then(|n| {
+                    let cleaned = n.strip_suffix("-root").unwrap_or(&n).to_string();
+                    (!cleaned.is_empty()).then_some(cleaned)
+                });
+            if let Some(name) = name {
+                return Ok(name);
+            }
+        }
+
+        // build.gradle archivesBaseName — the actual jar filename base
+        for gradle_name in &["build.gradle", "build.gradle.kts"] {
+            let gradle_path = self.repo_path.join(gradle_name);
+            let name = gradle_path
+                .is_file()
+                .then(|| fs::read_to_string(&gradle_path).ok())
+                .flatten()
+                .and_then(|c| parse_gradle_archives_base_name(&c));
+            if let Some(name) = name {
+                return Ok(name);
+            }
+        }
+
+        // Directory name — better than group for artifact identity
         let name = self
             .repo_path
             .file_name()
@@ -547,7 +615,7 @@ fn parse_pom_license(content: &str) -> Option<String> {
     let content = strip_xml_comments(content);
     let start = content.find("<licenses>")?;
     let end = content[start..].find("</licenses>")?;
-    let section = &content[start..start + end];
+    let section = &content[start..start + end + "</licenses>".len()];
     extract_xml_tag(section, "name")
 }
 
@@ -627,6 +695,43 @@ fn extract_gradle_quoted(rhs: &str) -> Option<String> {
             // Accept if tail is empty or only contains a comment
             if tail.is_empty() || tail.starts_with("//") || tail.starts_with("/*") {
                 return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract `archivesBaseName` from build.gradle — the actual jar filename base.
+/// This is more reliable than `group` for artifact identity since it directly
+/// corresponds to the jar name and Maven artifactId convention.
+fn parse_gradle_archives_base_name(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Skip comments
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+            continue;
+        }
+        // archivesBaseName = 'my-lib' or archivesBaseName = "my-lib"
+        // Also: base.archivesName.set("my-lib") (Gradle 7+ convention)
+        if trimmed.starts_with("archivesBaseName") {
+            if let Some((_, rhs)) = trimmed.split_once('=') {
+                if let Some(v) = extract_gradle_quoted(rhs.trim()) {
+                    return Some(v);
+                }
+            }
+        } else if trimmed.starts_with("archivesName") || trimmed.contains(".archivesName") {
+            // archivesName = "my-lib" or base.archivesName.set("my-lib")
+            if let Some((_, rhs)) = trimmed.split_once('=') {
+                if let Some(v) = extract_gradle_quoted(rhs.trim()) {
+                    return Some(v);
+                }
+            }
+            // base.archivesName.set("my-lib") — extract the arg inside .set(...)
+            if let Some(set_pos) = trimmed.find(".set(") {
+                let inner = &trimmed[set_pos + 5..]; // after ".set("
+                if let Some(v) = extract_gradle_quoted(inner) {
+                    return Some(v);
+                }
             }
         }
     }
@@ -2364,5 +2469,234 @@ dependencies {
         .unwrap();
         let handler = JavaHandler::new(tmp.path());
         assert_eq!(handler.get_license(), Some("BSD-3-Clause".to_string()));
+    }
+
+    // ── get_artifact_id ──
+
+    #[test]
+    fn get_artifact_id_from_pom() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>my-library</artifactId></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_artifact_id().unwrap(), "my-library");
+    }
+
+    #[test]
+    fn get_artifact_id_from_settings_gradle() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("build.gradle"),
+            "group = 'com.example'\nversion = '1.0'\n",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle"),
+            "rootProject.name = 'my-cool-lib'\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        // Should use rootProject.name, not group
+        assert_eq!(handler.get_artifact_id().unwrap(), "my-cool-lib");
+    }
+
+    #[test]
+    fn get_artifact_id_gradle_only_skips_group() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("build.gradle"),
+            "group = 'com.example'\nversion = '1.0'\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        // No pom.xml, no settings.gradle, no archivesBaseName → falls back to dir name
+        // Crucially, does NOT return "com.example" (the group namespace)
+        let artifact = handler.get_artifact_id().unwrap();
+        assert_ne!(
+            artifact, "com.example",
+            "get_artifact_id must not return group namespace"
+        );
+    }
+
+    #[test]
+    fn get_artifact_id_from_archives_base_name() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("build.gradle"),
+            "group = 'com.example'\narchivesBaseName = 'my-artifact'\nversion = '1.0'\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_artifact_id().unwrap(), "my-artifact");
+    }
+
+    #[test]
+    fn get_artifact_id_from_archives_name_set() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("build.gradle.kts"),
+            "group = \"com.example\"\nbase.archivesName.set(\"my-kts-artifact\")\nversion = \"1.0\"\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_artifact_id().unwrap(), "my-kts-artifact");
+    }
+
+    // ── parse_gradle_archives_base_name ──
+
+    #[test]
+    fn parse_archives_base_name_basic() {
+        let content = "archivesBaseName = 'my-lib'\n";
+        assert_eq!(
+            parse_gradle_archives_base_name(content),
+            Some("my-lib".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_archives_base_name_double_quotes() {
+        let content = "archivesBaseName = \"my-lib\"\n";
+        assert_eq!(
+            parse_gradle_archives_base_name(content),
+            Some("my-lib".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_archives_name_set() {
+        let content = "base.archivesName.set(\"my-lib\")\n";
+        assert_eq!(
+            parse_gradle_archives_base_name(content),
+            Some("my-lib".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_archives_name_equals() {
+        let content = "archivesName = 'cool-project'\n";
+        assert_eq!(
+            parse_gradle_archives_base_name(content),
+            Some("cool-project".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_archives_base_name_not_present() {
+        let content = "group = 'com.example'\nversion = '1.0'\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    #[test]
+    fn parse_archives_base_name_skips_comments() {
+        let content = "// archivesBaseName = 'old-name'\narchivesBaseName = 'real-name'\n";
+        assert_eq!(
+            parse_gradle_archives_base_name(content),
+            Some("real-name".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_archives_name_skips_block_comments() {
+        let content = "/* archivesName = 'old' */\n* archivesName = 'star-prefix'\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    #[test]
+    fn parse_archives_name_rejects_set_archives_name_prefix() {
+        // Non-standard property — should not match our tightened pattern
+        let content = "setArchivesNamePrefix = 'wrong'\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    // ── get_artifact_id edge cases ──
+
+    #[test]
+    fn get_artifact_id_pom_parent_suffix_stripped_to_empty() {
+        // artifactId is exactly "-parent" → stripped to empty → falls through
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>-parent</artifactId></project>",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let id = handler.get_artifact_id().unwrap();
+        // Should fall through to dir name, not return empty
+        assert!(!id.is_empty());
+    }
+
+    #[test]
+    fn get_artifact_id_settings_gradle_root_suffix_stripped_to_empty() {
+        // rootProject.name = "-root" → stripped to empty → falls through
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle"),
+            "rootProject.name = '-root'\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let id = handler.get_artifact_id().unwrap();
+        assert!(!id.is_empty());
+    }
+
+    #[test]
+    fn get_artifact_id_settings_gradle_kts() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("settings.gradle.kts"),
+            "rootProject.name = \"my-kts-artifact\"\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_artifact_id().unwrap(), "my-kts-artifact");
+    }
+
+    #[test]
+    fn get_artifact_id_archives_base_name_kts() {
+        // archivesBaseName in .kts file via the gradle_name loop second iteration
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("build.gradle.kts"),
+            "archivesBaseName = \"my-kts-jar\"\n",
+        )
+        .unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        assert_eq!(handler.get_artifact_id().unwrap(), "my-kts-jar");
+    }
+
+    #[test]
+    fn get_artifact_id_fallback_dir_name() {
+        // No pom.xml, no settings.gradle, no build.gradle → dir name
+        let tmp = TempDir::new().unwrap();
+        let handler = JavaHandler::new(tmp.path());
+        let id = handler.get_artifact_id().unwrap();
+        assert!(!id.is_empty());
+        assert_ne!(id, "unknown");
+    }
+
+    // ── parse_gradle_archives_base_name edge cases ──
+
+    #[test]
+    fn parse_archives_base_name_no_equals_sign() {
+        // archivesBaseName without '=' should return None (no split_once match)
+        let content = "archivesBaseName 'my-lib'\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    #[test]
+    fn parse_archives_name_constant_not_quoted() {
+        // archivesName = someVariable (not a quoted string) should return None
+        let content = "archivesName = someVariable\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
+    }
+
+    #[test]
+    fn parse_archives_name_set_with_variable() {
+        // base.archivesName.set(someVariable) — no quotes, should return None
+        let content = "base.archivesName.set(someVariable)\n";
+        assert_eq!(parse_gradle_archives_base_name(content), None);
     }
 }

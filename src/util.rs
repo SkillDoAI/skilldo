@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -300,6 +300,50 @@ pub fn build_maven_pom_xml(deps: &[String]) -> Option<String> {
 </project>"#,
         deps_xml.join("\n")
     ))
+}
+
+/// Filter a list of paths to only include those that resolve within `boundary`.
+/// Canonicalizes both the boundary and each path, then checks that the
+/// canonical path starts with the canonical boundary. This prevents symlink
+/// traversal attacks where a symlink inside a repo points to `/etc` or `~/.ssh`.
+///
+/// Paths that cannot be canonicalized (e.g., dangling symlinks) are silently
+/// skipped. Paths that escape the boundary are logged at warn level and skipped.
+pub fn filter_within_boundary(paths: Vec<PathBuf>, boundary: &Path) -> Vec<PathBuf> {
+    let canonical_boundary = match boundary.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                "Cannot canonicalize repo boundary {}: {} — rejecting all paths",
+                boundary.display(),
+                e
+            );
+            return Vec::new();
+        }
+    };
+
+    paths
+        .into_iter()
+        .filter(|path| {
+            match path.canonicalize() {
+                Ok(canonical) => {
+                    if canonical.starts_with(&canonical_boundary) {
+                        true
+                    } else {
+                        tracing::warn!(
+                            "Skipping symlink escaping repo boundary: {}",
+                            path.display()
+                        );
+                        false
+                    }
+                }
+                Err(_) => {
+                    // Dangling symlink or permission error — skip silently
+                    false
+                }
+            }
+        })
+        .collect()
 }
 
 /// Calculate file priority for source file reading order.
@@ -790,5 +834,125 @@ mod tests {
         let deps = vec!["com.example:lib&test:1.0".into()];
         let pom = build_maven_pom_xml(&deps).unwrap();
         assert!(pom.contains("lib&amp;test"));
+    }
+
+    // ── filter_within_boundary tests ──
+
+    #[test]
+    fn filter_within_boundary_keeps_normal_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join("hello.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let result = filter_within_boundary(vec![file.clone()], root);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], file);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filter_within_boundary_skips_symlink_escaping_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create a directory outside the repo boundary
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("secret.txt");
+        std::fs::write(&outside_file, "sensitive data").unwrap();
+
+        // Create a symlink inside the repo that points outside
+        let symlink_path = root.join("escape");
+        std::os::unix::fs::symlink(outside.path(), &symlink_path).unwrap();
+
+        let escaped_file = symlink_path.join("secret.txt");
+        let normal_file = root.join("normal.txt");
+        std::fs::write(&normal_file, "safe content").unwrap();
+
+        let result = filter_within_boundary(vec![escaped_file, normal_file.clone()], root);
+        assert_eq!(result.len(), 1, "should keep only the normal file");
+        assert_eq!(result[0], normal_file);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filter_within_boundary_keeps_internal_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create a real file and a symlink to it within the same directory
+        let real_file = root.join("real.txt");
+        std::fs::write(&real_file, "content").unwrap();
+        let symlink_path = root.join("link.txt");
+        std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+
+        let result = filter_within_boundary(vec![symlink_path.clone()], root);
+        assert_eq!(result.len(), 1, "internal symlink should be kept");
+    }
+
+    #[test]
+    fn filter_within_boundary_skips_dangling_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create a file path that doesn't exist (can't be canonicalized)
+        let nonexistent = root.join("ghost.txt");
+        let real_file = root.join("real.txt");
+        std::fs::write(&real_file, "content").unwrap();
+
+        let result = filter_within_boundary(vec![nonexistent, real_file.clone()], root);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], real_file);
+    }
+
+    #[test]
+    fn filter_within_boundary_empty_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = filter_within_boundary(vec![], dir.path());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_within_boundary_noncanonicalize_boundary_rejects_all() {
+        // If the boundary itself can't be canonicalized, fail closed (reject all)
+        let nonexistent_boundary = Path::new("/nonexistent_dir_abc123");
+        let paths = vec![PathBuf::from("/some/path")];
+        let result = filter_within_boundary(paths, nonexistent_boundary);
+        assert!(
+            result.is_empty(),
+            "should reject all paths when boundary is not canonicalizable"
+        );
+    }
+
+    #[test]
+    fn build_maven_pom_strips_classifier() {
+        // 4-part Maven coordinate: group:artifact:version:classifier
+        let deps = vec!["com.google.code.gson:gson:2.10.1:javadoc".into()];
+        let pom = build_maven_pom_xml(&deps).unwrap();
+        assert!(
+            pom.contains("<version>2.10.1</version>"),
+            "classifier should be stripped"
+        );
+        assert!(
+            !pom.contains("javadoc"),
+            "classifier should not appear in POM"
+        );
+    }
+
+    #[test]
+    fn build_maven_pom_skips_empty_version() {
+        // group:artifact: (trailing colon, empty version)
+        let deps = vec!["com.example:lib:".into()];
+        assert!(
+            build_maven_pom_xml(&deps).is_none(),
+            "empty version after colon should be skipped"
+        );
+    }
+
+    #[test]
+    fn build_maven_pom_skips_non_maven_dep() {
+        // Single token with no colon separator
+        let deps = vec!["just-a-name".into()];
+        assert!(build_maven_pom_xml(&deps).is_none());
     }
 }

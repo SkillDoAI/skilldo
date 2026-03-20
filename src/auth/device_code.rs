@@ -121,7 +121,7 @@ pub async fn device_code_login(endpoint: &OAuthEndpoint) -> Result<super::TokenS
 
     // Step 3: Poll for token
     let token_url = format!("{auth_base}/deviceauth/token");
-    let interval = std::time::Duration::from_secs(user_code_resp.interval);
+    let interval = std::time::Duration::from_secs(user_code_resp.interval.max(1));
     let deadline =
         tokio::time::Instant::now() + tokio::time::Duration::from_secs(POLL_TIMEOUT_SECS);
 

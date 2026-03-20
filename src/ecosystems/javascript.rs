@@ -34,6 +34,7 @@ impl JsHandler {
         }
 
         files.sort_by_key(|p| self.file_priority(p));
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} JS/TS source files", files.len());
         Ok(files)
     }
@@ -43,6 +44,7 @@ impl JsHandler {
         let mut files = Vec::new();
         self.collect_js_files(&self.repo_path, &mut files, 0, true)?;
 
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} JS/TS test files", files.len());
         Ok(files)
     }
@@ -74,6 +76,7 @@ impl JsHandler {
             }
         }
 
+        let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
         info!("Found {} documentation files", docs.len());
         Ok(docs)
     }
@@ -91,6 +94,7 @@ impl JsHandler {
 
         files.sort();
         files.dedup();
+        let files = crate::util::filter_within_boundary(files, &self.repo_path);
         info!("Found {} JS/TS example files", files.len());
         Ok(files)
     }

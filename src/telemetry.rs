@@ -164,12 +164,20 @@ pub fn append_run(record: &RunRecord, path: Option<PathBuf>) -> std::io::Result<
     Ok(())
 }
 
-/// Write `data` to `path` atomically: write to a sibling temp file, then rename.
-/// Prevents data loss if the process is killed mid-write.
+/// Write `data` to `path` atomically: write to a sibling temp file, then persist.
+/// Uses `tempfile::NamedTempFile::persist()` which handles platform differences
+/// (on Windows pre-10 1607, `fs::rename` fails if dest exists).
 fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, data)?;
-    fs::rename(&tmp, path)
+    let dir = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path has no parent directory",
+        )
+    })?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(data)?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 /// Count CSV columns respecting RFC 4180 quoting (commas inside quotes don't count).
@@ -492,8 +500,26 @@ mod tests {
         fs::write(&path, "original").unwrap();
         write_atomic(&path, b"replaced").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "replaced");
-        // Temp file should not linger
-        assert!(!dir.path().join("atomic.tmp").exists());
+        // No temp files should linger (NamedTempFile is consumed by persist)
+        let remaining: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "only the target file should remain, found: {:?}",
+            remaining.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_write_atomic_creates_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new_file.txt");
+        assert!(!path.exists());
+        write_atomic(&path, b"fresh content").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "fresh content");
     }
 
     #[test]
@@ -513,5 +539,39 @@ mod tests {
         let lines: Vec<&str> = after.lines().collect();
         assert_eq!(lines.len(), 3); // header + 2 rows
         assert_eq!(lines[0], before.lines().next().unwrap());
+    }
+
+    #[test]
+    fn test_write_atomic_empty_path_no_parent() {
+        // An empty path has no parent directory — should return InvalidInput error
+        use std::path::Path;
+        let result = write_atomic(Path::new(""), b"data");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_migrate_header_only_no_data_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+
+        // Write a stale header with no data rows
+        let old_header = "language,library,library_version,provider,model,test_provider,test_model,review_provider,review_model,max_retries,retries_used,review_retries_used,passed,failed_stage,failure_reason,duration_secs,timestamp,skilldo_version,review_degraded";
+        fs::write(&csv_path, format!("{old_header}\n")).unwrap();
+
+        // Migrate should replace header and produce no data rows
+        migrate_header_if_stale(&csv_path).unwrap();
+
+        let content = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 1, "should have only the new header");
+        assert_eq!(lines[0], RunRecord::csv_header());
+    }
+
+    #[test]
+    fn test_csv_escape_carriage_return() {
+        let escaped = csv_escape("line1\rline2");
+        assert_eq!(escaped, "\"line1\rline2\"");
     }
 }
