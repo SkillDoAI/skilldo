@@ -230,6 +230,10 @@ jobs:
             repo: matklad/once_cell
             tag: v1.21.3
             flag: "--language rust"
+          - lang: java
+            repo: google/gson
+            tag: gson-parent-2.12.1
+            flag: "--language java"
     env:
       CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
     steps:
