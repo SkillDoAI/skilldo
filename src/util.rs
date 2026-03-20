@@ -136,11 +136,11 @@ fn find_next_line_fence(text: &str, from: usize) -> Option<(char, usize, usize)>
 /// Per CommonMark, the closing fence must use the same char and be at least
 /// as long as the opening fence.
 fn find_closing_fence(text: &str, from: usize, fence_char: char, min_len: usize) -> Option<usize> {
-    let base_fence: String = std::iter::repeat_n(fence_char, 3).collect();
+    let base_fence = if fence_char == '`' { "```" } else { "~~~" };
     let mut search_pos = 0;
     let slice = &text[from..];
     loop {
-        match slice[search_pos..].find(&base_fence) {
+        match slice[search_pos..].find(base_fence) {
             Some(offset) => {
                 let abs = search_pos + offset;
                 // Check line-boundary

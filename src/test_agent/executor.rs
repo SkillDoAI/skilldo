@@ -1267,7 +1267,7 @@ pub(crate) fn extract_node_package_name(json_content: &str) -> Option<String> {
 
 /// Build the npm install argument list for a Node local-install.
 /// Puts `local_source` first, then appends any dep that doesn't match `local_name`.
-fn build_node_install_args(
+pub(crate) fn build_node_install_args(
     deps: &[String],
     local_source: &str,
     local_name: Option<&str>,

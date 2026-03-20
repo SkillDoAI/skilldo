@@ -11,8 +11,8 @@ use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use super::executor::{
-    extract_cargo_package_name, extract_go_module_name, extract_node_package_name,
-    go_dep_needs_replace, ExecutionEnv, ExecutionResult, MAVEN_REPO_DIR,
+    build_node_install_args, extract_cargo_package_name, extract_go_module_name,
+    extract_node_package_name, go_dep_needs_replace, ExecutionEnv, ExecutionResult, MAVEN_REPO_DIR,
 };
 use super::LanguageExecutor;
 use crate::config::{ContainerConfig, InstallSource};
@@ -59,34 +59,27 @@ impl ContainerExecutor {
             r#"echo '{"name":"skilldo-test","version":"0.1.0","private":true,"type":"module"}' > package.json"#.to_string(),
         ];
 
-        // Determine which packages to install from the registry vs local source.
-        let local_name: Option<String> = if self.has_local_source() {
-            self.config
+        // Validate dep names before embedding in shell script
+        for dep in deps {
+            sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+        }
+
+        // Build install args: /src first (if local), then registry deps with
+        // the local package filtered out. Reuses bare-metal NodeExecutor's helper.
+        let install_args = if self.has_local_source() {
+            let local_name: Option<String> = self
+                .config
                 .source_path
                 .as_ref()
                 .and_then(|p| {
                     let pkg_json = std::path::Path::new(p).join("package.json");
                     std::fs::read_to_string(pkg_json).ok()
                 })
-                .and_then(|c| extract_node_package_name(&c))
+                .and_then(|c| extract_node_package_name(&c));
+            build_node_install_args(deps, "/src", local_name.as_deref())
         } else {
-            None
+            deps.to_vec()
         };
-
-        // Build the install argument list: /src first (if local), then registry deps
-        // with the local package filtered out (same pattern as bare-metal NodeExecutor).
-        let mut install_args: Vec<String> = Vec::new();
-        if self.has_local_source() {
-            install_args.push("/src".to_string());
-        }
-        for dep in deps {
-            sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
-            // Skip the local package from registry deps — it's installed from /src.
-            if local_name.as_deref() == Some(dep.as_str()) {
-                continue;
-            }
-            install_args.push(dep.clone());
-        }
 
         if !install_args.is_empty() {
             // Single-quote each dep to prevent shell metachar interpretation
@@ -203,7 +196,8 @@ fi"#
             // Generate a Cargo.toml with local crate at /src + registry deps.
             let mut dep_lines = format!("{name} = {{ path = \"/src\" }}\n");
             for d in deps {
-                if d != &name {
+                // Cargo: dash/underscore are equivalent in crate names
+                if d.replace('-', "_") != name.replace('-', "_") {
                     dep_lines.push_str(&format!("{d} = \"*\"\n"));
                 }
             }
