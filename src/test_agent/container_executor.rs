@@ -244,6 +244,35 @@ edition = "2021"
         }
     }
 
+    /// Generate Cargo.toml for Rust registry mode (no local source, has deps).
+    fn generate_rust_registry_install(&self, deps: &[String]) -> Result<String> {
+        for d in deps {
+            sanitize_dep_name(d).map_err(|e| anyhow::anyhow!(e))?;
+        }
+        let mut dep_lines = String::new();
+        for d in deps {
+            let crate_name = d
+                .split(&['=', '>', '<', '~', '^', '['][..])
+                .next()
+                .unwrap_or(d)
+                .trim_end_matches('-');
+            dep_lines.push_str(&format!("{crate_name} = \"*\"\n"));
+        }
+        Ok(format!(
+            r#"export CARGO_HOME=/tmp/cargo-home
+mkdir -p "$CARGO_HOME" src
+cp main.rs src/main.rs
+cat > Cargo.toml << 'SKILLDO_EOF'
+[package]
+name = "skilldo-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+{dep_lines}SKILLDO_EOF"#
+        ))
+    }
+
     /// Generate run.sh for non-Python languages (JS, Rust, Go, Java)
     /// Python uses `uv run test.py` directly — no run.sh needed
     fn generate_container_script(&self, deps: &[String]) -> Result<String> {
@@ -252,15 +281,14 @@ edition = "2021"
             Language::Go => self.generate_go_install_script(deps)?,
             Language::Java => self.generate_java_install_script(deps)?,
             Language::Rust if self.has_local_source() => self.generate_rust_local_install(deps)?,
+            Language::Rust if !deps.is_empty() => self.generate_rust_registry_install(deps)?,
             _ => String::new(),
         };
 
         let run_line = match self.language {
-            // With local source AND a valid crate name, Rust uses cargo.
-            // If install_cmd is empty (no Cargo.toml found), fall back to rustc.
-            Language::Rust if self.has_local_source() && !install_cmd.is_empty() => {
-                "cargo run 2>&1"
-            }
+            // Rust uses cargo when we generated a Cargo.toml (local source or deps present).
+            // Falls back to rustc only when there are no deps at all.
+            Language::Rust if !install_cmd.is_empty() => "cargo run 2>&1",
             Language::JavaScript => "node test.js",
             Language::Rust => "rustc main.rs -o main && ./main",
             Language::Go => "go run main.go",
@@ -913,14 +941,38 @@ mod tests {
     // --- generate_container_script: Rust/Go with deps (deps should be ignored) ---
 
     #[test]
-    fn test_rust_container_script_with_deps_ignores_them() {
+    fn test_rust_container_script_with_deps_uses_cargo() {
         let executor = ContainerExecutor::new(make_config(), Language::Rust);
         let deps = vec!["serde".to_string(), "tokio".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
-        assert!(script.contains("rustc main.rs -o main && ./main"));
-        // Rust has no install step, deps are ignored
-        assert!(!script.contains("cargo install"));
-        assert!(!script.contains("serde"));
+        // With deps, Rust generates Cargo.toml and uses cargo run
+        assert!(
+            script.contains("cargo run"),
+            "should use cargo run with deps: {script}"
+        );
+        assert!(
+            script.contains("serde"),
+            "should include serde dep: {script}"
+        );
+        assert!(
+            script.contains("tokio"),
+            "should include tokio dep: {script}"
+        );
+        assert!(
+            script.contains("[dependencies]"),
+            "should have deps section: {script}"
+        );
+    }
+
+    #[test]
+    fn test_rust_container_script_no_deps_uses_rustc() {
+        let executor = ContainerExecutor::new(make_config(), Language::Rust);
+        let script = executor.generate_container_script(&[]).unwrap();
+        // No deps: plain rustc is sufficient
+        assert!(
+            script.contains("rustc main.rs -o main && ./main"),
+            "should use rustc without deps: {script}"
+        );
     }
 
     #[test]
