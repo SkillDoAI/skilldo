@@ -116,13 +116,24 @@ cleanup = true
 #   "registry"      — install from package registry (default)
 #   "local-install" — mount local repo at /src, wire into import resolution
 #   "local-mount"   — mount local repo at /src (same wiring as local-install)
-# All 5 languages supported: Python, Go, JavaScript, Java, Rust.
+# Supported: Python, Go, JavaScript, Java (all modes), Rust (bare-metal only;
+# Rust container mode is planned for v0.5.4).
 # See docs/languages.md for per-language details.
 # install_source = "registry"
 
 # Path to local source repo for local-install or local-mount modes.
 # Defaults to the PATH argument passed to `skilldo generate`.
 # source_path = "/path/to/local/repo"
+
+# Test execution mode:
+#   "bare-metal" — run test code directly on the host (default)
+#   "container"  — run in Docker/Podman container for isolation
+# execution_mode = "bare-metal"
+
+# Extra environment variables passed to the test executor.
+# Useful for API keys, feature flags, or test configuration.
+# [generation.container.extra_env]
+# MY_API_KEY = "test-key"
 
 # Container images per language (defaults shown — override for specific versions)
 # python_image = "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"

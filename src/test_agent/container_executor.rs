@@ -1760,15 +1760,30 @@ mod tests {
     #[test]
     fn test_java_local_mount_with_deps_has_both_jar_copy_and_maven() {
         let tmp = TempDir::new().unwrap();
+        // Create a pom.xml so get_artifact_id() resolves and filters the local dep
+        std::fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>my-lib</artifactId></project>",
+        )
+        .unwrap();
         let config = make_local_config(&tmp.path().to_string_lossy());
         let executor = ContainerExecutor::new(config, Language::Java);
-        let deps = vec!["com.google.code.gson:gson:2.10.1".to_string()];
+        // Include the local artifact + a registry dep
+        let deps = vec![
+            "com.example:my-lib:1.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+        ];
         let script = executor.generate_java_install_script(&deps).unwrap();
         // Should have jar copy commands
         assert!(script.contains("/src/target"), "should copy from /src");
-        // Should also have Maven pom
-        assert!(script.contains("pom.xml"), "should also fetch Maven deps");
-        assert!(script.contains("mvn dependency:copy-dependencies"));
+        // Should have Maven pom for the NON-local dep
+        assert!(script.contains("pom.xml"), "should fetch Maven deps");
+        assert!(script.contains("gson"), "gson should be in the POM");
+        // The local artifact (my-lib) should be filtered from Maven fetch
+        assert!(
+            !script.contains("<artifactId>my-lib</artifactId>"),
+            "local artifact should be filtered from Maven POM"
+        );
     }
 
     #[test]

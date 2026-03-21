@@ -17,7 +17,7 @@ Docs/README ──→ Learn (Context Extraction)  ──┘      ↑          �
 1. **Extract**, **Map**, and **Learn** run in parallel to gather API signatures, usage patterns, and conventions
 2. **Create** combines everything into a formatted SKILL.md
 3. **Review** verifies accuracy (dates, signatures, consistency) and safety (prompt injection, nefarious content)
-4. **Test** generates runnable code from the patterns and executes it in a container
+4. **Test** generates runnable code from the patterns and executes it (bare-metal by default, container optional)
 5. If Review or Test fails, feedback loops back to Create for regeneration (up to `max_retries`)
 
 ## What to Expect
@@ -29,7 +29,7 @@ Generation gets you **90-95%** of the way to a production-quality SKILL.md. The 
 - **Code examples**: Occasionally use invalid syntax or hallucinated API calls
 - **Security CVEs**: Referenced generically instead of by specific CVE number
 
-The **test stage** catches many of these by actually running the code examples in a container. Enable it when possible.
+The **test stage** catches many of these by actually running the code examples. All 5 languages (Python, Go, JavaScript, Java, Rust) are supported in bare-metal mode. Container mode is available for Python, Go, JavaScript, and Java (Rust container support is planned for v0.5.4).
 
 ## Model Selection
 

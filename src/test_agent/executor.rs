@@ -2470,6 +2470,15 @@ edition = "2021"
     }
 
     #[test]
+    fn test_go_extract_module_name_strips_comment() {
+        let content = "module github.com/user/mylib // runtime dependency\n";
+        assert_eq!(
+            extract_go_module_name(content),
+            Some("github.com/user/mylib".to_string())
+        );
+    }
+
+    #[test]
     fn test_go_extract_module_from_tempdir() {
         let tmp = TempDir::new().unwrap();
         let go_mod = "module github.com/example/coolpkg\n\ngo 1.22\n";
@@ -2609,6 +2618,25 @@ edition = "2021"
             ],
             "local package should be excluded, replaced by source path"
         );
+    }
+
+    #[test]
+    fn test_node_local_install_version_qualified_dep_filtered() {
+        // "my-pkg@^1.0.0" should be filtered when local_name is "my-pkg"
+        let deps = vec!["my-pkg@^1.0.0".to_string(), "express".to_string()];
+        let install_args = build_node_install_args(&deps, "/src", Some("my-pkg"));
+        assert_eq!(install_args.len(), 2); // /src + express
+        assert_eq!(install_args[0], "/src");
+        assert_eq!(install_args[1], "express");
+    }
+
+    #[test]
+    fn test_node_local_install_scoped_version_qualified() {
+        // "@scope/pkg@^2.0" should be filtered when local_name is "@scope/pkg"
+        let deps = vec!["@scope/pkg@^2.0".to_string(), "lodash".to_string()];
+        let install_args = build_node_install_args(&deps, "/src", Some("@scope/pkg"));
+        assert_eq!(install_args.len(), 2); // /src + lodash
+        assert_eq!(install_args[1], "lodash");
     }
 
     #[test]
