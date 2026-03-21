@@ -95,6 +95,7 @@ No API key or OAuth needed — shell out to vendor CLIs that handle their own au
 ```toml
 [llm]
 provider_type = "cli"
+model = "claude-sonnet-4-6"  # required even for CLI providers
 cli_command = "claude"
 cli_args = ["-p", "--output-format", "json"]
 cli_json_path = "result"
