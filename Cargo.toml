@@ -1,6 +1,6 @@
 [package]
 name = "skilldo"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -29,6 +29,9 @@ tokio = { version = "1", features = ["full"] }
 toml = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 mockito = "1"

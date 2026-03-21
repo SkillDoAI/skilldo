@@ -3,6 +3,19 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.3
+
+### Added
+- Container local-mount support for all languages — Go, JavaScript, Java, and Rust now wire `/src` into container import resolution (previously Python-only). Go uses `go mod edit -replace`, JS uses `npm install /src`, Java copies jars from `/src/target`, Rust uses `path = "/src"` in `Cargo.toml`.
+- Tilde fence (`~~~`) support in `src/lint.rs` — linter now recognizes tilde fences alongside backtick fences
+- CommonMark-compliant fence length matching — closing fences must match or exceed opener length, and trailing info text on closing fences is rejected
+
+### Changed
+- Pre-push hook uses `--quiet` flag to prevent pipe overflow with 2500+ tests
+
+### Fixed
+- Process group kill on timeout (Unix) — commands now spawn in their own process group, and on timeout SIGKILL is sent to the entire group, cleaning up orphaned compilers and package managers
+
 ## 0.5.0
 
 - Added Java language ecosystem support — full pipeline with Maven and Gradle projects

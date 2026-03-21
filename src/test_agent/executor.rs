@@ -136,7 +136,7 @@ fn filter_python_deps<'a>(deps: &'a [String], local_pkg_name: Option<&str>) -> V
 }
 
 /// Filter Java deps by artifact ID, excluding the local package.
-fn filter_java_deps_by_artifact_id(
+pub(crate) fn filter_java_deps_by_artifact_id(
     deps: &[String],
     local_artifact_id: Option<&str>,
 ) -> Vec<String> {
@@ -518,7 +518,7 @@ const CARGO_HOME_DIR: &str = "cargo-home";
 
 /// Extract the package name from a Cargo.toml at the given source directory.
 /// Returns `None` if the file is missing, unreadable, or lacks `[package] name`.
-fn extract_cargo_package_name(source: &str) -> Option<String> {
+pub(crate) fn extract_cargo_package_name(source: &str) -> Option<String> {
     let cargo_path = std::path::Path::new(source).join("Cargo.toml");
     std::fs::read_to_string(&cargo_path)
         .ok()
@@ -1220,11 +1220,12 @@ impl LanguageExecutor for JavaExecutor {
 
 /// Extract the module name from a `go.mod` file's content.
 /// Returns `None` if no `module` directive is found.
-fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
+pub(crate) fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
     go_mod_content.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("module ")
-            .map(|m| m.trim().to_string())
+        line.trim().strip_prefix("module ").map(|m| {
+            // Strip trailing comments (e.g., "module foo // comment")
+            m.split("//").next().unwrap_or(m).trim().to_string()
+        })
     })
 }
 
@@ -1253,13 +1254,13 @@ fn go_module_matches_dep(dep: &str, module: &str) -> bool {
 }
 
 /// Check whether **any** dependency in `deps` matches or is a sub-package of `module`.
-fn go_dep_needs_replace(deps: &[String], module: &str) -> bool {
+pub(crate) fn go_dep_needs_replace(deps: &[String], module: &str) -> bool {
     deps.iter().any(|d| go_module_matches_dep(d, module))
 }
 
 /// Extract the package name from a `package.json` file's content.
 /// Returns `None` if the JSON is invalid or has no string `name` field.
-fn extract_node_package_name(json_content: &str) -> Option<String> {
+pub(crate) fn extract_node_package_name(json_content: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(json_content)
         .ok()
         .and_then(|v| v.get("name")?.as_str().map(|s| s.to_string()))
@@ -1267,14 +1268,27 @@ fn extract_node_package_name(json_content: &str) -> Option<String> {
 
 /// Build the npm install argument list for a Node local-install.
 /// Puts `local_source` first, then appends any dep that doesn't match `local_name`.
-fn build_node_install_args(
+pub(crate) fn build_node_install_args(
     deps: &[String],
     local_source: &str,
     local_name: Option<&str>,
 ) -> Vec<String> {
     let mut args = vec![local_source.to_string()];
     for d in deps {
-        if local_name != Some(d.as_str()) {
+        // Strip version specifier (e.g., "my-pkg@^1.0.0" → "my-pkg") before
+        // comparing to local_name, so versioned deps are still filtered out.
+        // Scoped packages start with @ (e.g., "@scope/pkg") — only split on
+        // @ when it's not at position 0.
+        let bare_name = if let Some(rest) = d.strip_prefix('@') {
+            // Scoped: "@scope/pkg@1.0" → find second @
+            match rest.find('@') {
+                Some(i) => &d[..i + 1],
+                None => d.as_str(),
+            }
+        } else {
+            d.split('@').next().unwrap_or(d)
+        };
+        if local_name != Some(bare_name) {
             args.push(d.clone());
         }
     }
@@ -2456,6 +2470,15 @@ edition = "2021"
     }
 
     #[test]
+    fn test_go_extract_module_name_strips_comment() {
+        let content = "module github.com/user/mylib // runtime dependency\n";
+        assert_eq!(
+            extract_go_module_name(content),
+            Some("github.com/user/mylib".to_string())
+        );
+    }
+
+    #[test]
     fn test_go_extract_module_from_tempdir() {
         let tmp = TempDir::new().unwrap();
         let go_mod = "module github.com/example/coolpkg\n\ngo 1.22\n";
@@ -2595,6 +2618,25 @@ edition = "2021"
             ],
             "local package should be excluded, replaced by source path"
         );
+    }
+
+    #[test]
+    fn test_node_local_install_version_qualified_dep_filtered() {
+        // "my-pkg@^1.0.0" should be filtered when local_name is "my-pkg"
+        let deps = vec!["my-pkg@^1.0.0".to_string(), "express".to_string()];
+        let install_args = build_node_install_args(&deps, "/src", Some("my-pkg"));
+        assert_eq!(install_args.len(), 2); // /src + express
+        assert_eq!(install_args[0], "/src");
+        assert_eq!(install_args[1], "express");
+    }
+
+    #[test]
+    fn test_node_local_install_scoped_version_qualified() {
+        // "@scope/pkg@^2.0" should be filtered when local_name is "@scope/pkg"
+        let deps = vec!["@scope/pkg@^2.0".to_string(), "lodash".to_string()];
+        let install_args = build_node_install_args(&deps, "/src", Some("@scope/pkg"));
+        assert_eq!(install_args.len(), 2); // /src + lodash
+        assert_eq!(install_args[1], "lodash");
     }
 
     #[test]

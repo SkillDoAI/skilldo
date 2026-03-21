@@ -259,11 +259,14 @@ timeout = 60
 cleanup = true
 
 # Library install source for test stage validation:
-#   "registry"       — install from PyPI / Go modules (default, works for published packages)
-#   "local-install"  — mount local repo at /src, run `pip install /src`
-#                      (requires pyproject.toml or setup.py in the repo)
-#   "local-mount"    — mount local repo, add to PYTHONPATH
-#                      (no packaging needed, works with any directory structure)
+#   "registry"       — install from registry (default, works for published packages)
+#   "local-install"  — mount local repo at /src and wire into import resolution:
+#                        Python: pip install /src
+#                        Go: go mod edit -replace targeting /src
+#                        JavaScript: npm install /src
+#                        Java: copies jars from /src/target
+#                        Rust: path = "/src" in Cargo.toml
+#   "local-mount"    — mount local repo at /src (same wiring as local-install)
 # install_source = "registry"
 
 # Path to local source repo for local-install or local-mount modes.

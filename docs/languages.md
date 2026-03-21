@@ -33,7 +33,7 @@ Each language has a dedicated executor that runs generated test code:
 
 ### Rust
 - **Bare-metal**: Creates an isolated temp directory with `CARGO_HOME` confined, runs `cargo run`
-- **Container**: `rust:1.75-slim`
+- **Container**: `rust:1.75-slim` — generates Cargo.toml with deps, runs `cargo run`
 - **Requirements**: Rust toolchain installed locally (bare-metal) or Docker/Podman (container)
 
 ### Java
@@ -41,6 +41,20 @@ Each language has a dedicated executor that runs generated test code:
 - **Container**: `maven:3-eclipse-temurin-21-alpine`
 - **Requirements**: JDK 17+ installed locally (bare-metal) or Docker/Podman (container)
 - **Build systems**: Maven (`pom.xml`) and Gradle (`build.gradle`, `build.gradle.kts`) are both detected and parsed
+
+## Local Source Mounting
+
+When `install_source` is set to `"local-install"` or `"local-mount"` in config, the local repository is mounted at `/src` inside the container. Each language wires `/src` into its import resolution:
+
+| Language | `local-install` | `local-mount` |
+|----------|-----------------|---------------|
+| **Python** | `pip install /src` | Adds `/src` to `PYTHONPATH` |
+| **Go** | `go mod edit -replace` pointing at `/src` | Same as local-install |
+| **JavaScript** | `npm install /src` | Same as local-install |
+| **Java** | Copies jars from `/src/target` to classpath | Same as local-install |
+| **Rust** | Sets `path = "/src"` in `Cargo.toml` dependency | Same as local-install |
+
+This lets the test agent validate generated code against the local (possibly unpublished) version of the library rather than the registry version.
 
 ## Ecosystem Handlers
 

@@ -264,19 +264,10 @@ impl<'a> TestCodeValidator<'a> {
                             }
                             (Box::new(exe), ExecutionMode::BareMetal)
                         }
-                        ExecutionMode::Container => {
-                            // Container mode for Rust uses bare `rustc` which can't resolve
-                            // external dependencies. Fall back to BareMetal (CargoExecutor).
-                            tracing::warn!(
-                                "Container mode is not yet supported for Rust \
-                                 (external deps require cargo). Falling back to bare metal. \
-                                 Set `execution_mode = \"bare-metal\"` in your config to suppress this warning."
-                            );
-                            (
-                                Box::new(CargoExecutor::new().with_timeout(timeout)),
-                                ExecutionMode::BareMetal,
-                            )
-                        }
+                        ExecutionMode::Container => (
+                            Box::new(ContainerExecutor::new(config.clone(), Language::Rust)),
+                            ExecutionMode::Container,
+                        ),
                     };
                 Ok(Self {
                     language: Language::Rust,
@@ -1608,7 +1599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_new_rust_container_falls_back_to_bare_metal() {
+    fn test_new_rust_container_stays_container() {
         use crate::llm::client::MockLlmClient;
 
         let client = MockLlmClient;
@@ -1617,8 +1608,8 @@ mod tests {
             ..ContainerConfig::default()
         };
         let validator = TestCodeValidator::new(&Language::Rust, &client, config, None).unwrap();
-        // Container mode should fall back to BareMetal for Rust
-        assert_eq!(validator.execution_mode, ExecutionMode::BareMetal);
+        // Rust container mode is now supported (Cargo.toml + cargo run)
+        assert_eq!(validator.execution_mode, ExecutionMode::Container);
     }
 
     #[test]
@@ -2190,9 +2181,8 @@ mod tests {
     }
 
     #[test]
-    fn test_new_rust_container_local_mount_falls_back_to_bare_metal() {
-        // Rust container always falls back to BareMetal (even with LocalMount),
-        // but via the Rust-specific fallback at lines 267-278, NOT the early fallback.
+    fn test_new_rust_container_local_mount_stays_container() {
+        // Rust container now supported — LocalMount keeps container mode.
         use crate::llm::client::MockLlmClient;
 
         let client = MockLlmClient;
@@ -2203,9 +2193,7 @@ mod tests {
             ..Default::default()
         };
         let validator = TestCodeValidator::new(&Language::Rust, &client, config, None).unwrap();
-        assert_eq!(validator.execution_mode(), ExecutionMode::BareMetal);
-        // LocalMount is non-Registry, so local_source should be set
-        assert_eq!(validator.local_source.as_deref(), Some("/tmp/rust-mount"));
+        assert_eq!(validator.execution_mode(), ExecutionMode::Container);
     }
 
     // --- Rust container + LocalInstall early fallback ---

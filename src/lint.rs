@@ -269,8 +269,8 @@ impl SkillLinter {
     fn check_content(&self, content: &str) -> Vec<LintIssue> {
         let mut issues = Vec::new();
 
-        // Check for code blocks
-        if !content.contains("```") {
+        // Check for code blocks (backtick or tilde fences per CommonMark)
+        if !content.contains("```") && !content.contains("~~~") {
             issues.push(LintIssue {
                 severity: Severity::Error,
                 category: "content".to_string(),
@@ -289,13 +289,17 @@ impl SkillLinter {
                     continue;
                 }
                 if fm_dashes >= 2 && !trimmed.is_empty() {
-                    if trimmed == "```markdown" || trimmed == "```md" {
+                    if trimmed == "```markdown"
+                        || trimmed == "```md"
+                        || trimmed == "~~~markdown"
+                        || trimmed == "~~~md"
+                    {
                         issues.push(LintIssue {
                             severity: Severity::Error,
                             category: "content".to_string(),
-                            message: "Body is wrapped in a ```markdown fence".to_string(),
+                            message: "Body is wrapped in a markdown fence".to_string(),
                             suggestion: Some(
-                                "Remove the wrapping ```markdown fence. The normalizer should have caught this."
+                                "Remove the wrapping markdown fence (```markdown or ~~~markdown). The normalizer should have caught this."
                                     .to_string(),
                             ),
                         });
@@ -407,17 +411,10 @@ impl SkillLinter {
 
             let pitfalls_content = &pitfalls_section[..pitfalls_end];
 
-            // Extract all code blocks
-            let code_blocks: Vec<&str> = pitfalls_content
-                .split("```")
-                .skip(1) // Skip text before first block
-                .step_by(2) // Take every other element (the code blocks)
-                .map(|block| {
-                    // Remove language identifier (e.g., "python\n")
-                    block
-                        .trim_start_matches(|c: char| c.is_alphanumeric() || c == '-')
-                        .trim()
-                })
+            // Extract all code blocks (backtick and tilde fences)
+            let code_blocks: Vec<String> = crate::util::find_fenced_blocks(pitfalls_content)
+                .into_iter()
+                .map(|(_, body)| body)
                 .collect();
 
             // Check for consecutive identical code blocks (Wrong vs Right pattern)

@@ -42,7 +42,7 @@ repos:
 
       - id: cargo-test
         name: cargo test
-        entry: cargo test
+        entry: cargo test --quiet
         language: system
         types: [rust]
         pass_filenames: false

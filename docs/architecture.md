@@ -52,6 +52,10 @@ The review agent evaluates the SKILL.md for accuracy and safety using an LLM ver
 
 If the review fails, error feedback is sent back to the Create stage for regeneration.
 
+## Test Execution
+
+The test agent runs generated code via bare-metal executors or containers. On Unix, each command spawns in its own process group. If execution exceeds the configured timeout, SIGKILL is sent to the entire process group, ensuring that child processes (compilers, package managers, language runtimes) are cleaned up and don't leak.
+
 ## Security Scanner
 
 Three-layer scanning runs during the review stage:

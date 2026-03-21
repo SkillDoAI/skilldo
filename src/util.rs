@@ -38,9 +38,10 @@ pub fn compute_code_block_lines(lines: &[&str]) -> Vec<bool> {
         if let Some(ch) = detect_fence_char(line) {
             let run_len = line.trim_start().chars().take_while(|&c| c == ch).count();
             if let Some((open_ch, open_len)) = open_fence {
-                // Inside a block -- only close if same fence character
-                // and closing fence is at least as long as the opening fence
-                if ch == open_ch && run_len >= open_len {
+                // Inside a block — close if same char, >= length, and no info text
+                // (per CommonMark, closing fences have only fence chars + whitespace)
+                let after_fence = line.trim_start().get(run_len..).unwrap_or("").trim();
+                if ch == open_ch && run_len >= open_len && after_fence.is_empty() {
                     open_fence = None;
                 }
             } else {
@@ -59,24 +60,36 @@ pub fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
     let mut blocks = Vec::new();
     let mut pos = 0;
     while pos < text.len() {
-        let (fence, start) = match find_next_line_fence(text, pos) {
+        let (fence_char, start, fence_len) = match find_next_line_fence(text, pos) {
             Some(result) => result,
             None => break,
         };
 
-        let after = start + fence.len();
-        // Closing fence must also be at a line boundary
-        if let Some(close_offset) = find_closing_fence(text, after, fence) {
-            let raw = &text[after..after + close_offset];
-            let (tag, body) = if let Some(nl) = raw.find('\n') {
-                let tag_part = raw[..nl].trim().to_ascii_lowercase();
-                let body = raw[nl + 1..].trim().to_string();
-                (tag_part, body)
-            } else {
-                (String::new(), raw.trim().to_string())
-            };
+        let after = start + fence_len;
+        // Extract tag from the opener line (text after the fence chars)
+        let line_end = text[after..]
+            .find('\n')
+            .map(|i| after + i)
+            .unwrap_or(text.len());
+        let tag = text[after..line_end].trim().to_ascii_lowercase();
+        let body_start = if line_end < text.len() {
+            line_end + 1
+        } else {
+            line_end
+        };
+
+        // Closing fence must use same char, at least same length, at line boundary
+        if let Some(close_offset) = find_closing_fence(text, body_start, fence_char, fence_len) {
+            let body = text[body_start..body_start + close_offset]
+                .trim()
+                .to_string();
             blocks.push((tag, body));
-            pos = after + close_offset + fence.len();
+            // Skip past the closing fence line
+            let close_abs = body_start + close_offset;
+            pos = text[close_abs..]
+                .find('\n')
+                .map(|i| close_abs + i + 1)
+                .unwrap_or(text.len());
         } else {
             break;
         }
@@ -85,49 +98,71 @@ pub fn find_fenced_blocks(text: &str) -> Vec<(String, String)> {
 }
 
 /// Find the next fence (``` or ~~~) that starts at a line boundary.
-fn find_next_line_fence(text: &str, from: usize) -> Option<(&str, usize)> {
+/// Returns the fence character, its position, and the full fence length (3+).
+fn find_next_line_fence(text: &str, from: usize) -> Option<(char, usize, usize)> {
     let mut search_pos = from;
     loop {
         let backtick = text[search_pos..].find("```").map(|i| search_pos + i);
         let tilde = text[search_pos..].find("~~~").map(|i| search_pos + i);
 
-        let (fence, candidate) = match (backtick, tilde) {
+        let (fence_char, candidate) = match (backtick, tilde) {
             (Some(b), Some(t)) => {
                 if t < b {
-                    ("~~~", t)
+                    ('~', t)
                 } else {
-                    ("```", b)
+                    ('`', b)
                 }
             }
-            (Some(b), None) => ("```", b),
-            (None, Some(t)) => ("~~~", t),
+            (Some(b), None) => ('`', b),
+            (None, Some(t)) => ('~', t),
             (None, None) => return None,
         };
 
         // Check line-boundary: position 0 or preceded by newline
         if candidate == 0 || text.as_bytes()[candidate - 1] == b'\n' {
-            return Some((fence, candidate));
+            // Count the full fence length (3 or more consecutive fence chars)
+            let fence_len = text[candidate..]
+                .chars()
+                .take_while(|&c| c == fence_char)
+                .count();
+            return Some((fence_char, candidate, fence_len));
         }
 
         // Not at line boundary — skip past this occurrence
-        search_pos = candidate + fence.len();
+        search_pos = candidate + 3;
     }
 }
 
 /// Find the closing fence that matches the opener, at a line boundary.
-fn find_closing_fence(text: &str, from: usize, fence: &str) -> Option<usize> {
+/// Per CommonMark, the closing fence must use the same char and be at least
+/// as long as the opening fence.
+fn find_closing_fence(text: &str, from: usize, fence_char: char, min_len: usize) -> Option<usize> {
+    let base_fence = if fence_char == '`' { "```" } else { "~~~" };
     let mut search_pos = 0;
     let slice = &text[from..];
     loop {
-        match slice[search_pos..].find(fence) {
+        match slice[search_pos..].find(base_fence) {
             Some(offset) => {
                 let abs = search_pos + offset;
-                // Check line-boundary: preceded by newline (closing fences are never at pos 0
-                // of the slice because there's at least the tag/body before them)
+                // Check line-boundary
                 if abs == 0 || slice.as_bytes()[abs - 1] == b'\n' {
-                    return Some(abs);
+                    // Count fence length at this position
+                    let len = slice[abs..]
+                        .chars()
+                        .take_while(|&c| c == fence_char)
+                        .count();
+                    // Per CommonMark, closing fence = only fence chars + optional
+                    // whitespace on the line. Reject lines with trailing info text
+                    // (e.g., ```json is an opener, not a closer).
+                    if len >= min_len {
+                        let after_fence = &slice[abs + len..];
+                        let rest = after_fence.split('\n').next().unwrap_or("").trim();
+                        if rest.is_empty() {
+                            return Some(abs);
+                        }
+                    }
                 }
-                search_pos = abs + fence.len();
+                search_pos = abs + 3;
             }
             None => return None,
         }
@@ -404,18 +439,32 @@ pub fn calculate_file_priority(path: &Path, repo_path: &Path) -> i32 {
     50
 }
 
-/// Run a command with a timeout, killing the child on expiry.
-/// Uses `tokio::process` with `kill_on_drop(true)` — no orphaned threads,
-/// no setsid/process-group gymnastics, no LLVM-profdata deadlocks.
+/// Run a command with a timeout, killing the child (and its descendants) on expiry.
 ///
-/// **Note:** `kill_on_drop` sends SIGKILL only to the direct child process,
-/// not to any grandchildren it may have spawned. For container workloads this
-/// is mitigated by explicit `runtime kill <container>` in the caller's error
-/// path. For non-container workloads, grandchild processes may be orphaned.
+/// On Unix: spawns the child in a new process group via `setpgid(0, 0)`.
+/// On timeout, sends `SIGKILL` to the entire process group (`kill(-pgid, SIGKILL)`),
+/// ensuring compilers, package managers, and other grandchildren are cleaned up.
+///
+/// On Windows: relies on `kill_on_drop(true)` which kills only the direct child.
+/// Full process-tree cleanup on Windows requires `TerminateJobObject`, which is
+/// not yet implemented.
 pub async fn run_cmd_with_timeout(
     mut cmd: Command,
     timeout: Duration,
 ) -> Result<std::process::Output> {
+    // On Unix, put the child in its own process group so we can kill the whole
+    // tree on timeout.
+    #[cfg(unix)]
+    // SAFETY: setpgid is async-signal-safe per POSIX.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
     let child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -423,11 +472,31 @@ pub async fn run_cmd_with_timeout(
         .spawn()
         .context("Failed to spawn command")?;
 
+    // Grab the pid before moving child into wait_with_output.
+    #[cfg(unix)]
+    let child_pid = child.id();
+
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(result) => result.context("Failed to execute command"),
         Err(_) => {
-            // Timeout expired. `child` was moved into `wait_with_output(self)`,
-            // so tokio drops it when cancelling the inner future → SIGKILL.
+            // Timeout expired. Kill the entire process group on Unix.
+            #[cfg(unix)]
+            if let Some(pid) = child_pid {
+                // SAFETY: sending a signal to a process group is safe.
+                // Negative pid means kill the whole process group.
+                unsafe {
+                    let ret = libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                    if ret == -1 {
+                        tracing::debug!(
+                            "Process group kill failed (pid={}): {}",
+                            pid,
+                            std::io::Error::last_os_error()
+                        );
+                    }
+                }
+            }
+            // On all platforms, tokio kill_on_drop handles the direct child
+            // when the future is cancelled and child is dropped.
             Err(crate::error::SkillDoError::Timeout(timeout).into())
         }
     }
@@ -613,6 +682,70 @@ mod tests {
         );
     }
 
+    /// Verify that timeout kills grandchild processes via process-group kill.
+    ///
+    /// Spawns a shell that launches a background `sleep 999` grandchild, then
+    /// verifies that after timeout both the shell and the sleep are gone.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_run_cmd_with_timeout_kills_process_group() {
+        use std::path::Path;
+
+        // Create a marker file that the grandchild will write to prove it started.
+        let marker_dir = tempfile::tempdir().unwrap();
+        let marker = marker_dir.path().join("grandchild_started");
+
+        // Shell script: touch a marker, then sleep forever.
+        // The shell is the child; sleep is the grandchild.
+        // Use a unique duration (98765) to avoid collisions with other tests
+        // that also spawn `sleep` (e.g., test_run_cmd_with_timeout_expires uses 999).
+        let script = format!("touch '{}' && sleep 98765", marker.display());
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(&script);
+
+        let result = run_cmd_with_timeout(cmd, Duration::from_millis(500)).await;
+        assert!(result.is_err(), "should have timed out");
+
+        // The marker proves the grandchild started running before timeout.
+        assert!(
+            Path::new(&marker).exists(),
+            "grandchild should have started (marker file missing)"
+        );
+
+        // Give the OS a moment to reap the killed processes.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Verify no `sleep 98765` processes survive.
+        let ps_output = std::process::Command::new("ps")
+            .args(["ax", "-o", "pid,command"])
+            .output()
+            .expect("ps should work");
+        let ps_text = String::from_utf8_lossy(&ps_output.stdout);
+
+        // Match only actual sleep processes, not commands that mention the
+        // duration in other context (e.g., git commit messages in ps output).
+        let orphaned: Vec<&str> = ps_text
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                // Match "sleep 98765" as the actual command, not as a substring
+                // of a larger command. The ps command column shows the binary name.
+                (trimmed.ends_with("sleep 98765") || trimmed.contains("sleep 98765 "))
+                    && !trimmed.contains("ps ")
+                    && !trimmed.contains("grep ")
+                    && !trimmed.contains("git ")
+                    && !trimmed.contains("cargo ")
+            })
+            .collect();
+
+        assert!(
+            orphaned.is_empty(),
+            "grandchild sleep processes should have been killed by process-group SIGKILL, \
+             but found: {:?}",
+            orphaned
+        );
+    }
+
     #[test]
     fn test_calculate_file_priority() {
         let repo = Path::new("/repo");
@@ -763,12 +896,43 @@ mod tests {
 
     #[test]
     fn test_find_fenced_blocks_empty_block_no_newline() {
-        // Adjacent opening+closing fences with no content or newline between them
+        // 6 consecutive backticks = a single 6-char opener with no closer (unclosed)
         let text = "``````";
         let blocks = find_fenced_blocks(text);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].0, "");
-        assert_eq!(blocks[0].1, "");
+        assert_eq!(blocks.len(), 0, "6-char fence with no closer is unclosed");
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_long_fence_needs_matching_close() {
+        // 4-char opener needs 4+ char closer.
+        // A line-start ``` (3-char) should NOT close a ```` (4-char) opener.
+        let text = "````json\n```\nstill inside\n````\n";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(
+            blocks.len(),
+            1,
+            "should find exactly one block: {:?}",
+            blocks
+        );
+        assert!(
+            blocks[0].1.starts_with("```"),
+            "body should start with inner ```: {:?}",
+            blocks[0].1
+        );
+    }
+
+    #[test]
+    fn test_find_fenced_blocks_closing_fence_rejects_info_text() {
+        // A closing fence must be only fence chars + whitespace.
+        // ```json at line start is an opener, not a closer.
+        let text = "```\ncode\n```json\nmore code\n```\n";
+        let blocks = find_fenced_blocks(text);
+        assert_eq!(blocks.len(), 1, "should find one block: {:?}", blocks);
+        assert!(
+            blocks[0].1.contains("```json\nmore code"),
+            "```json should be body, not a closer: {:?}",
+            blocks[0].1
+        );
     }
 
     // ── xml_escape tests ──

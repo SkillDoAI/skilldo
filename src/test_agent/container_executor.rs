@@ -10,7 +10,11 @@ use tempfile::TempDir;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use super::executor::{ExecutionEnv, ExecutionResult, MAVEN_REPO_DIR};
+use super::executor::{
+    build_node_install_args, extract_cargo_package_name, extract_go_module_name,
+    extract_node_package_name, filter_java_deps_by_artifact_id, go_dep_needs_replace, ExecutionEnv,
+    ExecutionResult, MAVEN_REPO_DIR,
+};
 use super::LanguageExecutor;
 use crate::config::{ContainerConfig, InstallSource};
 use crate::detector::Language;
@@ -42,21 +46,48 @@ impl ContainerExecutor {
         super::executor::is_tool_available(&self.config.runtime, "--version").await
     }
 
-    /// Generate dependency installation script for JavaScript/TypeScript
+    /// Whether the container has `/src` mounted (local-install or local-mount mode).
+    fn has_local_source(&self) -> bool {
+        self.config.install_source != InstallSource::Registry
+    }
+
+    /// Generate dependency installation script for JavaScript/TypeScript.
+    /// When local source is mounted at `/src`, installs it first (like bare-metal
+    /// NodeExecutor), filtering the local package from the registry dep list.
     fn generate_node_install_script(&self, deps: &[String]) -> Result<String> {
         // Always write package.json with type:module so ESM import syntax works.
         let mut lines = vec![
             r#"echo '{"name":"skilldo-test","version":"0.1.0","private":true,"type":"module"}' > package.json"#.to_string(),
         ];
-        if !deps.is_empty() {
-            for dep in deps {
-                sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
-            }
+
+        // Validate dep names before embedding in shell script
+        for dep in deps {
+            sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
+        }
+
+        // Build install args: /src first (if local), then registry deps with
+        // the local package filtered out. Reuses bare-metal NodeExecutor's helper.
+        let install_args = if self.has_local_source() {
+            let local_name: Option<String> = self
+                .config
+                .source_path
+                .as_ref()
+                .and_then(|p| {
+                    let pkg_json = std::path::Path::new(p).join("package.json");
+                    std::fs::read_to_string(pkg_json).ok()
+                })
+                .and_then(|c| extract_node_package_name(&c));
+            build_node_install_args(deps, "/src", local_name.as_deref())
+        } else {
+            deps.to_vec()
+        };
+
+        if !install_args.is_empty() {
             // Single-quote each dep to prevent shell metachar interpretation
             // (e.g., >=, ~, ^ are shell operators in unquoted context).
             // The `--` terminator prevents dep names starting with `-` from
             // being interpreted as npm flags.
-            let quoted: Vec<String> = deps.iter().map(|d| format!("'{}'", d)).collect();
+            let quoted: Vec<String> = install_args.iter().map(|d| format!("'{}'", d)).collect();
             lines.push(format!(
                 "npm install --no-save --ignore-scripts --no-audit --no-fund -- {} > /dev/null 2>&1",
                 quoted.join(" ")
@@ -67,9 +98,31 @@ impl ContainerExecutor {
 
     /// Generate dependency installation script for Go.
     /// Initializes a Go module and runs `go get` for each dependency.
+    /// When local source is mounted at `/src`, applies `go mod edit -replace`
+    /// for the root module before `go get` (same as bare-metal GoExecutor).
     fn generate_go_install_script(&self, deps: &[String]) -> Result<String> {
         // go.mod may already exist from a previous pattern run; only init if missing
         let mut lines = vec!["[ -f go.mod ] || go mod init test >/dev/null 2>&1".to_string()];
+
+        // Local source: read the module name from the host's go.mod and emit a
+        // replace directive so the container resolves it from /src.
+        if self.has_local_source() {
+            if let Some(module) = self
+                .config
+                .source_path
+                .as_ref()
+                .and_then(|p| {
+                    let go_mod = std::path::Path::new(p).join("go.mod");
+                    std::fs::read_to_string(go_mod).ok()
+                })
+                .and_then(|c| extract_go_module_name(&c))
+            {
+                if go_dep_needs_replace(deps, &module) {
+                    lines.push(format!("go mod edit -replace '{module}=/src'"));
+                }
+            }
+        }
+
         for dep in deps {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
             lines.push(format!("go get '{}'", dep));
@@ -79,16 +132,52 @@ impl ContainerExecutor {
 
     /// Generate dependency installation script for Java.
     /// Creates a pom.xml and uses `mvn dependency:copy-dependencies` to fetch jars.
+    /// When local source is mounted at `/src`, copies jars from `/src/target/*.jar`
+    /// (Maven) or `/src/build/libs/*.jar` (Gradle) into deps/ — same as bare-metal
+    /// JavaExecutor.
     fn generate_java_install_script(&self, deps: &[String]) -> Result<String> {
+        let mut lines: Vec<String> = Vec::new();
+
+        // Local source: copy pre-built jars from /src into deps/.
+        // Supports Maven (target/) and Gradle (build/libs/) layouts.
+        if self.has_local_source() {
+            lines.push(
+                r#"mkdir -p deps
+if [ -d /src/target ]; then
+  find /src/target -maxdepth 1 -name '*.jar' -exec cp {} deps/ \;
+fi
+if [ -d /src/build/libs ]; then
+  find /src/build/libs -maxdepth 1 -name '*.jar' -exec cp {} deps/ \;
+fi"#
+                .to_string(),
+            );
+        }
+
         if deps.is_empty() {
-            return Ok(String::new());
+            return Ok(lines.join("\n"));
         }
 
         for dep in deps {
             sanitize_dep_name(dep).map_err(|e| anyhow::anyhow!(e))?;
         }
 
-        let pom = match crate::util::build_maven_pom_xml(deps) {
+        // Filter out the local artifact from Maven deps to avoid classpath collision
+        // (same local jar + registry jar on deps/*). Mirrors bare-metal JavaExecutor.
+        let fetch_deps = if self.has_local_source() {
+            let local_artifact = self.config.source_path.as_ref().and_then(|p| {
+                let handler = crate::ecosystems::java::JavaHandler::new(std::path::Path::new(p));
+                handler.get_artifact_id().ok()
+            });
+            filter_java_deps_by_artifact_id(deps, local_artifact.as_deref())
+        } else {
+            deps.to_vec()
+        };
+
+        if fetch_deps.is_empty() {
+            return Ok(lines.join("\n"));
+        }
+
+        let pom = match crate::util::build_maven_pom_xml(&fetch_deps) {
             Some(p) => p,
             None => {
                 warn!(
@@ -96,12 +185,91 @@ impl ContainerExecutor {
                     deps.len(),
                     if deps.len() == 1 { "dep" } else { "deps" }
                 );
-                return Ok(String::new());
+                return Ok(lines.join("\n"));
             }
         };
 
-        Ok(format!(
+        lines.push(format!(
             "mkdir -p deps {MAVEN_REPO_DIR}\ncat > pom.xml << 'SKILLDO_EOF'\n{pom}\nSKILLDO_EOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -Dmaven.repo.local={MAVEN_REPO_DIR} -q 2>maven-errors.log || echo 'WARNING: Maven dependency resolution failed — tests may fail due to missing jars' >&2\n[ -s maven-errors.log ] && cat maven-errors.log >&2\nrm -f maven-errors.log"
+        ));
+
+        Ok(lines.join("\n"))
+    }
+
+    /// Generate the Rust install/setup commands when local source is mounted.
+    /// Reads the crate name from `source_path`'s Cargo.toml and generates a
+    /// Cargo.toml in /workspace with a path dep to `/src`.
+    fn generate_rust_local_install(&self, deps: &[String]) -> Result<String> {
+        let crate_name = self
+            .config
+            .source_path
+            .as_deref()
+            .and_then(extract_cargo_package_name);
+
+        if let Some(name) = crate_name {
+            // Validate dep names before embedding in shell script
+            for d in deps {
+                sanitize_dep_name(d).map_err(|e| anyhow::anyhow!(e))?;
+            }
+            // Generate a Cargo.toml with local crate at /src + registry deps.
+            let mut dep_lines = format!("{name} = {{ path = \"/src\" }}\n");
+            for d in deps {
+                // Strip version constraints and extras (e.g., "serde>=1.0" → "serde",
+                // "tokio[full]" → "tokio") since only the crate name is valid as TOML bare key.
+                let crate_name = d
+                    .split(&['=', '>', '<', '~', '^', '['][..])
+                    .next()
+                    .unwrap_or(d)
+                    .trim_end_matches('-');
+                // Cargo: dash/underscore are equivalent in crate names
+                if crate_name.replace('-', "_") != name.replace('-', "_") {
+                    dep_lines.push_str(&format!("{crate_name} = \"*\"\n"));
+                }
+            }
+            Ok(format!(
+                r#"export CARGO_HOME=/tmp/cargo-home
+mkdir -p "$CARGO_HOME" src
+cp main.rs src/main.rs
+cat > Cargo.toml << 'SKILLDO_EOF'
+[package]
+name = "skilldo-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+{dep_lines}SKILLDO_EOF"#
+            ))
+        } else {
+            Ok(String::new())
+        }
+    }
+
+    /// Generate Cargo.toml for Rust registry mode (no local source, has deps).
+    fn generate_rust_registry_install(&self, deps: &[String]) -> Result<String> {
+        for d in deps {
+            sanitize_dep_name(d).map_err(|e| anyhow::anyhow!(e))?;
+        }
+        let mut dep_lines = String::new();
+        for d in deps {
+            let crate_name = d
+                .split(&['=', '>', '<', '~', '^', '['][..])
+                .next()
+                .unwrap_or(d)
+                .trim_end_matches('-');
+            dep_lines.push_str(&format!("{crate_name} = \"*\"\n"));
+        }
+        Ok(format!(
+            r#"export CARGO_HOME=/tmp/cargo-home
+mkdir -p "$CARGO_HOME" src
+cp main.rs src/main.rs
+cat > Cargo.toml << 'SKILLDO_EOF'
+[package]
+name = "skilldo-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+{dep_lines}SKILLDO_EOF"#
         ))
     }
 
@@ -112,10 +280,15 @@ impl ContainerExecutor {
             Language::JavaScript => self.generate_node_install_script(deps)?,
             Language::Go => self.generate_go_install_script(deps)?,
             Language::Java => self.generate_java_install_script(deps)?,
+            Language::Rust if self.has_local_source() => self.generate_rust_local_install(deps)?,
+            Language::Rust if !deps.is_empty() => self.generate_rust_registry_install(deps)?,
             _ => String::new(),
         };
 
         let run_line = match self.language {
+            // Rust uses cargo when we generated a Cargo.toml (local source or deps present).
+            // Falls back to rustc only when there are no deps at all.
+            Language::Rust if !install_cmd.is_empty() => "cargo run 2>&1",
             Language::JavaScript => "node test.js",
             Language::Rust => "rustc main.rs -o main && ./main",
             Language::Go => "go run main.go",
@@ -768,14 +941,38 @@ mod tests {
     // --- generate_container_script: Rust/Go with deps (deps should be ignored) ---
 
     #[test]
-    fn test_rust_container_script_with_deps_ignores_them() {
+    fn test_rust_container_script_with_deps_uses_cargo() {
         let executor = ContainerExecutor::new(make_config(), Language::Rust);
         let deps = vec!["serde".to_string(), "tokio".to_string()];
         let script = executor.generate_container_script(&deps).unwrap();
-        assert!(script.contains("rustc main.rs -o main && ./main"));
-        // Rust has no install step, deps are ignored
-        assert!(!script.contains("cargo install"));
-        assert!(!script.contains("serde"));
+        // With deps, Rust generates Cargo.toml and uses cargo run
+        assert!(
+            script.contains("cargo run"),
+            "should use cargo run with deps: {script}"
+        );
+        assert!(
+            script.contains("serde"),
+            "should include serde dep: {script}"
+        );
+        assert!(
+            script.contains("tokio"),
+            "should include tokio dep: {script}"
+        );
+        assert!(
+            script.contains("[dependencies]"),
+            "should have deps section: {script}"
+        );
+    }
+
+    #[test]
+    fn test_rust_container_script_no_deps_uses_rustc() {
+        let executor = ContainerExecutor::new(make_config(), Language::Rust);
+        let script = executor.generate_container_script(&[]).unwrap();
+        // No deps: plain rustc is sufficient
+        assert!(
+            script.contains("rustc main.rs -o main && ./main"),
+            "should use rustc without deps: {script}"
+        );
     }
 
     #[test]
@@ -1391,5 +1588,474 @@ mod tests {
         assert!(script.contains("cd /workspace"));
         assert!(script.contains("mkdir -p deps"));
         assert!(script.contains("java -cp 'deps/*:.' Main"));
+    }
+
+    // --- Local-mount/local-install helper ---
+
+    fn make_local_config(source_path: &str) -> ContainerConfig {
+        let mut config = make_config();
+        config.install_source = InstallSource::LocalMount;
+        config.source_path = Some(source_path.to_string());
+        config
+    }
+
+    // --- Go: container local-mount tests ---
+
+    #[test]
+    fn test_go_local_mount_emits_replace_when_dep_matches_module() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("go.mod"),
+            "module github.com/example/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Go);
+        let deps = vec!["github.com/example/mylib".to_string()];
+        let script = executor.generate_go_install_script(&deps).unwrap();
+        assert!(
+            script.contains("go mod edit -replace 'github.com/example/mylib=/src'"),
+            "should emit replace directive: {script}"
+        );
+        assert!(script.contains("go get 'github.com/example/mylib'"));
+    }
+
+    #[test]
+    fn test_go_local_mount_skips_replace_when_no_dep_matches() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("go.mod"),
+            "module github.com/example/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Go);
+        let deps = vec!["github.com/other/pkg".to_string()];
+        let script = executor.generate_go_install_script(&deps).unwrap();
+        assert!(
+            !script.contains("go mod edit -replace"),
+            "should not emit replace when dep doesn't match module: {script}"
+        );
+    }
+
+    #[test]
+    fn test_go_local_mount_no_gomod_skips_replace() {
+        let tmp = TempDir::new().unwrap();
+        // No go.mod in source
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Go);
+        let deps = vec!["github.com/example/mylib".to_string()];
+        let script = executor.generate_go_install_script(&deps).unwrap();
+        assert!(
+            !script.contains("go mod edit -replace"),
+            "should not emit replace when go.mod is missing: {script}"
+        );
+    }
+
+    #[test]
+    fn test_go_local_mount_container_script_has_replace() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("go.mod"),
+            "module github.com/example/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Go);
+        let deps = vec!["github.com/example/mylib".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.contains("go mod edit -replace"));
+        assert!(script.contains("go run main.go"));
+    }
+
+    #[test]
+    fn test_go_registry_mode_no_replace() {
+        // Registry mode (default) should never emit replace, even if source_path is set
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        let deps = vec!["github.com/example/mylib".to_string()];
+        let script = executor.generate_go_install_script(&deps).unwrap();
+        assert!(
+            !script.contains("go mod edit -replace"),
+            "registry mode should never emit replace"
+        );
+    }
+
+    // --- JavaScript: container local-mount tests ---
+
+    #[test]
+    fn test_node_local_mount_installs_src_first() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            r#"{"name":"my-local-pkg","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
+        let deps = vec!["express".to_string()];
+        let script = executor.generate_node_install_script(&deps).unwrap();
+        assert!(script.contains("'/src'"), "should install /src: {script}");
+        assert!(
+            script.contains("'express'"),
+            "should also install registry deps: {script}"
+        );
+        // /src should come before express in the npm install line
+        let src_pos = script.find("'/src'").unwrap();
+        let dep_pos = script.find("'express'").unwrap();
+        assert!(
+            src_pos < dep_pos,
+            "/src should be installed before registry deps"
+        );
+    }
+
+    #[test]
+    fn test_node_local_mount_filters_local_package_from_deps() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            r#"{"name":"my-local-pkg","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
+        // Dep list includes the local package name — should be filtered out
+        let deps = vec!["my-local-pkg".to_string(), "express".to_string()];
+        let script = executor.generate_node_install_script(&deps).unwrap();
+        assert!(script.contains("'/src'"), "should install from /src");
+        assert!(
+            script.contains("'express'"),
+            "should install express from registry"
+        );
+        // The local package name should NOT appear as a separate registry dep
+        assert!(
+            !script.contains("'my-local-pkg'"),
+            "local package should be filtered from registry deps: {script}"
+        );
+    }
+
+    #[test]
+    fn test_node_local_mount_no_package_json_still_installs_src() {
+        let tmp = TempDir::new().unwrap();
+        // No package.json — can't extract name, but /src is still installed
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
+        let deps = vec!["express".to_string()];
+        let script = executor.generate_node_install_script(&deps).unwrap();
+        assert!(
+            script.contains("'/src'"),
+            "should install /src even without package.json: {script}"
+        );
+    }
+
+    #[test]
+    fn test_node_local_mount_no_deps_still_installs_src() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
+        let script = executor.generate_node_install_script(&[]).unwrap();
+        assert!(
+            script.contains("npm install"),
+            "should run npm install for /src even with no deps: {script}"
+        );
+        assert!(script.contains("'/src'"));
+    }
+
+    #[test]
+    fn test_node_local_mount_container_script() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            r#"{"name":"my-pkg","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
+        let deps = vec!["express".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+        assert!(script.contains("'/src'"));
+        assert!(script.contains("node test.js"));
+    }
+
+    #[test]
+    fn test_node_registry_mode_no_src() {
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
+        let deps = vec!["express".to_string()];
+        let script = executor.generate_node_install_script(&deps).unwrap();
+        assert!(
+            !script.contains("/src"),
+            "registry mode should not reference /src: {script}"
+        );
+    }
+
+    // --- Java: container local-mount tests ---
+
+    #[test]
+    fn test_java_local_mount_copies_jars() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Java);
+        let script = executor.generate_java_install_script(&[]).unwrap();
+        assert!(
+            script.contains("mkdir -p deps"),
+            "should create deps dir: {script}"
+        );
+        assert!(
+            script.contains("/src/target"),
+            "should check Maven target dir: {script}"
+        );
+        assert!(
+            script.contains("/src/build/libs"),
+            "should check Gradle build/libs dir: {script}"
+        );
+        assert!(script.contains("*.jar"), "should copy jar files: {script}");
+    }
+
+    #[test]
+    fn test_java_local_mount_with_deps_has_both_jar_copy_and_maven() {
+        let tmp = TempDir::new().unwrap();
+        // Create a pom.xml so get_artifact_id() resolves and filters the local dep
+        std::fs::write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>my-lib</artifactId></project>",
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Java);
+        // Include the local artifact + a registry dep
+        let deps = vec![
+            "com.example:my-lib:1.0".to_string(),
+            "com.google.code.gson:gson:2.10.1".to_string(),
+        ];
+        let script = executor.generate_java_install_script(&deps).unwrap();
+        // Should have jar copy commands
+        assert!(script.contains("/src/target"), "should copy from /src");
+        // Should have Maven pom for the NON-local dep
+        assert!(script.contains("pom.xml"), "should fetch Maven deps");
+        assert!(script.contains("gson"), "gson should be in the POM");
+        // The local artifact (my-lib) should be filtered from Maven fetch
+        assert!(
+            !script.contains("<artifactId>my-lib</artifactId>"),
+            "local artifact should be filtered from Maven POM"
+        );
+    }
+
+    #[test]
+    fn test_java_local_mount_container_script() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Java);
+        let script = executor.generate_container_script(&[]).unwrap();
+        assert!(script.contains("/src/target"));
+        assert!(script.contains("javac"));
+        assert!(script.contains("java -cp"));
+    }
+
+    #[test]
+    fn test_java_registry_mode_no_jar_copy() {
+        let executor = ContainerExecutor::new(make_config(), Language::Java);
+        let script = executor.generate_java_install_script(&[]).unwrap();
+        assert!(
+            !script.contains("/src"),
+            "registry mode should not reference /src: {script}"
+        );
+    }
+
+    // --- Rust: container local-mount tests ---
+
+    #[test]
+    fn test_rust_local_mount_generates_cargo_toml() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            r#"[package]
+name = "my-crate"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Rust);
+        let script = executor.generate_rust_local_install(&[]).unwrap();
+        assert!(
+            script.contains(r#"my-crate = { path = "/src" }"#),
+            "should add path dep to Cargo.toml: {script}"
+        );
+        assert!(
+            script.contains("[dependencies]"),
+            "should have dependencies section"
+        );
+        assert!(
+            script.contains("mkdir -p") && script.contains("src"),
+            "should create src/ for cargo convention"
+        );
+        assert!(
+            script.contains("cp main.rs src/main.rs"),
+            "should move code to src/main.rs"
+        );
+    }
+
+    #[test]
+    fn test_rust_local_mount_includes_registry_deps() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Rust);
+        let deps = vec!["serde".to_string(), "tokio".to_string()];
+        let script = executor.generate_rust_local_install(&deps).unwrap();
+        assert!(
+            script.contains(r#"my-crate = { path = "/src" }"#),
+            "should have local path dep: {script}"
+        );
+        assert!(
+            script.contains("serde = \"*\""),
+            "should include registry dep serde: {script}"
+        );
+        assert!(
+            script.contains("tokio = \"*\""),
+            "should include registry dep tokio: {script}"
+        );
+        // my-crate should NOT appear as a registry dep
+        assert!(
+            !script.contains("my-crate = \"*\""),
+            "local crate should not be duplicated as registry dep: {script}"
+        );
+    }
+
+    #[test]
+    fn test_rust_local_mount_container_script_uses_cargo_run() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            r#"[package]
+name = "my-crate"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Rust);
+        let script = executor.generate_container_script(&[]).unwrap();
+        assert!(
+            script.contains("cargo run"),
+            "local-mount Rust should use cargo run: {script}"
+        );
+        assert!(
+            !script.contains("rustc main.rs"),
+            "local-mount Rust should NOT use rustc: {script}"
+        );
+    }
+
+    #[test]
+    fn test_rust_local_mount_no_cargo_toml_falls_back() {
+        let tmp = TempDir::new().unwrap();
+        // No Cargo.toml in source — can't extract crate name
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Rust);
+        let script = executor.generate_rust_local_install(&[]).unwrap();
+        assert!(
+            script.is_empty(),
+            "should return empty when Cargo.toml is missing: {script}"
+        );
+    }
+
+    #[test]
+    fn test_rust_local_mount_no_cargo_toml_falls_back_to_rustc() {
+        let tmp = TempDir::new().unwrap();
+        // No Cargo.toml — can't extract crate name, so install is empty.
+        // Should fall back to rustc instead of broken cargo run.
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Rust);
+        let script = executor.generate_container_script(&[]).unwrap();
+        assert!(
+            script.contains("rustc main.rs"),
+            "local-mount without Cargo.toml should fall back to rustc: {script}"
+        );
+    }
+
+    #[test]
+    fn test_rust_registry_mode_uses_rustc() {
+        let executor = ContainerExecutor::new(make_config(), Language::Rust);
+        let script = executor.generate_container_script(&[]).unwrap();
+        assert!(
+            script.contains("rustc main.rs"),
+            "registry mode should use rustc: {script}"
+        );
+        assert!(
+            !script.contains("cargo run"),
+            "registry mode should not use cargo run"
+        );
+    }
+
+    // --- has_local_source helper tests ---
+
+    #[test]
+    fn test_has_local_source_registry() {
+        let executor = ContainerExecutor::new(make_config(), Language::Go);
+        assert!(!executor.has_local_source());
+    }
+
+    #[test]
+    fn test_has_local_source_local_mount() {
+        let mut config = make_config();
+        config.install_source = InstallSource::LocalMount;
+        let executor = ContainerExecutor::new(config, Language::Go);
+        assert!(executor.has_local_source());
+    }
+
+    #[test]
+    fn test_has_local_source_local_install() {
+        let mut config = make_config();
+        config.install_source = InstallSource::LocalInstall;
+        let executor = ContainerExecutor::new(config, Language::Go);
+        assert!(executor.has_local_source());
+    }
+
+    // --- Go local-mount with sub-package dep ---
+
+    #[test]
+    fn test_go_local_mount_replace_with_subpackage_dep() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("go.mod"),
+            "module github.com/example/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let config = make_local_config(&tmp.path().to_string_lossy());
+        let executor = ContainerExecutor::new(config, Language::Go);
+        // Sub-package dep should still trigger replace for the root module
+        let deps = vec!["github.com/example/mylib/subpkg".to_string()];
+        let script = executor.generate_go_install_script(&deps).unwrap();
+        assert!(
+            script.contains("go mod edit -replace 'github.com/example/mylib=/src'"),
+            "sub-package dep should trigger root module replace: {script}"
+        );
+    }
+
+    // --- Local-install mode uses same wiring as local-mount ---
+
+    #[test]
+    fn test_go_local_install_also_emits_replace() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("go.mod"),
+            "module github.com/example/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        let mut config = make_config();
+        config.install_source = InstallSource::LocalInstall;
+        config.source_path = Some(tmp.path().to_string_lossy().to_string());
+        let executor = ContainerExecutor::new(config, Language::Go);
+        let deps = vec!["github.com/example/mylib".to_string()];
+        let script = executor.generate_go_install_script(&deps).unwrap();
+        assert!(
+            script.contains("go mod edit -replace"),
+            "local-install should also emit replace: {script}"
+        );
     }
 }
