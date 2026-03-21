@@ -3,6 +3,16 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.4
+
+### Added
+- Java e2e test in CI matrix using google/gson v2.12.1
+
+### Fixed
+- Rust container validate() now uses the container executor instead of bare-metal CargoExecutor — fixes setup/run/cleanup mismatch where container_name was None
+- E2E model updated from `gpt-oss-120b` (removed from Cerebras) to `qwen-3-235b-a22b-instruct-2507`
+- show-prompts correctly maps Rust and JavaScript to their TestEnv constants
+
 ## 0.5.3
 
 ### Added
