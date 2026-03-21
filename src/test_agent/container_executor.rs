@@ -227,7 +227,8 @@ fi"#
                 }
             }
             Ok(format!(
-                r#"mkdir -p src
+                r#"export CARGO_HOME=/tmp/cargo-home
+mkdir -p "$CARGO_HOME" src
 cp main.rs src/main.rs
 cat > Cargo.toml << 'SKILLDO_EOF'
 [package]
@@ -1833,7 +1834,7 @@ edition = "2021"
             "should have dependencies section"
         );
         assert!(
-            script.contains("mkdir -p src"),
+            script.contains("mkdir -p") && script.contains("src"),
             "should create src/ for cargo convention"
         );
         assert!(

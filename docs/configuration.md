@@ -116,8 +116,7 @@ cleanup = true
 #   "registry"      — install from package registry (default)
 #   "local-install" — mount local repo at /src, wire into import resolution
 #   "local-mount"   — mount local repo at /src (same wiring as local-install)
-# Supported: Python, Go, JavaScript, Java (all modes), Rust (bare-metal only;
-# Rust container mode is planned for v0.5.4).
+# All 5 languages supported: Python, Go, JavaScript, Java, Rust.
 # See docs/languages.md for per-language details.
 # install_source = "registry"
 

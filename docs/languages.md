@@ -9,7 +9,7 @@ Skilldo auto-detects the language from project files. Use `--language` to overri
 | Python | Full support | pip/uv | `*.py`, `pyproject.toml`, `setup.py` | uv bare-metal or container |
 | Go | Full support | go modules | `*.go`, `go.mod` | go toolchain bare-metal or container |
 | JavaScript/TypeScript | Full support | npm | `*.js`, `*.ts`, `package.json` | node+npm bare-metal or container |
-| Rust | Full support | cargo | `*.rs`, `Cargo.toml` | cargo bare-metal (container planned for v0.5.4) |
+| Rust | Full support | cargo | `*.rs`, `Cargo.toml` | cargo bare-metal or container |
 | Java | Full support | Maven/Gradle | `*.java`, `pom.xml`, `build.gradle`, `build.gradle.kts` | javac bare-metal or Maven container |
 
 ## Test Validation
@@ -33,8 +33,8 @@ Each language has a dedicated executor that runs generated test code:
 
 ### Rust
 - **Bare-metal**: Creates an isolated temp directory with `CARGO_HOME` confined, runs `cargo run`
-- **Container**: Planned for v0.5.4 (container wiring exists but validator falls back to bare-metal until e2e testing is complete)
-- **Requirements**: Rust toolchain installed locally (bare-metal)
+- **Container**: `rust:1.75-slim` — generates Cargo.toml with deps, runs `cargo run`
+- **Requirements**: Rust toolchain installed locally (bare-metal) or Docker/Podman (container)
 
 ### Java
 - **Bare-metal**: Creates an isolated temp directory, writes `Main.java`, compiles with `javac`, runs with `java`. If Maven is available, generates `pom.xml` and downloads dependencies.

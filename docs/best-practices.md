@@ -29,7 +29,7 @@ Generation gets you **90-95%** of the way to a production-quality SKILL.md. The 
 - **Code examples**: Occasionally use invalid syntax or hallucinated API calls
 - **Security CVEs**: Referenced generically instead of by specific CVE number
 
-The **test stage** catches many of these by actually running the code examples. All 5 languages (Python, Go, JavaScript, Java, Rust) are supported in bare-metal mode. Container mode is available for Python, Go, JavaScript, and Java (Rust container support is planned for v0.5.4).
+The **test stage** catches many of these by actually running the code examples. All 5 languages (Python, Go, JavaScript, Java, Rust) are supported in both bare-metal and container modes.
 
 ## Model Selection
 
