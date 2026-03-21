@@ -2,8 +2,11 @@
 
 Skilldo uses a TOML config file. It searches for config in this order:
 1. `--config <path>` (explicit CLI argument)
-2. `./skilldo.toml` (repository root)
-3. `~/.config/skilldo/config.toml` (user config directory)
+2. `skilldo.toml` in the target repository (the path argument to `skilldo generate`)
+3. `./skilldo.toml` (current working directory)
+4. `skilldo.toml` in the git root (if CWD is inside a git repo)
+5. `~/.config/skilldo/config.toml` (user config directory)
+6. Built-in defaults (Anthropic provider, Sonnet 4.6)
 
 ## Minimal Config
 
@@ -25,7 +28,7 @@ This uses GPT-5.2 for all stages, with test validation enabled by default.
 ```toml
 # ── LLM Provider ──────────────────────────────────────────────
 [llm]
-# Provider type: "anthropic", "openai", "chatgpt", "gemini", or "openai-compatible"
+# Provider type: "anthropic", "openai", "chatgpt", "gemini", "openai-compatible", or "cli"
 provider_type = "anthropic"
 
 # Human-readable name for this provider instance.
@@ -102,8 +105,8 @@ enable_review = true
 # Also available: extract_llm, map_llm, learn_llm, create_llm, review_llm
 
 # ── Additional Generation Settings ─────────────────────────────
-# Review loop retries (separate from create/test retries, default: 5)
-# review_max_retries = 5
+# Review loop retries (separate from create/test retries, default: 10)
+# review_max_retries = 10
 
 # YARA + regex security scanning on generated SKILL.md (default: true)
 # Set to false to skip security scanning (e.g., for trusted internal repos)
@@ -131,9 +134,11 @@ cleanup = true
 
 # Library install source for test validation:
 #   "registry"      — install from package registry (default)
-#   "local-install" — mount local repo at /src, wire into import resolution
-#   "local-mount"   — mount local repo at /src (same wiring as local-install)
-# All 5 languages supported: Python, Go, JavaScript, Java, Rust.
+#   "local-install" — install local source into the test environment
+#   "local-mount"   — mount local repo at /src in container mode
+# All 5 languages supported. Note: "local-install" + container mode falls
+# back to bare-metal for non-Python languages (Python uses editable install
+# inside the container; others need bare-metal package manager access).
 # See docs/languages.md for per-language details.
 # install_source = "registry"
 
@@ -176,6 +181,7 @@ cleanup = true
 | **ChatGPT** | `"chatgpt"` | Yes (OAuth or `OPENAI_API_KEY`) | Uses the Responses API. Models: `gpt-5.2-codex`, `gpt-5.1-codex-mini`, etc. See [Authentication](authentication.md). |
 | **Google Gemini** | `"gemini"` | Yes (`GEMINI_API_KEY`) | Gemini models |
 | **OpenAI-compatible** | `"openai-compatible"` | Varies | Ollama, DeepSeek, Groq, Together, Fireworks, xAI, Mistral, vLLM, etc. Set `base_url`. |
+| **CLI** | `"cli"` | No (CLI handles auth) | Shell out to Claude CLI, Codex CLI, Gemini CLI. See below. |
 
 ## CLI Provider Mode
 
