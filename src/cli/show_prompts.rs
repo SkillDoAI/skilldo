@@ -5,7 +5,9 @@ use crate::llm::prompts_v2;
 use crate::test_agent::code_generator::{build_test_prompt, TestEnv};
 use crate::test_agent::go_code_gen::GO_ENV;
 use crate::test_agent::java_code_gen::JAVA_ENV;
+use crate::test_agent::js_code_gen::JS_ENV;
 use crate::test_agent::python_code_gen::PYTHON_ENV;
+use crate::test_agent::rust_code_gen::RUST_ENV;
 use crate::test_agent::CodePattern;
 use crate::test_agent::PatternCategory;
 
@@ -14,9 +16,11 @@ const STAGES: &[&str] = &["extract", "map", "learn", "create", "review", "test"]
 /// Returns the canonical TestEnv for a language (reuses the real constants).
 fn test_env_for(lang: &Language) -> &'static TestEnv {
     match lang {
+        Language::Python => &PYTHON_ENV,
         Language::Go => &GO_ENV,
+        Language::JavaScript => &JS_ENV,
+        Language::Rust => &RUST_ENV,
         Language::Java => &JAVA_ENV,
-        _ => &PYTHON_ENV,
     }
 }
 
