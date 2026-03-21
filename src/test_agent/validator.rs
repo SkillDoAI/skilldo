@@ -265,8 +265,10 @@ impl<'a> TestCodeValidator<'a> {
                             (Box::new(exe), ExecutionMode::BareMetal)
                         }
                         ExecutionMode::Container => {
-                            // Container mode for Rust uses bare `rustc` which can't resolve
-                            // external dependencies. Fall back to BareMetal (CargoExecutor).
+                            // Container executor now supports Rust local-mount (Cargo.toml
+                            // with path dep), but the end-to-end container path hasn't been
+                            // validated with real container runs yet. Fall back to BareMetal
+                            // until container e2e testing is complete (tracked for v0.5.4).
                             tracing::warn!(
                                 "Container mode is not yet supported for Rust \
                                  (external deps require cargo). Falling back to bare metal. \

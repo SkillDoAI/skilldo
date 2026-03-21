@@ -214,10 +214,10 @@ fi"#
             // Generate a Cargo.toml with local crate at /src + registry deps.
             let mut dep_lines = format!("{name} = {{ path = \"/src\" }}\n");
             for d in deps {
-                // Strip version constraints (e.g., "serde>=1.0" → "serde")
-                // since only the crate name is a valid TOML bare key.
+                // Strip version constraints and extras (e.g., "serde>=1.0" → "serde",
+                // "tokio[full]" → "tokio") since only the crate name is valid as TOML bare key.
                 let crate_name = d
-                    .split(&['=', '>', '<', '~', '^'][..])
+                    .split(&['=', '>', '<', '~', '^', '['][..])
                     .next()
                     .unwrap_or(d)
                     .trim_end_matches('-');
