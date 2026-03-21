@@ -28,7 +28,7 @@ This uses GPT-5.2 for all stages, with test validation enabled by default.
 ```toml
 # ── LLM Provider ──────────────────────────────────────────────
 [llm]
-# Provider type: "anthropic", "openai", "chatgpt", "gemini", or "openai-compatible"
+# Provider type: "anthropic", "openai", "chatgpt", "gemini", "openai-compatible", or "cli"
 provider_type = "anthropic"
 
 # Human-readable name for this provider instance.
