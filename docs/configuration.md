@@ -102,10 +102,11 @@ enable_review = true
 # Also available: extract_llm, map_llm, learn_llm, create_llm, review_llm
 
 # ── Additional Generation Settings ─────────────────────────────
-# Review loop retries (separate from create/test retries)
+# Review loop retries (separate from create/test retries, default: 5)
 # review_max_retries = 5
 
-# Disable YARA + regex security scanning on generated SKILL.md
+# YARA + regex security scanning on generated SKILL.md (default: true)
+# Set to false to skip security scanning (e.g., for trusted internal repos)
 # enable_security_scan = true
 
 # Output path override (default: "SKILL.md" in CWD)
