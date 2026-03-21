@@ -1222,9 +1222,10 @@ impl LanguageExecutor for JavaExecutor {
 /// Returns `None` if no `module` directive is found.
 pub(crate) fn extract_go_module_name(go_mod_content: &str) -> Option<String> {
     go_mod_content.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("module ")
-            .map(|m| m.trim().to_string())
+        line.trim().strip_prefix("module ").map(|m| {
+            // Strip trailing comments (e.g., "module foo // comment")
+            m.split("//").next().unwrap_or(m).trim().to_string()
+        })
     })
 }
 
@@ -1274,7 +1275,20 @@ pub(crate) fn build_node_install_args(
 ) -> Vec<String> {
     let mut args = vec![local_source.to_string()];
     for d in deps {
-        if local_name != Some(d.as_str()) {
+        // Strip version specifier (e.g., "my-pkg@^1.0.0" → "my-pkg") before
+        // comparing to local_name, so versioned deps are still filtered out.
+        // Scoped packages start with @ (e.g., "@scope/pkg") — only split on
+        // @ when it's not at position 0.
+        let bare_name = if let Some(rest) = d.strip_prefix('@') {
+            // Scoped: "@scope/pkg@1.0" → find second @
+            match rest.find('@') {
+                Some(i) => &d[..i + 1],
+                None => d.as_str(),
+            }
+        } else {
+            d.split('@').next().unwrap_or(d)
+        };
+        if local_name != Some(bare_name) {
             args.push(d.clone());
         }
     }

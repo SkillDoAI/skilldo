@@ -699,7 +699,7 @@ mod tests {
         // The shell is the child; sleep is the grandchild.
         // Use a unique duration (98765) to avoid collisions with other tests
         // that also spawn `sleep` (e.g., test_run_cmd_with_timeout_expires uses 999).
-        let script = format!("touch {} && sleep 98765", marker.display());
+        let script = format!("touch '{}' && sleep 98765", marker.display());
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(&script);
 

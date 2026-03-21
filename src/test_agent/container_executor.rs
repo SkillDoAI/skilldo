@@ -145,7 +145,8 @@ impl ContainerExecutor {
                 r#"mkdir -p deps
 if [ -d /src/target ]; then
   find /src/target -maxdepth 1 -name '*.jar' -exec cp {} deps/ \;
-elif [ -d /src/build/libs ]; then
+fi
+if [ -d /src/build/libs ]; then
   find /src/build/libs -maxdepth 1 -name '*.jar' -exec cp {} deps/ \;
 fi"#
                 .to_string(),
@@ -213,9 +214,16 @@ fi"#
             // Generate a Cargo.toml with local crate at /src + registry deps.
             let mut dep_lines = format!("{name} = {{ path = \"/src\" }}\n");
             for d in deps {
+                // Strip version constraints (e.g., "serde>=1.0" → "serde")
+                // since only the crate name is a valid TOML bare key.
+                let crate_name = d
+                    .split(&['=', '>', '<', '~', '^'][..])
+                    .next()
+                    .unwrap_or(d)
+                    .trim_end_matches('-');
                 // Cargo: dash/underscore are equivalent in crate names
-                if d.replace('-', "_") != name.replace('-', "_") {
-                    dep_lines.push_str(&format!("{d} = \"*\"\n"));
+                if crate_name.replace('-', "_") != name.replace('-', "_") {
+                    dep_lines.push_str(&format!("{crate_name} = \"*\"\n"));
                 }
             }
             Ok(format!(
