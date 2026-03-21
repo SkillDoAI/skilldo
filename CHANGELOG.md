@@ -6,15 +6,62 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 ## 0.5.3
 
 ### Added
-- Container local-mount support for all languages — Go, JavaScript, Java, and Rust now wire `/src` into container import resolution (previously Python-only). Go uses `go mod edit -replace`, JS uses `npm install /src`, Java copies jars from `/src/target`, Rust uses `path = "/src"` in `Cargo.toml`.
-- Tilde fence (`~~~`) support in `src/lint.rs` — linter now recognizes tilde fences alongside backtick fences
-- CommonMark-compliant fence length matching — closing fences must match or exceed opener length, and trailing info text on closing fences is rejected
+- Container local-mount support for all 5 languages — Go, JavaScript, Java, and Rust now wire `/src` into container import resolution (previously Python-only)
+- Rust container mode enabled end-to-end — validator no longer falls back to bare-metal. Container generates Cargo.toml with deps and uses `cargo run`
+- Rust container registry mode — generates Cargo.toml with deps even without local source (was silently using rustc which can't resolve deps)
+- Tilde fence (`~~~`) support in linter — code block detection, duplicate example check, and markdown-wrap check all handle both fence types
+- CommonMark-compliant fence length matching — closing fences must match or exceed opener length, trailing info text rejected
+- `CARGO_HOME` isolation in Rust container scripts
 
 ### Changed
 - Pre-push hook uses `--quiet` flag to prevent pipe overflow with 2500+ tests
+- Java container jar copy checks both `target/` and `build/libs/` independently (was `elif`)
+- Container Java local-mount filters local artifact from Maven POM deps (prevents classpath collisions)
+- npm dep filtering strips `@version` specifiers and handles scoped packages (`@scope/pkg@^1.0`)
+- Go module name extraction strips trailing `//` comments
+- Rust container dep names strip version constraints and brackets for valid TOML keys
 
 ### Fixed
-- Process group kill on timeout (Unix) — commands now spawn in their own process group, and on timeout SIGKILL is sent to the entire group, cleaning up orphaned compilers and package managers
+- Process group kill on timeout (Unix) — commands spawn in their own process group, SIGKILL sent to entire group on timeout
+- Security: `aws-lc-sys` 0.37.1 → 0.39.0 (RUSTSEC-2026-0048), `rustls-webpki` 0.103.9 → 0.103.10 (RUSTSEC-2026-0049)
+
+## 0.5.2
+
+### Added
+- `JavaHandler::get_artifact_id()` — returns actual artifact name instead of Gradle group namespace for accurate local-install dep filtering
+- `parse_gradle_archives_base_name()` — parses `archivesBaseName`, `archivesName`, and `base.archivesName.set()` from Gradle build files
+- Symlink traversal guard — `filter_within_boundary()` canonicalizes collected file paths and rejects any escaping the repo root. Applied to all 5 ecosystem handlers.
+- Windows-safe atomic write — `write_atomic()` uses `tempfile::NamedTempFile::persist()` instead of `fs::rename`
+
+### Changed
+- Default model updated from `claude-sonnet-4-20250514` (Sonnet 4) to `claude-sonnet-4-6` (Sonnet 4.6)
+
+### Fixed
+- POM license parser off-by-one — section slice now includes the closing `</licenses>` tag
+- Device code polling interval floor at 1 second to prevent busy-spin
+- Workspace-inherited Rust features now union correctly (was replacing)
+
+## 0.5.1
+
+### Added
+- Local-install support for all 5 languages (Python, Go, JavaScript, Java, Rust) — bare-metal executors exclude local package from registry deps
+- Structured Rust dependency pipeline — `StructuredDep` preserves raw TOML specs (versions, features, git refs) end-to-end through collection → prompts → parsing → execution
+- Rust update mode now receives structured deps for the `[dependencies]` block
+- 150+ new coverage tests across executor, validator, collector, rust_parser, yara
+
+### Changed
+- Executor helper functions extracted from async methods into standalone testable functions
+- `append_rust_deps_section()` shared between create and update prompts (DRY)
+
+### Fixed
+- Python local-install excludes local package from `pyproject.toml` deps (PEP 503 normalization)
+- Cargo path dep preserves features/default-features from raw_spec
+- Go module matching excludes major version paths (`/v2`, `/v3`)
+- Workspace dep resolution unions child features instead of replacing
+- `LocalMount` keeps container mode (only `LocalInstall` triggers bare-metal fallback)
+- Review `malformed` flag no longer discards valid issues when `passed` field has wrong type
+- Dash/underscore normalization in Rust parser structured dep dedup
+- Multiple TOML fences in `## Imports` now all contribute specs
 
 ## 0.5.0
 
