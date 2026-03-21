@@ -258,7 +258,7 @@ jobs:
         run: |
           ./bin/skilldo generate /tmp/test-lib \
             --provider openai-compatible \
-            --model qwen-3-235b-a22b-instruct-2507 \
+            --model gpt-oss-120b \
             --base-url https://api.cerebras.ai/v1 \
             --max-retries 5 \
             --best-effort \

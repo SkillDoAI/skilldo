@@ -10,8 +10,9 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 
 ### Fixed
 - Rust container validate() now uses the container executor instead of bare-metal CargoExecutor — fixes setup/run/cleanup mismatch where container_name was None
-- E2E model updated from `gpt-oss-120b` (removed from Cerebras) to `qwen-3-235b-a22b-instruct-2507`
-- show-prompts correctly maps Rust and JavaScript to their TestEnv constants
+
+### Notes
+- Java e2e verified with both Cerebras `gpt-oss-120b` (20s, paid key) and `qwen-3-235b-a22b-instruct-2507` (259s, free key). Both produce clean SKILL.md output.
 
 ## 0.5.3
 
