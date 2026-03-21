@@ -13,7 +13,7 @@ The goal: make agent rules a standard part of every open-source package — like
 
 - **Validated code examples** — Generated patterns are executed locally to catch hallucinated APIs before they ship
 - **3-layer security scanning** — Regex patterns + prompt injection detection + 41 YARA rules catch malicious content
-- **Multi-provider** — Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, etc.)
+- **Multi-provider** — Anthropic, OpenAI, Google Gemini, ChatGPT (OAuth), any OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, etc.), or CLI provider mode (Claude CLI, Codex CLI, Gemini CLI)
 - **Per-stage model mixing** — Cheap local model for extraction, frontier cloud model for review. One config, multiple providers.
 - **Python, Go, JavaScript/TypeScript, Rust, and Java** — Full pipeline support with language-specific parsers and test validation
 - **Free with local models** — Run the entire pipeline on Ollama with zero API cost
@@ -117,7 +117,7 @@ make coverage      # HTML coverage report
 make lint          # Clippy + formatter check
 ```
 
-**Runtime requirements**: An LLM API key (or Ollama). For test validation: `uv`+`python3` (Python), `go` 1.21+ (Go), `node` 18+ (JS/TS), or `cargo` (Rust). Pass `--container` to use Docker/Podman instead.
+**Runtime requirements**: An LLM API key (or Ollama). For test validation: `uv`+`python3` (Python), `go` 1.21+ (Go), `node` 18+ (JS/TS), `cargo` (Rust), or `javac`+`java` (Java). Pass `--container` to use Docker/Podman instead.
 
 ## License
 

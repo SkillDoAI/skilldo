@@ -101,6 +101,22 @@ enable_review = true
 #
 # Also available: extract_llm, map_llm, learn_llm, create_llm, review_llm
 
+# ── Additional Generation Settings ─────────────────────────────
+# Review loop retries (separate from create/test retries)
+# review_max_retries = 5
+
+# Disable YARA + regex security scanning on generated SKILL.md
+# enable_security_scan = true
+
+# Output path override (default: "SKILL.md" in CWD)
+# output = "SKILL.md"
+
+# Input path override for existing SKILL.md (update mode)
+# input = "existing-SKILL.md"
+
+# Language override (skips auto-detection)
+# language = "python"
+
 # ── Container / Execution Settings ────────────────────────────
 [generation.container]
 # Container runtime: "podman" or "docker" (default: auto-detected, prefers podman)
@@ -211,4 +227,4 @@ Validate your configuration file without running a generation:
 skilldo config check --config my-config.toml
 ```
 
-Reports missing fields, invalid provider names, unreachable base URLs, and malformed `extra_body_json` before you burn API credits.
+Reports missing fields, invalid provider names, missing language tools (uv/cargo/go/node/javac), container runtime availability, and malformed `extra_body_json` before you burn API credits.

@@ -206,6 +206,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
                 ("cargo", "Rust"),
                 ("go", "Go"),
                 ("node", "JavaScript"),
+                ("javac", "Java"),
             ];
             let mut any_found = false;
             for &(tool, lang) in tools {
@@ -221,7 +222,7 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
             }
             if !any_found && config.generation.enable_test {
                 results.error(
-                    "Bare-metal mode: no language tools found (uv/cargo/go/node) — test agent validation will fail".to_string(),
+                    "Bare-metal mode: no language tools found (uv/cargo/go/node/javac) — test agent validation will fail".to_string(),
                 );
             }
         }
