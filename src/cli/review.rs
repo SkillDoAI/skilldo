@@ -97,12 +97,12 @@ pub fn write_review_output(
 ) -> Result<()> {
     if result.passed && !result.issues.is_empty() {
         writeln!(out, "PASSED with {} warning(s):\n", result.issues.len())?;
-        crate::review::print_review_issues(&result.issues);
+        crate::review::write_review_issues(&result.issues, out)?;
     } else if result.passed {
         writeln!(out, "PASSED: No issues found.")?;
     } else {
         writeln!(out, "FAILED: {} issue(s) found.\n", result.issues.len())?;
-        crate::review::print_review_issues(&result.issues);
+        crate::review::write_review_issues(&result.issues, out)?;
     }
     Ok(())
 }

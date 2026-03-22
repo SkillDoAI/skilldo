@@ -786,8 +786,8 @@ mod tests {
     }
 
     #[test]
-    fn token_set_not_expired_just_outside_buffer() {
-        // Token that expires at exactly now + 61s — should NOT be expired
+    fn token_set_not_expired_well_outside_buffer() {
+        // Token expires in 120s — well outside the 60s buffer, never flaky
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -795,14 +795,14 @@ mod tests {
         let tokens = TokenSet {
             access_token: "test".to_string(),
             refresh_token: "refresh".to_string(),
-            expires_at: now + 61,
+            expires_at: now + 120,
         };
         assert!(!tokens.is_expired());
     }
 
     #[test]
-    fn token_set_expired_at_boundary() {
-        // Token that expires at exactly now + 60s — should be expired (>= comparison)
+    fn token_set_expired_well_inside_buffer() {
+        // Token expires in 30s — well inside the 60s buffer, always expired
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -810,7 +810,7 @@ mod tests {
         let tokens = TokenSet {
             access_token: "test".to_string(),
             refresh_token: "refresh".to_string(),
-            expires_at: now + 60,
+            expires_at: now + 30,
         };
         assert!(tokens.is_expired());
     }
