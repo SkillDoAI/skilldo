@@ -126,7 +126,7 @@ pub fn logout_to(config_path: Option<String>, out: &mut dyn std::io::Write) -> R
 
     for endpoint in &endpoints {
         auth::delete_tokens(&endpoint.provider_name)?;
-        info!("Logged out of {}.", endpoint.provider_name);
+        writeln!(out, "Logged out of {}.", endpoint.provider_name)?;
     }
 
     Ok(())

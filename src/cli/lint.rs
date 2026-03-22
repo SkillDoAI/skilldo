@@ -49,7 +49,7 @@ pub fn run(path: &str) -> Result<()> {
 pub fn write_security_scan(
     scan_report: &crate::security::ScanReport,
     out: &mut dyn std::io::Write,
-) -> anyhow::Result<()> {
+) -> std::io::Result<()> {
     if !scan_report.findings.is_empty() {
         writeln!(out, "\nSecurity scan (score {}/100):", scan_report.score)?;
         for f in &scan_report.findings {
