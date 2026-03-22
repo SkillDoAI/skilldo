@@ -516,4 +516,52 @@ if __name__ == '__main__':
         // Raw response is the trimmed input (no extractable Python code)
         assert_eq!(code, response.trim());
     }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_mock() {
+        use crate::llm::client::MockLlmClient;
+        let mock_client = MockLlmClient::new();
+        let generator = PythonCodeGenerator::new(&mock_client);
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(
+                &pattern,
+                "import click\nprint('old')",
+                "NameError: name 'x'",
+            )
+            .await;
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+        let mock_client = MockLlmClient::new();
+        let generator = PythonCodeGenerator::new(&mock_client);
+        generator.set_local_package(Some("click".to_string()));
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "import click", "ModuleNotFoundError")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mutex_poison_recovery() {
+        // Verify that a poisoned Mutex<Option<String>> is handled by
+        // unwrap_or_else(|e| e.into_inner()) — the pattern used in production.
+        use std::sync::Mutex;
+        let m = Mutex::new(Some("original".to_string()));
+
+        // Poison the mutex
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = m.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // The production pattern: unwrap_or_else recovers the inner value
+        let recovered = m.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(recovered.as_deref(), Some("original"));
+    }
 }
