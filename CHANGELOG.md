@@ -3,6 +3,13 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.5
+
+### Changed
+- Review prompt: unused imports and speculative future versions no longer trigger false error-severity retries. Reduces review loop from ~4 retries to ~1 for typical libraries.
+- Mutex locks in all 5 code generators use `lock_or_recover()` shared helper instead of `.unwrap()` — recovers from poisoned mutex instead of crashing.
+- Poison recovery tests deduplicated into `poison_recovery_tests!` macro — shared across all 5 language code generators (was copy-pasted in 4, missing in Java).
+
 ## 0.5.4
 
 ### Added

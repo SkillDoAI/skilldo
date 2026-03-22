@@ -180,7 +180,7 @@ impl<'a> JsCodeGenerator<'a> {
 #[async_trait::async_trait]
 impl<'a> LanguageCodeGenerator for JsCodeGenerator<'a> {
     fn set_local_package(&self, package: Option<String>) {
-        *self.local_package.lock().unwrap() = package;
+        *super::lock_or_recover(&self.local_package) = package;
     }
 
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String> {
@@ -189,7 +189,7 @@ impl<'a> LanguageCodeGenerator for JsCodeGenerator<'a> {
             pattern.name
         );
 
-        let local_pkg = self.local_package.lock().unwrap().clone();
+        let local_pkg = super::lock_or_recover(&self.local_package).clone();
         let prompt = Self::create_test_prompt(
             pattern,
             self.custom_instructions.as_deref(),
@@ -215,7 +215,7 @@ impl<'a> LanguageCodeGenerator for JsCodeGenerator<'a> {
             pattern.name
         );
 
-        let local_pkg = self.local_package.lock().unwrap().clone();
+        let local_pkg = super::lock_or_recover(&self.local_package).clone();
         let prompt = build_retry_prompt(
             pattern,
             &JS_ENV,
@@ -525,4 +525,19 @@ console.log("✓ Test passed: Tilde");
             .await;
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+        let mock_client = MockLlmClient::new();
+        let generator = JsCodeGenerator::new(&mock_client);
+        generator.set_local_package(Some("express".to_string()));
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "const x = 1;", "Error: test")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    poison_recovery_tests!(JsCodeGenerator, sample_pattern);
 }

@@ -107,13 +107,13 @@ impl<'a> RustCodeGenerator<'a> {
 #[async_trait::async_trait]
 impl<'a> LanguageCodeGenerator for RustCodeGenerator<'a> {
     fn set_local_package(&self, package: Option<String>) {
-        *self.local_package.lock().unwrap() = package;
+        *super::lock_or_recover(&self.local_package) = package;
     }
 
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String> {
         debug!("Generating Rust test code for pattern: {}", pattern.name);
 
-        let local_pkg = self.local_package.lock().unwrap().clone();
+        let local_pkg = super::lock_or_recover(&self.local_package).clone();
         let prompt = Self::create_test_prompt(
             pattern,
             self.custom_instructions.as_deref(),
@@ -139,7 +139,7 @@ impl<'a> LanguageCodeGenerator for RustCodeGenerator<'a> {
             pattern.name
         );
 
-        let local_pkg = self.local_package.lock().unwrap().clone();
+        let local_pkg = super::lock_or_recover(&self.local_package).clone();
         let prompt = build_retry_prompt(
             pattern,
             &RUST_ENV,
@@ -406,4 +406,46 @@ fn main() {
             code
         );
     }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_mock() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = RustCodeGenerator::new(&mock_client);
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(
+                &pattern,
+                "fn main() { println!(\"old\"); }",
+                "error[E0425]: cannot find value `x`",
+            )
+            .await;
+        assert!(result.is_ok());
+        let code = result.unwrap();
+        assert!(!code.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = RustCodeGenerator::new(&mock_client)
+            .with_custom_instructions(Some("Use tokio runtime".to_string()));
+        generator.set_local_package(Some("reqwest".to_string()));
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(
+                &pattern,
+                "fn main() { reqwest::get(\"url\"); }",
+                "error: unresolved import",
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    poison_recovery_tests!(RustCodeGenerator, sample_pattern);
 }

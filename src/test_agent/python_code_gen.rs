@@ -110,13 +110,13 @@ impl<'a> PythonCodeGenerator<'a> {
 #[async_trait::async_trait]
 impl<'a> LanguageCodeGenerator for PythonCodeGenerator<'a> {
     fn set_local_package(&self, package: Option<String>) {
-        *self.local_package.lock().unwrap() = package;
+        *super::lock_or_recover(&self.local_package) = package;
     }
 
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String> {
         debug!("Generating Python test code for pattern: {}", pattern.name);
 
-        let local_pkg = self.local_package.lock().unwrap().clone();
+        let local_pkg = super::lock_or_recover(&self.local_package).clone();
         let prompt = Self::create_test_prompt(
             pattern,
             self.custom_instructions.as_deref(),
@@ -142,7 +142,7 @@ impl<'a> LanguageCodeGenerator for PythonCodeGenerator<'a> {
             pattern.name
         );
 
-        let local_pkg = self.local_package.lock().unwrap().clone();
+        let local_pkg = super::lock_or_recover(&self.local_package).clone();
         let prompt = build_retry_prompt(
             pattern,
             &PYTHON_ENV,
@@ -508,4 +508,36 @@ if __name__ == '__main__':
         // Raw response is the trimmed input (no extractable Python code)
         assert_eq!(code, response.trim());
     }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_mock() {
+        use crate::llm::client::MockLlmClient;
+        let mock_client = MockLlmClient::new();
+        let generator = PythonCodeGenerator::new(&mock_client);
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(
+                &pattern,
+                "import click\nprint('old')",
+                "NameError: name 'x'",
+            )
+            .await;
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+        let mock_client = MockLlmClient::new();
+        let generator = PythonCodeGenerator::new(&mock_client);
+        generator.set_local_package(Some("click".to_string()));
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "import click", "ModuleNotFoundError")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    poison_recovery_tests!(PythonCodeGenerator, sample_pattern);
 }

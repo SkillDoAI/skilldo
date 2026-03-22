@@ -2,6 +2,59 @@
 //! real code from it, then executing that code in a container to verify it works.
 //! Language-specific logic lives in parser/codegen submodules (e.g. `python_parser`).
 
+/// Generate three mutex-poison-recovery tests for a code generator type.
+/// Covers: set_local_package after poison, generate_test_code after poison,
+/// and retry_test_code after poison.
+#[allow(unused_macros)]
+macro_rules! poison_recovery_tests {
+    ($GenType:ident, $sample_pattern:ident) => {
+        #[test]
+        fn test_mutex_poison_recovery() {
+            use crate::llm::client::MockLlmClient;
+            let client = MockLlmClient::new();
+            let gen = $GenType::new(&client);
+            let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = gen.local_package.lock().unwrap();
+                panic!("intentional poison");
+            }));
+            assert!(poisoned.is_err(), "poison setup should panic");
+            gen.set_local_package(Some("test-pkg".to_string()));
+            let val = gen.local_package.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(val.as_deref(), Some("test-pkg"));
+        }
+
+        #[tokio::test]
+        async fn test_generate_after_poison_recovers() {
+            use crate::llm::client::MockLlmClient;
+            let client = MockLlmClient::new();
+            let gen = $GenType::new(&client);
+            let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = gen.local_package.lock().unwrap();
+                panic!("poison");
+            }));
+            assert!(poisoned.is_err(), "poison setup should panic");
+            let pattern = $sample_pattern();
+            let result = gen.generate_test_code(&pattern).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_retry_after_poison_recovers() {
+            use crate::llm::client::MockLlmClient;
+            let client = MockLlmClient::new();
+            let gen = $GenType::new(&client);
+            let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = gen.local_package.lock().unwrap();
+                panic!("poison");
+            }));
+            assert!(poisoned.is_err(), "poison setup should panic");
+            let pattern = $sample_pattern();
+            let result = gen.retry_test_code(&pattern, "old code", "error msg").await;
+            assert!(result.is_ok());
+        }
+    };
+}
+
 pub mod code_generator;
 pub mod container_executor;
 pub mod executor;
@@ -24,7 +77,14 @@ pub use parser::{CodePattern, PatternCategory};
 pub use validator::{TestCodeValidator, TestResult, ValidationMode};
 
 use anyhow::Result;
+use std::sync::{Mutex, MutexGuard};
 use tracing::debug;
+
+/// Lock a mutex, recovering from poison instead of panicking.
+/// Used by all code generators for their `local_package` field.
+pub(crate) fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 use parser::frontmatter_field;
 
