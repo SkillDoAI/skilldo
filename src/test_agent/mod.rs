@@ -13,10 +13,11 @@ macro_rules! poison_recovery_tests {
             use crate::llm::client::MockLlmClient;
             let client = MockLlmClient::new();
             let gen = $GenType::new(&client);
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _guard = gen.local_package.lock().unwrap();
                 panic!("intentional poison");
             }));
+            assert!(poisoned.is_err(), "poison setup should panic");
             gen.set_local_package(Some("test-pkg".to_string()));
             let val = gen.local_package.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(val.as_deref(), Some("test-pkg"));
@@ -27,10 +28,11 @@ macro_rules! poison_recovery_tests {
             use crate::llm::client::MockLlmClient;
             let client = MockLlmClient::new();
             let gen = $GenType::new(&client);
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _guard = gen.local_package.lock().unwrap();
                 panic!("poison");
             }));
+            assert!(poisoned.is_err(), "poison setup should panic");
             let pattern = $sample_pattern();
             let result = gen.generate_test_code(&pattern).await;
             assert!(result.is_ok());
@@ -41,10 +43,11 @@ macro_rules! poison_recovery_tests {
             use crate::llm::client::MockLlmClient;
             let client = MockLlmClient::new();
             let gen = $GenType::new(&client);
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _guard = gen.local_package.lock().unwrap();
                 panic!("poison");
             }));
+            assert!(poisoned.is_err(), "poison setup should panic");
             let pattern = $sample_pattern();
             let result = gen.retry_test_code(&pattern, "old code", "error msg").await;
             assert!(result.is_ok());
