@@ -410,4 +410,67 @@ func main() {
         assert!(code.contains("package main"));
         assert!(!code.contains("~~~"));
     }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_mock() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = GoCodeGenerator::new(&mock_client);
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "package main\nfunc main() {}", "compile error: x")
+            .await;
+        assert!(result.is_ok());
+        let code = result.unwrap();
+        assert!(!code.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = GoCodeGenerator::new(&mock_client)
+            .with_custom_instructions(Some("Use table-driven tests".to_string()));
+        generator.set_local_package(Some("github.com/go-chi/chi/v5".to_string()));
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "package main\nfunc main() {}", "undefined: chi")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_extract_code_generic_block_with_known_tag_on_first_line() {
+        // Generic ``` block where the first content line is a known language tag "go"
+        // This exercises the branch that strips the tag from a generic fence block
+        let response = "```\ngo\npackage main\n\nfunc main() {}\n```";
+        let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains("package main"),
+            "should strip 'go' tag from generic block: {code}"
+        );
+        assert!(!code.starts_with("go"), "tag should be stripped: {code}");
+    }
+
+    #[test]
+    fn test_extract_code_unclosed_go_fence() {
+        // A ```go block with no closing fence — falls through to generic or raw
+        let response = "```go\npackage main\nfunc main() {}";
+        let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
+        // Should fall through to raw code since there's no closing fence
+        assert!(code.contains("package main"));
+    }
+
+    #[test]
+    fn test_extract_code_generic_block_single_line() {
+        // Generic ``` block with single-line content (no newline after trim).
+        // Exercises the `else` branch of `split_once('\n')` in the generic path.
+        let response = "```\nfmt.Println(\"hi\")\n```";
+        let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
+        assert_eq!(code, "fmt.Println(\"hi\")");
+    }
 }

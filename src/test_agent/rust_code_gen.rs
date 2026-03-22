@@ -414,4 +414,44 @@ fn main() {
             code
         );
     }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_mock() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = RustCodeGenerator::new(&mock_client);
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(
+                &pattern,
+                "fn main() { println!(\"old\"); }",
+                "error[E0425]: cannot find value `x`",
+            )
+            .await;
+        assert!(result.is_ok());
+        let code = result.unwrap();
+        assert!(!code.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retry_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+
+        let mock_client = MockLlmClient::new();
+        let generator = RustCodeGenerator::new(&mock_client)
+            .with_custom_instructions(Some("Use tokio runtime".to_string()));
+        generator.set_local_package(Some("reqwest".to_string()));
+
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(
+                &pattern,
+                "fn main() { reqwest::get(\"url\"); }",
+                "error: unresolved import",
+            )
+            .await;
+        assert!(result.is_ok());
+    }
 }
