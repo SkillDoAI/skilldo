@@ -117,6 +117,9 @@ impl ContainerExecutor {
                 })
                 .and_then(|c| extract_go_module_name(&c))
             {
+                // Validate module name before shell interpolation (defense in depth —
+                // Go module paths can't contain shell metacharacters in practice)
+                sanitize_dep_name(&module).map_err(|e| anyhow::anyhow!(e))?;
                 if go_dep_needs_replace(deps, &module) {
                     lines.push(format!("go mod edit -replace '{module}=/src'"));
                 }
