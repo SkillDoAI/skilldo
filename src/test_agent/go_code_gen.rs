@@ -101,13 +101,17 @@ impl<'a> GoCodeGenerator<'a> {
 #[async_trait::async_trait]
 impl<'a> LanguageCodeGenerator for GoCodeGenerator<'a> {
     fn set_local_package(&self, package: Option<String>) {
-        *self.local_package.lock().unwrap() = package;
+        *self.local_package.lock().unwrap_or_else(|e| e.into_inner()) = package;
     }
 
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String> {
         debug!("Generating Go test code for pattern: {}", pattern.name);
 
-        let local_pkg = self.local_package.lock().unwrap().clone();
+        let local_pkg = self
+            .local_package
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let prompt = Self::create_test_prompt(
             pattern,
             self.custom_instructions.as_deref(),
@@ -133,7 +137,11 @@ impl<'a> LanguageCodeGenerator for GoCodeGenerator<'a> {
             pattern.name
         );
 
-        let local_pkg = self.local_package.lock().unwrap().clone();
+        let local_pkg = self
+            .local_package
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let prompt = build_retry_prompt(
             pattern,
             &GO_ENV,

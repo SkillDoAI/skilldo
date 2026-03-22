@@ -1189,6 +1189,11 @@ Rules:
 - Every "error" MUST include proof in the "evidence" field. No proof = use "warning" instead.
 - Simplified signatures are NOT errors: omitting type annotations, return types, or optional
   params is acceptable for a quick-reference document. Only flag wrong/nonexistent param names.
+- Unused imports are NOT errors: the ## Imports section is a reference list of available symbols,
+  not a minimal import set. Symbols listed there but not used in examples are intentional (they
+  help the AI agent discover the full API). Do NOT flag unused imports as errors or warnings.
+- Speculative future versions (e.g., "removed in 9.0") are NOT errors unless you can PROVE the
+  claim is wrong. Future predictions based on deprecation patterns are acceptable.
 - Do NOT flag code inside `### Wrong:` sections. Those examples are INTENTIONALLY broken.
 - Timestamps and dates may be in the future relative to your training data — that is fine.
   Only flag date issues when a date and its weekday are inconsistent (e.g., wrong day of week).
