@@ -22,19 +22,7 @@ pub fn run(path: &str) -> Result<()> {
 
     // Security scan (YARA + unicode + injection)
     let scan_report = crate::security::scan_skill(&content);
-    if !scan_report.findings.is_empty() {
-        println!("\nSecurity scan (score {}/100):", scan_report.score);
-        for f in &scan_report.findings {
-            let icon = if f.severity >= crate::security::Severity::High {
-                "error"
-            } else {
-                "warn"
-            };
-            println!("  [{icon}] {} — {} (line {})", f.rule_id, f.message, f.line);
-        }
-    } else {
-        println!("\nSecurity scan passed (score {}/100)", scan_report.score);
-    }
+    write_security_scan(&scan_report, &mut std::io::stdout())?;
 
     let lint_errors = issues
         .iter()
@@ -54,6 +42,35 @@ pub fn run(path: &str) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Write security scan results to the given writer (testable variant).
+pub fn write_security_scan(
+    scan_report: &crate::security::ScanReport,
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
+    if !scan_report.findings.is_empty() {
+        writeln!(out, "\nSecurity scan (score {}/100):", scan_report.score)?;
+        for f in &scan_report.findings {
+            let icon = if f.severity >= crate::security::Severity::High {
+                "error"
+            } else {
+                "warn"
+            };
+            writeln!(
+                out,
+                "  [{icon}] {} — {} (line {})",
+                f.rule_id, f.message, f.line
+            )?;
+        }
+    } else {
+        writeln!(
+            out,
+            "\nSecurity scan passed (score {}/100)",
+            scan_report.score
+        )?;
+    }
     Ok(())
 }
 
@@ -187,6 +204,253 @@ mypkg.good()
         assert!(
             err.contains("security error"),
             "error should mention security: {err}"
+        );
+    }
+
+    #[test]
+    fn test_write_security_scan_with_high_and_low_findings() {
+        use crate::security::{Category, Finding, ScanReport, Severity};
+
+        let report = ScanReport {
+            findings: vec![
+                Finding {
+                    rule_id: "SD-101".into(),
+                    severity: Severity::High,
+                    category: Category::PromptInjection,
+                    message: "system tag injection".into(),
+                    line: 10,
+                    snippet: String::new(),
+                },
+                Finding {
+                    rule_id: "SD-301".into(),
+                    severity: Severity::Low,
+                    category: Category::Obfuscation,
+                    message: "minor obfuscation".into(),
+                    line: 25,
+                    snippet: String::new(),
+                },
+            ],
+            score: 83,
+        };
+
+        let mut buf = Vec::new();
+        write_security_scan(&report, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(
+            output.contains("Security scan (score 83/100):"),
+            "should show score header, got: {output}"
+        );
+        assert!(
+            output.contains("[error] SD-101"),
+            "high severity should show [error], got: {output}"
+        );
+        assert!(
+            output.contains("[warn] SD-301"),
+            "low severity should show [warn], got: {output}"
+        );
+        assert!(
+            output.contains("system tag injection"),
+            "should include finding message, got: {output}"
+        );
+        assert!(
+            output.contains("(line 10)"),
+            "should include line number, got: {output}"
+        );
+        assert!(
+            output.contains("(line 25)"),
+            "should include line number for second finding, got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_write_security_scan_no_findings() {
+        use crate::security::ScanReport;
+
+        let report = ScanReport {
+            findings: vec![],
+            score: 100,
+        };
+
+        let mut buf = Vec::new();
+        write_security_scan(&report, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(
+            output.contains("Security scan passed (score 100/100)"),
+            "clean scan should show passed message, got: {output}"
+        );
+        // Must NOT contain the findings header
+        assert!(
+            !output.contains("Security scan (score"),
+            "clean scan should not show findings header, got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_write_security_scan_critical_severity_shows_error() {
+        use crate::security::{Category, Finding, ScanReport, Severity};
+
+        let report = ScanReport {
+            findings: vec![Finding {
+                rule_id: "SD-000".into(),
+                severity: Severity::Critical,
+                category: Category::CodeExecution,
+                message: "critical threat".into(),
+                line: 1,
+                snippet: String::new(),
+            }],
+            score: 70,
+        };
+
+        let mut buf = Vec::new();
+        write_security_scan(&report, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(
+            output.contains("[error] SD-000"),
+            "critical severity (>= High) should show [error], got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_write_security_scan_medium_severity_shows_warn() {
+        use crate::security::{Category, Finding, ScanReport, Severity};
+
+        let report = ScanReport {
+            findings: vec![Finding {
+                rule_id: "SD-050".into(),
+                severity: Severity::Medium,
+                category: Category::Persistence,
+                message: "medium concern".into(),
+                line: 15,
+                snippet: String::new(),
+            }],
+            score: 95,
+        };
+
+        let mut buf = Vec::new();
+        write_security_scan(&report, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(
+            output.contains("[warn] SD-050"),
+            "medium severity (< High) should show [warn], got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_run_lint_only_errors_no_security() {
+        // A SKILL.md that has lint errors but no security findings.
+        // Missing required sections triggers lint errors.
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        // Missing frontmatter entirely -- triggers lint Error severity
+        let content = "This file has no frontmatter at all.\n";
+        std::fs::write(&skill_path, content).unwrap();
+        let result = run(skill_path.to_str().unwrap());
+        assert!(result.is_err(), "missing frontmatter should fail lint");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("lint error"),
+            "error should mention lint errors: {err}"
+        );
+    }
+
+    /// A writer that always fails, to exercise error propagation from writeln!.
+    struct FailWriter;
+    impl std::io::Write for FailWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "boom"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A writer that succeeds for `n` bytes then fails, to hit error paths
+    /// after the header writeln! succeeds but the loop writeln! fails.
+    struct FailAfterNBytes {
+        remaining: usize,
+    }
+    impl std::io::Write for FailAfterNBytes {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "quota exhausted",
+                ));
+            }
+            let n = buf.len().min(self.remaining);
+            self.remaining -= n;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_write_security_scan_write_error_with_findings() {
+        use crate::security::{Category, Finding, ScanReport, Severity};
+
+        let report = ScanReport {
+            findings: vec![Finding {
+                rule_id: "SD-999".into(),
+                severity: Severity::High,
+                category: Category::CodeExecution,
+                message: "will fail to write".into(),
+                line: 1,
+                snippet: String::new(),
+            }],
+            score: 85,
+        };
+
+        // FailWriter fails on the header writeln! (line 54)
+        let result = write_security_scan(&report, &mut FailWriter);
+        assert!(result.is_err(), "should propagate write error on header");
+    }
+
+    #[test]
+    fn test_write_security_scan_write_error_in_finding_loop() {
+        use crate::security::{Category, Finding, ScanReport, Severity};
+
+        let report = ScanReport {
+            findings: vec![Finding {
+                rule_id: "SD-999".into(),
+                severity: Severity::High,
+                category: Category::CodeExecution,
+                message: "will fail mid-write".into(),
+                line: 1,
+                snippet: String::new(),
+            }],
+            score: 85,
+        };
+
+        // Allow enough bytes for the header line to succeed,
+        // then fail on the per-finding writeln! (line 61-65).
+        // Header: "\nSecurity scan (score 85/100):\n" = 31 bytes
+        let mut writer = FailAfterNBytes { remaining: 40 };
+        let result = write_security_scan(&report, &mut writer);
+        assert!(
+            result.is_err(),
+            "should propagate write error in finding loop"
+        );
+    }
+
+    #[test]
+    fn test_write_security_scan_write_error_no_findings() {
+        use crate::security::ScanReport;
+
+        let report = ScanReport {
+            findings: vec![],
+            score: 100,
+        };
+
+        let result = write_security_scan(&report, &mut FailWriter);
+        assert!(
+            result.is_err(),
+            "should propagate write error on clean scan"
         );
     }
 }

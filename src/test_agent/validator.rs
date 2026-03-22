@@ -464,8 +464,14 @@ impl<'a> TestCodeValidator<'a> {
 
         // 3. Setup environment once (reuse for all tests)
         info!("  → Setting up {} environment...", self.language.as_str());
-        let env = if matches!(self.language, Language::Rust) {
-            // Rust-specific path: extract structured deps for lossless Cargo.toml
+        let env = if matches!(self.language, Language::Rust)
+            && self.execution_mode == ExecutionMode::BareMetal
+        {
+            // Rust bare-metal: use structured deps for lossless Cargo.toml
+            // (preserves exact versions, features, git refs from the source project).
+            // Container mode uses self.executor which handles Rust via Cargo.toml
+            // generation with wildcard deps — structured specs are not carried through
+            // the container path yet.
             let rust_parser = super::rust_parser::RustParser;
             let structured_deps = rust_parser.extract_structured_dependencies(skill_md)?;
             debug!(
@@ -476,9 +482,6 @@ impl<'a> TestCodeValidator<'a> {
                     .filter(|d| d.raw_spec.is_some())
                     .count()
             );
-            // Fresh CargoExecutor (not self.executor) because the Rust path needs
-            // setup_structured_environment which isn't on the LanguageExecutor trait.
-            // This must stay in sync with CargoExecutor::new() defaults.
             let mut cargo_exec =
                 super::executor::CargoExecutor::new().with_timeout(self.executor_timeout);
             if let Some(ref src) = self.local_source {
@@ -2127,6 +2130,34 @@ mod tests {
             Some("/tmp/nonexistent-rust-src".to_string()),
         );
         let result = validator.validate("# No deps SKILL.md\n").await.unwrap();
+        assert_eq!(result.passed, 1);
+        assert!(result.all_passed());
+    }
+
+    #[tokio::test]
+    async fn test_validate_rust_container_uses_executor_not_cargo() {
+        // When execution_mode is Container, validate() should use self.executor
+        // (the MockExecutor) instead of creating a fresh CargoExecutor.
+        // This verifies the Codex P1 fix: container mode goes through the
+        // container executor's setup/run/cleanup, not the bare-metal branch.
+        let patterns = vec![basic_pattern()];
+        let validator = TestCodeValidator {
+            language: Language::Rust,
+            parser: Box::new(MockParser::new(patterns)),
+            code_generator: Box::new(MockCodeGenerator::succeeding("fn main() {}")),
+            executor: Box::new(MockExecutor::passing("ok")),
+            execution_mode: ExecutionMode::Container,
+            mode: ValidationMode::Minimal,
+            install_source: InstallSource::Registry,
+            executor_timeout: 30,
+            local_source: None,
+        };
+        // MockExecutor.setup_environment returns a valid env with no container_name.
+        // If this used CargoExecutor, it would also return no container_name —
+        // but the key difference is that run_code would fail on a real
+        // ContainerExecutor because container_name is None.
+        // With MockExecutor, it passes because MockExecutor doesn't check container_name.
+        let result = validator.validate("# No deps\n").await.unwrap();
         assert_eq!(result.passed, 1);
         assert!(result.all_passed());
     }

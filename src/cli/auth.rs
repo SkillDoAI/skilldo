@@ -52,11 +52,16 @@ pub async fn login(config_path: Option<String>) -> Result<()> {
 
 /// Show OAuth token status for all configured providers.
 pub fn status(config_path: Option<String>) -> Result<()> {
+    status_to(config_path, &mut std::io::stdout())
+}
+
+/// Write OAuth token status to the given writer (testable variant).
+pub fn status_to(config_path: Option<String>, out: &mut dyn std::io::Write) -> Result<()> {
     let config = Config::load_with_path(config_path)?;
     let endpoints = collect_all_endpoints(&config)?;
 
     if endpoints.is_empty() {
-        println!("No OAuth endpoints configured.");
+        writeln!(out, "No OAuth endpoints configured.")?;
         return Ok(());
     }
 
@@ -71,29 +76,32 @@ pub fn status(config_path: Option<String>) -> Result<()> {
                 if tokens.is_expired() {
                     if tokens.expires_at <= now {
                         let ago = now - tokens.expires_at;
-                        println!(
+                        writeln!(
+                            out,
                             "{}: EXPIRED (expired {}s ago, has refresh token: {})",
                             endpoint.provider_name,
                             ago,
                             !tokens.refresh_token.is_empty()
-                        );
+                        )?;
                     } else {
                         let remaining = tokens.expires_at.saturating_sub(now);
-                        println!(
+                        writeln!(
+                            out,
                             "{}: EXPIRING SOON (expires in {}s, will auto-refresh)",
                             endpoint.provider_name, remaining
-                        );
+                        )?;
                     }
                 } else {
                     let remaining = tokens.expires_at.saturating_sub(now);
-                    println!(
+                    writeln!(
+                        out,
                         "{}: VALID (expires in {}s)",
                         endpoint.provider_name, remaining
-                    );
+                    )?;
                 }
             }
             None => {
-                println!("{}: NOT LOGGED IN", endpoint.provider_name);
+                writeln!(out, "{}: NOT LOGGED IN", endpoint.provider_name)?;
             }
         }
     }
@@ -103,17 +111,22 @@ pub fn status(config_path: Option<String>) -> Result<()> {
 
 /// Delete all stored OAuth tokens for configured providers.
 pub fn logout(config_path: Option<String>) -> Result<()> {
+    logout_to(config_path, &mut std::io::stdout())
+}
+
+/// Delete tokens with output to the given writer (testable variant).
+pub fn logout_to(config_path: Option<String>, out: &mut dyn std::io::Write) -> Result<()> {
     let config = Config::load_with_path(config_path)?;
     let endpoints = collect_all_endpoints(&config)?;
 
     if endpoints.is_empty() {
-        println!("No OAuth endpoints configured.");
+        writeln!(out, "No OAuth endpoints configured.")?;
         return Ok(());
     }
 
     for endpoint in &endpoints {
         auth::delete_tokens(&endpoint.provider_name)?;
-        info!("Logged out of {}.", endpoint.provider_name);
+        writeln!(out, "Logged out of {}.", endpoint.provider_name)?;
     }
 
     Ok(())
@@ -895,6 +908,317 @@ provider_name = "test-multi-logout-b"
                 name
             );
         }
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
+    fn status_to_captures_no_endpoints_message() {
+        let mut buf = Vec::new();
+        // Empty config → no OAuth endpoints
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n",
+        )
+        .unwrap();
+        let result = status_to(Some(tmp.path().to_string_lossy().to_string()), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("No OAuth endpoints configured"),
+            "output: {output}"
+        );
+    }
+
+    #[test]
+    fn logout_to_captures_no_endpoints_message() {
+        let mut buf = Vec::new();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n",
+        )
+        .unwrap();
+        let result = logout_to(Some(tmp.path().to_string_lossy().to_string()), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("No OAuth endpoints configured"),
+            "output: {output}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn status_to_valid_token_output() {
+        let provider = "test-cli-status-to-valid";
+        let env_var = "SKILLDO_TEST_STATUS_TO_VALID";
+        std::env::set_var(env_var, "client-id");
+
+        let tokens = auth::TokenSet {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            expires_at: u64::MAX,
+        };
+        auth::save_tokens(provider, &tokens).unwrap();
+
+        let config_path = write_temp_oauth_config(provider, env_var);
+        let mut buf = Vec::new();
+        let result = status_to(Some(config_path), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("VALID"), "expected VALID in: {output}");
+        assert!(
+            output.contains(provider),
+            "expected provider name in: {output}"
+        );
+        assert!(
+            output.contains("expires in"),
+            "expected 'expires in' in: {output}"
+        );
+
+        auth::delete_tokens(provider).unwrap();
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
+    #[serial]
+    fn status_to_expired_token_output() {
+        let provider = "test-cli-status-to-expired";
+        let env_var = "SKILLDO_TEST_STATUS_TO_EXP";
+        std::env::set_var(env_var, "client-id");
+
+        let tokens = auth::TokenSet {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            expires_at: 0,
+        };
+        auth::save_tokens(provider, &tokens).unwrap();
+
+        let config_path = write_temp_oauth_config(provider, env_var);
+        let mut buf = Vec::new();
+        let result = status_to(Some(config_path), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("EXPIRED"), "expected EXPIRED in: {output}");
+        assert!(
+            output.contains("has refresh token: true"),
+            "expected 'has refresh token: true' in: {output}"
+        );
+
+        auth::delete_tokens(provider).unwrap();
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
+    #[serial]
+    fn status_to_expired_no_refresh_token_output() {
+        let provider = "test-cli-status-to-exp-norefresh";
+        let env_var = "SKILLDO_TEST_STATUS_TO_EXPNR";
+        std::env::set_var(env_var, "client-id");
+
+        let tokens = auth::TokenSet {
+            access_token: "at".to_string(),
+            refresh_token: "".to_string(),
+            expires_at: 0,
+        };
+        auth::save_tokens(provider, &tokens).unwrap();
+
+        let config_path = write_temp_oauth_config(provider, env_var);
+        let mut buf = Vec::new();
+        let result = status_to(Some(config_path), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("EXPIRED"), "expected EXPIRED in: {output}");
+        assert!(
+            output.contains("has refresh token: false"),
+            "expected 'has refresh token: false' in: {output}"
+        );
+
+        auth::delete_tokens(provider).unwrap();
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
+    #[serial]
+    fn status_to_expiring_soon_output() {
+        let provider = "test-cli-status-to-soon";
+        let env_var = "SKILLDO_TEST_STATUS_TO_SOON";
+        std::env::set_var(env_var, "client-id");
+
+        // 30s from now — within the 60s safety buffer so is_expired() == true
+        // but expires_at > now so it hits the EXPIRING SOON branch
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tokens = auth::TokenSet {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            expires_at: now + 30,
+        };
+        assert!(tokens.is_expired());
+        auth::save_tokens(provider, &tokens).unwrap();
+
+        let config_path = write_temp_oauth_config(provider, env_var);
+        let mut buf = Vec::new();
+        let result = status_to(Some(config_path), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("EXPIRING SOON"),
+            "expected EXPIRING SOON in: {output}"
+        );
+        assert!(
+            output.contains("will auto-refresh"),
+            "expected 'will auto-refresh' in: {output}"
+        );
+
+        auth::delete_tokens(provider).unwrap();
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
+    #[serial]
+    fn status_to_not_logged_in_output() {
+        let provider = "test-cli-status-to-nologin";
+        let env_var = "SKILLDO_TEST_STATUS_TO_NOLOG";
+        std::env::set_var(env_var, "client-id");
+
+        // Ensure no token file exists
+        let _ = auth::delete_tokens(provider);
+
+        let config_path = write_temp_oauth_config(provider, env_var);
+        let mut buf = Vec::new();
+        let result = status_to(Some(config_path), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("NOT LOGGED IN"),
+            "expected NOT LOGGED IN in: {output}"
+        );
+        assert!(
+            output.contains(provider),
+            "expected provider name in: {output}"
+        );
+
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
+    #[serial]
+    fn logout_to_with_endpoints_deletes_tokens() {
+        let provider = "test-cli-logout-to-ep";
+        let env_var = "SKILLDO_TEST_LOGOUT_TO_EP";
+        std::env::set_var(env_var, "client-id");
+
+        let tokens = auth::TokenSet {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            expires_at: u64::MAX,
+        };
+        auth::save_tokens(provider, &tokens).unwrap();
+        assert!(auth::load_tokens(provider).unwrap().is_some());
+
+        let config_path = write_temp_oauth_config(provider, env_var);
+        let mut buf = Vec::new();
+        let result = logout_to(Some(config_path), &mut buf);
+        assert!(result.is_ok());
+
+        // Token should be deleted
+        assert!(
+            auth::load_tokens(provider).unwrap().is_none(),
+            "token should have been deleted"
+        );
+        // logout_to writes "Logged out of <provider>." to the buffer
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("Logged out of"),
+            "expected logout confirmation in output: {output}"
+        );
+        std::env::remove_var(env_var);
+    }
+
+    #[test]
+    fn status_to_with_invalid_config_errors() {
+        let mut buf = Vec::new();
+        let result = status_to(
+            Some("/tmp/nonexistent-skilldo-cfg-99999.toml".to_string()),
+            &mut buf,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn logout_to_with_invalid_config_errors() {
+        let mut buf = Vec::new();
+        let result = logout_to(
+            Some("/tmp/nonexistent-skilldo-cfg-99999.toml".to_string()),
+            &mut buf,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn status_to_multiple_providers_mixed_states() {
+        let env_var = "SKILLDO_TEST_STATUS_TO_MIX";
+        std::env::set_var(env_var, "client-id");
+
+        // Provider A: valid token
+        let provider_a = "test-status-to-mix-valid";
+        auth::save_tokens(
+            provider_a,
+            &auth::TokenSet {
+                access_token: "at".to_string(),
+                refresh_token: "rt".to_string(),
+                expires_at: u64::MAX,
+            },
+        )
+        .unwrap();
+
+        // Provider B: no token (NOT LOGGED IN)
+        let provider_b = "test-status-to-mix-nologin";
+        let _ = auth::delete_tokens(provider_b);
+
+        let dir = std::env::temp_dir().join("skilldo-test-status-to-mix");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("skilldo.toml");
+        std::fs::write(
+            &path,
+            format!(
+                r#"
+[llm]
+provider_type = "openai"
+model = "gpt-4o"
+oauth_auth_url = "https://auth.example.com/authorize"
+oauth_token_url = "https://auth.example.com/token"
+oauth_client_id_env = "{env_var}"
+provider_name = "{provider_a}"
+
+[generation.extract_llm]
+provider_type = "openai"
+model = "gpt-4o"
+oauth_auth_url = "https://auth2.example.com/authorize"
+oauth_token_url = "https://auth2.example.com/token"
+oauth_client_id_env = "{env_var}"
+provider_name = "{provider_b}"
+"#
+            ),
+        )
+        .unwrap();
+
+        let mut buf = Vec::new();
+        let result = status_to(Some(path.to_str().unwrap().to_string()), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("VALID"), "expected VALID in: {output}");
+        assert!(
+            output.contains("NOT LOGGED IN"),
+            "expected NOT LOGGED IN in: {output}"
+        );
+
+        auth::delete_tokens(provider_a).unwrap();
         std::env::remove_var(env_var);
     }
 }

@@ -583,4 +583,188 @@ mod tests {
         let tags = repo.list_tags_sorted().unwrap();
         assert!(!tags.is_empty(), "Expected tags after fetch");
     }
+
+    #[test]
+    fn test_repo_root_bare_repo() {
+        let dir = TempDir::new().unwrap();
+        run_git_ok(dir.path(), &["init", "--bare"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let result = repo.repo_root();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Bare repository has no working directory"),);
+    }
+
+    #[test]
+    fn test_fetch_tags_bare_repo() {
+        let dir = TempDir::new().unwrap();
+        run_git_ok(dir.path(), &["init", "--bare"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let result = repo.fetch_tags(Duration::from_secs(1));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Bare repository"));
+    }
+
+    #[test]
+    fn test_fetch_tags_timeout_or_unreachable() {
+        // Create a repo with a remote that points to an unreachable address.
+        // Either the fetch times out or fails with a connection error.
+        let dir = init_test_repo();
+        // Point origin at a non-routable address (RFC 5737 TEST-NET)
+        run_git_ok(
+            dir.path(),
+            &["remote", "add", "origin", "https://192.0.2.1/fake.git"],
+        );
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let result = repo.fetch_tags(Duration::from_millis(100));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        // Either times out or the fetch thread itself errors
+        assert!(
+            err.contains("timed out") || err.contains("Failed to fetch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_branch_name_bare_repo_no_head() {
+        // A bare repo with no commits has no HEAD reference
+        let dir = TempDir::new().unwrap();
+        run_git_ok(dir.path(), &["init", "--bare"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let result = repo.branch_name();
+        // HEAD exists but is unborn — libgit2 returns an error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_short_sha_bare_repo_no_head() {
+        // A bare repo with no commits has no HEAD commit
+        let dir = TempDir::new().unwrap();
+        run_git_ok(dir.path(), &["init", "--bare"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let result = repo.short_sha();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_describe_tags_multiple_tags_picks_nearest() {
+        let dir = init_test_repo();
+        run_git_ok(dir.path(), &["tag", "v1.0.0"]);
+        // Make two more commits, tagging the second
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+        run_git_ok(dir.path(), &["add", "a.txt"]);
+        run_git_ok(dir.path(), &["commit", "-m", "second", "--no-gpg-sign"]);
+        run_git_ok(dir.path(), &["tag", "v2.0.0"]);
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+        run_git_ok(dir.path(), &["add", "b.txt"]);
+        run_git_ok(dir.path(), &["commit", "-m", "third", "--no-gpg-sign"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        // Should find v2.0.0 (nearest tag), not v1.0.0
+        assert_eq!(tag, "v2.0.0");
+    }
+
+    #[test]
+    fn test_list_tags_sorted_two_component() {
+        // 2-component tags like "v2.0" should sort as patch 0
+        let dir = init_test_repo();
+        for tag in &["v2.0", "v1.9.9", "v2.0.0", "v2.0.1"] {
+            run_git_ok(dir.path(), &["tag", tag]);
+        }
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tags = repo.list_tags_sorted().unwrap();
+        assert_eq!(tags[0], "v2.0.1");
+        // v2.0 and v2.0.0 parse the same — either order is acceptable for equal versions
+        assert!(tags[1] == "v2.0" || tags[1] == "v2.0.0");
+    }
+
+    #[test]
+    fn test_parse_semver_leading_zeros() {
+        // Standard parse behavior with leading zeros in components
+        assert_eq!(parse_semver("v0.0.0"), Some((0, 0, 0, false)));
+        assert_eq!(parse_semver("v0.0.1"), Some((0, 0, 1, false)));
+    }
+
+    #[test]
+    fn test_parse_semver_prerelease_in_minor() {
+        // Minor component contains non-digit characters (prerelease marker)
+        // e.g. "v1.0-rc1" has minor_str "0-rc1" which contains non-digits
+        assert_eq!(parse_semver("v1.0-rc1"), Some((1, 0, 0, true)));
+    }
+
+    #[test]
+    fn test_parse_semver_non_numeric_major() {
+        // Major component that doesn't parse as u32
+        assert_eq!(parse_semver("abc.1.2"), None);
+        assert_eq!(parse_semver("v.1.2"), None);
+    }
+
+    #[test]
+    fn test_compare_semver_desc_prerelease_both() {
+        // Both are pre-releases at same version — sort by is_prerelease flag
+        // Both have is_prerelease=true so they sort Equal on that dimension
+        assert_eq!(
+            compare_semver_desc("v1.0.0-rc1", "v1.0.0-beta"),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_compare_semver_desc_different_minor() {
+        assert_eq!(
+            compare_semver_desc("v1.2.0", "v1.1.0"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_semver_desc("v1.1.0", "v1.2.0"),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn test_compare_semver_desc_different_patch() {
+        assert_eq!(
+            compare_semver_desc("v1.0.2", "v1.0.1"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_semver_desc("v1.0.1", "v1.0.2"),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn test_open_from_subdirectory() {
+        // Git2Repo::open discovers the repo from a subdirectory
+        let dir = init_test_repo();
+        let sub = dir.path().join("deep").join("nested");
+        std::fs::create_dir_all(&sub).unwrap();
+        let repo = Git2Repo::open(&sub);
+        assert!(repo.is_ok());
+    }
+
+    #[test]
+    fn test_describe_tags_with_empty_distance_segment() {
+        // Tag like "v1.0--gabc" — the distance between the two dashes is empty
+        // This exercises the `!distance.is_empty()` = false branch
+        let dir = init_test_repo();
+        run_git_ok(dir.path(), &["tag", "v1.0--gabc"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        // The empty distance segment means we don't strip — return full tag
+        assert_eq!(tag, "v1.0--gabc");
+    }
+
+    #[test]
+    fn test_describe_tags_with_g_empty_after() {
+        // Tag ending with "-g" but nothing after it — exercises after_g.is_empty() = true
+        let dir = init_test_repo();
+        run_git_ok(dir.path(), &["tag", "v1.0-g"]);
+        let repo = Git2Repo::open(dir.path()).unwrap();
+        let tag = repo.describe_tags().unwrap();
+        assert_eq!(tag, "v1.0-g");
+    }
 }

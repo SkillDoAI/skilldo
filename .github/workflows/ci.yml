@@ -68,6 +68,21 @@ jobs:
           fi
           echo "All commits follow conventional commit format"
 
+  windows-check:
+    name: windows build check
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-windows
+          cache-all-crates: true
+      - run: cargo check --all-targets
+
   fmt:
     name: cargo fmt
     needs: changes

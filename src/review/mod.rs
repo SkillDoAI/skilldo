@@ -43,18 +43,28 @@ pub struct ReviewIssue {
 
 /// Print a numbered list of review issues to stdout.
 pub fn print_review_issues(issues: &[ReviewIssue]) {
+    write_review_issues(issues, &mut std::io::stdout()).ok();
+}
+
+/// Write review issues to the given writer (testable variant).
+pub fn write_review_issues(
+    issues: &[ReviewIssue],
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
     for (i, issue) in issues.iter().enumerate() {
-        println!(
+        writeln!(
+            out,
             "  {}. [{}][{}] {}",
             i + 1,
             issue.severity,
             issue.category,
             issue.complaint
-        );
+        )?;
         if !issue.evidence.is_empty() {
-            println!("     Evidence: {}", issue.evidence);
+            writeln!(out, "     Evidence: {}", issue.evidence)?;
         }
     }
+    Ok(())
 }
 
 /// Review agent that validates SKILL.md accuracy and safety.

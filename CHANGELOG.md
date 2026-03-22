@@ -3,6 +3,23 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.4
+
+### Added
+- Java e2e test in CI matrix using google/gson v2.12.1
+
+### Changed
+- `skilldo auth logout` now prints confirmation messages to stdout (was only visible with `RUST_LOG=info`)
+- CLI output functions refactored for testability (`status_to`, `logout_to`, `write_results`, `write_security_scan`, `write_review_output`)
+
+### Fixed
+- Rust container validate() now uses the container executor instead of bare-metal CargoExecutor — fixes setup/run/cleanup mismatch where container_name was None
+- Output file write uses `NamedTempFile::persist()` for cross-platform safety (Windows `fs::rename` fails if dest exists)
+- Go module name sanitized before shell interpolation in container executor
+
+### Notes
+- Java e2e verified with both Cerebras `gpt-oss-120b` (20s, paid key) and `qwen-3-235b-a22b-instruct-2507` (259s, free key). Both produce clean SKILL.md output.
+
 ## 0.5.3
 
 ### Added

@@ -465,29 +465,24 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
 
     let output_result = generator.generate(&collected_data).await?;
 
-    // Write output — use temp file + rename to avoid overwriting known-good
-    // SKILL.md with a failed result (atomic on same filesystem)
+    // Write output — use NamedTempFile + persist() for cross-platform atomic
+    // replacement (handles Windows where fs::rename fails if dest exists).
     let output_path = Path::new(&output);
     let output_dir = output_path.parent().unwrap_or(Path::new("."));
-    let tmp_path = output_dir.join(format!(
-        ".{}.{}.tmp",
-        output_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy(),
-        std::process::id()
-    ));
-    fs::write(&tmp_path, &output_result.skill_md)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(output_dir)?;
+    std::io::Write::write_all(&mut tmp, output_result.skill_md.as_bytes())?;
 
     // Only promote to final path if the run succeeded (or --best-effort)
     if !output_result.has_unresolved_errors || best_effort {
-        fs::rename(&tmp_path, &output)?;
+        tmp.persist(output_path).map_err(|e| e.error)?;
         info!("✓ Generated SKILL.md written to {}", output);
         cleanup_stale_tmp_files(output_dir, output_path);
     } else {
+        // Keep the temp file around for inspection instead of auto-deleting
+        let kept_path = tmp.into_temp_path().keep().map_err(|e| e.error)?;
         info!(
             "⚠ Output written to {} (unresolved errors — original preserved)",
-            tmp_path.display()
+            kept_path.display()
         );
     }
 

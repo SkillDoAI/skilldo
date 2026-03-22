@@ -6,7 +6,7 @@ use tracing::info;
 use crate::config::{Config, Provider};
 use crate::detector::Language;
 use crate::llm::factory;
-use crate::review::{self, ReviewAgent};
+use crate::review::ReviewAgent;
 
 /// Run the review agent standalone against an existing SKILL.md file.
 pub async fn run(
@@ -81,20 +81,29 @@ pub async fn run(
     let result = review_agent.review(&skill_md, &lang).await?;
 
     // Print results
-    if result.passed && !result.issues.is_empty() {
-        println!("PASSED with {} warning(s):\n", result.issues.len());
-        review::print_review_issues(&result.issues);
-    } else if result.passed {
-        println!("PASSED: No issues found.");
-    } else {
-        println!("FAILED: {} issue(s) found.\n", result.issues.len());
-        review::print_review_issues(&result.issues);
-    }
+    write_review_output(&result, &mut std::io::stdout())?;
 
     if !result.passed {
         bail!("{} review issue(s) found", result.issues.len());
     }
 
+    Ok(())
+}
+
+/// Write review results to the given writer (testable variant).
+pub fn write_review_output(
+    result: &crate::review::ReviewResult,
+    out: &mut dyn std::io::Write,
+) -> Result<()> {
+    if result.passed && !result.issues.is_empty() {
+        writeln!(out, "PASSED with {} warning(s):\n", result.issues.len())?;
+        crate::review::write_review_issues(&result.issues, out)?;
+    } else if result.passed {
+        writeln!(out, "PASSED: No issues found.")?;
+    } else {
+        writeln!(out, "FAILED: {} issue(s) found.\n", result.issues.len())?;
+        crate::review::write_review_issues(&result.issues, out)?;
+    }
     Ok(())
 }
 
@@ -837,5 +846,136 @@ api_key_env = "none"
         let (name, lang) = extract_frontmatter_meta(md);
         assert_eq!(name.unwrap(), "single-quoted");
         assert_eq!(lang.unwrap(), "double-quoted");
+    }
+
+    // --- Coverage: write_review_output branches ---
+
+    #[test]
+    fn test_write_review_output_passed_no_issues() {
+        use crate::review::ReviewResult;
+
+        let result = ReviewResult {
+            passed: true,
+            malformed: false,
+            issues: vec![],
+        };
+
+        let mut buf = Vec::new();
+        write_review_output(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, "PASSED: No issues found.\n");
+    }
+
+    #[test]
+    fn test_write_review_output_passed_with_warnings() {
+        use crate::review::{ReviewIssue, ReviewResult, Severity};
+
+        let result = ReviewResult {
+            passed: true,
+            malformed: false,
+            issues: vec![
+                ReviewIssue {
+                    severity: Severity::Warning,
+                    category: "consistency".to_string(),
+                    complaint: "Minor version drift".to_string(),
+                    evidence: "1.0.0 vs 1.0.1".to_string(),
+                },
+                ReviewIssue {
+                    severity: Severity::Warning,
+                    category: "formatting".to_string(),
+                    complaint: "Trailing whitespace".to_string(),
+                    evidence: String::new(),
+                },
+            ],
+        };
+
+        let mut buf = Vec::new();
+        write_review_output(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("PASSED with 2 warning(s)"),
+            "expected passed-with-warnings header: {output}"
+        );
+        // Verify issue details are written through the injected writer
+        assert!(
+            output.contains("Minor version drift"),
+            "issue complaint should be in output: {output}"
+        );
+        assert!(
+            output.contains("1.0.0 vs 1.0.1"),
+            "issue evidence should be in output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_write_review_output_failed_with_errors() {
+        use crate::review::{ReviewIssue, ReviewResult, Severity};
+
+        let result = ReviewResult {
+            passed: false,
+            malformed: false,
+            issues: vec![ReviewIssue {
+                severity: Severity::Error,
+                category: "accuracy".to_string(),
+                complaint: "Wrong function signature".to_string(),
+                evidence: "expected foo(i32), got foo(u32)".to_string(),
+            }],
+        };
+
+        let mut buf = Vec::new();
+        write_review_output(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("FAILED: 1 issue(s) found"),
+            "expected failed header: {output}"
+        );
+        assert!(
+            output.contains("Wrong function signature"),
+            "issue complaint should be in output: {output}"
+        );
+        assert!(
+            output.contains("expected foo(i32), got foo(u32)"),
+            "issue evidence should be in output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_write_review_output_failed_with_multiple_issues() {
+        use crate::review::{ReviewIssue, ReviewResult, Severity};
+
+        let result = ReviewResult {
+            passed: false,
+            malformed: false,
+            issues: vec![
+                ReviewIssue {
+                    severity: Severity::Error,
+                    category: "accuracy".to_string(),
+                    complaint: "Missing import".to_string(),
+                    evidence: "numpy not listed".to_string(),
+                },
+                ReviewIssue {
+                    severity: Severity::Error,
+                    category: "safety".to_string(),
+                    complaint: "Prompt injection detected".to_string(),
+                    evidence: "ignore previous instructions".to_string(),
+                },
+            ],
+        };
+
+        let mut buf = Vec::new();
+        write_review_output(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("FAILED: 2 issue(s) found"),
+            "expected 2 issues in header: {output}"
+        );
+        assert!(
+            output.contains("Missing import"),
+            "first issue complaint should be in output: {output}"
+        );
+        assert!(
+            output.contains("Prompt injection detected"),
+            "second issue complaint should be in output: {output}"
+        );
     }
 }
