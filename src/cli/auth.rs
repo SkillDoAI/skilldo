@@ -1130,7 +1130,12 @@ provider_name = "test-multi-logout-b"
             auth::load_tokens(provider).unwrap().is_none(),
             "token should have been deleted"
         );
-        // logout_to doesn't write to the buffer (uses info! tracing), but should not error
+        // logout_to writes "Logged out of <provider>." to the buffer
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("Logged out of"),
+            "expected logout confirmation in output: {output}"
+        );
         std::env::remove_var(env_var);
     }
 
