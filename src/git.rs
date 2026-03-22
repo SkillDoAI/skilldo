@@ -608,9 +608,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fetch_tags_timeout() {
+    fn test_fetch_tags_timeout_or_unreachable() {
         // Create a repo with a remote that points to an unreachable address.
-        // The fetch thread will block on connection, triggering the timeout.
+        // Either the fetch times out or fails with a connection error.
         let dir = init_test_repo();
         // Point origin at a non-routable address (RFC 5737 TEST-NET)
         run_git_ok(
