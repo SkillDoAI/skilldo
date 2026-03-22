@@ -479,10 +479,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         cleanup_stale_tmp_files(output_dir, output_path);
     } else {
         // Keep the temp file around for inspection instead of auto-deleting
-        let kept = tmp.into_temp_path();
-        let kept_path = kept.to_path_buf();
-        // Prevent auto-delete by leaking the TempPath
-        std::mem::forget(kept);
+        let kept_path = tmp.into_temp_path().keep().map_err(|e| e.error)?;
         info!(
             "⚠ Output written to {} (unresolved errors — original preserved)",
             kept_path.display()
