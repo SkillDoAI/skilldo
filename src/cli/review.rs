@@ -847,4 +847,110 @@ api_key_env = "none"
         assert_eq!(name.unwrap(), "single-quoted");
         assert_eq!(lang.unwrap(), "double-quoted");
     }
+
+    // --- Coverage: write_review_output branches ---
+
+    #[test]
+    fn test_write_review_output_passed_no_issues() {
+        use crate::review::ReviewResult;
+
+        let result = ReviewResult {
+            passed: true,
+            malformed: false,
+            issues: vec![],
+        };
+
+        let mut buf = Vec::new();
+        write_review_output(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, "PASSED: No issues found.\n");
+    }
+
+    #[test]
+    fn test_write_review_output_passed_with_warnings() {
+        use crate::review::{ReviewIssue, ReviewResult, Severity};
+
+        let result = ReviewResult {
+            passed: true,
+            malformed: false,
+            issues: vec![
+                ReviewIssue {
+                    severity: Severity::Warning,
+                    category: "consistency".to_string(),
+                    complaint: "Minor version drift".to_string(),
+                    evidence: "1.0.0 vs 1.0.1".to_string(),
+                },
+                ReviewIssue {
+                    severity: Severity::Warning,
+                    category: "formatting".to_string(),
+                    complaint: "Trailing whitespace".to_string(),
+                    evidence: String::new(),
+                },
+            ],
+        };
+
+        let mut buf = Vec::new();
+        write_review_output(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("PASSED with 2 warning(s)"),
+            "expected passed-with-warnings header: {output}"
+        );
+    }
+
+    #[test]
+    fn test_write_review_output_failed_with_errors() {
+        use crate::review::{ReviewIssue, ReviewResult, Severity};
+
+        let result = ReviewResult {
+            passed: false,
+            malformed: false,
+            issues: vec![ReviewIssue {
+                severity: Severity::Error,
+                category: "accuracy".to_string(),
+                complaint: "Wrong function signature".to_string(),
+                evidence: "expected foo(i32), got foo(u32)".to_string(),
+            }],
+        };
+
+        let mut buf = Vec::new();
+        write_review_output(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("FAILED: 1 issue(s) found"),
+            "expected failed header: {output}"
+        );
+    }
+
+    #[test]
+    fn test_write_review_output_failed_with_multiple_issues() {
+        use crate::review::{ReviewIssue, ReviewResult, Severity};
+
+        let result = ReviewResult {
+            passed: false,
+            malformed: false,
+            issues: vec![
+                ReviewIssue {
+                    severity: Severity::Error,
+                    category: "accuracy".to_string(),
+                    complaint: "Missing import".to_string(),
+                    evidence: "numpy not listed".to_string(),
+                },
+                ReviewIssue {
+                    severity: Severity::Error,
+                    category: "safety".to_string(),
+                    complaint: "Prompt injection detected".to_string(),
+                    evidence: "ignore previous instructions".to_string(),
+                },
+            ],
+        };
+
+        let mut buf = Vec::new();
+        write_review_output(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("FAILED: 2 issue(s) found"),
+            "expected 2 issues in header: {output}"
+        );
+    }
 }
