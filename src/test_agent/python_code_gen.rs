@@ -549,19 +549,19 @@ if __name__ == '__main__':
 
     #[test]
     fn test_mutex_poison_recovery() {
-        // Verify that a poisoned Mutex<Option<String>> is handled by
-        // unwrap_or_else(|e| e.into_inner()) — the pattern used in production.
-        use std::sync::Mutex;
-        let m = Mutex::new(Some("original".to_string()));
+        use crate::llm::client::MockLlmClient;
+        let client = MockLlmClient::new();
+        let gen = PythonCodeGenerator::new(&client);
 
-        // Poison the mutex
+        // Poison the mutex via catch_unwind
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = m.lock().unwrap();
+            let _guard = gen.local_package.lock().unwrap();
             panic!("intentional poison");
         }));
 
-        // The production pattern: unwrap_or_else recovers the inner value
-        let recovered = m.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(recovered.as_deref(), Some("original"));
+        // Production code should recover via unwrap_or_else
+        gen.set_local_package(Some("test-pkg".to_string()));
+        let val = gen.local_package.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(val.as_deref(), Some("test-pkg"));
     }
 }

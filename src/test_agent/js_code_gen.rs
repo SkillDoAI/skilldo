@@ -534,6 +534,19 @@ console.log("✓ Test passed: Tilde");
         assert!(result.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_retry_test_code_with_local_package() {
+        use crate::llm::client::MockLlmClient;
+        let mock_client = MockLlmClient::new();
+        let generator = JsCodeGenerator::new(&mock_client);
+        generator.set_local_package(Some("express".to_string()));
+        let pattern = sample_pattern();
+        let result = generator
+            .retry_test_code(&pattern, "const x = 1;", "Error: test")
+            .await;
+        assert!(result.is_ok());
+    }
+
     #[test]
     fn test_mutex_poison_recovery() {
         use crate::llm::client::MockLlmClient;
