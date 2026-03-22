@@ -533,4 +533,22 @@ console.log("✓ Test passed: Tilde");
             .await;
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_mutex_poison_recovery() {
+        use crate::llm::client::MockLlmClient;
+        let client = MockLlmClient::new();
+        let gen = JsCodeGenerator::new(&client);
+
+        // Poison the mutex via catch_unwind
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = gen.local_package.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // Production code should recover via unwrap_or_else
+        gen.set_local_package(Some("test-pkg".to_string()));
+        let val = gen.local_package.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(val.as_deref(), Some("test-pkg"));
+    }
 }
