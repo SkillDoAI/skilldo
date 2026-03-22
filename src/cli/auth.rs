@@ -52,11 +52,16 @@ pub async fn login(config_path: Option<String>) -> Result<()> {
 
 /// Show OAuth token status for all configured providers.
 pub fn status(config_path: Option<String>) -> Result<()> {
+    status_to(config_path, &mut std::io::stdout())
+}
+
+/// Write OAuth token status to the given writer (testable variant).
+pub fn status_to(config_path: Option<String>, out: &mut dyn std::io::Write) -> Result<()> {
     let config = Config::load_with_path(config_path)?;
     let endpoints = collect_all_endpoints(&config)?;
 
     if endpoints.is_empty() {
-        println!("No OAuth endpoints configured.");
+        writeln!(out, "No OAuth endpoints configured.")?;
         return Ok(());
     }
 
@@ -71,29 +76,32 @@ pub fn status(config_path: Option<String>) -> Result<()> {
                 if tokens.is_expired() {
                     if tokens.expires_at <= now {
                         let ago = now - tokens.expires_at;
-                        println!(
+                        writeln!(
+                            out,
                             "{}: EXPIRED (expired {}s ago, has refresh token: {})",
                             endpoint.provider_name,
                             ago,
                             !tokens.refresh_token.is_empty()
-                        );
+                        )?;
                     } else {
                         let remaining = tokens.expires_at.saturating_sub(now);
-                        println!(
+                        writeln!(
+                            out,
                             "{}: EXPIRING SOON (expires in {}s, will auto-refresh)",
                             endpoint.provider_name, remaining
-                        );
+                        )?;
                     }
                 } else {
                     let remaining = tokens.expires_at.saturating_sub(now);
-                    println!(
+                    writeln!(
+                        out,
                         "{}: VALID (expires in {}s)",
                         endpoint.provider_name, remaining
-                    );
+                    )?;
                 }
             }
             None => {
-                println!("{}: NOT LOGGED IN", endpoint.provider_name);
+                writeln!(out, "{}: NOT LOGGED IN", endpoint.provider_name)?;
             }
         }
     }
@@ -103,11 +111,16 @@ pub fn status(config_path: Option<String>) -> Result<()> {
 
 /// Delete all stored OAuth tokens for configured providers.
 pub fn logout(config_path: Option<String>) -> Result<()> {
+    logout_to(config_path, &mut std::io::stdout())
+}
+
+/// Delete tokens with output to the given writer (testable variant).
+pub fn logout_to(config_path: Option<String>, out: &mut dyn std::io::Write) -> Result<()> {
     let config = Config::load_with_path(config_path)?;
     let endpoints = collect_all_endpoints(&config)?;
 
     if endpoints.is_empty() {
-        println!("No OAuth endpoints configured.");
+        writeln!(out, "No OAuth endpoints configured.")?;
         return Ok(());
     }
 
@@ -896,5 +909,42 @@ provider_name = "test-multi-logout-b"
             );
         }
         std::env::remove_var(env_var);
+    }
+
+    #[test]
+    fn status_to_captures_no_endpoints_message() {
+        let mut buf = Vec::new();
+        // Empty config → no OAuth endpoints
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n",
+        )
+        .unwrap();
+        let result = status_to(Some(tmp.path().to_string_lossy().to_string()), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("No OAuth endpoints configured"),
+            "output: {output}"
+        );
+    }
+
+    #[test]
+    fn logout_to_captures_no_endpoints_message() {
+        let mut buf = Vec::new();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            "[llm]\nprovider_type = \"anthropic\"\nmodel = \"test\"\n",
+        )
+        .unwrap();
+        let result = logout_to(Some(tmp.path().to_string_lossy().to_string()), &mut buf);
+        assert!(result.is_ok());
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("No OAuth endpoints configured"),
+            "output: {output}"
+        );
     }
 }

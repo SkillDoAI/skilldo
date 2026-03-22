@@ -4,10 +4,10 @@ use std::process::Command;
 
 use crate::config::{Config, ExecutionMode, Provider};
 
-struct CheckResult {
-    passed: Vec<String>,
-    warnings: Vec<String>,
-    errors: Vec<String>,
+pub struct CheckResult {
+    pub passed: Vec<String>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
 }
 
 impl CheckResult {
@@ -484,23 +484,29 @@ fn check_runtime_daemon(runtime: &str) -> Option<bool> {
 }
 
 fn print_results(results: &CheckResult) {
-    println!();
+    write_results(results, &mut std::io::stdout()).ok();
+}
+
+/// Write check results to the given writer (testable variant).
+pub fn write_results(results: &CheckResult, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+    writeln!(out)?;
     for msg in &results.passed {
-        println!("  \u{2713} {}", msg);
+        writeln!(out, "  \u{2713} {}", msg)?;
     }
     for msg in &results.warnings {
-        println!("  ! {}", msg);
+        writeln!(out, "  ! {}", msg)?;
     }
     for msg in &results.errors {
-        println!("  \u{2717} {}", msg);
+        writeln!(out, "  \u{2717} {}", msg)?;
     }
-    println!();
-    println!(
+    writeln!(out)?;
+    writeln!(
+        out,
         "{} passed, {} warnings, {} errors",
         results.passed.len(),
         results.warnings.len(),
         results.errors.len()
-    );
+    )
 }
 
 #[cfg(test)]
@@ -2001,5 +2007,31 @@ temperature = 0.5
         .unwrap();
         let result = run(Some(config_path.to_str().unwrap().to_string()), false);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn write_results_captures_output() {
+        let mut results = CheckResult::new();
+        results.pass("API key found".to_string());
+        results.warn("Model is deprecated".to_string());
+        results.error("Base URL unreachable".to_string());
+
+        let mut buf = Vec::new();
+        write_results(&results, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(
+            output.contains("\u{2713} API key found"),
+            "output: {output}"
+        );
+        assert!(output.contains("! Model is deprecated"), "output: {output}");
+        assert!(
+            output.contains("\u{2717} Base URL unreachable"),
+            "output: {output}"
+        );
+        assert!(
+            output.contains("1 passed, 1 warnings, 1 errors"),
+            "output: {output}"
+        );
     }
 }

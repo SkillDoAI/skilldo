@@ -22,19 +22,7 @@ pub fn run(path: &str) -> Result<()> {
 
     // Security scan (YARA + unicode + injection)
     let scan_report = crate::security::scan_skill(&content);
-    if !scan_report.findings.is_empty() {
-        println!("\nSecurity scan (score {}/100):", scan_report.score);
-        for f in &scan_report.findings {
-            let icon = if f.severity >= crate::security::Severity::High {
-                "error"
-            } else {
-                "warn"
-            };
-            println!("  [{icon}] {} — {} (line {})", f.rule_id, f.message, f.line);
-        }
-    } else {
-        println!("\nSecurity scan passed (score {}/100)", scan_report.score);
-    }
+    write_security_scan(&scan_report, &mut std::io::stdout())?;
 
     let lint_errors = issues
         .iter()
@@ -54,6 +42,35 @@ pub fn run(path: &str) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Write security scan results to the given writer (testable variant).
+pub fn write_security_scan(
+    scan_report: &crate::security::ScanReport,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<()> {
+    if !scan_report.findings.is_empty() {
+        writeln!(out, "\nSecurity scan (score {}/100):", scan_report.score)?;
+        for f in &scan_report.findings {
+            let icon = if f.severity >= crate::security::Severity::High {
+                "error"
+            } else {
+                "warn"
+            };
+            writeln!(
+                out,
+                "  [{icon}] {} — {} (line {})",
+                f.rule_id, f.message, f.line
+            )?;
+        }
+    } else {
+        writeln!(
+            out,
+            "\nSecurity scan passed (score {}/100)",
+            scan_report.score
+        )?;
+    }
     Ok(())
 }
 

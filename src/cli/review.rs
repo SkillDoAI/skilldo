@@ -6,7 +6,7 @@ use tracing::info;
 use crate::config::{Config, Provider};
 use crate::detector::Language;
 use crate::llm::factory;
-use crate::review::{self, ReviewAgent};
+use crate::review::ReviewAgent;
 
 /// Run the review agent standalone against an existing SKILL.md file.
 pub async fn run(
@@ -81,20 +81,29 @@ pub async fn run(
     let result = review_agent.review(&skill_md, &lang).await?;
 
     // Print results
-    if result.passed && !result.issues.is_empty() {
-        println!("PASSED with {} warning(s):\n", result.issues.len());
-        review::print_review_issues(&result.issues);
-    } else if result.passed {
-        println!("PASSED: No issues found.");
-    } else {
-        println!("FAILED: {} issue(s) found.\n", result.issues.len());
-        review::print_review_issues(&result.issues);
-    }
+    write_review_output(&result, &mut std::io::stdout())?;
 
     if !result.passed {
         bail!("{} review issue(s) found", result.issues.len());
     }
 
+    Ok(())
+}
+
+/// Write review results to the given writer (testable variant).
+pub fn write_review_output(
+    result: &crate::review::ReviewResult,
+    out: &mut dyn std::io::Write,
+) -> Result<()> {
+    if result.passed && !result.issues.is_empty() {
+        writeln!(out, "PASSED with {} warning(s):\n", result.issues.len())?;
+        crate::review::print_review_issues(&result.issues);
+    } else if result.passed {
+        writeln!(out, "PASSED: No issues found.")?;
+    } else {
+        writeln!(out, "FAILED: {} issue(s) found.\n", result.issues.len())?;
+        crate::review::print_review_issues(&result.issues);
+    }
     Ok(())
 }
 
