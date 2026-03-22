@@ -896,6 +896,15 @@ api_key_env = "none"
             output.contains("PASSED with 2 warning(s)"),
             "expected passed-with-warnings header: {output}"
         );
+        // Verify issue details are written through the injected writer
+        assert!(
+            output.contains("Minor version drift"),
+            "issue complaint should be in output: {output}"
+        );
+        assert!(
+            output.contains("1.0.0 vs 1.0.1"),
+            "issue evidence should be in output: {output}"
+        );
     }
 
     #[test]
@@ -919,6 +928,14 @@ api_key_env = "none"
         assert!(
             output.contains("FAILED: 1 issue(s) found"),
             "expected failed header: {output}"
+        );
+        assert!(
+            output.contains("Wrong function signature"),
+            "issue complaint should be in output: {output}"
+        );
+        assert!(
+            output.contains("expected foo(i32), got foo(u32)"),
+            "issue evidence should be in output: {output}"
         );
     }
 
@@ -951,6 +968,14 @@ api_key_env = "none"
         assert!(
             output.contains("FAILED: 2 issue(s) found"),
             "expected 2 issues in header: {output}"
+        );
+        assert!(
+            output.contains("Missing import"),
+            "first issue complaint should be in output: {output}"
+        );
+        assert!(
+            output.contains("Prompt injection detected"),
+            "second issue complaint should be in output: {output}"
         );
     }
 }
