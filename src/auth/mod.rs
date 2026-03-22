@@ -800,20 +800,7 @@ mod tests {
         assert!(!tokens.is_expired());
     }
 
-    #[test]
-    fn token_set_expired_well_inside_buffer() {
-        // Token expires in 30s — well inside the 60s buffer, always expired
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let tokens = TokenSet {
-            access_token: "test".to_string(),
-            refresh_token: "refresh".to_string(),
-            expires_at: now + 30,
-        };
-        assert!(tokens.is_expired());
-    }
+    // token_set_expired_within_buffer (line 253) already covers now+30
 
     #[test]
     fn token_path_constructs_expected_structure() {
