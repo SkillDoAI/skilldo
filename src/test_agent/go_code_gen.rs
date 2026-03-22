@@ -101,17 +101,13 @@ impl<'a> GoCodeGenerator<'a> {
 #[async_trait::async_trait]
 impl<'a> LanguageCodeGenerator for GoCodeGenerator<'a> {
     fn set_local_package(&self, package: Option<String>) {
-        *self.local_package.lock().unwrap_or_else(|e| e.into_inner()) = package;
+        *super::lock_or_recover(&self.local_package) = package;
     }
 
     async fn generate_test_code(&self, pattern: &CodePattern) -> Result<String> {
         debug!("Generating Go test code for pattern: {}", pattern.name);
 
-        let local_pkg = self
-            .local_package
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let local_pkg = super::lock_or_recover(&self.local_package).clone();
         let prompt = Self::create_test_prompt(
             pattern,
             self.custom_instructions.as_deref(),
@@ -137,11 +133,7 @@ impl<'a> LanguageCodeGenerator for GoCodeGenerator<'a> {
             pattern.name
         );
 
-        let local_pkg = self
-            .local_package
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let local_pkg = super::lock_or_recover(&self.local_package).clone();
         let prompt = build_retry_prompt(
             pattern,
             &GO_ENV,
@@ -474,49 +466,5 @@ func main() {
         assert_eq!(code, "fmt.Println(\"hi\")");
     }
 
-    #[test]
-    fn test_mutex_poison_recovery() {
-        use crate::llm::client::MockLlmClient;
-        let client = MockLlmClient::new();
-        let gen = GoCodeGenerator::new(&client);
-
-        // Poison the mutex via catch_unwind
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = gen.local_package.lock().unwrap();
-            panic!("intentional poison");
-        }));
-
-        // Production code should recover via unwrap_or_else
-        gen.set_local_package(Some("test-pkg".to_string()));
-        let val = gen.local_package.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(val.as_deref(), Some("test-pkg"));
-    }
-
-    #[tokio::test]
-    async fn test_generate_after_poison_recovers() {
-        use crate::llm::client::MockLlmClient;
-        let client = MockLlmClient::new();
-        let gen = GoCodeGenerator::new(&client);
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = gen.local_package.lock().unwrap();
-            panic!("poison");
-        }));
-        let pattern = sample_pattern();
-        let result = gen.generate_test_code(&pattern).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_retry_after_poison_recovers() {
-        use crate::llm::client::MockLlmClient;
-        let client = MockLlmClient::new();
-        let gen = GoCodeGenerator::new(&client);
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = gen.local_package.lock().unwrap();
-            panic!("poison");
-        }));
-        let pattern = sample_pattern();
-        let result = gen.retry_test_code(&pattern, "old code", "error msg").await;
-        assert!(result.is_ok());
-    }
+    poison_recovery_tests!(GoCodeGenerator, sample_pattern);
 }
