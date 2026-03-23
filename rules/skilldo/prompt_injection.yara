@@ -106,7 +106,7 @@ rule SD_106_authority_claim
         description = "False authority claims to gain trust or elevated access"
 
     strings:
-        $iam = /(i\s+am|this\s+is)\s+(your\s+)?(admin|administrator|developer|creator|owner|operator)/i
+        $iam = /(i\s+am|this\s+is)\s+your\s+(admin|administrator|developer|creator|owner|operator)/i
         $mode = /(enter|activate|enable|switch\s+to|engage|you\s+are\s+(now\s+)?in)\s+(admin|maintenance|debug|developer|emergency)\s+(mode|access|override)/i
 
     condition:
