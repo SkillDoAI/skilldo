@@ -385,18 +385,30 @@ fn strip_body_markdown_fence(content: &str) -> String {
 
     // Check if last non-empty line is a closing ```
     let last_nonempty = lines.iter().rposition(|l| !l.trim().is_empty());
-    let last_nonempty = match last_nonempty {
-        Some(i) if lines[i].trim() == "```" => i,
-        _ => return content.to_string(),
+    let has_closing_fence = matches!(last_nonempty, Some(i) if lines[i].trim() == "```");
+
+    // Strip the opening fence (and closing fence if present).
+    // Unclosed fences happen when the LLM forgets to close or output is truncated.
+    let body_end = if has_closing_fence {
+        last_nonempty.unwrap()
+    } else {
+        lines.len()
     };
 
-    warn!("Stripping wrapping ```markdown fence from body");
+    warn!(
+        "Stripping wrapping ```markdown fence from body ({})",
+        if has_closing_fence {
+            "paired"
+        } else {
+            "unclosed"
+        }
+    );
 
     // Rebuild: frontmatter + body without the wrapping fences
     let mut result: Vec<&str> = Vec::new();
     result.extend_from_slice(&lines[..=fm_end]);
     result.push(""); // blank line after frontmatter
-    result.extend_from_slice(&lines[body_start + 1..last_nonempty]);
+    result.extend_from_slice(&lines[body_start + 1..body_end]);
 
     let mut out = result.join("\n");
     out.push('\n');
@@ -740,6 +752,32 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_body_markdown_fence_unclosed() {
+        // Real-world failure: Sonnet CLI opened ```markdown but never closed it
+        let content = std::fs::read_to_string("tests/fixtures/llmposter-fence-wrap-SKILL.md")
+            .expect("fixture must exist");
+        let result = strip_body_markdown_fence(&content);
+
+        assert!(
+            !result.contains("```markdown"),
+            "Should strip unclosed ```markdown fence"
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve body content"
+        );
+        assert!(
+            result.contains("name: llmposter"),
+            "Should preserve frontmatter"
+        );
+        // Verify the normalizer didn't eat the inner code blocks
+        assert!(
+            result.contains("```rust") || result.contains("```toml"),
+            "Should preserve inner code fences"
+        );
+    }
+
+    #[test]
     fn test_strip_body_markdown_fence_no_wrapper() {
         let content = "---\nname: test\ndescription: test library.\nlicense: MIT\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n";
         let result = strip_body_markdown_fence(content);
@@ -984,13 +1022,17 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_body_markdown_fence_last_line_not_closing_fence() {
-        // Line 305: body starts with ```markdown but last non-empty line is NOT ```
+    fn test_strip_body_markdown_fence_unclosed_simple() {
+        // Body starts with ```markdown but no closing ``` — should still strip
         let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n```markdown\n## Imports\nimport foo\nNo closing fence here\n";
         let result = strip_body_markdown_fence(content);
-        assert_eq!(
-            result, content,
-            "Missing closing fence should mean no changes"
+        assert!(
+            !result.contains("```markdown"),
+            "Should strip unclosed ```markdown fence"
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve body content"
         );
     }
 

@@ -1356,7 +1356,12 @@ fn rust_hints(stage: &str) -> &'static str {
 - Follow Rust conventions: snake_case functions, CamelCase types, SCREAMING_SNAKE_CASE constants\n\
 - The ## Imports section MUST include: (1) `use` statements for public API paths, \
 (2) a fenced ```toml block with [dependencies] listing exact versions and features \
-from the Known Dependencies input. The tool uses this block to write Cargo.toml."
+from the Known Dependencies input. The tool uses this block to write Cargo.toml.\n\
+- If code examples use `mod` wrappers for isolation, each module name MUST be unique \
+and descriptive (e.g., `mod basic_usage`, `mod streaming_example`). Never reuse `mod example` \
+across multiple code blocks — duplicate module names cause E0428 compilation errors.\n\
+- Only import types that are actually used in each code example. Unused imports cause \
+compiler warnings and confuse readers."
         }
         "review_verdict" => {
             "\
