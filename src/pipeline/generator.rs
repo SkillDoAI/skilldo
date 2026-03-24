@@ -283,18 +283,16 @@ impl Generator {
         }
     }
 
-    /// Enable debug stage file dumping. Pass the library name to create
-    /// `/tmp/skilldo-{lib}-debug-{timestamp}/` with each stage's raw output.
-    pub fn with_debug_stage_files(mut self, lib_name: Option<String>) -> Self {
-        if let Some(name) = lib_name {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs().to_string())
-                .unwrap_or_else(|_| "0".to_string());
-            let dir = std::path::PathBuf::from(format!("/tmp/skilldo-{name}-debug-{ts}"));
-            std::fs::create_dir_all(&dir).ok();
-            info!("Debug stage files: {}", dir.display());
-            self.debug_stage_dir = Some(dir);
+    /// Dump each pipeline stage's raw output to the specified directory.
+    pub fn with_debug_stage_dir(mut self, dir_path: Option<String>) -> Self {
+        if let Some(path) = dir_path {
+            let dir = std::path::PathBuf::from(path);
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
+            } else {
+                info!("Debug stage files: {}", dir.display());
+                self.debug_stage_dir = Some(dir);
+            }
         }
         self
     }

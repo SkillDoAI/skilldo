@@ -160,9 +160,9 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Dump each pipeline stage's raw output to /tmp/skilldo-{lib}-debug-{timestamp}/
-        #[arg(long)]
-        debug_stage_files: bool,
+        /// Dump each pipeline stage's raw output to the specified directory
+        #[arg(long, value_name = "DIR")]
+        debug_stage_files: Option<String>,
     },
 
     /// Lint a SKILL.md file for errors
