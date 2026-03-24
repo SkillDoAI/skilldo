@@ -2,7 +2,7 @@
 //! create → review → test) with retry loops, normalization, and lint checks.
 
 use anyhow::Result;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::collector::CollectedData;
 use super::normalizer;
@@ -156,6 +156,7 @@ pub struct Generator {
     parallel_extraction: bool,      // Run extract/map/learn in parallel
     existing_skill: Option<String>, // Existing SKILL.md for update mode
     model_name: Option<String>,     // For metadata.generated-by frontmatter field
+    debug_stage_dir: Option<std::path::PathBuf>, // Dump stage outputs here
 }
 
 impl Generator {
@@ -179,6 +180,7 @@ impl Generator {
             parallel_extraction: true,
             existing_skill: None,
             model_name: None,
+            debug_stage_dir: None,
         }
     }
 
@@ -264,6 +266,36 @@ impl Generator {
 
     pub fn with_parallel_extraction(mut self, parallel: bool) -> Self {
         self.parallel_extraction = parallel;
+        self
+    }
+
+    /// Enable debug stage file dumping. Pass the library name to create
+    /// `/tmp/skilldo-{lib}-debug-{timestamp}/` with each stage's raw output.
+    /// Write a stage's output to the debug directory if enabled.
+    fn dump_stage(&self, filename: &str, content: &str) {
+        if let Some(ref dir) = self.debug_stage_dir {
+            let path = dir.join(filename);
+            if let Err(e) = std::fs::write(&path, content) {
+                warn!("Failed to write debug stage file {}: {}", path.display(), e);
+            } else {
+                debug!("Wrote debug stage file: {}", path.display());
+            }
+        }
+    }
+
+    /// Enable debug stage file dumping. Pass the library name to create
+    /// `/tmp/skilldo-{lib}-debug-{timestamp}/` with each stage's raw output.
+    pub fn with_debug_stage_files(mut self, lib_name: Option<String>) -> Self {
+        if let Some(name) = lib_name {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_else(|_| "0".to_string());
+            let dir = std::path::PathBuf::from(format!("/tmp/skilldo-{name}-debug-{ts}"));
+            std::fs::create_dir_all(&dir).ok();
+            info!("Debug stage files: {}", dir.display());
+            self.debug_stage_dir = Some(dir);
+        }
         self
     }
 
@@ -375,6 +407,10 @@ impl Generator {
 
         info!("extract/map/learn: All extractions complete");
 
+        self.dump_stage("1-extract.md", &api_surface);
+        self.dump_stage("2-map.md", &patterns);
+        self.dump_stage("3-learn.md", &context);
+
         // create: Synthesize SKILL.md
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
             // Update mode: patch existing SKILL.md
@@ -410,6 +446,8 @@ impl Generator {
                 .complete(&synthesis_prompt)
                 .await?
         };
+
+        self.dump_stage("4-create-raw.md", &skill_md);
 
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
@@ -666,6 +704,21 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     .review(&skill_md, &data.language, Some(&api_surface))
                     .await?;
 
+                self.dump_stage(
+                    &format!("6-review-attempt{}.txt", review_attempt + 1),
+                    &format!(
+                        "passed: {}\nmalformed: {}\nissues:\n{}",
+                        result.passed,
+                        result.malformed,
+                        result
+                            .issues
+                            .iter()
+                            .map(|i| format!("  [{}][{}] {}", i.severity, i.category, i.complaint))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                );
+
                 if result.malformed {
                     if review_attempt < self.review_max_retries {
                         warn!("  ⚠ review: malformed verdict, retrying");
@@ -832,6 +885,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             &data.project_urls,
             self.model_name.as_deref(),
         );
+
+        self.dump_stage("5-normalized.md", &skill_md);
 
         // Final security gate after normalization
         rescan_after_rewrite(&skill_md, self.enable_security_scan, "post-normalization")?;

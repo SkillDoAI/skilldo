@@ -45,6 +45,7 @@ pub struct GenerateOptions {
     pub telemetry: bool,
     pub no_telemetry: bool,
     pub dry_run: bool,
+    pub debug_stage_files: bool,
 }
 
 pub async fn run(opts: GenerateOptions) -> Result<()> {
@@ -78,6 +79,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         telemetry,
         no_telemetry,
         dry_run,
+        debug_stage_files,
     } = opts;
     let repo_path = Path::new(&path);
 
@@ -457,7 +459,12 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         .with_security_scan(config.generation.enable_security_scan)
         .with_review_max_retries(config.generation.review_max_retries)
         .with_container_config(config.generation.container.clone())
-        .with_parallel_extraction(config.generation.parallel_extraction);
+        .with_parallel_extraction(config.generation.parallel_extraction)
+        .with_debug_stage_files(if debug_stage_files {
+            Some(collected_data.package_name.clone())
+        } else {
+            None
+        });
 
     if let Some(ref skill) = existing_skill {
         generator = generator.with_existing_skill(skill.clone());
