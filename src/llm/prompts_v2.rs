@@ -27,10 +27,10 @@ pub fn extract_prompt(
     let scale_hint = if source_file_count > 2000 {
         "\n\n⚠️  **LARGE LIBRARY ALERT** (2000+ files)\n\
          This is a massive codebase. Focus on:\n\
-         1. **Main entry points** - Look for top-level `__init__.py` files\n\
-         2. **Most commonly used APIs** - Core functions/classes used in examples\n\
-         3. **Skip implementation details** - Only extract public interfaces\n\
-         4. **Prioritize __all__ exports** - These explicitly mark the public API\n"
+         1. **Main entry points** — top-level module exports and re-exports\n\
+         2. **Most commonly used APIs** — core functions/types used in examples\n\
+         3. **Skip implementation details** — only extract public interfaces\n\
+         4. **Prioritize documented exports** — these are the official public API\n"
     } else if source_file_count > 1000 {
         "\n\n📦 **LARGE LIBRARY** (1000+ files)\n\
          Focus on top-level public APIs and main entry points. Skip internal modules.\n"
@@ -48,7 +48,7 @@ Your job: Extract the complete public API surface.{}
 Analyze the codebase and classify it:
 - **web_framework** - Has routing decorators (@app.get, @route), request/response handling
 - **orm** - Has Model base classes, query builders, database operations
-- **cli** - Has command/argument decorators (@command, @option, argparse)
+- **cli** - Has command/argument definitions, subcommand patterns
 - **http_client** - Has HTTP method functions (get, post, put, delete)
 - **async_framework** - Heavy use of async/await patterns
 - **testing** - Assert helpers, fixtures, test runners
@@ -82,41 +82,31 @@ Example:
 
 ## Method Type Classification
 
-Clearly distinguish:
-- **function** - Module-level function
-- **method** - Instance method (regular def in class)
-- **classmethod** - Has @classmethod decorator
-- **staticmethod** - Has @staticmethod decorator
-- **property** - Has @property decorator
-  - For properties, also include: `"has_setter": bool, "has_deleter": bool`
-- **descriptor** - Has __get__, __set__, or __delete__ methods
+Clearly distinguish using language-appropriate categories:
+- **function** - Module-level / free-standing function
+- **method** - Instance method on a type/class
+- **static** - Static method (no instance receiver)
+- **constructor** - Type constructor / factory method
+- **property** / **getter** - Accessor method
+
+Use the language's own terminology (e.g., Rust: associated function vs method; \
+Python: classmethod, staticmethod, property; Java: static, instance).
 
 ## Type Hint Handling
 
-### Complex Type Extraction
-Handle these patterns:
-- `Annotated[T, metadata]` → Extract both T and metadata separately
-- `Union[A, B]` or `A | B` → List all variants
-- `Optional[T]` → Mark as `"optional": true`
-- `Generic[T]` → Extract type parameters
-- `Callable[[Args], Return]` → Extract signature structure
-
-For each parameter with type hints, include:
+### Type Information
+For each parameter, extract type information when available:
 ```json
 "type_hints": {{
   "param_name": {{
     "base_type": "str",
     "is_optional": false,
-    "default_value": null,
-    "metadata": ["Query()"] // For Annotated types
+    "default_value": null
   }}
 }}
 ```
-
-### Special Cases
-- FastAPI: Extract Query(), Path(), Body(), Depends() from Annotated
-- Pydantic: Extract Field() metadata
-- Click: Extract Option(), Argument() metadata
+Language-specific type systems (generics, enums, union types, optional types) \
+should be represented using the language's native syntax.
 
 ## Doc Comment Warning
 
@@ -160,19 +150,17 @@ Look for deprecation signals (language-specific hints may add more):
 **Categorize deprecation severity:**
 
 1. **Soft Deprecation** - "Still okay to use for now"
-   - Signals: DeprecationWarning without removal version, "discouraged", "prefer"
+   - Signals: "discouraged", "prefer X instead", no specific removal version
    - Removal timeline: >2 versions away or unspecified
-   - Replacement may not be fully stable yet
    - Mark as: `"deprecation_severity": "soft"`
 
 2. **Hard Deprecation** - "Move off of these"
-   - Signals: FutureWarning, specific removal version, "will be removed in"
-   - Removal timeline: 1-2 versions away
-   - Replacement is stable and ready
+   - Signals: specific removal version, "will be removed in X.Y"
+   - Removal timeline: 1-2 versions away, replacement is stable
    - Mark as: `"deprecation_severity": "hard"`
 
 3. **Removed** - Already gone
-   - Raises error when called
+   - Raises error or no longer exists
    - Mark as: `"deprecation_severity": "removed"`
 
 Extract:
@@ -350,48 +338,20 @@ For each distinct usage pattern:
 
 ## Key Testing Patterns to Recognize
 
-### Test Clients & Runners
-- `TestClient(app)` - FastAPI/Starlette
-- `CliRunner().invoke()` - Click
-- `self.client.get/post()` - Django
-- Pytest fixtures
+### Test Infrastructure
+- Look for test clients, test runners, mock objects, and fixtures
+- These reveal the intended API usage patterns
 
 ### Setup Methods
-- `setUpTestData(cls)` - Django class-level setup
-- `@pytest.fixture` - Pytest fixtures
-- Context managers for resource cleanup
+- Setup/teardown patterns (test initialization and cleanup)
+- Shared fixtures or test helpers
 
-### Parametrized Tests
-```python
-@pytest.mark.parametrize("input,expected", [...])
-def test_something(input, expected):
-    ...
-```
-- Extract all parameter combinations
-- Each is a distinct usage pattern
-
-### Decorator Testing
-- For decorator-heavy libraries (Click, FastAPI)
-- Show decorator order and stacking
-- Document context/object passing patterns
-
-## Special Cases
+### Parametrized / Data-Driven Tests
+- Extract all parameter combinations — each is a distinct usage pattern
 
 ### Async Patterns
-```python
-async def test_async():
-    result = await async_function()
-```
-- Mark patterns as async
-- Show proper await usage
-
-### Dependency Injection
-```python
-@app.get("/items")
-async def get_items(db = Depends(get_db)):
-    ...
-```
-- Extract dependency patterns
+- Tests using async/await — mark patterns as async
+- Note which runtime or test harness is used
 - Show how dependencies are created/injected
 
 ### Error Handling
@@ -462,7 +422,7 @@ pub fn learn_prompt(
     let mut prompt = format!(
         r#"You are analyzing documentation and changelog for {lang_str} {ecosystem_term} "{}" v{}.
 
-Your job: Extract conventions, best practices, pitfalls, and migration notes.
+Your job: Extract conventions, best practices, pitfalls, behavioral semantics, and migration notes.
 
 ## What to Extract
 
@@ -470,7 +430,6 @@ Your job: Extract conventions, best practices, pitfalls, and migration notes.
 - Recommended usage patterns
 - Naming conventions
 - Code organization guidelines
-- Type hint requirements
 - Async vs sync guidelines
 
 ### 2. PITFALLS - Common Mistakes
@@ -482,12 +441,18 @@ Why it fails: [explanation]
 Right: [correct pattern with code example]
 ```
 
-Look for:
-- Mutable default arguments
-- Missing await on async functions
-- Decorator order issues
-- Context/scope problems
-- Type validation gotchas
+Look for mistakes specific to the library's domain and language.
+
+### 2.5. BEHAVIORAL SEMANTICS - What Happens When
+
+Extract observable behaviors documented in user guides, especially:
+- Error responses: what HTTP status codes, error shapes, or exceptions result from invalid input
+- Edge cases: what happens with empty input, missing config, expired tokens, etc.
+- Side effects: does calling method X implicitly enable feature Y?
+- Return values: what does the method return in success vs failure cases
+
+These are critical for writing accurate code examples — the create stage needs to know \
+what assertions to make (e.g., "assert status == 401" requires knowing that 401 is the response).
 
 ### 3. BREAKING CHANGES
 
@@ -506,22 +471,18 @@ For each breaking change:
 
 ## Documentation Patterns to Recognize
 
-### Docstring Styles
-- ReStructuredText (`:param:`, `:returns:`)
-- Google style
-- NumPy style
-- Plain markdown
+**WARNING**: User-facing documentation may be outdated or inaccurate relative to the current \
+codebase. Treat docs as hints, not ground truth. If a doc claims a method exists or behaves \
+a certain way, it should be cross-referenced against actual code when possible. The extract \
+stage's API surface is the authoritative source for what methods exist.
 
 ### Code Examples
-- Extract working examples
+- Extract working examples from docs
 - Note which ones show pitfalls vs best practices
-- Preserve exact syntax (indentation matters!)
+- Preserve exact syntax
 
-### Warning Boxes
-```
-.. warning::
-   Don't do X because Y
-```
+### Warning/Caution Boxes
+- Look for warnings, cautions, notes, or "important" callouts in any doc format
 - These are high-value pitfalls!
 
 ### Changelog Entries
@@ -539,20 +500,10 @@ Pay special attention to these annotated entries — they indicate the most impo
 
 ## Special Considerations
 
-### Large Frameworks (Django-style)
-- Settings configuration patterns
-- Database backend differences
-- Feature gates (what requires what)
-
-### CLI Tools (Click-style)
-- Command-line argument patterns
-- Environment variable usage
-- Configuration file formats
-
-### Async Frameworks
-- Async/await requirements
-- Synchronous vs asynchronous endpoints
-- Background task patterns
+- Feature gates / conditional compilation: what requires what
+- Configuration patterns: environment variables, config files, builder options
+- Async requirements: which methods need await, which runtime is expected
+- Error handling: what error types are returned, what HTTP status codes are used
 
 ## Documented API Extraction (CRITICAL)
 
@@ -565,25 +516,14 @@ Pay special attention to these annotated entries — they indicate the most impo
    - Function/class definitions with full signatures
    - Method listings under class documentation
 
-2. **Sphinx/Autodoc Patterns** (Python docs)
-   - `.. autofunction:: module.function_name`
-   - `.. autoclass:: module.ClassName`
-   - `.. automethod:: ClassName.method_name`
-   - Module tables listing functions/classes
+2. **Documentation Headings**
+   - Function/type headings: `### function_name(params)` or `## ClassName`
+   - API reference sections listing methods and signatures
+   - Documented examples in README or docs/
 
-3. **Markdown Patterns**
-   - Function headings: `### function_name(params)` or `## ClassName`
-   - Code blocks showing imports: `from module import ClassName`
-   - Documented examples in README
-
-4. **Docstring References**
-   - Any function/class/method shown in rendered documentation
-   - Parameter descriptions indicate it's documented
-   - Return type documentation
-
-5. **Import Examples**
-   - `from package import Class, function` → Extract "Class" and "function"
-   - `import package.module` → Extract what's used from that module in examples
+3. **Import/Usage Examples**
+   - Any documented import pattern showing which types/functions are public
+   - Code examples in docs that demonstrate API usage
 
 **What to extract:**
 - Fully qualified names when possible: `module.ClassName`, `module.function_name`
@@ -610,8 +550,15 @@ Return JSON:
     "ClassName.method_name"
   ],
   "conventions": [
-    "Use async def for I/O operations",
-    "Type hints required for validation"
+    "Use async for I/O operations",
+    "Type annotations required for validation"
+  ],
+  "behavioral_semantics": [
+    {{
+      "trigger": "Calling endpoint without valid auth token",
+      "behavior": "Returns HTTP 401 with provider-specific error body",
+      "assertion": "assert_eq!(response.status(), 401)"
+    }}
   ],
   "pitfalls": [
     {{
@@ -1223,14 +1170,32 @@ LIBRARY PATTERNS:\n\
 - pytest fixtures (`@pytest.fixture`) indicate common setup patterns\n\
 - `@pytest.mark.parametrize` shows common input/output combinations\n\
 - `with` context managers reveal resource lifecycle patterns\n\
-- `conftest.py` files define shared test infrastructure"
+- `conftest.py` files define shared test infrastructure\n\
+\n\
+PYTHON TEST PATTERNS:\n\
+- Test Clients: `TestClient(app)` (FastAPI), `CliRunner().invoke()` (Click), `self.client` (Django)\n\
+- Setup: `setUpTestData(cls)` (Django), `@pytest.fixture`\n\
+- Decorator testing: Click/FastAPI decorator order and stacking\n\
+- Dependency injection: `Depends()` patterns in FastAPI"
         }
         "learn" => {
             "\
 \n\nPYTHON-SPECIFIC HINTS:\n\
 - Look for PEP references (e.g., PEP 484, PEP 723) — these contextualize design decisions\n\
 - Note Python 2→3 migration patterns (e.g., `six` compat layers, `__future__` imports)\n\
-- Check for type stub files (`.pyi`) that document the type system"
+- Check for type stub files (`.pyi`) that document the type system\n\
+\n\
+PYTHON DOC PATTERNS:\n\
+- Sphinx/Autodoc: `.. autofunction::`, `.. autoclass::`, `.. automethod::`\n\
+- ReStructuredText: `:param:`, `:returns:`, `:raises:`\n\
+- Google/NumPy docstring styles\n\
+- `.. warning::` / `.. note::` boxes are high-value pitfalls\n\
+\n\
+PYTHON PITFALL PATTERNS:\n\
+- Mutable default arguments\n\
+- Decorator order issues\n\
+- Context/scope problems\n\
+- Missing `__all__` causing import leakage"
         }
         "create" => {
             "\
