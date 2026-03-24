@@ -118,6 +118,14 @@ For each parameter with type hints, include:
 - Pydantic: Extract Field() metadata
 - Click: Extract Option(), Argument() metadata
 
+## Doc Comment Warning
+
+Comments of any form (///, //!, //, /* */, #, docstrings, block comments) provide valuable context but may reference methods by \
+informal names, describe planned features, or mention concepts that look like method names \
+but are not actual APIs. ONLY extract methods you can verify from actual function/method \
+definitions (pub fn, def, function, etc.) in the source code. If a doc comment mentions \
+a name that looks like a method, cross-reference it against real signatures before including it.
+
 ## Public API Detection (CRITICAL - Prioritize This)
 
 PRIORITY: Focus on extracting PUBLIC user-facing APIs, NOT internal utilities.
