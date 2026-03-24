@@ -130,18 +130,17 @@ a name that looks like a method, cross-reference it against real signatures befo
 
 PRIORITY: Focus on extracting PUBLIC user-facing APIs, NOT internal utilities.
 
-**How to identify PUBLIC APIs:**
-- Check `__all__` exports in `__init__.py` → These are the official public API
-- Top-level imports (e.g., `from library import MainClass`) → More public than submodules
+**How to identify PUBLIC APIs (language-specific hints may add more signals):**
 - Documented in user-facing docs → Public
 - Used in example code → Public
-- Module paths with `.compat`, `.internal`, `._private`, `._impl` → INTERNAL, deprioritize
+- Exported at the top-level module entry point → Public
+- Internal/private modules or naming conventions → INTERNAL, deprioritize
 
 **Scoring system:**
 For each API, assign a "publicity_score":
-- `"high"` - In `__all__`, top-level import, documented (PREFER THESE)
-- `"medium"` - In public module, documented but not in `__all__`
-- `"low"` - In `.compat`, `.internal`, or underscore modules (DEPRIORITIZE)
+- `"high"` - Top-level export, documented, used in examples (PREFER THESE)
+- `"medium"` - In public module, documented but not a primary export
+- `"low"` - In internal/private/compatibility modules (DEPRIORITIZE)
 
 Include in output:
 ```json
@@ -149,20 +148,14 @@ Include in output:
 "module_type": "public" // or "internal" or "compatibility"
 ```
 
-**Example:**
-- `library.MainClass` → publicity_score: "high" (top-level, in __all__)
-- `library.compat.helper_function()` → publicity_score: "low" (internal compat layer)
-
 **Extract both, but MARK internal APIs clearly** so downstream agents can prioritize correctly.
 
 ## Deprecation Tracking and Categorization
 
-Look for deprecation signals:
-- `@deprecated` decorator (hard deprecation if removal_version set)
-- `warnings.warn()` calls with DeprecationWarning or FutureWarning
-- Docstrings containing "deprecated", ".. deprecated::", "removal in"
+Look for deprecation signals (language-specific hints may add more):
 - CHANGELOG mentions of "Breaking Changes" or "Removed"
-- `raise` statements for removed APIs (fully removed)
+- Documentation mentioning "deprecated", "removal in", "will be removed"
+- Error/exception raised when calling removed APIs
 
 **Categorize deprecation severity:**
 
@@ -201,68 +194,20 @@ Extract:
 - Hard: `"migration_note": "Action required: Migrate before v3.0.0"`
 - Removed: `"migration_note": "No longer available, must use replacement"`
 
-## Decorator Stacks
-
-Record ALL decorators in order (top to bottom):
-```json
-"decorators": [
-  {{"name": "app.get", "params": {{"/items/{{{{item_id}}}}"}}}},
-  {{"name": "requires_auth", "params": {{}}}}
-]
-```
-
-## Class Hierarchies
-
-For classes, include:
-- Base classes (direct parents)
-- Whether it's abstract (has ABCMeta or abstractmethod)
-- Key metaclass info if relevant (e.g., Django models)
-
-## Library-Specific Patterns
-
-### Web Frameworks (FastAPI, Flask, Django)
-Extract:
-- Route decorators and paths
-- HTTP methods
-- Request/response type signatures
-- Dependency injection patterns
-
-### CLI Tools (Click, argparse)
-Extract:
-- Command decorators
-- Argument/option decorators with all parameters
-- Context parameter patterns
-- Command groups and nesting
-
-### ORMs (Django ORM, SQLAlchemy)
-Extract:
-- Model field definitions
-- Query method signatures
-- Relationship fields
-- Manager methods
-
-### HTTP Clients (requests, httpx)
-Extract:
-- HTTP method signatures
-- Session methods
-- Auth patterns
-- Streaming methods
-
 ## Extraction Priorities (NOT Exclusions)
 
 **HIGH PRIORITY - Extract these first:**
-- APIs in `__all__` exports
-- Top-level public APIs (e.g., `library.MainClass`)
-- Well-documented user-facing classes/functions
+- Top-level exported public APIs
+- Well-documented user-facing functions/methods/types
 - APIs used in official examples
 
 **MEDIUM PRIORITY - Extract but mark as internal:**
-- Compatibility layers (`.compat` modules)
-- Internal utilities (`.internal`, `._utils` modules)
+- Compatibility layers
+- Internal utilities
 - Undocumented but potentially useful APIs
 
 **LOW PRIORITY - Skip these:**
-- Functions/classes starting with `_` (unless in `__all__`)
+- Private/internal items (language-specific conventions)
 - Test utilities and fixtures
 - Vendored third-party code
 - Build/packaging code
@@ -1244,7 +1189,33 @@ fn python_hints(stage: &str) -> &'static str {
             "\
 \n\nPYTHON-SPECIFIC HINTS:\n\
 - Note `__version__` attributes in `__init__.py` for version detection\n\
-- `setup.py` / `setup.cfg` may define additional entry points and console scripts"
+- `setup.py` / `setup.cfg` may define additional entry points and console scripts\n\
+\n\
+PUBLIC API DETECTION (Python):\n\
+- Check `__all__` exports in `__init__.py` — these are the official public API\n\
+- Top-level imports (e.g., `from library import MainClass`) are more public than submodules\n\
+- Functions/classes starting with `_` are private (unless in `__all__`)\n\
+- Module paths with `.compat`, `.internal`, `._private`, `._impl` are INTERNAL\n\
+\n\
+DEPRECATION SIGNALS (Python):\n\
+- `@deprecated` decorator (hard deprecation if removal_version set)\n\
+- `warnings.warn()` calls with DeprecationWarning or FutureWarning\n\
+- Docstrings containing `.. deprecated::` (Sphinx directive)\n\
+- `raise` statements for fully removed APIs\n\
+\n\
+CLASS HIERARCHIES:\n\
+- Include base classes (direct parents)\n\
+- Note if abstract (has ABCMeta or abstractmethod)\n\
+- Note metaclass info if relevant (e.g., Django models)\n\
+\n\
+DECORATOR STACKS:\n\
+- Record ALL decorators in order (top to bottom) with parameters\n\
+\n\
+LIBRARY PATTERNS:\n\
+- Web Frameworks (FastAPI, Flask, Django): route decorators, HTTP methods, dependency injection\n\
+- CLI Tools (Click, argparse): command/argument/option decorators, command groups\n\
+- ORMs (Django ORM, SQLAlchemy): model fields, query methods, relationships\n\
+- HTTP Clients (requests, httpx): HTTP method signatures, session methods, auth patterns"
         }
         "map" => {
             "\
@@ -1299,7 +1270,15 @@ fn go_hints(stage: &str) -> &'static str {
 - Exported identifiers start with uppercase (e.g., `NewRouter`, `Handle`)\n\
 - `go.mod` defines module path and Go version — use for version detection\n\
 - `doc.go` files contain package-level documentation\n\
-- Interface types define the public API contract — prioritize these"
+- Interface types define the public API contract — prioritize these\n\
+\n\
+PUBLIC API DETECTION (Go):\n\
+- Uppercase first letter = exported (public): `func NewServer()`, `type Config struct`\n\
+- Lowercase first letter = unexported (private): `func newConn()`\n\
+- `internal/` packages cannot be imported by external consumers\n\
+\n\
+DEPRECATION SIGNALS (Go):\n\
+- `// Deprecated:` comment prefix (Go convention per godoc)"
         }
         "map" => {
             "\
@@ -1351,8 +1330,18 @@ fn rust_hints(stage: &str) -> &'static str {
 \n\nRUST-SPECIFIC HINTS:\n\
 - `pub` items define the public API — prioritize these over `pub(crate)` or private items\n\
 - `Cargo.toml` defines version, features, and dependencies\n\
-- `lib.rs` re-exports are the primary API surface\n\
-- Trait definitions and their implementations are the core abstraction layer"
+- `lib.rs` `pub use` re-exports are the primary API surface — these are the crate-root types\n\
+- Trait definitions and their implementations are the core abstraction layer\n\
+\n\
+PUBLIC API DETECTION (Rust):\n\
+- `pub fn`, `pub struct`, `pub enum`, `pub trait` = public API\n\
+- `pub(crate)`, `pub(super)`, no visibility modifier = NOT public\n\
+- `pub use` in `lib.rs` = re-exported at crate root (highest priority)\n\
+- Items behind `#[cfg(feature = \"...\")]` are feature-gated — note the required feature\n\
+\n\
+DEPRECATION SIGNALS (Rust):\n\
+- `#[deprecated]` attribute with optional `since` and `note` fields\n\
+- Doc comments mentioning \"deprecated\" or \"removed\""
         }
         "map" => {
             "\
@@ -1373,10 +1362,12 @@ fn rust_hints(stage: &str) -> &'static str {
         "create" => {
             "\
 \n\nRUST-SPECIFIC HINTS:\n\
-- Use Rust import conventions: prefer crate-root re-exports (`use crate_name::Type;`) when available, \
-otherwise `use crate_name::module::Type;`. Check custom_instructions for library-specific import rules.\n\
+- Use Rust import conventions: prefer crate-root re-exports (`use crate_name::Type;`) when available. \
+Check custom_instructions for library-specific import rules before using submodule paths.\n\
 - Always show error handling with `Result<T, E>` and the `?` operator\n\
-- Use `fn main() -> Result<(), Box<dyn std::error::Error>>` in runnable examples\n\
+- For async libraries, use the appropriate async runtime macro (e.g., `#[tokio::main]`, `#[async_std::main]`) \
+with `async fn main()` and `.await` on all async calls. Check the library's dependencies to determine which runtime it uses.\n\
+- Use `fn main() -> Result<(), Box<dyn std::error::Error>>` (or `async fn main()` for async) in runnable examples\n\
 - Follow Rust conventions: snake_case functions, CamelCase types, SCREAMING_SNAKE_CASE constants\n\
 - The ## Imports section MUST include: (1) `use` statements for public API paths, \
 (2) a fenced ```toml block with [dependencies] listing exact versions and features \
@@ -1399,6 +1390,8 @@ compiler warnings and confuse readers."
             "\
 \n\nRUST-SPECIFIC TEST HINTS:\n\
 - Runs via `cargo run` — write a `fn main()` program\n\
+- For async libraries, use the appropriate async runtime macro (e.g., `#[tokio::main]`, `#[async_std::main]`) \
+with `async fn main()` and `.await` on all async calls. Check the library's dependencies to determine which runtime it uses.\n\
 - Use `eprintln!` and `std::process::exit(1)` for assertion failures\n\
 - External crates from the Imports section are pre-installed; just `use` them directly"
         }
@@ -1414,7 +1407,15 @@ fn java_hints(stage: &str) -> &'static str {
 - `public` classes and methods define the public API surface\n\
 - `pom.xml` or `build.gradle` define version, dependencies, and build configuration\n\
 - Interface types and abstract classes define API contracts\n\
-- Annotations like `@Override`, `@Deprecated` indicate API lifecycle"
+- Annotations like `@Override`, `@Deprecated` indicate API lifecycle\n\
+\n\
+PUBLIC API DETECTION (Java):\n\
+- `public` modifier = public API; `protected`, package-private, `private` = not public\n\
+- Classes in `internal`, `impl`, or `util` packages are typically internal\n\
+\n\
+DEPRECATION SIGNALS (Java):\n\
+- `@Deprecated` annotation (with optional `since` and `forRemoval` fields)\n\
+- Javadoc `@deprecated` tag with migration guidance"
         }
         "map" => {
             "\
