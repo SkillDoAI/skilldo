@@ -8,6 +8,49 @@ use tracing::debug;
 use super::client::LlmClient;
 use crate::util::SecretString;
 
+/// Token usage from an LLM API response. All fields optional since
+/// not all providers return all fields.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct TokenUsage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
+    #[serde(default)]
+    pub total_tokens: u32,
+    // Anthropic uses input/output naming
+    #[serde(default, alias = "input_tokens")]
+    _input_tokens: u32,
+    #[serde(default, alias = "output_tokens")]
+    _output_tokens: u32,
+}
+
+fn log_usage(provider: &str, model: &str, usage: &Option<TokenUsage>) {
+    if let Some(u) = usage {
+        let prompt = if u.prompt_tokens > 0 {
+            u.prompt_tokens
+        } else {
+            u._input_tokens
+        };
+        let completion = if u.completion_tokens > 0 {
+            u.completion_tokens
+        } else {
+            u._output_tokens
+        };
+        let total = if u.total_tokens > 0 {
+            u.total_tokens
+        } else {
+            prompt + completion
+        };
+        if total > 0 {
+            debug!(
+                "tokens: {} prompt={} completion={} total={} ({})",
+                model, prompt, completion, total, provider
+            );
+        }
+    }
+}
+
 /// Headers that must not be overridden by extra_headers (case-insensitive).
 const PROTECTED_HEADERS: &[&str] = &[
     "authorization",
@@ -57,6 +100,7 @@ struct AnthropicMessage {
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContent>,
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +172,8 @@ impl LlmClient for AnthropicClient {
             .await
             .context("Failed to parse Anthropic API response")?;
 
+        log_usage("anthropic", &self.model, &api_response.usage);
+
         api_response
             .content
             .first()
@@ -187,6 +233,7 @@ impl OpenAIMessage {
 #[derive(Debug, Deserialize)]
 struct OpenAIResponse {
     choices: Vec<OpenAIChoice>,
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -240,8 +287,11 @@ impl OpenAIClient {
 #[async_trait]
 impl LlmClient for OpenAIClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
-        // GPT-5+ models use max_completion_tokens instead of max_tokens
-        let (max_tokens, max_completion_tokens) = if self.model.starts_with("gpt-5") {
+        // GPT-5+ models use max_completion_tokens instead of max_tokens.
+        // max_tokens = 0 means "omit from request, let provider decide".
+        let (max_tokens, max_completion_tokens) = if self.max_tokens == 0 {
+            (None, None)
+        } else if self.model.starts_with("gpt-5") {
             (None, Some(self.max_tokens))
         } else {
             (Some(self.max_tokens), None)
@@ -324,6 +374,8 @@ impl LlmClient for OpenAIClient {
             .await
             .context("Failed to parse OpenAI API response")?;
 
+        log_usage("openai", &self.model, &api_response.usage);
+
         let choice = api_response
             .choices
             .first()
@@ -385,8 +437,20 @@ struct GeminiPart {
 }
 
 #[derive(Debug, Deserialize)]
+struct GeminiUsageMetadata {
+    #[serde(default, rename = "promptTokenCount")]
+    prompt_token_count: u32,
+    #[serde(default, rename = "candidatesTokenCount")]
+    candidates_token_count: u32,
+    #[serde(default, rename = "totalTokenCount")]
+    total_token_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
 struct GeminiResponse {
     candidates: Vec<GeminiCandidate>,
+    #[serde(default, rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -437,9 +501,13 @@ impl LlmClient for GeminiClient {
                     text: prompt.to_string(),
                 }],
             }],
-            generation_config: Some(GeminiGenerationConfig {
-                max_output_tokens: self.max_tokens,
-            }),
+            generation_config: if self.max_tokens == 0 {
+                None
+            } else {
+                Some(GeminiGenerationConfig {
+                    max_output_tokens: self.max_tokens,
+                })
+            },
         };
 
         debug!("Calling Gemini API with model: {}", self.model);
@@ -484,6 +552,13 @@ impl LlmClient for GeminiClient {
             .json()
             .await
             .context("Failed to parse Gemini API response")?;
+
+        if let Some(ref u) = api_response.usage_metadata {
+            debug!(
+                "tokens: {} prompt={} completion={} total={} (gemini)",
+                self.model, u.prompt_token_count, u.candidates_token_count, u.total_token_count
+            );
+        }
 
         api_response
             .candidates
@@ -535,6 +610,7 @@ struct ResponsesInputContent {
 #[derive(Debug, Deserialize)]
 struct ResponsesResponse {
     output: Vec<ResponsesOutput>,
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -593,7 +669,11 @@ impl LlmClient for ChatGPTClient {
                     text: prompt.to_string(),
                 }],
             }],
-            max_output_tokens: Some(self.max_tokens),
+            max_output_tokens: if self.max_tokens == 0 {
+                None
+            } else {
+                Some(self.max_tokens)
+            },
             store: false,
         };
 
@@ -647,6 +727,8 @@ impl LlmClient for ChatGPTClient {
             .json()
             .await
             .context("Failed to parse Responses API response")?;
+
+        log_usage("chatgpt", &self.model, &api_response.usage);
 
         let text: String = api_response
             .output

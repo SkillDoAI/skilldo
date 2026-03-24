@@ -47,6 +47,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 # Override max output tokens per LLM request.
 # Defaults: anthropic=8192, openai=8192, openai-compatible=16384, gemini=8192
+# Set to 0 to omit from the request (let the provider use its own default).
 # max_tokens = 8192
 
 # Number of automatic retries on network/API errors (default: 10)

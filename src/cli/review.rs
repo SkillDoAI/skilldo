@@ -78,7 +78,7 @@ pub async fn run(
     let review_agent =
         ReviewAgent::new(client.as_ref(), config.prompts.review_custom.clone()).with_strict(true);
 
-    let result = review_agent.review(&skill_md, &lang).await?;
+    let result = review_agent.review(&skill_md, &lang, None).await?;
 
     // Print results
     write_review_output(&result, &mut std::io::stdout())?;

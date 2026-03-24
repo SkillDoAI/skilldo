@@ -3,6 +3,25 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.6
+
+### Added
+- API surface from extract stage passed to review for hallucination detection — review can now cross-reference documented methods against the actual source API
+- Token usage logging at debug level for all 4 providers (Anthropic, OpenAI, Gemini, ChatGPT)
+- Test failure compiler errors now logged at warn level (first 5 lines) instead of only debug
+- `max_tokens = 0` in config omits the field from API requests, letting the provider use its default
+
+### Fixed
+- Normalizer strips unclosed `\`\`\`markdown` fence wraps — Sonnet 4.6 sometimes opens the fence but never closes it
+- Normalizer ordering: duplicate frontmatter stripping now runs before meta-text stripping, preventing accidental removal of valid frontmatter content
+- Go code extractor refactored to use `find_fenced_blocks()` with tag priority, matching Python/Rust/Java — fixes silent extraction of bash blocks instead of Go code
+- Test agent strips `optional = true` from structured deps when writing temp Cargo.toml — optional crate features (like `reqwest`) are now available in test binaries
+- Rust create-stage hint no longer tells models to use submodule import paths (`crate::module::Type`), instead defers to custom_instructions for library-specific import rules
+- Review prompt accuracy rule strengthened to flag methods not found in the Known API Surface as hallucinations
+
+### Changed
+- Rust create-stage hints: unique `mod` names required per code block, unused imports flagged
+
 ## 0.5.5
 
 ### Changed

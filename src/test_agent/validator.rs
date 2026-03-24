@@ -565,11 +565,10 @@ impl<'a> TestCodeValidator<'a> {
                     );
                 }
                 ExecutionResult::Fail(error) => {
-                    warn!("    ✗ Test failed (after retry)");
-                    debug!(
-                        "    Error: {}",
-                        error.lines().next().unwrap_or("(no error message)")
-                    );
+                    // Show first 5 lines of error at warn level for diagnosis
+                    let summary: String = error.lines().take(5).collect::<Vec<_>>().join("\n");
+                    warn!("    ✗ Test failed (after retry):\n{}", summary);
+                    debug!("    Full error:\n{}", error);
                 }
                 ExecutionResult::Timeout => {
                     warn!("    ⏱  Test timed out");

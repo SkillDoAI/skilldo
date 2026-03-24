@@ -50,6 +50,8 @@ Both Review and Test can be disabled (`--no-review`, `--no-test`) for faster ite
 
 The review agent evaluates the SKILL.md for accuracy and safety using an LLM verdict. It checks for incorrect API signatures, wrong version numbers, hallucinated features, and security issues (prompt injection, destructive commands, credential leaks).
 
+Since v0.5.6, the review receives the extract stage's API surface as ground truth context. Methods documented in the SKILL.md that do not appear in the extracted API surface are flagged as hallucinations. This cross-reference catches invented methods that LLMs sometimes generate based on plausible API patterns.
+
 If the review fails, error feedback is sent back to the Create stage for regeneration.
 
 ## Test Execution

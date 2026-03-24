@@ -662,7 +662,9 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     self.review_max_retries + 1
                 );
 
-                let result = review_agent.review(&skill_md, &data.language).await?;
+                let result = review_agent
+                    .review(&skill_md, &data.language, Some(&api_surface))
+                    .await?;
 
                 if result.malformed {
                     if review_attempt < self.review_max_retries {

@@ -298,10 +298,11 @@ impl LlmConfig {
             .unwrap_or_else(|| self.provider.to_string())
     }
 
-    /// Get max_tokens value, using provider-specific default if not specified
+    /// Get max_tokens value, using provider-specific default if not specified.
+    /// Returns 0 if explicitly set to 0 (meaning "omit from request, let provider decide").
     pub fn get_max_tokens(&self) -> u32 {
         if let Some(tokens) = self.max_tokens {
-            return tokens;
+            return tokens; // 0 = explicit "omit"
         }
 
         // Provider-specific defaults

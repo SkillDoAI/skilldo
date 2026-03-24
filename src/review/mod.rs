@@ -93,10 +93,20 @@ impl<'a> ReviewAgent<'a> {
     }
 
     /// Run the review on a SKILL.md (LLM verdict only).
-    pub async fn review(&self, skill_md: &str, language: &Language) -> Result<ReviewResult> {
+    /// `api_surface`: optional extract-stage output for cross-referencing documented APIs.
+    pub async fn review(
+        &self,
+        skill_md: &str,
+        language: &Language,
+        api_surface: Option<&str>,
+    ) -> Result<ReviewResult> {
         // LLM verdict (accuracy + safety + consistency)
-        let verdict_prompt =
-            prompts_v2::review_verdict_prompt(skill_md, self.custom_prompt.as_deref(), language);
+        let verdict_prompt = prompts_v2::review_verdict_prompt(
+            skill_md,
+            self.custom_prompt.as_deref(),
+            language,
+            api_surface,
+        );
         let verdict_response = self
             .client
             .complete(&verdict_prompt)
@@ -671,6 +681,7 @@ mod tests {
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 &Language::Python,
+                None,
             )
             .await
             .expect("review should succeed");
@@ -689,6 +700,7 @@ mod tests {
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 &Language::Python,
+                None,
             )
             .await
             .expect("review should succeed");

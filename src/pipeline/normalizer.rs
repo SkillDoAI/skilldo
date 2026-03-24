@@ -464,14 +464,15 @@ pub fn normalize_skill_md(
     // 1.5. Clean frontmatter (remove blank lines, trim --- whitespace)
     normalized = clean_frontmatter(&normalized);
 
-    // 2. Strip meta-text preamble (LLM framing text)
+    // 2. Strip duplicate frontmatter blocks (before meta-text, so meta-text
+    //    stripping doesn't accidentally eat the duplicate frontmatter content)
+    normalized = strip_duplicate_frontmatter(&normalized);
+
+    // 2.5. Strip meta-text preamble (LLM framing text)
     normalized = strip_meta_text(&normalized);
 
-    // 2.5. Strip leaked metadata from body
+    // 2.7. Strip leaked metadata from body
     normalized = strip_leaked_metadata(&normalized);
-
-    // 3. Strip duplicate frontmatter blocks
-    normalized = strip_duplicate_frontmatter(&normalized);
 
     // 4. Strip wrapping ```markdown fence from body
     normalized = strip_body_markdown_fence(&normalized);
