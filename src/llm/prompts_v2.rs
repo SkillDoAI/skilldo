@@ -1139,7 +1139,7 @@ OUTPUT FORMAT — Return a JSON object:
   "issues": [
     {{
       "severity": "error" or "warning",
-      "category": "accuracy" or "safety" or "consistency",
+      "category": "accuracy" or "safety" or "consistency" or "completeness",
       "complaint": "Clear description of what is wrong",
       "evidence": "Your proof: calculation or internal contradiction"
     }}
