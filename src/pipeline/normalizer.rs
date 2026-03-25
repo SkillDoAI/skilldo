@@ -346,24 +346,33 @@ fn strip_trailing_meta_text(content: &str) -> String {
         "i've made",
     ];
 
-    // Scan backwards from end to find where trailing meta-text starts
+    // Find trailing meta-text by scanning FORWARD from the last heading.
+    // A meta block: a meta pattern line with only subordinate content (bullets, indented)
+    // or blank lines after it through end-of-file. If there's a non-subordinate content
+    // line (heading, code fence, paragraph) after the meta pattern, it's mid-body, not trailing.
     let mut trim_from = None;
-    let mut i = lines.len();
-    while i > last_heading {
-        i -= 1;
+    for i in (last_heading + 1)..lines.len() {
         let trimmed = lines[i].trim().to_lowercase();
         if trimmed.is_empty() {
             continue;
         }
-        // If we hit a line that matches meta patterns, mark it for trimming
         if meta_patterns.iter().any(|p| trimmed.contains(p)) {
-            trim_from = Some(i);
-            // Keep scanning backwards to find the start of the meta block
-            continue;
-        }
-        // If we're in a trimming region and hit non-meta content, stop
-        if trim_from.is_some() {
-            break;
+            // Check if everything after this line to EOF is subordinate
+            // (blank, bullets, indented, or more meta patterns)
+            let all_trailing = lines[i + 1..].iter().all(|l| {
+                let t = l.trim();
+                t.is_empty()
+                    || t.starts_with('-')
+                    || t.starts_with('*')
+                    || t.starts_with("```")
+                    || l.starts_with("  ")
+                    || l.starts_with('\t')
+                    || meta_patterns.iter().any(|p| t.to_lowercase().contains(p))
+            });
+            if all_trailing {
+                trim_from = Some(i);
+                break;
+            }
         }
     }
 
@@ -1327,6 +1336,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_strip_trailing_meta_text_pattern_mid_body_last_section() {
+        // Greptile P1: "summary of" appears mid-body in the last section,
+        // with real content AFTER it. Should NOT strip anything.
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## API Reference\nHere is a summary of the available methods:\n\n### `create()`\nCreates a new instance.\n\n### `delete()`\nDeletes an instance.\n";
+        let result = strip_trailing_meta_text(content);
+        assert_eq!(
+            result, content,
+            "Meta pattern mid-body in last section with real content after should not strip"
+        );
+    }
+
     // --- ensure_frontmatter preamble handling tests ---
 
     #[test]
@@ -1451,7 +1472,7 @@ mod tests {
     #[test]
     fn test_strip_trailing_meta_text_fixes_applied_with_consecutive_meta_lines() {
         // Consecutive meta pattern lines (no non-meta content between them) are all stripped
-        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\nimport test\n\n## Core Patterns\nPatterns.\n\nFixes applied:\nWhat changed:\n- Change 1\n";
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\nimport test\n\n## Core Patterns\nPatterns.\n\nFixes applied:\nChanges made:\n- Change 1\n";
         let result = strip_trailing_meta_text(content);
         assert!(
             !result.contains("Fixes applied"),
@@ -1459,8 +1480,8 @@ mod tests {
             result
         );
         assert!(
-            !result.contains("What changed"),
-            "Should strip 'What changed'"
+            !result.contains("Changes made"),
+            "Should strip 'Changes made'"
         );
         assert!(result.contains("Patterns."));
     }
