@@ -50,6 +50,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Set to 0 to omit the field entirely from the API request, letting the
 # provider use its own default. Useful for models that reject explicit
 # max_tokens or where the provider default is higher than skilldo's.
+# NOTE: Anthropic requires max_tokens and will return an API error if set to 0.
 # max_tokens = 8192
 
 # Number of automatic retries on network/API errors (default: 10)

@@ -1160,9 +1160,8 @@ Rules:
 - Every "error" MUST include proof in the "evidence" field. No proof = use "warning" instead.
 - Simplified signatures are NOT errors: omitting type annotations, return types, or optional
   params is acceptable for a quick-reference document. Only flag wrong/nonexistent param names.
-- Unused imports: check custom_instructions for guidance. If custom_instructions say to only
-  include used types, flag unused imports as errors. Otherwise, the ## Imports section may
-  serve as a reference list of available symbols — unused entries are acceptable.
+- Unused imports are errors: the ## Imports section should only list types that appear in
+  code examples. Types listed but never used in any example are unnecessary and confuse readers.
 - Speculative future versions (e.g., "removed in 9.0") are NOT errors unless you can PROVE the
   claim is wrong. Future predictions based on deprecation patterns are acceptable.
 - Do NOT flag code inside `### Wrong:` sections. Those examples are INTENTIONALLY broken.
@@ -2256,6 +2255,14 @@ mod tests {
             Some("func NewRouter() *Router"),
             Some("table-driven test patterns"),
             Some("idiomatic Go error handling"),
+        );
+        assert!(
+            prompt.contains("KNOWN API SURFACE"),
+            "Should include API surface section"
+        );
+        assert!(
+            prompt.contains("func NewRouter() *Router"),
+            "Should embed API surface content"
         );
         assert!(
             prompt.contains("USAGE PATTERNS"),
