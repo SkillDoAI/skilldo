@@ -6,21 +6,33 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 ## 0.5.6
 
 ### Added
-- API surface from extract stage passed to review for hallucination detection — review can now cross-reference documented methods against the actual source API
+- `--debug-stage-files DIR` flag dumps each pipeline stage's raw output for diagnosis
+- Behavioral semantics extraction in learn stage — discovers observable behaviors (error codes, side effects, edge cases)
+- Review stage receives behavioral_semantics for completeness verification — flags missing behavioral coverage
 - Token usage logging at debug level for all 4 providers (Anthropic, OpenAI, Gemini, ChatGPT)
-- Test failure compiler errors now logged at warn level (first 5 lines) instead of only debug
-- `max_tokens = 0` in config omits the field from API requests, letting the provider use its default
+- Extract prompt warns against inferring methods from doc comments
+- Review checks API Reference descriptions against custom_instructions for consistency
+- "Darryl" review persona for more thorough defect detection
 
 ### Fixed
-- Normalizer strips unclosed `\`\`\`markdown` fence wraps — Sonnet 4.6 sometimes opens the fence but never closes it
-- Normalizer ordering: duplicate frontmatter stripping now runs before meta-text stripping, preventing accidental removal of valid frontmatter content
-- Go code extractor refactored to use `find_fenced_blocks()` with tag priority, matching Python/Rust/Java — fixes silent extraction of bash blocks instead of Go code
-- Test agent strips `optional = true` from structured deps when writing temp Cargo.toml — optional crate features (like `reqwest`) are now available in test binaries
-- Rust create-stage hint no longer tells models to use submodule import paths (`crate::module::Type`), instead defers to custom_instructions for library-specific import rules
-- Review prompt accuracy rule strengthened to flag methods not found in the Known API Surface as hallucinations
+- Normalizer strips unclosed markdown fence wraps (Sonnet CLI pattern)
+- Normalizer strips duplicate frontmatter when LLM prepends preamble text
+- Normalizer strips trailing AI review notes ("Summary of fixes", "Changes made")
+- Normalizer ordering: duplicate frontmatter stripped before meta-text
+- Go code extractor refactored to use `find_fenced_blocks()` with tag priority
+- Test agent strips `optional = true` from structured deps in temp Cargo.toml
+- Rust create hint no longer contradicts custom_instructions on import paths
+- `max_tokens = 0` in config omits the field from API requests
 
 ### Changed
-- Rust create-stage hints: unique `mod` names required per code block, unused imports flagged
+- Extract/map/learn prompts language-gated: Python-specific patterns moved to python_hints()
+- Rust-specific public API detection, deprecation signals, and async hints added
+- Go, Java public API detection and deprecation hints added
+- Create prompt explicitly bans AI self-commentary and process notes
+- Review prompt checks for leaked AI commentary as consistency error
+- Unused imports rule deferred to custom_instructions instead of blanket exemption
+- Test failure compiler errors logged at warn level (first 5 lines visible without debug)
+- Async runtime hint is runtime-agnostic (not tokio-specific)
 
 ## 0.5.5
 

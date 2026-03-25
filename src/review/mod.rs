@@ -93,12 +93,17 @@ impl<'a> ReviewAgent<'a> {
     }
 
     /// Run the review on a SKILL.md (LLM verdict only).
-    /// `api_surface`: optional extract-stage output for cross-referencing documented APIs.
+    /// Stage outputs are optional context for cross-referencing:
+    /// - `api_surface`: extract-stage output (method signatures — ground truth)
+    /// - `patterns`: map-stage output (usage patterns from tests)
+    /// - `context`: learn-stage output (conventions, pitfalls, behavioral semantics)
     pub async fn review(
         &self,
         skill_md: &str,
         language: &Language,
         api_surface: Option<&str>,
+        patterns: Option<&str>,
+        context: Option<&str>,
     ) -> Result<ReviewResult> {
         // LLM verdict (accuracy + safety + consistency)
         let verdict_prompt = prompts_v2::review_verdict_prompt(
@@ -106,6 +111,8 @@ impl<'a> ReviewAgent<'a> {
             self.custom_prompt.as_deref(),
             language,
             api_surface,
+            patterns,
+            context,
         );
         let verdict_response = self
             .client
@@ -682,6 +689,8 @@ mod tests {
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 &Language::Python,
                 None,
+                None,
+                None,
             )
             .await
             .expect("review should succeed");
@@ -700,6 +709,8 @@ mod tests {
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 &Language::Python,
+                None,
+                None,
                 None,
             )
             .await

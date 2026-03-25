@@ -47,7 +47,9 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 # Override max output tokens per LLM request.
 # Defaults: anthropic=8192, openai=8192, openai-compatible=16384, gemini=8192
-# Set to 0 to omit from the request (let the provider use its own default).
+# Set to 0 to omit the field entirely from the API request, letting the
+# provider use its own default. Useful for models that reject explicit
+# max_tokens or where the provider default is higher than skilldo's.
 # max_tokens = 8192
 
 # Number of automatic retries on network/API errors (default: 10)
@@ -236,3 +238,13 @@ skilldo config check --config my-config.toml
 ```
 
 Reports missing fields, invalid provider names, missing language tools (uv/cargo/go/node/javac), container runtime availability, and malformed `extra_body_json` before you burn API credits.
+
+## Debugging Stage Output
+
+Use `--debug-stage-files DIR` to dump each pipeline stage's raw LLM output to a directory for diagnosis:
+
+```bash
+skilldo generate /path/to/repo --debug-stage-files ./debug-out
+```
+
+This writes one file per stage (extract, map, learn, create, review) containing the raw text returned by the LLM before any normalization or parsing. Useful for diagnosing prompt regressions, truncated outputs, or unexpected LLM formatting without re-running the full pipeline.

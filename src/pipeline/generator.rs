@@ -5,6 +5,33 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::collector::CollectedData;
+
+/// Extract the behavioral_semantics JSON array from the learn stage output.
+/// Returns None if not found. Uses simple string matching to avoid fragile JSON parsing.
+fn extract_behavioral_semantics(learn_output: &str) -> Option<String> {
+    let key = "\"behavioral_semantics\"";
+    let start = learn_output.find(key)?;
+    let after_key = &learn_output[start + key.len()..];
+    let bracket_start = after_key.find('[')?;
+    let array_start = start + key.len() + bracket_start;
+
+    // Find matching closing bracket, tracking nesting
+    let mut depth = 0;
+    for (i, ch) in learn_output[array_start..].char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    let extracted = &learn_output[array_start..=array_start + i];
+                    return Some(format!("behavioral_semantics: {}", extracted));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
 use super::normalizer;
 use crate::config::{ContainerConfig, PromptsConfig};
 use crate::lint::{Severity, SkillLinter};
@@ -698,8 +725,16 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     self.review_max_retries + 1
                 );
 
+                // Extract behavioral_semantics from learn context for review
+                let behavioral = extract_behavioral_semantics(&context);
                 let result = review_agent
-                    .review(&skill_md, &data.language, Some(&api_surface))
+                    .review(
+                        &skill_md,
+                        &data.language,
+                        Some(&api_surface),
+                        None, // patterns too large for review context
+                        behavioral.as_deref(),
+                    )
                     .await?;
 
                 self.dump_stage(
@@ -2901,7 +2936,7 @@ testpkg.run()
     #[async_trait::async_trait]
     impl LlmClient for FailingReviewClient {
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-            if prompt.contains("quality gate for a generated SKILL.md") {
+            if prompt.contains("SKILL.MD UNDER REVIEW") {
                 Ok(r#"{"passed": false, "issues": [{"complaint": "Wrong function signature for foo.bar()", "severity": "error", "category": "accuracy", "evidence": "signature is bar(x) not bar()"}]}"#.to_string())
             } else {
                 // For extract/map/learn/create prompts, delegate to MockLlmClient
@@ -2916,7 +2951,7 @@ testpkg.run()
     #[async_trait::async_trait]
     impl LlmClient for MalformedReviewClient {
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-            if prompt.contains("quality gate for a generated SKILL.md") {
+            if prompt.contains("SKILL.MD UNDER REVIEW") {
                 Ok("I think this looks fine overall.".to_string())
             } else {
                 MockLlmClient::new().complete(prompt).await
@@ -2941,7 +2976,7 @@ testpkg.run()
     #[async_trait::async_trait]
     impl LlmClient for FailThenPassReviewClient {
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-            if prompt.contains("quality gate for a generated SKILL.md") {
+            if prompt.contains("SKILL.MD UNDER REVIEW") {
                 let n = self
                     .call_count
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -2964,7 +2999,7 @@ testpkg.run()
     #[async_trait::async_trait]
     impl LlmClient for SafetyReviewClient {
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-            if prompt.contains("quality gate for a generated SKILL.md") {
+            if prompt.contains("SKILL.MD UNDER REVIEW") {
                 Ok(r#"{"passed": false, "issues": [{"complaint": "Contains dangerous code execution pattern", "severity": "error", "category": "safety", "evidence": "line 42: executes arbitrary user input"}]}"#.to_string())
             } else {
                 MockLlmClient::new().complete(prompt).await
