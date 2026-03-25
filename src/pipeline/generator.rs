@@ -12,7 +12,16 @@ fn extract_behavioral_semantics(learn_output: &str) -> Option<String> {
     let key = "\"behavioral_semantics\"";
     let start = learn_output.find(key)?;
     let after_key = &learn_output[start + key.len()..];
+    // Verify the [ comes immediately after the key (only whitespace/colon between)
+    // to avoid grabbing a later unrelated array when the value is null/string
     let bracket_start = after_key.find('[')?;
+    let between = &after_key[..bracket_start];
+    if between
+        .chars()
+        .any(|c| c != ' ' && c != ':' && c != '\n' && c != '\r' && c != '\t')
+    {
+        return None; // Something other than whitespace/colon between key and [ — wrong array
+    }
     let array_start = start + key.len() + bracket_start;
 
     // Find matching closing bracket, tracking nesting
@@ -3298,6 +3307,18 @@ None known.
         assert!(
             result.is_none(),
             "Should return None when behavioral_semantics key is absent"
+        );
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_null_with_later_array() {
+        // P1 bug: key is null but a later field has an array — should NOT grab it
+        let input = r#"{"behavioral_semantics": null, "patterns": ["x", "y"]}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(
+            result.is_none(),
+            "Should not grab a later array when value is null: {:?}",
+            result
         );
     }
 
