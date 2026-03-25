@@ -1515,4 +1515,120 @@ mod tests {
             result
         );
     }
+
+    // --- Coverage gap tests ---
+
+    #[test]
+    fn test_ensure_frontmatter_missing_version_and_metadata() {
+        // Frontmatter has name and description but no version AND no metadata
+        // This exercises line 76: !has_version && !has_metadata
+        let content =
+            "---\nname: mylib\ndescription: A library.\nlicense: MIT\n---\n\n## Imports\n";
+        let result = ensure_frontmatter(content, "mylib", "1.0.0", "python", Some("MIT"), None);
+
+        assert!(
+            result.contains("metadata:"),
+            "Should replace with proper frontmatter containing metadata. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("version: \"1.0.0\""),
+            "Should have version in new frontmatter"
+        );
+    }
+
+    #[test]
+    fn test_ensure_frontmatter_broken_no_closing_delimiter() {
+        // Content starts with --- but has no second --- delimiter
+        // This exercises line 109: no closing --- found
+        let content = "---\nname: mylib\ndescription: A library.\nversion: 1.0\n";
+        let result = ensure_frontmatter(content, "mylib", "1.0", "python", None, None);
+
+        // Should fall through and add new frontmatter since existing is broken
+        assert!(
+            result.contains("name:"),
+            "Should produce output with frontmatter. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_clean_frontmatter_with_lines_before_opening_delimiter() {
+        // Lines before the opening --- delimiter exercises lines 185-186
+        let content =
+            "preamble line\n---\nname: test\n\ndescription: test.\nversion: 1.0\n---\n\n## Imports\n";
+        let result = clean_frontmatter(content);
+
+        assert!(
+            result.contains("preamble line"),
+            "Should preserve lines before frontmatter"
+        );
+        // Blank lines inside frontmatter should be removed
+        let fm_start = result.find("---\n").unwrap();
+        let fm_end = result[fm_start + 4..].find("\n---").unwrap();
+        let frontmatter = &result[fm_start + 4..fm_start + 4 + fm_end];
+        assert!(
+            !frontmatter.contains("\n\n"),
+            "Should remove blank lines from frontmatter. Got:\n{}",
+            frontmatter
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_no_frontmatter() {
+        // Content without frontmatter — exercises line 220: None branch
+        let content = "No frontmatter here\ngenerated-by: skilldo/gpt-5.2\nMore content\n";
+        let result = strip_leaked_metadata(content);
+        assert_eq!(
+            result, content,
+            "No frontmatter should mean no changes for leaked metadata stripping"
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_trailing_newline_preserved() {
+        // Exercises line 255-257: the trailing newline fixup after stripping
+        let content = "---\nname: test\ndescription: test lib\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Overview\n\ngenerated-by: skilldo/0.2.4\n";
+        let result = strip_leaked_metadata(content);
+
+        assert!(
+            !result
+                .split("\n---\n")
+                .nth(1)
+                .unwrap()
+                .contains("generated-by: skilldo"),
+            "Should strip leaked metadata"
+        );
+        assert!(result.ends_with('\n'), "Should preserve trailing newline");
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_heading_before_candidate() {
+        // A ## heading appears before the candidate duplicate --- block
+        // This exercises line 413: heading before second_start
+        let content = "---\nname: test\ndescription: test.\nversion: 1.0\necosystem: python\n---\n\n## Section One\nContent here.\n\n---\n\nname: test\ndescription: test.\n\n---\n\n## More\n";
+        let result = strip_duplicate_frontmatter(content);
+        assert_eq!(
+            result, content,
+            "Heading before candidate duplicate should prevent stripping"
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_md_variant() {
+        // Body starts with ```md (not ```markdown) — exercises the paired branch
+        // and the "paired" label at line 497-498
+        let content = "---\nname: test\ndescription: test.\nlicense: MIT\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n```md\n## Imports\n\n```python\nimport test\n```\n\n## Core Patterns\nSome patterns\n```\n";
+        let result = strip_body_markdown_fence(content);
+
+        assert!(
+            !result.contains("```md"),
+            "Should strip ```md wrapper. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve body content"
+        );
+    }
 }

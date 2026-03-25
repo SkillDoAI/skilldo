@@ -1463,6 +1463,38 @@ mod tests {
         assert_eq!(result.test_cases.len(), 3);
     }
 
+    #[tokio::test]
+    async fn test_validate_failed_names_collected_for_failed_patterns() {
+        // Exercises the `failed_names` collection path in the test summary:
+        // when tests fail, the warn! branch collects their names.
+        let patterns = vec![basic_pattern(), config_pattern()];
+        let validator = make_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("code")),
+            Box::new(MockExecutor::failing_execution("module not found")),
+            ValidationMode::Thorough,
+            InstallSource::Registry,
+        );
+        let result = validator.validate("# SKILL.md").await.unwrap();
+        assert_eq!(result.failed, 2);
+        // Verify the pattern names are preserved in the failed test cases —
+        // these are the same names that feed into the warn! `failed_names` output.
+        let failed_names: Vec<&str> = result
+            .test_cases
+            .iter()
+            .filter(|tc| !tc.result.is_pass())
+            .map(|tc| tc.pattern_name.as_str())
+            .collect();
+        assert!(
+            failed_names.contains(&"Basic Usage"),
+            "expected Basic Usage in failed names"
+        );
+        assert!(
+            failed_names.contains(&"Configuration"),
+            "expected Configuration in failed names"
+        );
+    }
+
     #[test]
     fn test_new_go_validator_constructs() {
         use crate::llm::client::MockLlmClient;

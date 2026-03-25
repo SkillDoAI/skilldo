@@ -485,5 +485,28 @@ func main() {
         assert_eq!(code, "fmt.Println(\"hi\")");
     }
 
+    #[test]
+    fn test_extract_code_all_non_go_tags_falls_through_to_pass3() {
+        // All blocks have tags that are in the NON_GO_TAGS list.
+        // Pass 1 skips (no "go"/"golang" tags), Pass 2 skips (all tags are known non-Go),
+        // so Pass 3 returns the first block regardless of its tag.
+        let response = r#"
+Here are two blocks:
+
+```json
+{"key": "value"}
+```
+
+```python
+print("hello")
+```
+"#;
+        let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains(r#"{"key": "value"}"#),
+            "Pass 3 should return first block: {code}"
+        );
+    }
+
     poison_recovery_tests!(GoCodeGenerator, sample_pattern);
 }

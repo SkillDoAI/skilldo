@@ -247,4 +247,4 @@ Use `--debug-stage-files DIR` to dump each pipeline stage's raw LLM output to a 
 skilldo generate /path/to/repo --debug-stage-files ./debug-out
 ```
 
-This writes one file per stage (extract, map, learn, create, review) containing the raw text returned by the LLM before any normalization or parsing. Useful for diagnosing prompt regressions, truncated outputs, or unexpected LLM formatting without re-running the full pipeline.
+This writes files for each stage: `1-extract.md`, `2-map.md`, `3-learn.md`, `4-create-raw.md`, `5-normalized.md`, and `6-review-attemptN.txt` (one per review attempt). Useful for diagnosing prompt regressions, truncated outputs, hallucinations, or unexpected LLM formatting.

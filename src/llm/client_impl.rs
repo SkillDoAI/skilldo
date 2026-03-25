@@ -839,11 +839,17 @@ mod tests {
         let json = r#"{
             "content": [
                 {"type": "text", "text": "Hello, world!"}
-            ]
+            ],
+            "usage": {
+                "input_tokens": 25,
+                "output_tokens": 100
+            }
         }"#;
 
         let response: AnthropicResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.content[0].text, "Hello, world!");
+        assert!(response.usage.is_some());
+        log_usage("anthropic", "claude-3", &response.usage);
     }
 
     #[test]
@@ -856,7 +862,12 @@ mod tests {
                         "content": "Hello, world!"
                     }
                 }
-            ]
+            ],
+            "usage": {
+                "prompt_tokens": 15,
+                "completion_tokens": 42,
+                "total_tokens": 57
+            }
         }"#;
 
         let response: OpenAIResponse = serde_json::from_str(json).unwrap();
@@ -864,6 +875,8 @@ mod tests {
             response.choices[0].message.content.as_deref(),
             Some("Hello, world!")
         );
+        assert!(response.usage.is_some());
+        log_usage("openai", "gpt-4", &response.usage);
     }
 
     #[tokio::test]
@@ -952,7 +965,12 @@ mod tests {
                         ]
                     }
                 }
-            ]
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 12,
+                "candidatesTokenCount": 45,
+                "totalTokenCount": 57
+            }
         }"#;
 
         let response: GeminiResponse = serde_json::from_str(json).unwrap();
@@ -960,6 +978,18 @@ mod tests {
             response.candidates[0].content.parts[0].text,
             "Hello, world!"
         );
+        // Exercise the Gemini-specific usage debug path (mirrors complete() logic)
+        if let Some(ref u) = response.usage_metadata {
+            debug!(
+                "tokens: {} prompt={} completion={} total={} (gemini)",
+                "gemini-pro", u.prompt_token_count, u.candidates_token_count, u.total_token_count
+            );
+            assert_eq!(u.prompt_token_count, 12);
+            assert_eq!(u.candidates_token_count, 45);
+            assert_eq!(u.total_token_count, 57);
+        } else {
+            panic!("expected usageMetadata to be present");
+        }
     }
 
     // --- Coverage: empty API key (line 57/94) ---
@@ -1270,7 +1300,12 @@ mod tests {
         let json = r#"{
             "output": [{
                 "content": [{"text": "Hello, world!"}]
-            }]
+            }],
+            "usage": {
+                "prompt_tokens": 30,
+                "completion_tokens": 55,
+                "total_tokens": 85
+            }
         }"#;
         let response: ResponsesResponse = serde_json::from_str(json).unwrap();
         let text: String = response
@@ -1280,6 +1315,8 @@ mod tests {
             .filter_map(|c| c.text.as_deref())
             .collect();
         assert_eq!(text, "Hello, world!");
+        assert!(response.usage.is_some());
+        log_usage("chatgpt", "gpt-5.2", &response.usage);
     }
 
     #[test]

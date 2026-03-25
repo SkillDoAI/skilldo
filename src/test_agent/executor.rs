@@ -2283,6 +2283,26 @@ func main() {
     }
 
     #[test]
+    fn test_cargo_structured_dep_optional_with_non_version_single_key() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        // When stripping optional leaves a single key that is NOT "version",
+        // the function should return the stripped spec as-is (no simplification).
+        let dep = StructuredDep {
+            name: "my-git-dep".to_string(),
+            raw_spec: Some(
+                "{ optional = true, git = \"https://github.com/example/repo\" }".to_string(),
+            ),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, None);
+        assert!(!line.contains("optional"), "optional stripped: {line}");
+        assert!(
+            line.contains("git = \"https://github.com/example/repo\""),
+            "git field preserved: {line}"
+        );
+    }
+
+    #[test]
     fn test_cargo_structured_dep_without_raw_spec() {
         use crate::pipeline::collector::{DepSource, StructuredDep};
         let dep = StructuredDep {

@@ -2221,4 +2221,64 @@ mod tests {
         assert!(prompt.contains("old content here"));
         assert!(prompt.contains("GO-SPECIFIC HINTS"));
     }
+
+    // --- Coverage: review_verdict_prompt optional params (lines 990-1024) ---
+
+    #[test]
+    fn test_verdict_prompt_with_custom_instructions() {
+        let prompt = review_verdict_prompt(
+            "# skill",
+            Some("Check for async patterns"),
+            &Language::Python,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            prompt.contains("ADDITIONAL INSTRUCTIONS"),
+            "Should include ADDITIONAL INSTRUCTIONS section"
+        );
+        assert!(
+            prompt.contains("Check for async patterns"),
+            "Should include custom instructions text"
+        );
+    }
+
+    #[test]
+    fn test_verdict_prompt_with_patterns_and_context() {
+        let prompt = review_verdict_prompt(
+            "# skill",
+            None,
+            &Language::Go,
+            Some("func NewRouter() *Router"),
+            Some("table-driven test patterns"),
+            Some("idiomatic Go error handling"),
+        );
+        assert!(
+            prompt.contains("USAGE PATTERNS"),
+            "Should include patterns section"
+        );
+        assert!(
+            prompt.contains("table-driven test patterns"),
+            "Should embed patterns content"
+        );
+        assert!(
+            prompt.contains("CONVENTIONS AND BEHAVIORAL SEMANTICS"),
+            "Should include context section"
+        );
+        assert!(
+            prompt.contains("idiomatic Go error handling"),
+            "Should embed context content"
+        );
+    }
+
+    // --- Coverage: days_to_ymd negative z branch (line 1506) ---
+
+    #[test]
+    fn test_days_to_ymd_before_epoch() {
+        // 1969-12-31 = -1 days since epoch
+        assert_eq!(days_to_ymd(-1), (1969, 12, 31));
+        // 1900-01-01 = -25567 days since epoch
+        assert_eq!(days_to_ymd(-25567), (1900, 1, 1));
+    }
 }
