@@ -135,7 +135,7 @@ impl LlmClient for ReviewFixtureClient {
         }
 
         // Create fix (review sends SKILL.md back for patching)
-        if prompt.contains("Here is the current SKILL.md") {
+        if prompt.contains("Here is the current SKILL.md") || prompt.contains("Current SKILL.md:") {
             if let Some(r) = self.fixture.responses.get("create_fix") {
                 return Ok(r.response.clone());
             }
