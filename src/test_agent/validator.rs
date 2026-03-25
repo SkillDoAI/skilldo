@@ -592,7 +592,17 @@ impl<'a> TestCodeValidator<'a> {
         if failed == 0 {
             info!("  ✓ All {} tests passed!", passed);
         } else {
-            warn!("  ✗ {} tests passed, {} failed", passed, failed);
+            let failed_names: Vec<&str> = test_cases
+                .iter()
+                .filter(|tc| !tc.result.is_pass())
+                .map(|tc| tc.pattern_name.as_str())
+                .collect();
+            warn!(
+                "  ✗ {} tests passed, {} failed: {}",
+                passed,
+                failed,
+                failed_names.join(", ")
+            );
         }
 
         Ok(TestResult {

@@ -1328,4 +1328,189 @@ mod tests {
         let key = client.api_key.expose();
         assert!(key.is_empty());
     }
+
+    // --- Coverage: TokenUsage deserialization ---
+
+    #[test]
+    fn test_token_usage_deserialize_openai_fields() {
+        let json = r#"{
+            "prompt_tokens": 100,
+            "completion_tokens": 200,
+            "total_tokens": 300
+        }"#;
+        let usage: TokenUsage = serde_json::from_str(json).unwrap();
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, 200);
+        assert_eq!(usage.total_tokens, 300);
+    }
+
+    #[test]
+    fn test_token_usage_deserialize_anthropic_fields() {
+        let json = r#"{
+            "input_tokens": 50,
+            "output_tokens": 150
+        }"#;
+        let usage: TokenUsage = serde_json::from_str(json).unwrap();
+        // Anthropic fields land in the aliased private fields; public fields stay 0
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+        // log_usage reads _input_tokens/_output_tokens when public fields are 0
+        assert_eq!(usage._input_tokens, 50);
+        assert_eq!(usage._output_tokens, 150);
+    }
+
+    #[test]
+    fn test_token_usage_default() {
+        let usage = TokenUsage::default();
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+        assert_eq!(usage._input_tokens, 0);
+        assert_eq!(usage._output_tokens, 0);
+    }
+
+    // --- Coverage: log_usage() ---
+
+    #[test]
+    fn test_log_usage_with_some_openai_style() {
+        let usage = Some(TokenUsage {
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            total_tokens: 30,
+            _input_tokens: 0,
+            _output_tokens: 0,
+        });
+        // Should not panic; exercises the Some branch with total > 0
+        log_usage("openai", "gpt-4", &usage);
+    }
+
+    #[test]
+    fn test_log_usage_with_some_anthropic_style() {
+        let usage = Some(TokenUsage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            _input_tokens: 40,
+            _output_tokens: 60,
+        });
+        // Falls through to _input_tokens/_output_tokens, total computed as 100
+        log_usage("anthropic", "claude-3", &usage);
+    }
+
+    #[test]
+    fn test_log_usage_with_none() {
+        // Should not panic; exercises the None branch
+        log_usage("openai", "gpt-4", &None);
+    }
+
+    #[test]
+    fn test_log_usage_with_zero_totals() {
+        let usage = Some(TokenUsage::default());
+        // All zeros → total == 0 → no debug! call, but no panic
+        log_usage("openai", "gpt-4", &usage);
+    }
+
+    // --- Coverage: OpenAI max_tokens == 0 omit path ---
+
+    #[test]
+    fn test_openai_request_max_tokens_zero_omits_both() {
+        let max_tokens_cfg: u32 = 0;
+        let model = "gpt-4o";
+        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
+            (None, None)
+        } else if model.starts_with("gpt-5") {
+            (None, Some(max_tokens_cfg))
+        } else {
+            (Some(max_tokens_cfg), None)
+        };
+
+        assert!(max_tokens.is_none());
+        assert!(max_completion_tokens.is_none());
+
+        let request = OpenAIRequest {
+            model: model.to_string(),
+            messages: vec![OpenAIMessage::user("test")],
+            temperature: 0.7,
+            max_tokens,
+            max_completion_tokens,
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+        // Both should be absent due to skip_serializing_if = "Option::is_none"
+        assert!(json.get("max_tokens").is_none());
+        assert!(json.get("max_completion_tokens").is_none());
+    }
+
+    // --- Coverage: Gemini max_tokens == 0 omits generation_config ---
+
+    #[test]
+    fn test_gemini_request_max_tokens_zero_omits_generation_config() {
+        let max_tokens: u32 = 0;
+        let request = GeminiRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart {
+                    text: "test".to_string(),
+                }],
+            }],
+            generation_config: if max_tokens == 0 {
+                None
+            } else {
+                Some(GeminiGenerationConfig {
+                    max_output_tokens: max_tokens,
+                })
+            },
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+        // generation_config should be absent due to skip_serializing_if = "Option::is_none"
+        assert!(json.get("generation_config").is_none());
+    }
+
+    // --- Coverage: ChatGPT max_tokens == 0 omits max_output_tokens ---
+
+    #[test]
+    fn test_chatgpt_request_max_tokens_zero_omits_max_output_tokens() {
+        let max_tokens: u32 = 0;
+        let req = ResponsesRequest {
+            model: "gpt-5.2".to_string(),
+            instructions: "i".to_string(),
+            input: vec![],
+            max_output_tokens: if max_tokens == 0 {
+                None
+            } else {
+                Some(max_tokens)
+            },
+            store: false,
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("max_output_tokens").is_none());
+    }
+
+    // --- Coverage: Gemini usage_metadata parsing ---
+
+    #[test]
+    fn test_gemini_response_with_usage_metadata() {
+        let json = r#"{
+            "candidates": [{"content": {"parts": [{"text": "hi"}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 20,
+                "totalTokenCount": 30
+            }
+        }"#;
+        let response: GeminiResponse = serde_json::from_str(json).unwrap();
+        let usage = response.usage_metadata.unwrap();
+        assert_eq!(usage.prompt_token_count, 10);
+        assert_eq!(usage.candidates_token_count, 20);
+        assert_eq!(usage.total_token_count, 30);
+    }
+
+    #[test]
+    fn test_gemini_response_without_usage_metadata() {
+        let json = r#"{"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}"#;
+        let response: GeminiResponse = serde_json::from_str(json).unwrap();
+        assert!(response.usage_metadata.is_none());
+    }
 }

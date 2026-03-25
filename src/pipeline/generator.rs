@@ -3265,4 +3265,197 @@ None known.
     fn test_bail_on_security_lint_empty_issues_passes() {
         assert!(bail_on_security_lint(&[]).is_ok());
     }
+
+    // ========================================================================
+    // extract_behavioral_semantics() — standalone function tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_behavioral_semantics_valid_json() {
+        let input = r#"{"behavioral_semantics": ["immutable by default", "lazy evaluation"]}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!(
+            val.starts_with("behavioral_semantics: ["),
+            "Should start with 'behavioral_semantics: ['. Got: {}",
+            val
+        );
+        assert!(val.contains("immutable by default"));
+        assert!(val.contains("lazy evaluation"));
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_missing_key() {
+        let input = r#"{"other_key": "value", "patterns": ["a", "b"]}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(
+            result.is_none(),
+            "Should return None when behavioral_semantics key is absent"
+        );
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_malformed_json_no_bracket() {
+        // Key exists but no opening bracket follows
+        let input = r#"{"behavioral_semantics": "not an array"}"#;
+        let result = extract_behavioral_semantics(input);
+        // The function looks for '[' after the key. "not an array" has no '[',
+        // but '}' comes before any '[', so it depends on whether '[' is found.
+        // Actually: after the key, the remaining string is `: "not an array"}`.
+        // There is no '[' in that string, so find('[') returns None.
+        assert!(
+            result.is_none(),
+            "Should return None when value is not an array"
+        );
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_nested_brackets() {
+        let input =
+            r#"{"behavioral_semantics": [["nested", "array"], "top-level"], "other": true}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        // Should capture the full outer array including nested brackets
+        assert!(val.starts_with("behavioral_semantics: ["), "Got: {}", val);
+        assert!(
+            val.ends_with(']'),
+            "Should end with closing bracket. Got: {}",
+            val
+        );
+        assert!(val.contains("[\"nested\""));
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_empty_array() {
+        let input = r#"{"behavioral_semantics": []}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "behavioral_semantics: []");
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_empty_string() {
+        let result = extract_behavioral_semantics("");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_unclosed_bracket() {
+        // Truly unclosed: nested bracket that never closes
+        let input = r#"{"behavioral_semantics": ["item1", ["nested""#;
+        let result = extract_behavioral_semantics(input);
+        assert!(
+            result.is_none(),
+            "Should return None when brackets are not balanced"
+        );
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_key_in_prose() {
+        // The key appears embedded in prose-like learn output
+        let input = r#"Here is the analysis.
+
+{
+  "behavioral_semantics": ["builder pattern", "fluent API", "method chaining"],
+  "paradigms": ["OOP"]
+}
+
+End of analysis."#;
+        let result = extract_behavioral_semantics(input);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!(val.contains("builder pattern"));
+        assert!(val.contains("method chaining"));
+    }
+
+    // ========================================================================
+    // dump_stage() — write failure warn path
+    // ========================================================================
+
+    #[test]
+    fn test_dump_stage_write_failure_warns() {
+        // with_debug_stage_dir("/dev/null/...") will fail create_dir_all,
+        // leaving debug_stage_dir as None. Manually set it to force the
+        // write-failure path in dump_stage.
+        let mut gen = Generator::new(Box::new(MockLlmClient::new()), 1);
+        // /dev/null is a file, not a directory — writes underneath it fail
+        gen.debug_stage_dir = Some(std::path::PathBuf::from("/dev/null"));
+
+        // dump_stage tries to write /dev/null/<filename> which will fail
+        // because /dev/null is not a directory. This exercises the warn path.
+        gen.dump_stage("test-stage.txt", "test content");
+        // No panic = success. The warn log is emitted internally.
+    }
+
+    #[test]
+    fn test_dump_stage_success_writes_file() {
+        let tmp = std::env::temp_dir().join(format!("skilldo-test-dump-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_debug_stage_dir(Some(tmp.to_string_lossy().to_string()));
+
+        gen.dump_stage("extract.txt", "extract output");
+        let written = std::fs::read_to_string(tmp.join("extract.txt")).unwrap();
+        assert_eq!(written, "extract output");
+
+        // Cleanup
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_dump_stage_noop_when_not_configured() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1);
+        // debug_stage_dir is None by default — dump_stage should be a no-op
+        gen.dump_stage("test.txt", "content");
+        // No panic = success
+    }
+
+    // ========================================================================
+    // with_debug_stage_dir() — dir creation failure warn path
+    // ========================================================================
+
+    #[test]
+    fn test_with_debug_stage_dir_creation_failure() {
+        // /dev/null is a file — create_dir_all("/dev/null/subdir") will fail
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_debug_stage_dir(Some("/dev/null/impossible/subdir".to_string()));
+
+        assert!(
+            gen.debug_stage_dir.is_none(),
+            "debug_stage_dir should remain None when dir creation fails"
+        );
+    }
+
+    #[test]
+    fn test_with_debug_stage_dir_success() {
+        let tmp =
+            std::env::temp_dir().join(format!("skilldo-test-debug-dir-{}", std::process::id()));
+        // Ensure it doesn't exist yet
+        std::fs::remove_dir_all(&tmp).ok();
+
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_debug_stage_dir(Some(tmp.to_string_lossy().to_string()));
+
+        assert!(
+            gen.debug_stage_dir.is_some(),
+            "debug_stage_dir should be set when dir creation succeeds"
+        );
+        assert!(tmp.exists(), "directory should have been created");
+
+        // Cleanup
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_with_debug_stage_dir_none() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1).with_debug_stage_dir(None);
+
+        assert!(
+            gen.debug_stage_dir.is_none(),
+            "debug_stage_dir should be None when None is passed"
+        );
+    }
 }

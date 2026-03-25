@@ -1383,4 +1383,136 @@ mod tests {
         );
         assert!(result.contains("## Imports"), "Should preserve body");
     }
+
+    // ========================================================================
+    // strip_trailing_meta_text() — warn log path when stripping occurs
+    // ========================================================================
+
+    #[test]
+    fn test_strip_trailing_meta_text_with_fenced_meta_block() {
+        // Meta text preceded by a bare ``` fence — tests the fence-stripping branch
+        let content = "---\nname: click\ndescription: CLI toolkit.\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport click\n```\n\n## Core Patterns\nSome patterns here.\n\n```\nI have made the following corrections:\n- Fixed import order\n- Added examples\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("I have made"),
+            "Should strip 'I have made' trailing meta-text. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Fixed import order"),
+            "Should strip bullet points after meta pattern"
+        );
+        assert!(
+            result.contains("## Core Patterns"),
+            "Should preserve real content"
+        );
+        assert!(
+            result.contains("Some patterns here."),
+            "Should preserve section body"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_ive_made() {
+        // Tests the "i've made" pattern triggering the warn log
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n\n## Core Patterns\nContent.\n\nI've made several improvements to the skill file.\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("I've made"),
+            "Should strip 'I've made' trailing text. Got:\n{}",
+            result
+        );
+        assert!(result.contains("## Core Patterns"));
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_what_was_fixed() {
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n\n## Pitfalls\nBe careful.\n\nWhat was fixed:\n- Item 1\n- Item 2\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("What was fixed"),
+            "Should strip 'What was fixed' trailing text. Got:\n{}",
+            result
+        );
+        assert!(result.contains("## Pitfalls"));
+        assert!(result.contains("Be careful."));
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_no_headings() {
+        // No ## headings at all — should return content unchanged
+        let content = "Just some text\nWith no headings\n";
+        let result = strip_trailing_meta_text(content);
+        assert_eq!(result, content, "No headings should mean no changes");
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_fixes_applied_with_consecutive_meta_lines() {
+        // Consecutive meta pattern lines (no non-meta content between them) are all stripped
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\nimport test\n\n## Core Patterns\nPatterns.\n\nFixes applied:\nWhat changed:\n- Change 1\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("Fixes applied"),
+            "Should strip 'Fixes applied'. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("What changed"),
+            "Should strip 'What changed'"
+        );
+        assert!(result.contains("Patterns."));
+    }
+
+    // ========================================================================
+    // ensure_frontmatter() — preamble with no closing frontmatter delimiter
+    // ========================================================================
+
+    #[test]
+    fn test_ensure_frontmatter_preamble_no_closing_delimiter() {
+        // Preamble text + opening --- + frontmatter fields but NO closing ---
+        // This should fall through the preamble detection (line 46 returns None)
+        // and proceed to add new frontmatter since content doesn't start with ---
+        let content = "Here is your SKILL.md:\n\n---\nname: foo\ndescription: A foo library.\n";
+        let result = ensure_frontmatter(content, "foo", "1.0.0", "python", Some("MIT"), None);
+
+        // Since there's no closing ---, the preamble handler can't reconstruct.
+        // The function should still produce valid output with frontmatter.
+        assert!(
+            result.contains("name:"),
+            "Should have name in output. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_ensure_frontmatter_preamble_has_name_desc_but_no_close() {
+        // Specific edge case: preamble detection finds \n---\n, content after has
+        // name: and description:, but there is no second \n--- to close the block.
+        // The inner `if let Some(fm_end)` on line 46 returns None, falling through.
+        let content =
+            "LLM preamble text\n---\nname: mylib\ndescription: A library for things.\nlicense: MIT\n";
+        let result = ensure_frontmatter(content, "mylib", "1.0.0", "python", Some("MIT"), None);
+
+        // Should still produce usable output (falls through to normal frontmatter handling)
+        assert!(
+            result.contains("name:"),
+            "Should have name field. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_ensure_frontmatter_preamble_without_name_field() {
+        // Preamble + \n---\n but the content after doesn't have name:/description:
+        // so the preamble detection is skipped entirely (line 45 condition fails)
+        let content = "Some preamble\n---\nrandom: stuff\nno_name_here: true\n---\n\n## Imports\n";
+        let result = ensure_frontmatter(content, "testlib", "1.0.0", "python", None, None);
+
+        // Should add proper frontmatter since the existing one lacks required fields
+        assert!(
+            result.contains("name: testlib"),
+            "Should contain correct name. Got:\n{}",
+            result
+        );
+    }
 }
