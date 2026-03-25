@@ -801,6 +801,8 @@ VERIFY before outputting (do not include this checklist):
 - Every API used is real and public
 - At least 5 public APIs documented
 - ## Imports section includes BOTH `use` statements AND a ```toml [dependencies] block
+- Every type in ## Imports `use` statements appears in at least one code example (no unused imports)
+- Fenced code blocks showing non-code content (SSE events, headers, CLI output) use ```text tag
 - Core patterns use actual API names (not placeholders)
 - Deprecation status marked with correct indicators
 - Pitfalls section has 3-5 specific examples
@@ -1109,7 +1111,8 @@ REVIEW CRITERIA:
    - **Version-specific claims**: Features described as "new in X.Y" should be plausible
      for the documented version.
    - **Markdown formatting**: Wrong language tags on code fences, broken fences, mismatched
-     indentation in nested blocks.
+     indentation in nested blocks. Fenced blocks showing non-code content (SSE events, HTTP
+     headers, CLI output, config snippets) must use ` ```text ` — bare ` ``` ` is an error.
 
 SEVERITY RULES — This is critical for avoiding false positives:
 
