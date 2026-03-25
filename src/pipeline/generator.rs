@@ -864,8 +864,15 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 );
                 let feedback = ReviewAgent::format_feedback(&result);
                 let fix_prompt = format!(
-                    "Here is the current SKILL.md:\n\n{}\n\n{}",
-                    skill_md, feedback
+                    "Fix the issues listed below in this SKILL.md. Output ONLY the corrected \
+                     SKILL.md content — no preamble, no commentary, no summary of changes, \
+                     no \"here is the fixed version\", no changelog. Just the raw SKILL.md \
+                     from the opening --- to the last section. Darryl is reviewing your output \
+                     and will reject anything that isn't pure documentation.\n\n\
+                     For accuracy fixes: use the API surface below as ground truth for method \
+                     signatures, parameter names, and feature flags. Do not guess.\n\n\
+                     API Surface:\n{}\n\nCurrent SKILL.md:\n\n{}\n\n{}",
+                    api_surface, skill_md, feedback
                 );
                 skill_md = self.get_client("create").complete(&fix_prompt).await?;
                 skill_md = strip_markdown_fences(&skill_md);

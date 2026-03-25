@@ -47,7 +47,7 @@ pub fn ensure_frontmatter(
                     // Found valid frontmatter after preamble — reconstruct without preamble
                     let fm_block = &after[..fm_end];
                     let body = &after[fm_end + 4..]; // skip \n---
-                    let reconstructed = format!("---\n{}---\n{}", fm_block, body);
+                    let reconstructed = format!("---\n{}\n---\n{}", fm_block, body);
                     // Recurse to handle generated-by injection on the clean content
                     return ensure_frontmatter(
                         &reconstructed,
@@ -338,8 +338,11 @@ fn strip_trailing_meta_text(content: &str) -> String {
         "fixes applied",
         "what was fixed",
         "what changed",
-        "here is the",
-        "here are the",
+        "here is the corrected",
+        "here is the updated",
+        "here is the fixed",
+        "here are the changes",
+        "here are the fixes",
         "i have made",
         "i've made",
     ];
