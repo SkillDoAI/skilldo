@@ -338,11 +338,8 @@ fn strip_trailing_meta_text(content: &str) -> String {
         "fixes applied",
         "what was fixed",
         "what changed",
-        "here is the corrected",
-        "here is the updated",
-        "here is the fixed",
-        "here are the changes",
-        "here are the fixes",
+        "here is",
+        "here are",
         "i have made",
         "i've made",
     ];

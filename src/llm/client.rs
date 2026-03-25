@@ -242,6 +242,7 @@ impl LlmClient for MockLlmClient {
             .to_string())
         } else if prompt.contains("creating an agent rules file")
             || prompt.contains("Here is the current SKILL.md")
+            || prompt.contains("Current SKILL.md:")
         {
             // Create agent: Synthesizer
             Ok(r#"---
