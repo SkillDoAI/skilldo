@@ -332,7 +332,9 @@ fn strip_trailing_meta_text(content: &str) -> String {
     // Find the end of the last section's content — look for trailing fenced blocks
     // or prose that contains LLM commentary patterns
     let meta_patterns = [
-        "summary of",
+        "summary of fixes",
+        "summary of changes made",
+        "summary of all",
         "changes made",
         "fixes made",
         "fixes applied",
