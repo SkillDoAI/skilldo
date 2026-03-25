@@ -358,7 +358,7 @@ fn strip_trailing_meta_text(content: &str) -> String {
         if trimmed.is_empty() {
             continue;
         }
-        if meta_patterns.iter().any(|p| trimmed.contains(p)) {
+        if meta_patterns.iter().any(|p| trimmed.starts_with(p)) {
             // Check if everything after this line to EOF is subordinate
             // (blank, bullets, indented, or more meta patterns)
             let all_trailing = lines[i + 1..].iter().all(|l| {
