@@ -715,6 +715,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 self.prompts_config.review_custom.clone(),
             );
 
+            // Extract behavioral_semantics once (context doesn't change between retries)
+            let behavioral = extract_behavioral_semantics(&context);
             let mut last_review_attempt = 0;
             let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {
@@ -724,9 +726,6 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     review_attempt + 1,
                     self.review_max_retries + 1
                 );
-
-                // Extract behavioral_semantics from learn context for review
-                let behavioral = extract_behavioral_semantics(&context);
                 let result = review_agent
                     .review(
                         &skill_md,
@@ -738,7 +737,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     .await?;
 
                 self.dump_stage(
-                    &format!("6-review-attempt{}.txt", review_attempt + 1),
+                    &format!("5-review-attempt{}.txt", review_attempt + 1),
                     &format!(
                         "passed: {}\nmalformed: {}\nissues:\n{}",
                         result.passed,
@@ -926,7 +925,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             self.model_name.as_deref(),
         );
 
-        self.dump_stage("5-normalized.md", &skill_md);
+        self.dump_stage("6-normalized.md", &skill_md);
 
         // Final security gate after normalization
         rescan_after_rewrite(&skill_md, self.enable_security_scan, "post-normalization")?;
