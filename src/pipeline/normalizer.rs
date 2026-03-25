@@ -41,7 +41,7 @@ pub fn ensure_frontmatter(
     // instead of blindly adding a new block.
     if !trimmed.starts_with("---") {
         if let Some(fm_start) = trimmed.find("\n---\n") {
-            let after = &trimmed[fm_start + 4..]; // skip the \n---\n
+            let after = &trimmed[fm_start + 5..]; // skip the \n---\n (5 bytes)
             if after.contains("name:") && after.contains("description:") {
                 if let Some(fm_end) = after.find("\n---") {
                     // Found valid frontmatter after preamble — reconstruct without preamble
@@ -342,8 +342,6 @@ fn strip_trailing_meta_text(content: &str) -> String {
         "here are the",
         "i have made",
         "i've made",
-        "note:",
-        "notes:",
     ];
 
     // Scan backwards from end to find where trailing meta-text starts
