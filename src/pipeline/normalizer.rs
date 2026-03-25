@@ -1631,4 +1631,44 @@ mod tests {
             "Should preserve body content"
         );
     }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_heading_after_candidate_non_yaml() {
+        // 4+ dashes where heading comes AFTER the candidate duplicate block,
+        // but the candidate has <2 yaml-like lines so looks_like_frontmatter = false.
+        let content = "---\nname: test\ndescription: test.\nversion: 1.0\necosystem: python\n---\n\n---\nThis is just text.\nNo YAML here!\n---\n\n## Section\nContent.\n";
+        let result = strip_duplicate_frontmatter(content);
+        assert_eq!(
+            result, content,
+            "Non-YAML content between duplicate dashes should not be stripped"
+        );
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_no_heading_at_all() {
+        // 4+ dashes with no ## heading anywhere
+        let content = "---\nname: test\ndescription: test.\nversion: 1.0\necosystem: python\n---\n\n---\nname: test\ndescription: test.\nversion: 1.0\n---\n\nJust content, no headings.\n";
+        let result = strip_duplicate_frontmatter(content);
+
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(
+            dash_count, 2,
+            "Should strip duplicate frontmatter when no headings exist. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_keys_with_underscore_and_dash() {
+        // YAML keys containing _ and - characters
+        let content = "---\nname: test\ndescription: test.\nversion: 1.0\necosystem: python\n---\n\n---\nsome_key: value1\nsome-other: value2\n---\n\n## Imports\n";
+        let result = strip_duplicate_frontmatter(content);
+
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(
+            dash_count, 2,
+            "Should strip duplicate frontmatter with underscore/dash keys. Got:\n{}",
+            result
+        );
+    }
 }
