@@ -416,7 +416,7 @@ pub struct GeminiClient {
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
     contents: Vec<GeminiContent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
     generation_config: Option<GeminiGenerationConfig>,
 }
 
@@ -1084,7 +1084,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["generation_config"]["maxOutputTokens"], 16384);
+        assert_eq!(json["generationConfig"]["maxOutputTokens"], 16384);
     }
 
     // --- Coverage: empty responses (lines 94, 247, 362-363) ---
@@ -1501,7 +1501,7 @@ mod tests {
 
         let json = serde_json::to_value(&request).unwrap();
         // generation_config should be absent due to skip_serializing_if = "Option::is_none"
-        assert!(json.get("generation_config").is_none());
+        assert!(json.get("generationConfig").is_none());
     }
 
     // --- Coverage: ChatGPT max_tokens == 0 omits max_output_tokens ---
