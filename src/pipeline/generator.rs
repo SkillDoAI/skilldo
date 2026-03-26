@@ -24,10 +24,20 @@ fn extract_behavioral_semantics(learn_output: &str) -> Option<String> {
     }
     let array_start = start + key.len() + bracket_start;
 
-    // Find matching closing bracket, tracking nesting
+    // Find matching closing bracket, tracking nesting and skipping string contents
     let mut depth = 0;
+    let mut in_string = false;
+    let mut prev_ch = '\0';
     for (i, ch) in learn_output[array_start..].char_indices() {
+        if in_string {
+            if ch == '"' && prev_ch != '\\' {
+                in_string = false;
+            }
+            prev_ch = ch;
+            continue;
+        }
         match ch {
+            '"' => in_string = true,
             '[' => depth += 1,
             ']' => {
                 depth -= 1;
@@ -38,6 +48,7 @@ fn extract_behavioral_semantics(learn_output: &str) -> Option<String> {
             }
             _ => {}
         }
+        prev_ch = ch;
     }
     None
 }
@@ -305,8 +316,6 @@ impl Generator {
         self
     }
 
-    /// Enable debug stage file dumping. Pass the library name to create
-    /// `/tmp/skilldo-{lib}-debug-{timestamp}/` with each stage's raw output.
     /// Write a stage's output to the debug directory if enabled.
     fn dump_stage(&self, filename: &str, content: &str) {
         if let Some(ref dir) = self.debug_stage_dir {

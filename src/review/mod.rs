@@ -151,11 +151,12 @@ impl<'a> ReviewAgent<'a> {
             .collect();
 
         if !accuracy_issues.is_empty() {
-            feedback.push_str("ACCURACY ISSUES:\n");
+            feedback.push_str("ISSUES:\n");
             for (i, issue) in accuracy_issues.iter().enumerate() {
                 feedback.push_str(&format!(
-                    "{}. {}\n   Evidence: {}\n",
+                    "{}. [{}] {}\n   Evidence: {}\n",
                     i + 1,
+                    issue.category,
                     issue.complaint,
                     issue.evidence
                 ));
@@ -444,7 +445,7 @@ mod tests {
         };
         let feedback = ReviewAgent::format_feedback(&result);
         assert!(feedback.contains("REVIEW FAILED"));
-        assert!(feedback.contains("ACCURACY ISSUES:"));
+        assert!(feedback.contains("ISSUES:"));
         assert!(feedback.contains("Wrong signature for set_loglevel"));
         assert!(feedback.contains("inspect.signature() says (level)"));
         assert!(feedback.contains("SAFETY ISSUES: None"));
@@ -595,7 +596,7 @@ mod tests {
             ],
         };
         let feedback = ReviewAgent::format_feedback(&result);
-        assert!(feedback.contains("ACCURACY ISSUES:"));
+        assert!(feedback.contains("ISSUES:"));
         assert!(feedback.contains("SAFETY ISSUES:"));
         assert!(feedback.contains("Wrong signature"));
         assert!(feedback.contains("Prompt injection found"));
