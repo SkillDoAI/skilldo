@@ -10,19 +10,24 @@ use super::collector::CollectedData;
 /// Returns None if not found. Uses simple string matching to avoid fragile JSON parsing.
 fn extract_behavioral_semantics(learn_output: &str) -> Option<String> {
     let key = "\"behavioral_semantics\"";
-    let start = learn_output.find(key)?;
-    let after_key = &learn_output[start + key.len()..];
-    // Verify the [ comes immediately after the key (only whitespace/colon between)
-    // to avoid grabbing a later unrelated array when the value is null/string
-    let bracket_start = after_key.find('[')?;
-    let between = &after_key[..bracket_start];
-    if between
-        .chars()
-        .any(|c| c != ' ' && c != ':' && c != '\n' && c != '\r' && c != '\t')
-    {
-        return None; // Something other than whitespace/colon between key and [ — wrong array
-    }
-    let array_start = start + key.len() + bracket_start;
+    // Scan for the key — skip prose mentions where the next token isn't `: [`
+    let mut search_from = 0;
+    let (array_start, _) = loop {
+        let start = learn_output[search_from..].find(key)?;
+        let abs_start = search_from + start;
+        let after_key = &learn_output[abs_start + key.len()..];
+        if let Some(bracket_pos) = after_key.find('[') {
+            let between = &after_key[..bracket_pos];
+            if between
+                .chars()
+                .all(|c| c == ' ' || c == ':' || c == '\n' || c == '\r' || c == '\t')
+            {
+                break (abs_start + key.len() + bracket_pos, abs_start);
+            }
+        }
+        // Not a valid match — skip past this occurrence and try again
+        search_from = abs_start + key.len();
+    };
 
     // Find matching closing bracket, tracking nesting and skipping string contents
     let mut depth = 0;
@@ -3409,6 +3414,20 @@ End of analysis."#;
         let val = result.unwrap();
         assert!(val.contains("builder pattern"));
         assert!(val.contains("method chaining"));
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_prose_mentions_key_before_json() {
+        // CodeRabbit: prose mentions the key name before the actual JSON block
+        let input = r#"The "behavioral_semantics" field is shown below.
+
+{"behavioral_semantics": [{"trigger": "auth", "behavior": "401"}]}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(
+            result.is_some(),
+            "Should skip prose mention and find the real JSON array"
+        );
+        assert!(result.unwrap().contains("401"));
     }
 
     // ========================================================================
