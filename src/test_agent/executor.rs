@@ -539,11 +539,14 @@ fn strip_optional_from_dep_spec(spec: &str) -> String {
     if !spec.contains("optional") {
         return spec.to_string();
     }
-    // Remove `optional = true, ` or `, optional = true` patterns
+    // Remove `optional = true` with common spacing variants
     let stripped = spec
         .replace("optional = true, ", "")
         .replace(", optional = true", "")
-        .replace("optional = true", "");
+        .replace("optional = true", "")
+        .replace("optional=true, ", "")
+        .replace(", optional=true", "")
+        .replace("optional=true", "");
     // If stripping left us with just `{ version = "X" }`, simplify to `"X"`
     if let Ok(val) = stripped.parse::<toml::Value>() {
         if let Some(table) = val.as_table() {

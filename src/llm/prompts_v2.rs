@@ -1016,7 +1016,7 @@ pub fn review_verdict_prompt(
         .filter(|s| !s.trim().is_empty())
         .map(|s| {
             format!(
-                "\n\nCONVENTIONS AND BEHAVIORAL SEMANTICS (from docs and changelog):\n{}\n\n\
+                "\n\nBEHAVIORAL SEMANTICS (observable behaviors extracted from docs):\n{}\n\n\
                  Completeness rule: If behavioral_semantics lists observable behaviors \
                  (error responses, side effects, edge cases), the SKILL.md MUST include \
                  code examples or documentation that demonstrates them. Flag missing behavioral \
@@ -2278,7 +2278,7 @@ mod tests {
             "Should embed patterns content"
         );
         assert!(
-            prompt.contains("CONVENTIONS AND BEHAVIORAL SEMANTICS"),
+            prompt.contains("BEHAVIORAL SEMANTICS"),
             "Should include context section"
         );
         assert!(
