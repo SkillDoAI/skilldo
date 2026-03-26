@@ -378,6 +378,7 @@ fn strip_trailing_meta_text(content: &str) -> String {
                     || t.starts_with('-')
                     || t.starts_with('*')
                     || t.starts_with("```")
+                    || t.chars().next().is_some_and(|c| c.is_ascii_digit()) // numbered lists
                     || l.starts_with("  ")
                     || l.starts_with('\t')
                     || meta_patterns.iter().any(|p| t.to_lowercase().contains(p))
