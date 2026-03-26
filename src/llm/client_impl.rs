@@ -289,9 +289,11 @@ impl LlmClient for OpenAIClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
         // GPT-5+ models use max_completion_tokens instead of max_tokens.
         // max_tokens = 0 means "omit from request, let provider decide".
+        // Normalize model name: strip provider prefix (e.g., "openai/gpt-5.1" → "gpt-5.1")
+        let model_name = self.model.rsplit('/').next().unwrap_or(&self.model);
         let (max_tokens, max_completion_tokens) = if self.max_tokens == 0 {
             (None, None)
-        } else if self.model.starts_with("gpt-5") {
+        } else if model_name.starts_with("gpt-5") {
             (None, Some(self.max_tokens))
         } else {
             (Some(self.max_tokens), None)
