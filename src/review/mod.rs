@@ -99,14 +99,14 @@ impl<'a> ReviewAgent<'a> {
     /// Stage outputs are optional context for cross-referencing:
     /// - `api_surface`: extract-stage output (method signatures — ground truth)
     /// - `patterns`: map-stage output (usage patterns from tests)
-    /// - `context`: behavioral_semantics extracted from learn-stage output (observable behaviors)
+    /// - `behavioral_semantics`: observable behaviors extracted from learn-stage output
     pub async fn review(
         &self,
         skill_md: &str,
         language: &Language,
         api_surface: Option<&str>,
         patterns: Option<&str>,
-        context: Option<&str>,
+        behavioral_semantics: Option<&str>,
     ) -> Result<ReviewResult> {
         // LLM verdict (accuracy + safety + consistency)
         let verdict_prompt = prompts_v2::review_verdict_prompt(
@@ -115,7 +115,7 @@ impl<'a> ReviewAgent<'a> {
             language,
             api_surface,
             patterns,
-            context,
+            behavioral_semantics,
         );
         let verdict_response = self
             .client

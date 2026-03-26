@@ -791,7 +791,7 @@ Output ONLY the SKILL.md content — just the facts about the library. Never inc
 The output is a published reference document, not a conversation.
 
 FAIR WARNING: Your output goes directly to Darryl — a 40-year IT veteran reviewer with zero \
-patience for sloppy work. If you leave out the [dependencies] TOML block, use wrong import \
+patience for sloppy work. If you leave out dependency declarations, use wrong import \
 paths, hallucinate methods, or include any AI commentary, he WILL reject it and you WILL have \
 to redo it. Get it right the first time.
 
@@ -986,7 +986,7 @@ pub fn review_verdict_prompt(
     language: &Language,
     api_surface: Option<&str>,
     patterns: Option<&str>,
-    context: Option<&str>,
+    behavioral_semantics: Option<&str>,
 ) -> String {
     let custom_section = custom_instructions
         .map(|c| format!("\n\nADDITIONAL INSTRUCTIONS:\n{}", c))
@@ -1012,7 +1012,7 @@ pub fn review_verdict_prompt(
             )
         })
         .unwrap_or_default();
-    let context_section = context
+    let context_section = behavioral_semantics
         .filter(|s| !s.trim().is_empty())
         .map(|s| {
             format!(
@@ -1245,7 +1245,6 @@ PYTHON TEST PATTERNS:\n\
 \n\nPYTHON-SPECIFIC HINTS:\n\
 - Look for PEP references (e.g., PEP 484, PEP 723) — these contextualize design decisions\n\
 - Note Python 2→3 migration patterns (e.g., `six` compat layers, `__future__` imports)\n\
-- Check for type stub files (`.pyi`) that document the type system\n\
 \n\
 PYTHON DOC PATTERNS:\n\
 - Sphinx/Autodoc: `.. autofunction::`, `.. autoclass::`, `.. automethod::`\n\
@@ -1381,10 +1380,9 @@ DEPRECATION SIGNALS (Rust):\n\
         "learn" => {
             "\
 \n\nRUST-SPECIFIC HINTS:\n\
-- `//!` and `///` doc comments are the documentation system (rendered by rustdoc)\n\
-- `# Examples` sections in doc comments are runnable doctests\n\
-- Feature flags (`#[cfg(feature = \"...\")]`) indicate optional functionality\n\
-- `unsafe` blocks indicate low-level or FFI code — note safety invariants"
+- Rustdoc conventions: `///` and `//!` doc comments, `# Examples` sections are runnable doctests\n\
+- Feature flags may be mentioned in docs — note which features are required vs optional\n\
+- MSRV (Minimum Supported Rust Version) constraints documented in README or Cargo.toml"
         }
         "create" => {
             "\
@@ -1457,8 +1455,7 @@ DEPRECATION SIGNALS (Java):\n\
 \n\nJAVA-SPECIFIC HINTS:\n\
 - Javadoc comments (`/** ... */`) are the documentation system\n\
 - `@param`, `@return`, `@throws` tags document method contracts\n\
-- `@since` tags indicate version history\n\
-- `package-info.java` files contain package-level documentation"
+- `@since` tags indicate version history"
         }
         "create" => {
             "\
