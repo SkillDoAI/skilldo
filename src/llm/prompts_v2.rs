@@ -1110,8 +1110,10 @@ REVIEW CRITERIA:
      verify that ## API Reference descriptions do not contradict them. For example, if
      custom_instructions say method X implicitly enables feature Y, the API Reference
      must not say X "requires" Y.
-   - **Unused imports**: Types listed in ## Imports that are never used in any code example
-     should be flagged. The Imports section should only list types that appear in examples.
+   - **Unused imports**: Import statements (e.g., `use`, `import`, `from X import Y`) in ## Imports
+     that are never used in any code example should be flagged. Dependency declarations (e.g.,
+     `[dependencies]` TOML blocks, `requirements.txt` entries) are NOT imports and should not
+     be flagged by this rule.
    - **Version-specific claims**: Features described as "new in X.Y" should be plausible
      for the documented version.
    - **Markdown formatting**: Wrong language tags on code fences, broken fences, mismatched
@@ -1165,8 +1167,8 @@ Rules:
 - Every "error" MUST include proof in the "evidence" field. No proof = use "warning" instead.
 - Simplified signatures are NOT errors: omitting type annotations, return types, or optional
   params is acceptable for a quick-reference document. Only flag wrong/nonexistent param names.
-- Unused imports are errors: the ## Imports section should only list types that appear in
-  code examples. Types listed but never used in any example are unnecessary and confuse readers.
+- Unused imports are errors: import statements in ## Imports should only list types that appear
+  in code examples. Dependency declarations (TOML/pip/npm blocks) are NOT imports and are exempt.
 - Speculative future versions (e.g., "removed in 9.0") are NOT errors unless you can PROVE the
   claim is wrong. Future predictions based on deprecation patterns are acceptable.
 - Do NOT flag code inside `### Wrong:` sections. Those examples are INTENTIONALLY broken.
