@@ -557,7 +557,7 @@ Return JSON:
     {{
       "trigger": "Calling endpoint without valid auth token",
       "behavior": "Returns HTTP 401 with provider-specific error body",
-      "assertion": "assert_eq!(response.status(), 401)"
+      "assertion": "response status equals 401"
     }}
   ],
   "pitfalls": [
@@ -800,8 +800,8 @@ VERIFY before outputting (do not include this checklist):
 - Frontmatter version matches the version provided in the input EXACTLY
 - Every API used is real and public
 - At least 5 public APIs documented
-- ## Imports section includes BOTH `use` statements AND a ```toml [dependencies] block
-- Every type in ## Imports `use` statements appears in at least one code example (no unused imports)
+- ## Imports section includes import statements AND dependency declarations appropriate for the language
+- Every type/module in ## Imports appears in at least one code example (no unused imports)
 - Plain-text fenced blocks (SSE events, headers, CLI output) use ```text; config blocks use ```toml/```yaml/```json
 - Core patterns use actual API names (not placeholders)
 - Deprecation status marked with correct indicators
