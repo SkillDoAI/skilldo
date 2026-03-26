@@ -379,9 +379,16 @@ fn strip_trailing_meta_text(content: &str) -> String {
     }
 
     if let Some(start) = trim_from {
-        // Also strip any bare ``` fence that opens the meta block
+        // Strip a bare ``` fence that opens the meta block, but only if preceded
+        // by a blank line (meaning it opens the meta block). If preceded by content,
+        // it's the closing fence of a real code block — leave it.
         let actual_start = if start > 0 && lines[start - 1].trim() == "```" {
-            start - 1
+            let preceded_by_blank = start < 2 || lines[start - 2].trim().is_empty();
+            if preceded_by_blank {
+                start - 1
+            } else {
+                start
+            }
         } else {
             start
         };
