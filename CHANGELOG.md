@@ -17,12 +17,20 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 ### Fixed
 - Normalizer strips unclosed markdown fence wraps (Sonnet CLI pattern)
 - Normalizer strips duplicate frontmatter when LLM prepends preamble text
-- Normalizer strips trailing AI review notes ("Summary of fixes", "Changes made")
+- Normalizer strips trailing AI review notes with fence-aware scanning
 - Normalizer ordering: duplicate frontmatter stripped before meta-text
 - Go code extractor refactored to use `find_fenced_blocks()` with tag priority
 - Test agent strips `optional = true` from structured deps in temp Cargo.toml
 - Rust create hint no longer contradicts custom_instructions on import paths
-- `max_tokens = 0` in config omits the field from API requests
+- `max_tokens = 0` in config omits the field from API requests; Anthropic fast-fails with clear error
+- Gemini `generationConfig` serialized as camelCase per API spec (was snake_case)
+- GPT-5 model detection normalizes provider-prefixed names (e.g., `openai/gpt-5.1`)
+- Behavioral semantics extractor handles double-backslash escapes and prose mentions of key
+- OpenAI-compatible usage logs correctly attributed (not hardcoded "openai")
+- Hallucination cross-reference rule conditional on API surface presence
+- `completeness` added to verdict schema categories
+- Review fix prompt includes API surface for accuracy and bans AI commentary
+- Stale mock review trigger updated for Darryl prompt
 
 ### Changed
 - Extract/map/learn prompts language-gated: Python-specific patterns moved to python_hints()
@@ -30,9 +38,10 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Go, Java public API detection and deprecation hints added
 - Create prompt explicitly bans AI self-commentary and process notes
 - Review prompt checks for leaked AI commentary as consistency error
-- Unused imports rule deferred to custom_instructions instead of blanket exemption
-- Test failure compiler errors logged at warn level (first 5 lines visible without debug)
+- Unused imports rule: import statements flagged, dependency declarations exempt
+- Test failure summary names which patterns failed
 - Async runtime hint is runtime-agnostic (not tokio-specific)
+- Extract prompt references only source-visible signals for publicity scoring
 
 ## 0.5.5
 
