@@ -199,6 +199,7 @@ pub struct OpenAIClient {
     extra_body: std::collections::HashMap<String, serde_json::Value>,
     extra_headers: Vec<(String, String)>,
     client: Client,
+    provider_label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,6 +265,11 @@ impl OpenAIClient {
         max_tokens: u32,
         timeout_secs: u64,
     ) -> Result<Self> {
+        let provider_label = if base_url.contains("api.openai.com") {
+            "openai".to_string()
+        } else {
+            "openai-compatible".to_string()
+        };
         Ok(Self {
             api_key: api_key.into(),
             model,
@@ -272,6 +278,7 @@ impl OpenAIClient {
             extra_body: std::collections::HashMap::new(),
             extra_headers: Vec::new(),
             client: build_http_client(timeout_secs)?,
+            provider_label,
         })
     }
 
@@ -381,7 +388,7 @@ impl LlmClient for OpenAIClient {
             .await
             .context("Failed to parse OpenAI API response")?;
 
-        log_usage("openai", &self.model, &api_response.usage);
+        log_usage(&self.provider_label, &self.model, &api_response.usage);
 
         let choice = api_response
             .choices
