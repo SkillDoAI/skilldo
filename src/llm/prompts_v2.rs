@@ -812,7 +812,7 @@ VERIFY before outputting (do not include this checklist):
 
 ## Output Structure
 
-Generate a SKILL.md file with EXACTLY the sections listed below. Your response MUST start with the opening `---` of the frontmatter. Do NOT include ANY preamble, commentary, corrections lists, conversational text, or markdown code fences. Do NOT say "Here is", "Certainly", or "Corrections made".
+Generate a SKILL.md file with EXACTLY the sections listed below. Your response MUST start with the opening `---` of the frontmatter. Do NOT wrap the output in a ```markdown fence. Do NOT include ANY preamble, commentary, corrections lists, or conversational text. Do NOT say "Here is", "Certainly", or "Corrections made". Code fences inside the document content (```rust, ```toml, ```text, etc.) are expected and required.
 
 Required sections in order:
 
