@@ -343,7 +343,6 @@ fn strip_trailing_meta_text(content: &str) -> String {
         "here is the corrected",
         "here is the updated",
         "here is the fixed",
-        "here is the complete",
         "here are the fixes",
         "i have made",
         "i've made",
