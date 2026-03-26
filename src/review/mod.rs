@@ -139,7 +139,7 @@ impl<'a> ReviewAgent<'a> {
             "REVIEW FAILED — Fix the following issues. Do NOT regenerate from scratch.\n\n",
         );
 
-        let accuracy_issues: Vec<_> = result
+        let non_safety_issues: Vec<_> = result
             .issues
             .iter()
             .filter(|i| i.category != "safety")
@@ -150,9 +150,9 @@ impl<'a> ReviewAgent<'a> {
             .filter(|i| i.category == "safety")
             .collect();
 
-        if !accuracy_issues.is_empty() {
+        if !non_safety_issues.is_empty() {
             feedback.push_str("ISSUES:\n");
-            for (i, issue) in accuracy_issues.iter().enumerate() {
+            for (i, issue) in non_safety_issues.iter().enumerate() {
                 feedback.push_str(&format!(
                     "{}. [{}] {}\n   Evidence: {}\n",
                     i + 1,
