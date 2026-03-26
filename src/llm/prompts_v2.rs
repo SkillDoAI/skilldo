@@ -121,9 +121,9 @@ a name that looks like a method, cross-reference it against real signatures befo
 PRIORITY: Focus on extracting PUBLIC user-facing APIs, NOT internal utilities.
 
 **How to identify PUBLIC APIs (language-specific hints may add more signals):**
-- Documented in user-facing docs → Public
-- Used in example code → Public
 - Exported at the top-level module entry point → Public
+- Used in example/test code in the source tree → Public
+- Has doc comments → likely Public
 - Internal/private modules or naming conventions → INTERNAL, deprioritize
 
 **Scoring system:**
@@ -142,9 +142,9 @@ Include in output:
 
 ## Deprecation Tracking and Categorization
 
-Look for deprecation signals (language-specific hints may add more):
-- CHANGELOG mentions of "Breaking Changes" or "Removed"
-- Documentation mentioning "deprecated", "removal in", "will be removed"
+Look for deprecation signals in source code (language-specific hints may add more):
+- Deprecation attributes/annotations on functions/types
+- Comments mentioning "deprecated", "removal in", "will be removed"
 - Error/exception raised when calling removed APIs
 
 **Categorize deprecation severity:**
