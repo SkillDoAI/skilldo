@@ -42,7 +42,7 @@ repos:
 
       - id: cargo-test
         name: cargo test
-        entry: cargo test --quiet
+        entry: bash -c 'MODULES=$(git diff --cached --name-only -- "*.rs" 2>/dev/null | grep "^src/" | sed "s|^src/||; s|\.rs$||; s|/mod$||; s|/|::|g" | sort -u); if [ -z "$MODULES" ]; then MODULES=$(git diff --name-only @{push}..HEAD -- "*.rs" 2>/dev/null | grep "^src/" | sed "s|^src/||; s|\.rs$||; s|/mod$||; s|/|::|g" | sort -u); fi; if [ -z "$MODULES" ]; then cargo test --quiet; else for mod in $MODULES; do echo "Testing $mod..."; cargo test --lib "$mod" --quiet || exit 1; done; fi'
         language: system
         types: [rust]
         pass_filenames: false
