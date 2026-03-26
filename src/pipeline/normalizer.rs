@@ -353,9 +353,20 @@ fn strip_trailing_meta_text(content: &str) -> String {
     // or blank lines after it through end-of-file. If there's a non-subordinate content
     // line (heading, code fence, paragraph) after the meta pattern, it's mid-body, not trailing.
     let mut trim_from = None;
+    let mut in_fence = false;
     for i in (last_heading + 1)..lines.len() {
         let trimmed = lines[i].trim().to_lowercase();
-        if trimmed.is_empty() {
+        // Track fenced code blocks — don't match meta patterns inside tagged fences.
+        // Bare ``` fences are NOT protected (LLMs wrap commentary in bare fences).
+        let is_tagged_fence = (trimmed.starts_with("```") && trimmed.len() > 3)
+            || (trimmed.starts_with("~~~") && trimmed.len() > 3);
+        let is_fence_close = trimmed == "```" || trimmed == "~~~";
+        if is_tagged_fence {
+            in_fence = true;
+        } else if is_fence_close && in_fence {
+            in_fence = false;
+        }
+        if in_fence || trimmed.is_empty() {
             continue;
         }
         if meta_patterns.iter().any(|p| trimmed.starts_with(p)) {
