@@ -381,8 +381,8 @@ def create(tags: list = None):
 - **Response** - Custom response
 "#
             .to_string())
-        } else if prompt.contains("quality gate for a generated SKILL.md") {
-            // Review agent: verdict
+        } else if prompt.contains("SKILL.MD UNDER REVIEW") {
+            // Review agent: Darryl verdict
             Ok(r#"{"passed": true, "issues": []}"#.to_string())
         } else {
             Ok(r#"{"status": "mock"}"#.to_string())

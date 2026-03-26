@@ -128,6 +128,11 @@ impl AnthropicClient {
 #[async_trait]
 impl LlmClient for AnthropicClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        if self.max_tokens == 0 {
+            anyhow::bail!(
+                "Anthropic requires max_tokens >= 1. Set a positive value in config (default: 8192)."
+            );
+        }
         let request = AnthropicRequest {
             model: self.model.clone(),
             max_tokens: self.max_tokens,
