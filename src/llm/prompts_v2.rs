@@ -471,10 +471,10 @@ For each breaking change:
 
 ## Documentation Patterns to Recognize
 
-**WARNING**: User-facing documentation may be outdated or inaccurate relative to the current \
-codebase. Treat docs as hints, not ground truth. If a doc claims a method exists or behaves \
-a certain way, it should be cross-referenced against actual code when possible. The extract \
-stage's API surface is the authoritative source for what methods exist.
+**WARNING**: User-facing documentation may be outdated or inaccurate. Treat docs as hints, not \
+ground truth. This stage only sees docs and changelog — source code validation happens in the \
+extract stage and review stage. Extract what docs claim, but flag anything that seems speculative \
+or unverifiable so downstream stages can cross-reference against the actual API surface.
 
 ### Code Examples
 - Extract working examples from docs

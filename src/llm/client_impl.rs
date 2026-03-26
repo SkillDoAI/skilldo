@@ -20,9 +20,9 @@ pub(crate) struct TokenUsage {
     pub total_tokens: u32,
     // Anthropic uses input/output naming
     #[serde(default, alias = "input_tokens")]
-    _input_tokens: u32,
+    input_tokens_alt: u32,
     #[serde(default, alias = "output_tokens")]
-    _output_tokens: u32,
+    output_tokens_alt: u32,
 }
 
 fn log_usage(provider: &str, model: &str, usage: &Option<TokenUsage>) {
@@ -30,12 +30,12 @@ fn log_usage(provider: &str, model: &str, usage: &Option<TokenUsage>) {
         let prompt = if u.prompt_tokens > 0 {
             u.prompt_tokens
         } else {
-            u._input_tokens
+            u.input_tokens_alt
         };
         let completion = if u.completion_tokens > 0 {
             u.completion_tokens
         } else {
-            u._output_tokens
+            u.output_tokens_alt
         };
         let total = if u.total_tokens > 0 {
             u.total_tokens
@@ -1393,8 +1393,8 @@ mod tests {
         assert_eq!(usage.completion_tokens, 0);
         assert_eq!(usage.total_tokens, 0);
         // log_usage reads _input_tokens/_output_tokens when public fields are 0
-        assert_eq!(usage._input_tokens, 50);
-        assert_eq!(usage._output_tokens, 150);
+        assert_eq!(usage.input_tokens_alt, 50);
+        assert_eq!(usage.output_tokens_alt, 150);
     }
 
     #[test]
@@ -1403,8 +1403,8 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 0);
         assert_eq!(usage.completion_tokens, 0);
         assert_eq!(usage.total_tokens, 0);
-        assert_eq!(usage._input_tokens, 0);
-        assert_eq!(usage._output_tokens, 0);
+        assert_eq!(usage.input_tokens_alt, 0);
+        assert_eq!(usage.output_tokens_alt, 0);
     }
 
     // --- Coverage: log_usage() ---
@@ -1415,8 +1415,8 @@ mod tests {
             prompt_tokens: 10,
             completion_tokens: 20,
             total_tokens: 30,
-            _input_tokens: 0,
-            _output_tokens: 0,
+            input_tokens_alt: 0,
+            output_tokens_alt: 0,
         });
         // Should not panic; exercises the Some branch with total > 0
         log_usage("openai", "gpt-4", &usage);
@@ -1428,8 +1428,8 @@ mod tests {
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
-            _input_tokens: 40,
-            _output_tokens: 60,
+            input_tokens_alt: 40,
+            output_tokens_alt: 60,
         });
         // Falls through to _input_tokens/_output_tokens, total computed as 100
         log_usage("anthropic", "claude-3", &usage);

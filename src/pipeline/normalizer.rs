@@ -334,7 +334,8 @@ fn strip_trailing_meta_text(content: &str) -> String {
     let meta_patterns = [
         "summary of fixes",
         "summary of changes made",
-        "summary of all",
+        "summary of all fixes",
+        "summary of all changes",
         "changes made:",
         "fixes made:",
         "fixes applied:",
