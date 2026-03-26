@@ -27,13 +27,13 @@ fn extract_behavioral_semantics(learn_output: &str) -> Option<String> {
     // Find matching closing bracket, tracking nesting and skipping string contents
     let mut depth = 0;
     let mut in_string = false;
-    let mut prev_ch = '\0';
+    let mut escape_count: usize = 0;
     for (i, ch) in learn_output[array_start..].char_indices() {
         if in_string {
-            if ch == '"' && prev_ch != '\\' {
+            if ch == '"' && escape_count.is_multiple_of(2) {
                 in_string = false;
             }
-            prev_ch = ch;
+            escape_count = if ch == '\\' { escape_count + 1 } else { 0 };
             continue;
         }
         match ch {
@@ -48,7 +48,7 @@ fn extract_behavioral_semantics(learn_output: &str) -> Option<String> {
             }
             _ => {}
         }
-        prev_ch = ch;
+        escape_count = 0;
     }
     None
 }

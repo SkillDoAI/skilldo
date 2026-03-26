@@ -99,7 +99,7 @@ impl<'a> ReviewAgent<'a> {
     /// Stage outputs are optional context for cross-referencing:
     /// - `api_surface`: extract-stage output (method signatures — ground truth)
     /// - `patterns`: map-stage output (usage patterns from tests)
-    /// - `context`: learn-stage output (conventions, pitfalls, behavioral semantics)
+    /// - `context`: behavioral_semantics extracted from learn-stage output (observable behaviors)
     pub async fn review(
         &self,
         skill_md: &str,
