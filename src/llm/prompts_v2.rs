@@ -473,8 +473,8 @@ For each breaking change:
 
 **WARNING**: User-facing documentation may be outdated or inaccurate. Treat docs as hints, not \
 ground truth. This stage only sees docs and changelog — source code validation happens in the \
-extract stage and review stage. Extract what docs claim, but flag anything that seems speculative \
-or unverifiable so downstream stages can cross-reference against the actual API surface.
+extract stage and review stage. Extract what docs claim — downstream stages will cross-reference \
+against the actual API surface.
 
 ### Code Examples
 - Extract working examples from docs
