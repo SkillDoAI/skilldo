@@ -20,6 +20,8 @@ pub struct ReviewResult {
     /// True when the LLM returned an unparseable verdict (non-strict mode only).
     /// The pipeline should retry when this is true and retries remain.
     pub malformed: bool,
+    /// Raw LLM verdict response for debug stage dumps.
+    pub raw_verdict: String,
 }
 
 impl Default for ReviewResult {
@@ -28,6 +30,7 @@ impl Default for ReviewResult {
             passed: true,
             issues: Vec::new(),
             malformed: false,
+            raw_verdict: String::new(),
         }
     }
 }
@@ -120,7 +123,8 @@ impl<'a> ReviewAgent<'a> {
             .await
             .context("review verdict LLM call failed")?;
 
-        let result = parse_review_response(&verdict_response, self.strict)?;
+        let mut result = parse_review_response(&verdict_response, self.strict)?;
+        result.raw_verdict = verdict_response;
 
         Ok(result)
     }
@@ -278,6 +282,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         passed,
         issues,
         malformed,
+        raw_verdict: String::new(), // populated by caller (ReviewAgent::review)
     })
 }
 
@@ -429,6 +434,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "accuracy".to_string(),
@@ -450,6 +456,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "safety".to_string(),
@@ -571,6 +578,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Error,

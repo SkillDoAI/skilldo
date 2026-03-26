@@ -759,7 +759,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 self.dump_stage(
                     &format!("5-review-attempt{}.txt", review_attempt + 1),
                     &format!(
-                        "passed: {}\nmalformed: {}\nissues:\n{}",
+                        "passed: {}\nmalformed: {}\nissues:\n{}\n\n--- raw verdict ---\n{}",
                         result.passed,
                         result.malformed,
                         result
@@ -767,7 +767,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                             .iter()
                             .map(|i| format!("  [{}][{}] {}", i.severity, i.category, i.complaint))
                             .collect::<Vec<_>>()
-                            .join("\n")
+                            .join("\n"),
+                        result.raw_verdict
                     ),
                 );
 

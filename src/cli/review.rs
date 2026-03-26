@@ -550,6 +550,7 @@ base_url = "http://localhost:11434/v1"
         let result = ReviewResult {
             passed: true,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![ReviewIssue {
                 severity: Severity::Warning,
                 category: "consistency".to_string(),
@@ -859,6 +860,7 @@ api_key_env = "none"
         let result = ReviewResult {
             passed: true,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![],
         };
 
@@ -875,6 +877,7 @@ api_key_env = "none"
         let result = ReviewResult {
             passed: true,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Warning,
@@ -916,6 +919,7 @@ api_key_env = "none"
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "accuracy".to_string(),
@@ -948,6 +952,7 @@ api_key_env = "none"
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Error,
