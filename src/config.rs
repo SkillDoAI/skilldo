@@ -303,7 +303,7 @@ impl LlmConfig {
     /// field from the request; Anthropic requires max_tokens so 0 will error.
     pub fn get_max_tokens(&self) -> u32 {
         if let Some(tokens) = self.max_tokens {
-            return tokens; // 0 = explicit "omit"
+            return tokens;
         }
 
         // Provider-specific defaults
