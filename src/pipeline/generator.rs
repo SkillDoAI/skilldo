@@ -321,8 +321,8 @@ impl Generator {
 
     /// Dump each pipeline stage's raw output to the specified directory.
     pub fn with_debug_stage_dir(mut self, dir_path: Option<String>) -> Self {
-        if let Some(path) = dir_path {
-            let dir = std::path::PathBuf::from(path);
+        if let Some(path) = dir_path.filter(|s| !s.trim().is_empty()) {
+            let dir = std::path::PathBuf::from(path.trim());
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
             } else {
