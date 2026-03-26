@@ -90,13 +90,39 @@ echo "────────────────────────�
 CR_INLINE=$(gh api "repos/${REPO}/pulls/${PR}/comments?per_page=100" \
     --jq '.[] | select(.user.login == "coderabbitai[bot]" and (.in_reply_to_id == null)) | "\(.path):\(.original_line) | \(.body | capture("_🟡 Minor_|_🟠 Major_|_🔴 Critical_") // "info") | \(.body | capture("\\*\\*(?<title>[^*]+)\\*\\*") | .title)"' 2>/dev/null)
 
-if [ -z "$CR_INLINE" ]; then
-    echo "  No inline findings"
-else
+if [ -n "$CR_INLINE" ]; then
+    echo "  Inline:"
     echo "$CR_INLINE" | while IFS= read -r line; do
-        echo "  • $line"
+        echo "    • $line"
     done
 fi
+
+# "Prompt for all review comments" from latest review
+CR_PROMPT_ALL=$(gh api "repos/${REPO}/pulls/${PR}/reviews" \
+    --jq '[.[] | select(.user.login == "coderabbitai[bot]")] | last | .body' \
+    | sed -n '/Prompt for all review comments/,/^<\/details>/p' \
+    | grep -v 'Prompt for all\|</details>\|<summary>\|````' \
+    | head -30)
+
+if [ -n "$CR_PROMPT_ALL" ]; then
+    echo "  Aggregated fix prompts:"
+    echo "$CR_PROMPT_ALL" | while IFS= read -r line; do
+        echo "    $line"
+    done
+fi
+
+if [ -z "$CR_INLINE" ] && [ -z "$CR_PROMPT_ALL" ]; then
+    echo "  No findings"
+fi
+echo ""
+
+# --- Last Checked Timestamp ---
+TIMESTAMP_FILE="/tmp/.pr-triage-${PR}-last-checked"
+LAST_CHECKED=$(cat "$TIMESTAMP_FILE" 2>/dev/null || echo "never")
+echo "───────────────────────────────────────────────────"
+echo "  Last checked: ${LAST_CHECKED}"
+date -u '+%Y-%m-%dT%H:%M:%SZ' > "$TIMESTAMP_FILE"
+echo "  Updated to: $(cat "$TIMESTAMP_FILE")"
 echo ""
 
 # --- Summary ---
