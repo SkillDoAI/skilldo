@@ -3,6 +3,20 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.7
+
+### Added
+- Test validator enriches deps from source manifest when model omits them from ## Imports — prevents compile failures due to missing dependencies (e.g., `serde_json` in llmposter)
+
+### Fixed
+- Extract prompt softens test-only usage signal for public API identification (CodeRabbit)
+
+### Findings (A/B test: opus 4.6 vs gpt-5.4 on llmposter)
+- **Opus 4.6 via CLI**: Generated 801-line SKILL.md, 3/3 tests passed (with dep enrichment), review converged in 3 attempts. 2 soft completeness warnings. Dep enrichment was critical — without it, all 3 tests failed (serde_json missing).
+- **Codex gpt-5.4 via CLI**: Timed out at 600s per call — codex `exec` mode runs as agent with tool calls, not suitable for text-only generation. Needs API mode.
+- **Dep loss**: Model consistently puts only 2/10 deps in ## Imports despite all being in Known Dependencies. Enrichment from source manifest fills the gap.
+- **CLI model confusion**: Opus occasionally generates chat messages ("I need access to...") instead of code during test retries
+
 ## 0.5.6
 
 ### Added
