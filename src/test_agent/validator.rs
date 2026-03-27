@@ -407,6 +407,10 @@ impl<'a> TestCodeValidator<'a> {
     /// `collected_deps` are structured deps from the source project's manifest
     /// (e.g., Cargo.toml). They supplement whatever the test parser extracts from
     /// the generated SKILL.md, ensuring deps the model omitted still get installed.
+    ///
+    /// NOTE: `collected_deps` is currently only applied for Rust in BareMetal
+    /// execution mode; it is a no-op for other languages/modes until support
+    /// is added.
     pub async fn validate(
         &self,
         skill_md: &str,
