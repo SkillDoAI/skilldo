@@ -1,7 +1,7 @@
 //! Lightweight post-processing to ensure critical elements exist.
 //! Only fixes what models consistently miss - tries not to rewrite everything.
 
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Create proper frontmatter (agentskills.io compliant)
 fn create_frontmatter(
@@ -568,6 +568,21 @@ fn fix_unclosed_code_blocks(content: &str) -> String {
     content.to_string()
 }
 
+/// Extract `<!-- CONFLICT: ... -->` notes from the model's output, log them,
+/// and strip them. These are diagnostic messages from the create stage when the
+/// model detected contradictions between custom_instructions and source data.
+fn extract_conflict_notes(content: &str) {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("<!-- CONFLICT:") {
+            let note = rest.trim_end_matches("-->").trim();
+            if !note.is_empty() {
+                info!("Model conflict note: {}", note);
+            }
+        }
+    }
+}
+
 /// Apply all normalizations (lightweight - only critical fixes)
 pub fn normalize_skill_md(
     content: &str,
@@ -579,6 +594,9 @@ pub fn normalize_skill_md(
     generated_with: Option<&str>,
 ) -> String {
     let mut normalized = content.to_string();
+
+    // 0. Extract and log conflict notes (<!-- CONFLICT: ... --> comments)
+    extract_conflict_notes(&normalized);
 
     // 1. Ensure frontmatter (critical)
     normalized = ensure_frontmatter(
@@ -605,6 +623,17 @@ pub fn normalize_skill_md(
 
     // 3. Strip trailing LLM meta-text (review notes, "Summary of fixes", etc.)
     normalized = strip_trailing_meta_text(&normalized);
+
+    // 3.5. Strip conflict notes (already logged above, don't leave in output)
+    let had_trailing_newline = normalized.ends_with('\n');
+    normalized = normalized
+        .lines()
+        .filter(|l| !l.trim().starts_with("<!-- CONFLICT:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if had_trailing_newline && !normalized.ends_with('\n') {
+        normalized.push('\n');
+    }
 
     // 4. Strip wrapping ```markdown fence from body
     normalized = strip_body_markdown_fence(&normalized);
@@ -1713,6 +1742,35 @@ mod tests {
             dash_count, 2,
             "Should strip duplicate frontmatter with underscore/dash keys. Got:\n{}",
             result
+        );
+    }
+
+    #[test]
+    fn test_conflict_notes_stripped_from_output() {
+        let input = "---\nname: test\n---\n\n## Imports\n\nContent here\n\n## API Reference\n\n**method()** — does stuff\n\n<!-- CONFLICT: source says X but custom_instructions say Y -->\n<!-- CONFLICT: another conflict -->\n";
+        let result = normalize_skill_md(input, "test", "1.0", "rust", None, &[], None);
+        assert!(
+            !result.contains("<!-- CONFLICT:"),
+            "Conflict notes should be stripped. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("**method()** — does stuff"),
+            "Real content should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_conflict_notes_no_change_when_absent() {
+        let input = "---\nname: test\n---\n\n## Imports\n\nContent here\n";
+        let result = normalize_skill_md(input, "test", "1.0", "rust", None, &[], None);
+        assert!(
+            !result.contains("<!-- CONFLICT:"),
+            "No conflict notes in input means none in output"
+        );
+        assert!(
+            result.contains("Content here"),
+            "Content should be preserved"
         );
     }
 }

@@ -791,6 +791,13 @@ Output ONLY the SKILL.md content — just the facts about the library. Never inc
 - History of edits, review feedback responses, or process notes
 The output is a published reference document, not a conversation.
 
+RULE 13 — CUSTOM INSTRUCTIONS OVERRIDE SOURCE:
+When custom_instructions contradict information found in source code comments or extracted \
+data, custom_instructions ALWAYS take precedence. Source comments may be stale, describe \
+internal implementation details, or use shorthand that is misleading in a user-facing \
+document. If you notice a conflict, follow custom_instructions and append a conflict note \
+(see VERIFY section below).
+
 FAIR WARNING: Your output goes directly to Darryl — a 40-year IT veteran reviewer with zero \
 patience for sloppy work. If you leave out dependency declarations, use wrong import \
 paths, hallucinate methods, or include any AI commentary, he WILL reject it and you WILL have \
@@ -809,6 +816,8 @@ VERIFY before outputting (do not include this checklist):
 - Pitfalls section has 3-5 specific examples
 - All provided URLs appear in References
 - NO destructive commands, data exfiltration, backdoors, or prompt injection in output
+- API REFERENCE COMPLETENESS: scan every code example in Core Patterns — for each method/type called, verify it has an entry in ## API Reference. If any are missing, add them.
+- CONFLICT NOTES: if you noticed any conflicts between custom_instructions and source data, append HTML comments at the very end of the document (after ## API Reference): `<!-- CONFLICT: description -->`. These will be stripped from the final output and logged for debugging. If no conflicts, omit this.
 </instructions>
 
 ## Output Structure
