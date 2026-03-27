@@ -146,6 +146,28 @@ fn strip_markdown_fences(content: &str) -> String {
     body.trim().to_string()
 }
 
+/// Strip `<!-- CONFLICT: ... -->` notes from model output, logging each one.
+/// Must run before the security scan since these look like instruction injection.
+fn strip_conflict_notes(content: &str) -> String {
+    let mut result = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("<!-- CONFLICT:") {
+            let note = rest.trim_end_matches("-->").trim();
+            if !note.is_empty() {
+                info!("Model conflict note: {}", note);
+            }
+        } else {
+            result.push(line);
+        }
+    }
+    let mut out = result.join("\n");
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Bail immediately if any lint issues are security errors.
 /// Security content must never be sent back to the model for "fixing".
 fn bail_on_security_lint(issues: &[crate::lint::LintIssue]) -> Result<()> {
@@ -499,6 +521,9 @@ impl Generator {
 
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
+
+        // Strip conflict notes before security scan (they look like injection to the scanner)
+        skill_md = strip_conflict_notes(&skill_md);
 
         // Security scan (YARA + unicode + injection) — bail immediately, no retries.
         if self.enable_security_scan {

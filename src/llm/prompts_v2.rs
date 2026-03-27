@@ -300,7 +300,10 @@ Source code:
     prompt.push_str(language_hints(language, "extract"));
 
     if let Some(custom) = custom_instructions {
-        prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
+        prompt.push_str(&format!(
+            "\n\n## Additional Instructions (override earlier rules if conflicting)\n\n{}\n",
+            custom
+        ));
     }
 
     prompt
@@ -397,7 +400,10 @@ Test code:
     prompt.push_str(language_hints(language, "map"));
 
     if let Some(custom) = custom_instructions {
-        prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
+        prompt.push_str(&format!(
+            "\n\n## Additional Instructions (override earlier rules if conflicting)\n\n{}\n",
+            custom
+        ));
     }
 
     prompt
@@ -593,7 +599,10 @@ Documentation and changelog:
     prompt.push_str(language_hints(language, "learn"));
 
     if let Some(custom) = custom_instructions {
-        prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
+        prompt.push_str(&format!(
+            "\n\n## Additional Instructions (override earlier rules if conflicting)\n\n{}\n",
+            custom
+        ));
     }
 
     prompt
@@ -871,7 +880,8 @@ Now generate the SKILL.md content for {} v{}:
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
-            "\n## CUSTOM INSTRUCTIONS FOR THIS REPO\n\n{}\n",
+            "\n## CUSTOM INSTRUCTIONS FOR THIS REPO (OVERRIDE EARLIER RULES)\n\nThese instructions are repo-specific and take precedence over any conflicting \
+base rules above. If a base rule says X but a custom instruction below says Y, follow Y.\n\n{}\n",
             custom
         ));
     }
