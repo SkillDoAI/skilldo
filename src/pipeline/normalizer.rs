@@ -574,7 +574,7 @@ fn fix_unclosed_code_blocks(content: &str) -> String {
 fn extract_conflict_notes(content: &str) {
     for line in content.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("<!-- CONFLICT:") {
+        if let Some(rest) = trimmed.strip_prefix("<!-- SKILLDO-CONFLICT:") {
             let note = rest.trim_end_matches("-->").trim();
             if !note.is_empty() {
                 info!("Model conflict note: {}", note);
@@ -628,7 +628,7 @@ pub fn normalize_skill_md(
     let had_trailing_newline = normalized.ends_with('\n');
     normalized = normalized
         .lines()
-        .filter(|l| !l.trim().starts_with("<!-- CONFLICT:"))
+        .filter(|l| !l.trim().starts_with("<!-- SKILLDO-CONFLICT:"))
         .collect::<Vec<_>>()
         .join("\n");
     if had_trailing_newline && !normalized.ends_with('\n') {
@@ -1750,7 +1750,7 @@ mod tests {
         let input = "---\nname: test\n---\n\n## Imports\n\nContent here\n\n## API Reference\n\n**method()** — does stuff\n\n<!-- CONFLICT: source says X but custom_instructions say Y -->\n<!-- CONFLICT: another conflict -->\n";
         let result = normalize_skill_md(input, "test", "1.0", "rust", None, &[], None);
         assert!(
-            !result.contains("<!-- CONFLICT:"),
+            !result.contains("<!-- SKILLDO-CONFLICT:"),
             "Conflict notes should be stripped. Got:\n{}",
             result
         );
@@ -1765,7 +1765,7 @@ mod tests {
         let input = "---\nname: test\n---\n\n## Imports\n\nContent here\n";
         let result = normalize_skill_md(input, "test", "1.0", "rust", None, &[], None);
         assert!(
-            !result.contains("<!-- CONFLICT:"),
+            !result.contains("<!-- SKILLDO-CONFLICT:"),
             "No conflict notes in input means none in output"
         );
         assert!(

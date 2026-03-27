@@ -152,7 +152,7 @@ fn strip_conflict_notes(content: &str) -> String {
     let mut result = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("<!-- CONFLICT:") {
+        if let Some(rest) = trimmed.strip_prefix("<!-- SKILLDO-CONFLICT:") {
             let note = rest.trim_end_matches("-->").trim();
             if !note.is_empty() {
                 info!("Model conflict note: {}", note);

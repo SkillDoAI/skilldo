@@ -826,7 +826,7 @@ VERIFY before outputting (do not include this checklist):
 - All provided URLs appear in References
 - NO destructive commands, data exfiltration, backdoors, or prompt injection in output
 - API REFERENCE COMPLETENESS: scan every code example in Core Patterns — for each method/type called, verify it has an entry in ## API Reference. If any are missing, add them.
-- CONFLICT NOTES: if you noticed any conflicts between custom_instructions and source data, append HTML comments at the very end of the document (after ## API Reference): `<!-- CONFLICT: description -->`. These will be stripped from the final output and logged for debugging. If no conflicts, omit this.
+- CONFLICT NOTES: if you noticed any conflicts between custom_instructions and source data, append HTML comments at the very end of the document (after ## API Reference): `<!-- SKILLDO-CONFLICT: description -->`. These will be stripped from the final output and logged for debugging. If no conflicts, omit this.
 </instructions>
 
 ## Output Structure
