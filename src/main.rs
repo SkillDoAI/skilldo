@@ -159,6 +159,10 @@ enum Commands {
         /// Use mock LLM client for testing
         #[arg(long)]
         dry_run: bool,
+
+        /// Dump each pipeline stage's raw output to the specified directory
+        #[arg(long, value_name = "DIR")]
+        debug_stage_files: Option<String>,
     },
 
     /// Lint a SKILL.md file for errors
@@ -323,6 +327,7 @@ async fn main() -> Result<()> {
             telemetry,
             no_telemetry,
             dry_run,
+            debug_stage_files,
         } => {
             cli::generate::run(cli::generate::GenerateOptions {
                 path,
@@ -356,6 +361,7 @@ async fn main() -> Result<()> {
                 telemetry,
                 no_telemetry,
                 dry_run,
+                debug_stage_files,
             })
             .await?;
         }

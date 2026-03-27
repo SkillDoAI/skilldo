@@ -81,11 +81,11 @@ fn test_extract_includes_method_type_classification() {
 fn test_extract_includes_type_hint_handling() {
     let prompt = extract_prompt("pydantic", "2.0.0", "", 1, None, false, &Language::Python);
 
-    assert!(prompt.contains("Annotated"));
-    assert!(prompt.contains("Union"));
-    assert!(prompt.contains("Optional"));
-    assert!(prompt.contains("Generic"));
-    assert!(prompt.contains("Callable"));
+    assert!(prompt.contains("Type Information"));
+    assert!(prompt.contains("type_hints"));
+    assert!(prompt.contains("is_optional"));
+    assert!(prompt.contains("base_type"));
+    assert!(prompt.contains("default_value"));
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn test_map_includes_test_client_patterns() {
 
     assert!(prompt.contains("TestClient"));
     assert!(prompt.contains("CliRunner"));
-    assert!(prompt.contains("Pytest fixtures"));
+    assert!(prompt.contains("pytest.fixture"));
 }
 
 #[test]
@@ -178,17 +178,17 @@ fn test_map_includes_parametrized_tests() {
 fn test_map_includes_async_patterns() {
     let prompt = map_prompt("httpx", "0.24.0", "", None, false, &Language::Python);
 
-    assert!(prompt.contains("async def test_async"));
-    assert!(prompt.contains("await"));
-    assert!(prompt.contains("Mark patterns as async"));
+    assert!(prompt.contains("Async Patterns"));
+    assert!(prompt.contains("async/await"));
+    assert!(prompt.contains("mark patterns as async"));
 }
 
 #[test]
 fn test_map_includes_dependency_injection() {
     let prompt = map_prompt("fastapi", "0.100.0", "", None, false, &Language::Python);
 
-    assert!(prompt.contains("Depends"));
-    assert!(prompt.contains("dependency patterns"));
+    assert!(prompt.contains("Depends()"));
+    assert!(prompt.contains("dependencies are created/injected"));
 }
 
 #[test]
@@ -260,17 +260,16 @@ fn test_learn_includes_docstring_styles() {
     let prompt = learn_prompt("numpy", "1.24.0", "", None, false, &Language::Python);
 
     assert!(prompt.contains("ReStructuredText"));
-    assert!(prompt.contains("Google style"));
-    assert!(prompt.contains("NumPy style"));
+    assert!(prompt.contains("Google/NumPy docstring styles"));
 }
 
 #[test]
 fn test_learn_includes_framework_specific_considerations() {
     let prompt = learn_prompt("django", "4.2.0", "", None, false, &Language::Python);
 
-    assert!(prompt.contains("Large Frameworks"));
-    assert!(prompt.contains("CLI Tools"));
-    assert!(prompt.contains("Async Frameworks"));
+    assert!(prompt.contains("Special Considerations"));
+    assert!(prompt.contains("Configuration patterns"));
+    assert!(prompt.contains("Async requirements"));
 }
 
 #[test]
@@ -935,10 +934,10 @@ fn test_comprehensive_coverage_extract() {
         "Method Type Classification",
         "Type Hint Handling",
         "Deprecation Tracking",
-        "Decorator Stacks",
-        "Class Hierarchies",
-        "Library-Specific Patterns",
-        "Exclusions",
+        "DECORATOR STACKS",
+        "CLASS HIERARCHIES",
+        "LIBRARY PATTERNS",
+        "Extraction Priorities",
         "Output Format",
     ];
 
@@ -962,9 +961,9 @@ fn test_comprehensive_coverage_map() {
         "What to Extract",
         "Key Testing Patterns",
         "Test Clients",
-        "Parametrized Tests",
+        "Parametrized / Data-Driven Tests",
         "Async Patterns",
-        "Dependency Injection",
+        "Dependency injection",
         "Error Handling",
         "Output Format",
     ];
@@ -1883,7 +1882,7 @@ fn test_create_prompt_python_ignores_deps() {
         &deps,
     );
     assert!(
-        !prompt.contains("[dependencies]"),
+        !prompt.contains("Known Dependencies (from Cargo.toml"),
         "Python create prompt must not include Rust [dependencies] block"
     );
     assert!(

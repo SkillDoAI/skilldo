@@ -120,7 +120,7 @@ impl ReviewFixtureClient {
 impl LlmClient for ReviewFixtureClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
         // Review verdict — pick pass or fail response based on attempt count
-        if prompt.contains("quality gate for a generated SKILL.md") {
+        if prompt.contains("SKILL.MD UNDER REVIEW") {
             let attempt = self.review_call_count.fetch_add(1, Ordering::SeqCst);
             let key = if attempt >= self.review_pass_on {
                 "review_verdict_pass"
@@ -135,7 +135,7 @@ impl LlmClient for ReviewFixtureClient {
         }
 
         // Create fix (review sends SKILL.md back for patching)
-        if prompt.contains("Here is the current SKILL.md") {
+        if prompt.contains("Here is the current SKILL.md") || prompt.contains("Current SKILL.md:") {
             if let Some(r) = self.fixture.responses.get("create_fix") {
                 return Ok(r.response.clone());
             }

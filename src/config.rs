@@ -298,7 +298,9 @@ impl LlmConfig {
             .unwrap_or_else(|| self.provider.to_string())
     }
 
-    /// Get max_tokens value, using provider-specific default if not specified
+    /// Get max_tokens value, using provider-specific default if not specified.
+    /// Returns 0 if explicitly set to 0 — OpenAI/Gemini/ChatGPT clients omit the
+    /// field from the request; Anthropic requires max_tokens so 0 will error.
     pub fn get_max_tokens(&self) -> u32 {
         if let Some(tokens) = self.max_tokens {
             return tokens;

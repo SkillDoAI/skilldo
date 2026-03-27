@@ -20,6 +20,8 @@ pub struct ReviewResult {
     /// True when the LLM returned an unparseable verdict (non-strict mode only).
     /// The pipeline should retry when this is true and retries remain.
     pub malformed: bool,
+    /// Raw LLM verdict response for debug stage dumps.
+    pub raw_verdict: String,
 }
 
 impl Default for ReviewResult {
@@ -28,6 +30,7 @@ impl Default for ReviewResult {
             passed: true,
             issues: Vec::new(),
             malformed: false,
+            raw_verdict: String::new(),
         }
     }
 }
@@ -93,17 +96,35 @@ impl<'a> ReviewAgent<'a> {
     }
 
     /// Run the review on a SKILL.md (LLM verdict only).
-    pub async fn review(&self, skill_md: &str, language: &Language) -> Result<ReviewResult> {
+    /// Stage outputs are optional context for cross-referencing:
+    /// - `api_surface`: extract-stage output (method signatures — ground truth)
+    /// - `patterns`: map-stage output (usage patterns from tests)
+    /// - `behavioral_semantics`: observable behaviors extracted from learn-stage output
+    pub async fn review(
+        &self,
+        skill_md: &str,
+        language: &Language,
+        api_surface: Option<&str>,
+        patterns: Option<&str>,
+        behavioral_semantics: Option<&str>,
+    ) -> Result<ReviewResult> {
         // LLM verdict (accuracy + safety + consistency)
-        let verdict_prompt =
-            prompts_v2::review_verdict_prompt(skill_md, self.custom_prompt.as_deref(), language);
+        let verdict_prompt = prompts_v2::review_verdict_prompt(
+            skill_md,
+            self.custom_prompt.as_deref(),
+            language,
+            api_surface,
+            patterns,
+            behavioral_semantics,
+        );
         let verdict_response = self
             .client
             .complete(&verdict_prompt)
             .await
             .context("review verdict LLM call failed")?;
 
-        let result = parse_review_response(&verdict_response, self.strict)?;
+        let mut result = parse_review_response(&verdict_response, self.strict)?;
+        result.raw_verdict = verdict_response;
 
         Ok(result)
     }
@@ -118,7 +139,7 @@ impl<'a> ReviewAgent<'a> {
             "REVIEW FAILED — Fix the following issues. Do NOT regenerate from scratch.\n\n",
         );
 
-        let accuracy_issues: Vec<_> = result
+        let non_safety_issues: Vec<_> = result
             .issues
             .iter()
             .filter(|i| i.category != "safety")
@@ -129,12 +150,13 @@ impl<'a> ReviewAgent<'a> {
             .filter(|i| i.category == "safety")
             .collect();
 
-        if !accuracy_issues.is_empty() {
-            feedback.push_str("ACCURACY ISSUES:\n");
-            for (i, issue) in accuracy_issues.iter().enumerate() {
+        if !non_safety_issues.is_empty() {
+            feedback.push_str("ISSUES:\n");
+            for (i, issue) in non_safety_issues.iter().enumerate() {
                 feedback.push_str(&format!(
-                    "{}. {}\n   Evidence: {}\n",
+                    "{}. [{}] {}\n   Evidence: {}\n",
                     i + 1,
+                    issue.category,
                     issue.complaint,
                     issue.evidence
                 ));
@@ -261,6 +283,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
         passed,
         issues,
         malformed,
+        raw_verdict: String::new(), // populated by caller (ReviewAgent::review)
     })
 }
 
@@ -412,6 +435,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "accuracy".to_string(),
@@ -421,7 +445,7 @@ mod tests {
         };
         let feedback = ReviewAgent::format_feedback(&result);
         assert!(feedback.contains("REVIEW FAILED"));
-        assert!(feedback.contains("ACCURACY ISSUES:"));
+        assert!(feedback.contains("ISSUES:"));
         assert!(feedback.contains("Wrong signature for set_loglevel"));
         assert!(feedback.contains("inspect.signature() says (level)"));
         assert!(feedback.contains("SAFETY ISSUES: None"));
@@ -433,6 +457,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "safety".to_string(),
@@ -554,6 +579,7 @@ mod tests {
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Error,
@@ -570,7 +596,7 @@ mod tests {
             ],
         };
         let feedback = ReviewAgent::format_feedback(&result);
-        assert!(feedback.contains("ACCURACY ISSUES:"));
+        assert!(feedback.contains("ISSUES:"));
         assert!(feedback.contains("SAFETY ISSUES:"));
         assert!(feedback.contains("Wrong signature"));
         assert!(feedback.contains("Prompt injection found"));
@@ -671,6 +697,9 @@ mod tests {
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 &Language::Python,
+                None,
+                None,
+                None,
             )
             .await
             .expect("review should succeed");
@@ -689,6 +718,9 @@ mod tests {
             .review(
                 "---\nname: testpkg\nversion: 1.0.0\necosystem: python\n---\n# Test",
                 &Language::Python,
+                None,
+                None,
+                None,
             )
             .await
             .expect("review should succeed");

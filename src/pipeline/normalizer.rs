@@ -36,7 +36,33 @@ pub fn ensure_frontmatter(
 ) -> String {
     let trimmed = content.trim_start();
 
-    // If frontmatter exists but has wrong format, replace it
+    // If content doesn't start with --- but has frontmatter nearby (LLMs sometimes
+    // prepend preamble text), extract the existing frontmatter and strip the preamble
+    // instead of blindly adding a new block.
+    if !trimmed.starts_with("---") {
+        if let Some(fm_start) = trimmed.find("\n---\n") {
+            let after = &trimmed[fm_start + 5..]; // skip the \n---\n (5 bytes)
+            if after.contains("name:") && after.contains("description:") {
+                if let Some(fm_end) = after.find("\n---") {
+                    // Found valid frontmatter after preamble — reconstruct without preamble
+                    let fm_block = &after[..fm_end];
+                    let body = &after[fm_end + 4..]; // skip \n---
+                    let reconstructed = format!("---\n{}\n---\n{}", fm_block, body);
+                    // Recurse to handle generated-by injection on the clean content
+                    return ensure_frontmatter(
+                        &reconstructed,
+                        package_name,
+                        version,
+                        ecosystem,
+                        license,
+                        generated_with,
+                    );
+                }
+            }
+        }
+    }
+
+    // If frontmatter exists at the start but has wrong format, replace it
     if let Some(after_start) = trimmed.strip_prefix("---") {
         // Scope field checks to frontmatter block (between first two --- delimiters)
         if let Some(end_pos) = after_start.find("---") {
@@ -288,6 +314,109 @@ fn strip_meta_text(content: &str) -> String {
     content.to_string()
 }
 
+/// Strip trailing LLM meta-text that leaks from the review→create feedback loop.
+/// LLMs sometimes append "Summary of fixes", "Changes made:", or similar self-review
+/// notes after the actual SKILL.md content. This strips any trailing content after
+/// the last recognized section that doesn't start with a ## heading.
+fn strip_trailing_meta_text(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Find the last ## heading
+    let last_heading = lines.iter().rposition(|l| l.starts_with("## "));
+
+    let last_heading = match last_heading {
+        Some(i) => i,
+        None => return content.to_string(),
+    };
+
+    // Find the end of the last section's content — look for trailing fenced blocks
+    // or prose that contains LLM commentary patterns
+    let meta_patterns = [
+        "summary of fixes",
+        "summary of changes made",
+        "summary of all fixes",
+        "summary of all changes",
+        "changes made:",
+        "fixes made:",
+        "fixes applied:",
+        "what was fixed",
+        "here is the corrected",
+        "here is the updated",
+        "here is the fixed",
+        "here are the fixes",
+        "i have made",
+        "i've made",
+    ];
+
+    // Find trailing meta-text by scanning FORWARD from the last heading.
+    // A meta block: a meta pattern line with only subordinate content (bullets, indented)
+    // or blank lines after it through end-of-file. If there's a non-subordinate content
+    // line (heading, code fence, paragraph) after the meta pattern, it's mid-body, not trailing.
+    let mut trim_from = None;
+    let mut in_fence = false;
+    for i in (last_heading + 1)..lines.len() {
+        let trimmed = lines[i].trim().to_lowercase();
+        // Track fenced code blocks — don't match meta patterns inside tagged fences.
+        // Bare ``` fences are NOT protected (LLMs wrap commentary in bare fences).
+        let is_tagged_fence = (trimmed.starts_with("```") && trimmed.len() > 3)
+            || (trimmed.starts_with("~~~") && trimmed.len() > 3);
+        let is_fence_close = trimmed == "```" || trimmed == "~~~";
+        if is_tagged_fence {
+            in_fence = true;
+        } else if is_fence_close && in_fence {
+            in_fence = false;
+        }
+        if in_fence || trimmed.is_empty() {
+            continue;
+        }
+        if meta_patterns.iter().any(|p| trimmed.starts_with(p)) {
+            // Check if everything after this line to EOF is subordinate
+            // (blank, bullets, indented, or more meta patterns)
+            let all_trailing = lines[i + 1..].iter().all(|l| {
+                let t = l.trim();
+                t.is_empty()
+                    || t.starts_with('-')
+                    || t.starts_with('*')
+                    || t.starts_with("```")
+                    || t.chars().next().is_some_and(|c| c.is_ascii_digit()) // numbered lists
+                    || l.starts_with("  ")
+                    || l.starts_with('\t')
+                    || meta_patterns.iter().any(|p| t.to_lowercase().contains(p))
+            });
+            if all_trailing {
+                trim_from = Some(i);
+                break;
+            }
+        }
+    }
+
+    if let Some(start) = trim_from {
+        // Strip a bare ``` fence that opens the meta block, but only if preceded
+        // by a blank line (meaning it opens the meta block). If preceded by content,
+        // it's the closing fence of a real code block — leave it.
+        let actual_start = if start > 0 && lines[start - 1].trim() == "```" {
+            let preceded_by_blank = start < 2 || lines[start - 2].trim().is_empty();
+            if preceded_by_blank {
+                start - 1
+            } else {
+                start
+            }
+        } else {
+            start
+        };
+        warn!(
+            "Stripping trailing LLM meta-text ({} lines from line {})",
+            lines.len() - actual_start,
+            actual_start + 1
+        );
+        let mut result = lines[..actual_start].join("\n");
+        result.push('\n');
+        return result;
+    }
+
+    content.to_string()
+}
+
 /// Strip duplicated frontmatter blocks that LLMs sometimes emit in the body
 fn strip_duplicate_frontmatter(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
@@ -385,18 +514,30 @@ fn strip_body_markdown_fence(content: &str) -> String {
 
     // Check if last non-empty line is a closing ```
     let last_nonempty = lines.iter().rposition(|l| !l.trim().is_empty());
-    let last_nonempty = match last_nonempty {
-        Some(i) if lines[i].trim() == "```" => i,
-        _ => return content.to_string(),
+    let has_closing_fence = matches!(last_nonempty, Some(i) if lines[i].trim() == "```");
+
+    // Strip the opening fence (and closing fence if present).
+    // Unclosed fences happen when the LLM forgets to close or output is truncated.
+    let body_end = if has_closing_fence {
+        last_nonempty.unwrap()
+    } else {
+        lines.len()
     };
 
-    warn!("Stripping wrapping ```markdown fence from body");
+    warn!(
+        "Stripping wrapping ```markdown fence from body ({})",
+        if has_closing_fence {
+            "paired"
+        } else {
+            "unclosed"
+        }
+    );
 
     // Rebuild: frontmatter + body without the wrapping fences
     let mut result: Vec<&str> = Vec::new();
     result.extend_from_slice(&lines[..=fm_end]);
     result.push(""); // blank line after frontmatter
-    result.extend_from_slice(&lines[body_start + 1..last_nonempty]);
+    result.extend_from_slice(&lines[body_start + 1..body_end]);
 
     let mut out = result.join("\n");
     out.push('\n');
@@ -452,14 +593,18 @@ pub fn normalize_skill_md(
     // 1.5. Clean frontmatter (remove blank lines, trim --- whitespace)
     normalized = clean_frontmatter(&normalized);
 
-    // 2. Strip meta-text preamble (LLM framing text)
+    // 2. Strip duplicate frontmatter blocks (before meta-text, so meta-text
+    //    stripping doesn't accidentally eat the duplicate frontmatter content)
+    normalized = strip_duplicate_frontmatter(&normalized);
+
+    // 2.5. Strip meta-text preamble (LLM framing text)
     normalized = strip_meta_text(&normalized);
 
-    // 2.5. Strip leaked metadata from body
+    // 2.7. Strip leaked metadata from body
     normalized = strip_leaked_metadata(&normalized);
 
-    // 3. Strip duplicate frontmatter blocks
-    normalized = strip_duplicate_frontmatter(&normalized);
+    // 3. Strip trailing LLM meta-text (review notes, "Summary of fixes", etc.)
+    normalized = strip_trailing_meta_text(&normalized);
 
     // 4. Strip wrapping ```markdown fence from body
     normalized = strip_body_markdown_fence(&normalized);
@@ -740,6 +885,32 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_body_markdown_fence_unclosed() {
+        // Real-world failure: Sonnet CLI opened ```markdown but never closed it
+        let content = std::fs::read_to_string("tests/fixtures/llmposter-fence-wrap-SKILL.md")
+            .expect("fixture must exist");
+        let result = strip_body_markdown_fence(&content);
+
+        assert!(
+            !result.contains("```markdown"),
+            "Should strip unclosed ```markdown fence"
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve body content"
+        );
+        assert!(
+            result.contains("name: llmposter"),
+            "Should preserve frontmatter"
+        );
+        // Verify the normalizer didn't eat the inner code blocks
+        assert!(
+            result.contains("```rust") || result.contains("```toml"),
+            "Should preserve inner code fences"
+        );
+    }
+
+    #[test]
     fn test_strip_body_markdown_fence_no_wrapper() {
         let content = "---\nname: test\ndescription: test library.\nlicense: MIT\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n";
         let result = strip_body_markdown_fence(content);
@@ -984,13 +1155,17 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_body_markdown_fence_last_line_not_closing_fence() {
-        // Line 305: body starts with ```markdown but last non-empty line is NOT ```
+    fn test_strip_body_markdown_fence_unclosed_simple() {
+        // Body starts with ```markdown but no closing ``` — should still strip
         let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n```markdown\n## Imports\nimport foo\nNo closing fence here\n";
         let result = strip_body_markdown_fence(content);
-        assert_eq!(
-            result, content,
-            "Missing closing fence should mean no changes"
+        assert!(
+            !result.contains("```markdown"),
+            "Should strip unclosed ```markdown fence"
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve body content"
         );
     }
 
@@ -1111,5 +1286,433 @@ mod tests {
         let input = "---\nname: click\ndescription: CLI framework\nmetadata:\n  version: \"8.1.7\"\n  ecosystem: python\n---\n\n## Imports\nContent here\n";
         let result = normalize_skill_md(input, "click", "8.1.7", "python", None, &[], None);
         assert_eq!(result, input, "Clean frontmatter should not be modified");
+    }
+
+    // --- strip_trailing_meta_text tests ---
+
+    #[test]
+    fn test_strip_trailing_meta_text_summary_of_fixes() {
+        let content = "---\nname: click\ndescription: CLI toolkit.\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport click\n```\n\n## Core Patterns\nSome patterns here.\n\nSummary of fixes:\n- Fixed import order\n- Added missing docstrings\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("Summary of fixes"),
+            "Should strip 'Summary of fixes' trailing block. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("## Core Patterns"),
+            "Should preserve real content sections"
+        );
+        assert!(
+            result.contains("Some patterns here."),
+            "Should preserve section body"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_changes_made() {
+        let content = "---\nname: torch\ndescription: Deep learning framework.\nmetadata:\n  version: \"2.0.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport torch\n```\n\n## Pitfalls\nAvoid common mistakes.\n\nChanges made:\n- Updated version info\n- Corrected pitfalls section\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("Changes made"),
+            "Should strip 'Changes made:' trailing block. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("## Pitfalls"),
+            "Should preserve real sections"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_here_is_the_updated() {
+        let content = "---\nname: requests\ndescription: HTTP library.\nmetadata:\n  version: \"2.31.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport requests\n```\n\n## Core Patterns\nSome patterns.\n\nHere is the updated SKILL.md with all corrections applied.\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("Here is the updated"),
+            "Should strip 'Here is the updated' trailing text. Got:\n{}",
+            result
+        );
+        assert!(result.contains("## Core Patterns"));
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_clean_content_unchanged() {
+        let content = "---\nname: click\ndescription: CLI toolkit.\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport click\n```\n\n## Core Patterns\nSome patterns here.\n\n## References\n- [Docs](https://click.palletsprojects.com)\n";
+        let result = strip_trailing_meta_text(content);
+        assert_eq!(
+            result, content,
+            "Clean content with no trailing meta should be unchanged"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_pattern_in_middle_unchanged() {
+        // Meta patterns appearing in the middle of content (not trailing) should NOT be stripped
+        let content = "---\nname: click\ndescription: CLI toolkit.\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport click\n```\n\n## Migration Notes\nHere is the summary of changes from v7 to v8.\n\n## Core Patterns\nSome patterns here.\n\n## Pitfalls\nWatch out for edge cases.\n";
+        let result = strip_trailing_meta_text(content);
+        assert_eq!(
+            result, content,
+            "Meta patterns in the middle of content should not be stripped"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_pattern_mid_body_last_section() {
+        // Greptile P1: "summary of" appears mid-body in the last section,
+        // with real content AFTER it. Should NOT strip anything.
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## API Reference\nHere is a summary of the available methods:\n\n### `create()`\nCreates a new instance.\n\n### `delete()`\nDeletes an instance.\n";
+        let result = strip_trailing_meta_text(content);
+        assert_eq!(
+            result, content,
+            "Meta pattern mid-body in last section with real content after should not strip"
+        );
+    }
+
+    // --- ensure_frontmatter preamble handling tests ---
+
+    #[test]
+    fn test_ensure_frontmatter_strips_preamble_before_frontmatter() {
+        let content = "Below is the SKILL.md:\n\n---\nname: foo\ndescription: A foo library.\nlicense: MIT\nmetadata:\n  version: \"1.0.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport foo\n```\n";
+        let result = ensure_frontmatter(content, "foo", "1.0.0", "python", Some("MIT"), None);
+
+        assert!(
+            result.starts_with("---\n"),
+            "Should start with frontmatter after preamble stripping. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Below is the SKILL.md"),
+            "Should strip preamble text"
+        );
+        assert!(
+            result.contains("name: foo"),
+            "Should preserve frontmatter fields"
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve body content"
+        );
+    }
+
+    #[test]
+    fn test_ensure_frontmatter_preamble_with_generated_by_injection() {
+        let content = "Here is your generated SKILL.md file:\n\n---\nname: bar\ndescription: A bar library.\nlicense: Apache-2.0\nmetadata:\n  version: \"2.0.0\"\n  ecosystem: rust\n---\n\n## Imports\n```rust\nuse bar;\n```\n";
+        let result = ensure_frontmatter(
+            content,
+            "bar",
+            "2.0.0",
+            "rust",
+            Some("Apache-2.0"),
+            Some("gpt-5.2"),
+        );
+
+        assert!(
+            result.starts_with("---\n"),
+            "Should start with frontmatter. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Here is your generated"),
+            "Should strip preamble"
+        );
+        assert!(
+            result.contains("  generated-by: skilldo/gpt-5.2"),
+            "Should inject generated-by into metadata. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("name: bar"),
+            "Should preserve original frontmatter fields"
+        );
+        assert!(result.contains("## Imports"), "Should preserve body");
+    }
+
+    // ========================================================================
+    // strip_trailing_meta_text() — warn log path when stripping occurs
+    // ========================================================================
+
+    #[test]
+    fn test_strip_trailing_meta_text_with_fenced_meta_block() {
+        // Meta text preceded by a bare ``` fence — tests the fence-stripping branch
+        let content = "---\nname: click\ndescription: CLI toolkit.\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport click\n```\n\n## Core Patterns\nSome patterns here.\n\n```\nI have made the following corrections:\n- Fixed import order\n- Added examples\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("I have made"),
+            "Should strip 'I have made' trailing meta-text. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Fixed import order"),
+            "Should strip bullet points after meta pattern"
+        );
+        assert!(
+            result.contains("## Core Patterns"),
+            "Should preserve real content"
+        );
+        assert!(
+            result.contains("Some patterns here."),
+            "Should preserve section body"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_ive_made() {
+        // Tests the "i've made" pattern triggering the warn log
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n\n## Core Patterns\nContent.\n\nI've made several improvements to the skill file.\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("I've made"),
+            "Should strip 'I've made' trailing text. Got:\n{}",
+            result
+        );
+        assert!(result.contains("## Core Patterns"));
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_what_was_fixed() {
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\n```python\nimport test\n```\n\n## Pitfalls\nBe careful.\n\nWhat was fixed:\n- Item 1\n- Item 2\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("What was fixed"),
+            "Should strip 'What was fixed' trailing text. Got:\n{}",
+            result
+        );
+        assert!(result.contains("## Pitfalls"));
+        assert!(result.contains("Be careful."));
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_no_headings() {
+        // No ## headings at all — should return content unchanged
+        let content = "Just some text\nWith no headings\n";
+        let result = strip_trailing_meta_text(content);
+        assert_eq!(result, content, "No headings should mean no changes");
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_fixes_applied_with_consecutive_meta_lines() {
+        // Consecutive meta pattern lines (no non-meta content between them) are all stripped
+        let content = "---\nname: test\ndescription: test.\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Imports\nimport test\n\n## Core Patterns\nPatterns.\n\nFixes applied:\nChanges made:\n- Change 1\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("Fixes applied"),
+            "Should strip 'Fixes applied'. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Changes made"),
+            "Should strip 'Changes made'"
+        );
+        assert!(result.contains("Patterns."));
+    }
+
+    // ========================================================================
+    // ensure_frontmatter() — preamble with no closing frontmatter delimiter
+    // ========================================================================
+
+    #[test]
+    fn test_ensure_frontmatter_preamble_no_closing_delimiter() {
+        // Preamble text + opening --- + frontmatter fields but NO closing ---
+        // This should fall through the preamble detection (line 46 returns None)
+        // and proceed to add new frontmatter since content doesn't start with ---
+        let content = "Here is your SKILL.md:\n\n---\nname: foo\ndescription: A foo library.\n";
+        let result = ensure_frontmatter(content, "foo", "1.0.0", "python", Some("MIT"), None);
+
+        // Since there's no closing ---, the preamble handler can't reconstruct.
+        // The function should still produce valid output with frontmatter.
+        assert!(
+            result.contains("name:"),
+            "Should have name in output. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_ensure_frontmatter_preamble_has_name_desc_but_no_close() {
+        // Specific edge case: preamble detection finds \n---\n, content after has
+        // name: and description:, but there is no second \n--- to close the block.
+        // The inner `if let Some(fm_end)` on line 46 returns None, falling through.
+        let content =
+            "LLM preamble text\n---\nname: mylib\ndescription: A library for things.\nlicense: MIT\n";
+        let result = ensure_frontmatter(content, "mylib", "1.0.0", "python", Some("MIT"), None);
+
+        // Should still produce usable output (falls through to normal frontmatter handling)
+        assert!(
+            result.contains("name:"),
+            "Should have name field. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_ensure_frontmatter_preamble_without_name_field() {
+        // Preamble + \n---\n but the content after doesn't have name:/description:
+        // so the preamble detection is skipped entirely (line 45 condition fails)
+        let content = "Some preamble\n---\nrandom: stuff\nno_name_here: true\n---\n\n## Imports\n";
+        let result = ensure_frontmatter(content, "testlib", "1.0.0", "python", None, None);
+
+        // Should add proper frontmatter since the existing one lacks required fields
+        assert!(
+            result.contains("name: testlib"),
+            "Should contain correct name. Got:\n{}",
+            result
+        );
+    }
+
+    // --- Coverage gap tests ---
+
+    #[test]
+    fn test_ensure_frontmatter_missing_version_and_metadata() {
+        // Frontmatter has name and description but no version AND no metadata
+        // This exercises line 76: !has_version && !has_metadata
+        let content =
+            "---\nname: mylib\ndescription: A library.\nlicense: MIT\n---\n\n## Imports\n";
+        let result = ensure_frontmatter(content, "mylib", "1.0.0", "python", Some("MIT"), None);
+
+        assert!(
+            result.contains("metadata:"),
+            "Should replace with proper frontmatter containing metadata. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("version: \"1.0.0\""),
+            "Should have version in new frontmatter"
+        );
+    }
+
+    #[test]
+    fn test_ensure_frontmatter_broken_no_closing_delimiter() {
+        // Content starts with --- but has no second --- delimiter
+        // This exercises line 109: no closing --- found
+        let content = "---\nname: mylib\ndescription: A library.\nversion: 1.0\n";
+        let result = ensure_frontmatter(content, "mylib", "1.0", "python", None, None);
+
+        // Should fall through and add new frontmatter since existing is broken
+        assert!(
+            result.contains("name:"),
+            "Should produce output with frontmatter. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_clean_frontmatter_with_lines_before_opening_delimiter() {
+        // Lines before the opening --- delimiter exercises lines 185-186
+        let content =
+            "preamble line\n---\nname: test\n\ndescription: test.\nversion: 1.0\n---\n\n## Imports\n";
+        let result = clean_frontmatter(content);
+
+        assert!(
+            result.contains("preamble line"),
+            "Should preserve lines before frontmatter"
+        );
+        // Blank lines inside frontmatter should be removed
+        let fm_start = result.find("---\n").unwrap();
+        let fm_end = result[fm_start + 4..].find("\n---").unwrap();
+        let frontmatter = &result[fm_start + 4..fm_start + 4 + fm_end];
+        assert!(
+            !frontmatter.contains("\n\n"),
+            "Should remove blank lines from frontmatter. Got:\n{}",
+            frontmatter
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_no_frontmatter() {
+        // Content without frontmatter — exercises line 220: None branch
+        let content = "No frontmatter here\ngenerated-by: skilldo/gpt-5.2\nMore content\n";
+        let result = strip_leaked_metadata(content);
+        assert_eq!(
+            result, content,
+            "No frontmatter should mean no changes for leaked metadata stripping"
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_metadata_trailing_newline_preserved() {
+        // Exercises line 255-257: the trailing newline fixup after stripping
+        let content = "---\nname: test\ndescription: test lib\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n## Overview\n\ngenerated-by: skilldo/0.2.4\n";
+        let result = strip_leaked_metadata(content);
+
+        assert!(
+            !result
+                .split("\n---\n")
+                .nth(1)
+                .unwrap()
+                .contains("generated-by: skilldo"),
+            "Should strip leaked metadata"
+        );
+        assert!(result.ends_with('\n'), "Should preserve trailing newline");
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_heading_before_candidate() {
+        // A ## heading appears before the candidate duplicate --- block
+        // This exercises line 413: heading before second_start
+        let content = "---\nname: test\ndescription: test.\nversion: 1.0\necosystem: python\n---\n\n## Section One\nContent here.\n\n---\n\nname: test\ndescription: test.\n\n---\n\n## More\n";
+        let result = strip_duplicate_frontmatter(content);
+        assert_eq!(
+            result, content,
+            "Heading before candidate duplicate should prevent stripping"
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_md_variant() {
+        // Body starts with ```md (not ```markdown) — exercises the paired branch
+        // and the "paired" label at line 497-498
+        let content = "---\nname: test\ndescription: test.\nlicense: MIT\nmetadata:\n  version: \"1.0\"\n  ecosystem: python\n---\n\n```md\n## Imports\n\n```python\nimport test\n```\n\n## Core Patterns\nSome patterns\n```\n";
+        let result = strip_body_markdown_fence(content);
+
+        assert!(
+            !result.contains("```md"),
+            "Should strip ```md wrapper. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("## Imports"),
+            "Should preserve body content"
+        );
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_heading_after_candidate_non_yaml() {
+        // 4+ dashes where heading comes AFTER the candidate duplicate block,
+        // but the candidate has <2 yaml-like lines so looks_like_frontmatter = false.
+        let content = "---\nname: test\ndescription: test.\nversion: 1.0\necosystem: python\n---\n\n---\nThis is just text.\nNo YAML here!\n---\n\n## Section\nContent.\n";
+        let result = strip_duplicate_frontmatter(content);
+        assert_eq!(
+            result, content,
+            "Non-YAML content between duplicate dashes should not be stripped"
+        );
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_no_heading_at_all() {
+        // 4+ dashes with no ## heading anywhere
+        let content = "---\nname: test\ndescription: test.\nversion: 1.0\necosystem: python\n---\n\n---\nname: test\ndescription: test.\nversion: 1.0\n---\n\nJust content, no headings.\n";
+        let result = strip_duplicate_frontmatter(content);
+
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(
+            dash_count, 2,
+            "Should strip duplicate frontmatter when no headings exist. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_duplicate_frontmatter_keys_with_underscore_and_dash() {
+        // YAML keys containing _ and - characters
+        let content = "---\nname: test\ndescription: test.\nversion: 1.0\necosystem: python\n---\n\n---\nsome_key: value1\nsome-other: value2\n---\n\n## Imports\n";
+        let result = strip_duplicate_frontmatter(content);
+
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(
+            dash_count, 2,
+            "Should strip duplicate frontmatter with underscore/dash keys. Got:\n{}",
+            result
+        );
     }
 }

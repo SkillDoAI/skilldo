@@ -55,45 +55,65 @@ impl<'a> GoCodeGenerator<'a> {
     fn extract_code_from_response(response: &str) -> Result<String> {
         let trimmed = response.trim();
 
-        // Try language-tagged fence first (```go or ~~~go), then generic fence
-        for fence in &["```", "~~~"] {
-            let go_fence = format!("{fence}go");
-            if let Some(start) = trimmed.find(&go_fence) {
-                let code_start = start + go_fence.len();
-                // Skip optional "lang" suffix (e.g., ```golang)
-                let after = &trimmed[code_start..];
-                let newline_pos = after.find('\n').unwrap_or(0);
-                let actual_start = code_start + newline_pos;
-                if let Some(end) = trimmed[actual_start..].find(*fence) {
-                    let code = trimmed[actual_start..actual_start + end].trim();
-                    return Ok(code.to_string());
-                }
+        const GO_TAGS: &[&str] = &["go", "golang"];
+
+        // Collect all fenced blocks with their tags
+        let blocks = crate::util::find_fenced_blocks(trimmed);
+
+        // Pass 1: prefer Go-tagged blocks
+        for (tag, body) in &blocks {
+            if GO_TAGS.contains(&tag.as_str()) {
+                return Ok(body.clone());
             }
         }
 
-        // Try generic ``` or ~~~ code block
-        for fence in &["```", "~~~"] {
-            if let Some(start) = trimmed.find(*fence) {
-                let code_start = start + fence.len();
-                if let Some(end) = trimmed[code_start..].find(*fence) {
-                    let mut code = trimmed[code_start..code_start + end].trim();
-                    // Strip known language tags
-                    if let Some((first_line, rest)) = code.split_once('\n') {
-                        let tag = first_line.trim().to_ascii_lowercase();
-                        const KNOWN_TAGS: &[&str] = &[
-                            "go", "golang", "bash", "sh", "shell", "text", "txt", "json", "yaml",
-                            "yml", "toml",
-                        ];
-                        if KNOWN_TAGS.contains(&tag.as_str()) {
-                            code = rest.trim();
-                        }
-                    }
-                    return Ok(code.to_string());
-                }
+        // Pass 2: fall back to first block that isn't a known non-Go language
+        const NON_GO_TAGS: &[&str] = &[
+            "json",
+            "bash",
+            "sh",
+            "shell",
+            "zsh",
+            "text",
+            "txt",
+            "yaml",
+            "yml",
+            "toml",
+            "sql",
+            "javascript",
+            "js",
+            "python",
+            "python3",
+            "py",
+            "ruby",
+            "rb",
+            "java",
+            "rust",
+            "rs",
+            "typescript",
+            "ts",
+            "html",
+            "css",
+            "xml",
+            "dockerfile",
+            "makefile",
+            "markdown",
+            "md",
+            "diff",
+            "csv",
+        ];
+        for (tag, body) in &blocks {
+            if tag.is_empty() || !NON_GO_TAGS.contains(&tag.as_str()) {
+                return Ok(body.clone());
             }
         }
 
-        // If no code block found, use the response as-is
+        // Pass 3: any block at all
+        if let Some((_, body)) = blocks.first() {
+            return Ok(body.clone());
+        }
+
+        // No code block found — use the response as-is
         Ok(trimmed.to_string())
     }
 }
@@ -437,15 +457,14 @@ func main() {
 
     #[test]
     fn test_extract_code_generic_block_with_known_tag_on_first_line() {
-        // Generic ``` block where the first content line is a known language tag "go"
-        // This exercises the branch that strips the tag from a generic fence block
+        // Generic ``` block where "go" is on its own line — not a tag per CommonMark.
+        // find_fenced_blocks correctly treats this as body content (tag is on the fence line).
         let response = "```\ngo\npackage main\n\nfunc main() {}\n```";
         let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
         assert!(
             code.contains("package main"),
-            "should strip 'go' tag from generic block: {code}"
+            "should preserve body: {code}"
         );
-        assert!(!code.starts_with("go"), "tag should be stripped: {code}");
     }
 
     #[test]
@@ -464,6 +483,29 @@ func main() {
         let response = "```\nfmt.Println(\"hi\")\n```";
         let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
         assert_eq!(code, "fmt.Println(\"hi\")");
+    }
+
+    #[test]
+    fn test_extract_code_all_non_go_tags_falls_through_to_pass3() {
+        // All blocks have tags that are in the NON_GO_TAGS list.
+        // Pass 1 skips (no "go"/"golang" tags), Pass 2 skips (all tags are known non-Go),
+        // so Pass 3 returns the first block regardless of its tag.
+        let response = r#"
+Here are two blocks:
+
+```json
+{"key": "value"}
+```
+
+```python
+print("hello")
+```
+"#;
+        let code = GoCodeGenerator::extract_code_from_response(response).unwrap();
+        assert!(
+            code.contains(r#"{"key": "value"}"#),
+            "Pass 3 should return first block: {code}"
+        );
     }
 
     poison_recovery_tests!(GoCodeGenerator, sample_pattern);

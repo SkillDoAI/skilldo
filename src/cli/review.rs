@@ -78,7 +78,9 @@ pub async fn run(
     let review_agent =
         ReviewAgent::new(client.as_ref(), config.prompts.review_custom.clone()).with_strict(true);
 
-    let result = review_agent.review(&skill_md, &lang).await?;
+    let result = review_agent
+        .review(&skill_md, &lang, None, None, None)
+        .await?;
 
     // Print results
     write_review_output(&result, &mut std::io::stdout())?;
@@ -548,6 +550,7 @@ base_url = "http://localhost:11434/v1"
         let result = ReviewResult {
             passed: true,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![ReviewIssue {
                 severity: Severity::Warning,
                 category: "consistency".to_string(),
@@ -857,6 +860,7 @@ api_key_env = "none"
         let result = ReviewResult {
             passed: true,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![],
         };
 
@@ -873,6 +877,7 @@ api_key_env = "none"
         let result = ReviewResult {
             passed: true,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Warning,
@@ -914,6 +919,7 @@ api_key_env = "none"
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![ReviewIssue {
                 severity: Severity::Error,
                 category: "accuracy".to_string(),
@@ -946,6 +952,7 @@ api_key_env = "none"
         let result = ReviewResult {
             passed: false,
             malformed: false,
+            raw_verdict: String::new(),
             issues: vec![
                 ReviewIssue {
                     severity: Severity::Error,

@@ -8,6 +8,49 @@ use tracing::debug;
 use super::client::LlmClient;
 use crate::util::SecretString;
 
+/// Token usage from an LLM API response. All fields optional since
+/// not all providers return all fields.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct TokenUsage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
+    #[serde(default)]
+    pub total_tokens: u32,
+    // Anthropic uses input/output naming
+    #[serde(default, alias = "input_tokens")]
+    input_tokens_alt: u32,
+    #[serde(default, alias = "output_tokens")]
+    output_tokens_alt: u32,
+}
+
+fn log_usage(provider: &str, model: &str, usage: &Option<TokenUsage>) {
+    if let Some(u) = usage {
+        let prompt = if u.prompt_tokens > 0 {
+            u.prompt_tokens
+        } else {
+            u.input_tokens_alt
+        };
+        let completion = if u.completion_tokens > 0 {
+            u.completion_tokens
+        } else {
+            u.output_tokens_alt
+        };
+        let total = if u.total_tokens > 0 {
+            u.total_tokens
+        } else {
+            prompt + completion
+        };
+        if total > 0 {
+            debug!(
+                "tokens: {} prompt={} completion={} total={} ({})",
+                model, prompt, completion, total, provider
+            );
+        }
+    }
+}
+
 /// Headers that must not be overridden by extra_headers (case-insensitive).
 const PROTECTED_HEADERS: &[&str] = &[
     "authorization",
@@ -57,6 +100,7 @@ struct AnthropicMessage {
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContent>,
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +128,11 @@ impl AnthropicClient {
 #[async_trait]
 impl LlmClient for AnthropicClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        if self.max_tokens == 0 {
+            anyhow::bail!(
+                "Anthropic requires max_tokens >= 1. Set a positive value in config (default: 8192)."
+            );
+        }
         let request = AnthropicRequest {
             model: self.model.clone(),
             max_tokens: self.max_tokens,
@@ -128,6 +177,8 @@ impl LlmClient for AnthropicClient {
             .await
             .context("Failed to parse Anthropic API response")?;
 
+        log_usage("anthropic", &self.model, &api_response.usage);
+
         api_response
             .content
             .first()
@@ -148,6 +199,7 @@ pub struct OpenAIClient {
     extra_body: std::collections::HashMap<String, serde_json::Value>,
     extra_headers: Vec<(String, String)>,
     client: Client,
+    provider_label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,6 +239,7 @@ impl OpenAIMessage {
 #[derive(Debug, Deserialize)]
 struct OpenAIResponse {
     choices: Vec<OpenAIChoice>,
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +265,11 @@ impl OpenAIClient {
         max_tokens: u32,
         timeout_secs: u64,
     ) -> Result<Self> {
+        let provider_label = if base_url.contains("api.openai.com") {
+            "openai".to_string()
+        } else {
+            "openai-compatible".to_string()
+        };
         Ok(Self {
             api_key: api_key.into(),
             model,
@@ -220,6 +278,7 @@ impl OpenAIClient {
             extra_body: std::collections::HashMap::new(),
             extra_headers: Vec::new(),
             client: build_http_client(timeout_secs)?,
+            provider_label,
         })
     }
 
@@ -240,8 +299,13 @@ impl OpenAIClient {
 #[async_trait]
 impl LlmClient for OpenAIClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
-        // GPT-5+ models use max_completion_tokens instead of max_tokens
-        let (max_tokens, max_completion_tokens) = if self.model.starts_with("gpt-5") {
+        // GPT-5+ models use max_completion_tokens instead of max_tokens.
+        // max_tokens = 0 means "omit from request, let provider decide".
+        // Normalize model name: strip provider prefix (e.g., "openai/gpt-5.1" → "gpt-5.1")
+        let model_name = self.model.rsplit('/').next().unwrap_or(&self.model);
+        let (max_tokens, max_completion_tokens) = if self.max_tokens == 0 {
+            (None, None)
+        } else if model_name.starts_with("gpt-5") {
             (None, Some(self.max_tokens))
         } else {
             (Some(self.max_tokens), None)
@@ -324,6 +388,8 @@ impl LlmClient for OpenAIClient {
             .await
             .context("Failed to parse OpenAI API response")?;
 
+        log_usage(&self.provider_label, &self.model, &api_response.usage);
+
         let choice = api_response
             .choices
             .first()
@@ -364,7 +430,7 @@ pub struct GeminiClient {
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
     contents: Vec<GeminiContent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
     generation_config: Option<GeminiGenerationConfig>,
 }
 
@@ -385,8 +451,20 @@ struct GeminiPart {
 }
 
 #[derive(Debug, Deserialize)]
+struct GeminiUsageMetadata {
+    #[serde(default, rename = "promptTokenCount")]
+    prompt_token_count: u32,
+    #[serde(default, rename = "candidatesTokenCount")]
+    candidates_token_count: u32,
+    #[serde(default, rename = "totalTokenCount")]
+    total_token_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
 struct GeminiResponse {
     candidates: Vec<GeminiCandidate>,
+    #[serde(default, rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -437,9 +515,13 @@ impl LlmClient for GeminiClient {
                     text: prompt.to_string(),
                 }],
             }],
-            generation_config: Some(GeminiGenerationConfig {
-                max_output_tokens: self.max_tokens,
-            }),
+            generation_config: if self.max_tokens == 0 {
+                None
+            } else {
+                Some(GeminiGenerationConfig {
+                    max_output_tokens: self.max_tokens,
+                })
+            },
         };
 
         debug!("Calling Gemini API with model: {}", self.model);
@@ -484,6 +566,13 @@ impl LlmClient for GeminiClient {
             .json()
             .await
             .context("Failed to parse Gemini API response")?;
+
+        if let Some(ref u) = api_response.usage_metadata {
+            debug!(
+                "tokens: {} prompt={} completion={} total={} (gemini)",
+                self.model, u.prompt_token_count, u.candidates_token_count, u.total_token_count
+            );
+        }
 
         api_response
             .candidates
@@ -535,6 +624,7 @@ struct ResponsesInputContent {
 #[derive(Debug, Deserialize)]
 struct ResponsesResponse {
     output: Vec<ResponsesOutput>,
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -593,7 +683,11 @@ impl LlmClient for ChatGPTClient {
                     text: prompt.to_string(),
                 }],
             }],
-            max_output_tokens: Some(self.max_tokens),
+            max_output_tokens: if self.max_tokens == 0 {
+                None
+            } else {
+                Some(self.max_tokens)
+            },
             store: false,
         };
 
@@ -647,6 +741,8 @@ impl LlmClient for ChatGPTClient {
             .json()
             .await
             .context("Failed to parse Responses API response")?;
+
+        log_usage("chatgpt", &self.model, &api_response.usage);
 
         let text: String = api_response
             .output
@@ -757,11 +853,17 @@ mod tests {
         let json = r#"{
             "content": [
                 {"type": "text", "text": "Hello, world!"}
-            ]
+            ],
+            "usage": {
+                "input_tokens": 25,
+                "output_tokens": 100
+            }
         }"#;
 
         let response: AnthropicResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.content[0].text, "Hello, world!");
+        assert!(response.usage.is_some());
+        log_usage("anthropic", "claude-3", &response.usage);
     }
 
     #[test]
@@ -774,7 +876,12 @@ mod tests {
                         "content": "Hello, world!"
                     }
                 }
-            ]
+            ],
+            "usage": {
+                "prompt_tokens": 15,
+                "completion_tokens": 42,
+                "total_tokens": 57
+            }
         }"#;
 
         let response: OpenAIResponse = serde_json::from_str(json).unwrap();
@@ -782,6 +889,8 @@ mod tests {
             response.choices[0].message.content.as_deref(),
             Some("Hello, world!")
         );
+        assert!(response.usage.is_some());
+        log_usage("openai", "gpt-4", &response.usage);
     }
 
     #[tokio::test]
@@ -870,7 +979,12 @@ mod tests {
                         ]
                     }
                 }
-            ]
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 12,
+                "candidatesTokenCount": 45,
+                "totalTokenCount": 57
+            }
         }"#;
 
         let response: GeminiResponse = serde_json::from_str(json).unwrap();
@@ -878,6 +992,18 @@ mod tests {
             response.candidates[0].content.parts[0].text,
             "Hello, world!"
         );
+        // Exercise the Gemini-specific usage debug path (mirrors complete() logic)
+        if let Some(ref u) = response.usage_metadata {
+            debug!(
+                "tokens: {} prompt={} completion={} total={} (gemini)",
+                "gemini-pro", u.prompt_token_count, u.candidates_token_count, u.total_token_count
+            );
+            assert_eq!(u.prompt_token_count, 12);
+            assert_eq!(u.candidates_token_count, 45);
+            assert_eq!(u.total_token_count, 57);
+        } else {
+            panic!("expected usageMetadata to be present");
+        }
     }
 
     // --- Coverage: empty API key (line 57/94) ---
@@ -972,7 +1098,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["generation_config"]["maxOutputTokens"], 16384);
+        assert_eq!(json["generationConfig"]["maxOutputTokens"], 16384);
     }
 
     // --- Coverage: empty responses (lines 94, 247, 362-363) ---
@@ -1188,7 +1314,12 @@ mod tests {
         let json = r#"{
             "output": [{
                 "content": [{"text": "Hello, world!"}]
-            }]
+            }],
+            "usage": {
+                "prompt_tokens": 30,
+                "completion_tokens": 55,
+                "total_tokens": 85
+            }
         }"#;
         let response: ResponsesResponse = serde_json::from_str(json).unwrap();
         let text: String = response
@@ -1198,6 +1329,8 @@ mod tests {
             .filter_map(|c| c.text.as_deref())
             .collect();
         assert_eq!(text, "Hello, world!");
+        assert!(response.usage.is_some());
+        log_usage("chatgpt", "gpt-5.2", &response.usage);
     }
 
     #[test]
@@ -1245,5 +1378,190 @@ mod tests {
             ChatGPTClient::new(String::new(), "m".to_string(), 8192, 120, true, None).unwrap();
         let key = client.api_key.expose();
         assert!(key.is_empty());
+    }
+
+    // --- Coverage: TokenUsage deserialization ---
+
+    #[test]
+    fn test_token_usage_deserialize_openai_fields() {
+        let json = r#"{
+            "prompt_tokens": 100,
+            "completion_tokens": 200,
+            "total_tokens": 300
+        }"#;
+        let usage: TokenUsage = serde_json::from_str(json).unwrap();
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, 200);
+        assert_eq!(usage.total_tokens, 300);
+    }
+
+    #[test]
+    fn test_token_usage_deserialize_anthropic_fields() {
+        let json = r#"{
+            "input_tokens": 50,
+            "output_tokens": 150
+        }"#;
+        let usage: TokenUsage = serde_json::from_str(json).unwrap();
+        // Anthropic fields land in the aliased private fields; public fields stay 0
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+        // log_usage reads _input_tokens/_output_tokens when public fields are 0
+        assert_eq!(usage.input_tokens_alt, 50);
+        assert_eq!(usage.output_tokens_alt, 150);
+    }
+
+    #[test]
+    fn test_token_usage_default() {
+        let usage = TokenUsage::default();
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+        assert_eq!(usage.input_tokens_alt, 0);
+        assert_eq!(usage.output_tokens_alt, 0);
+    }
+
+    // --- Coverage: log_usage() ---
+
+    #[test]
+    fn test_log_usage_with_some_openai_style() {
+        let usage = Some(TokenUsage {
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            total_tokens: 30,
+            input_tokens_alt: 0,
+            output_tokens_alt: 0,
+        });
+        // Should not panic; exercises the Some branch with total > 0
+        log_usage("openai", "gpt-4", &usage);
+    }
+
+    #[test]
+    fn test_log_usage_with_some_anthropic_style() {
+        let usage = Some(TokenUsage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            input_tokens_alt: 40,
+            output_tokens_alt: 60,
+        });
+        // Falls through to _input_tokens/_output_tokens, total computed as 100
+        log_usage("anthropic", "claude-3", &usage);
+    }
+
+    #[test]
+    fn test_log_usage_with_none() {
+        // Should not panic; exercises the None branch
+        log_usage("openai", "gpt-4", &None);
+    }
+
+    #[test]
+    fn test_log_usage_with_zero_totals() {
+        let usage = Some(TokenUsage::default());
+        // All zeros → total == 0 → no debug! call, but no panic
+        log_usage("openai", "gpt-4", &usage);
+    }
+
+    // --- Coverage: OpenAI max_tokens == 0 omit path ---
+
+    #[test]
+    fn test_openai_request_max_tokens_zero_omits_both() {
+        let max_tokens_cfg: u32 = 0;
+        let model = "gpt-4o";
+        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
+            (None, None)
+        } else if model.starts_with("gpt-5") {
+            (None, Some(max_tokens_cfg))
+        } else {
+            (Some(max_tokens_cfg), None)
+        };
+
+        assert!(max_tokens.is_none());
+        assert!(max_completion_tokens.is_none());
+
+        let request = OpenAIRequest {
+            model: model.to_string(),
+            messages: vec![OpenAIMessage::user("test")],
+            temperature: 0.7,
+            max_tokens,
+            max_completion_tokens,
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+        // Both should be absent due to skip_serializing_if = "Option::is_none"
+        assert!(json.get("max_tokens").is_none());
+        assert!(json.get("max_completion_tokens").is_none());
+    }
+
+    // --- Coverage: Gemini max_tokens == 0 omits generation_config ---
+
+    #[test]
+    fn test_gemini_request_max_tokens_zero_omits_generation_config() {
+        let max_tokens: u32 = 0;
+        let request = GeminiRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart {
+                    text: "test".to_string(),
+                }],
+            }],
+            generation_config: if max_tokens == 0 {
+                None
+            } else {
+                Some(GeminiGenerationConfig {
+                    max_output_tokens: max_tokens,
+                })
+            },
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+        // generation_config should be absent due to skip_serializing_if = "Option::is_none"
+        assert!(json.get("generationConfig").is_none());
+    }
+
+    // --- Coverage: ChatGPT max_tokens == 0 omits max_output_tokens ---
+
+    #[test]
+    fn test_chatgpt_request_max_tokens_zero_omits_max_output_tokens() {
+        let max_tokens: u32 = 0;
+        let req = ResponsesRequest {
+            model: "gpt-5.2".to_string(),
+            instructions: "i".to_string(),
+            input: vec![],
+            max_output_tokens: if max_tokens == 0 {
+                None
+            } else {
+                Some(max_tokens)
+            },
+            store: false,
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("max_output_tokens").is_none());
+    }
+
+    // --- Coverage: Gemini usage_metadata parsing ---
+
+    #[test]
+    fn test_gemini_response_with_usage_metadata() {
+        let json = r#"{
+            "candidates": [{"content": {"parts": [{"text": "hi"}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 20,
+                "totalTokenCount": 30
+            }
+        }"#;
+        let response: GeminiResponse = serde_json::from_str(json).unwrap();
+        let usage = response.usage_metadata.unwrap();
+        assert_eq!(usage.prompt_token_count, 10);
+        assert_eq!(usage.candidates_token_count, 20);
+        assert_eq!(usage.total_token_count, 30);
+    }
+
+    #[test]
+    fn test_gemini_response_without_usage_metadata() {
+        let json = r#"{"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}"#;
+        let response: GeminiResponse = serde_json::from_str(json).unwrap();
+        assert!(response.usage_metadata.is_none());
     }
 }

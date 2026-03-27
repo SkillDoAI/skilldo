@@ -101,8 +101,14 @@ pub fn run(language_str: &str, stage_filter: Option<&str>) -> anyhow::Result<()>
                 println!("{prompt}");
             }
             "review" => {
-                let prompt =
-                    prompts_v2::review_verdict_prompt("<SKILL_MD_CONTENT>", None, &language);
+                let prompt = prompts_v2::review_verdict_prompt(
+                    "<SKILL_MD_CONTENT>",
+                    None,
+                    &language,
+                    None,
+                    None,
+                    None,
+                );
                 println!("{prompt}");
             }
             "test" => {

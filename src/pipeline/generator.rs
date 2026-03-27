@@ -2,9 +2,61 @@
 //! create → review → test) with retry loops, normalization, and lint checks.
 
 use anyhow::Result;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::collector::CollectedData;
+
+/// Extract the behavioral_semantics JSON array from the learn stage output.
+/// Returns None if not found. Uses simple string matching to avoid fragile JSON parsing.
+fn extract_behavioral_semantics(learn_output: &str) -> Option<String> {
+    let key = "\"behavioral_semantics\"";
+    // Scan for the key — skip prose mentions where the next token isn't `: [`
+    let mut search_from = 0;
+    let (array_start, _) = loop {
+        let start = learn_output[search_from..].find(key)?;
+        let abs_start = search_from + start;
+        let after_key = &learn_output[abs_start + key.len()..];
+        if let Some(bracket_pos) = after_key.find('[') {
+            let between = &after_key[..bracket_pos];
+            if between
+                .chars()
+                .all(|c| c == ' ' || c == ':' || c == '\n' || c == '\r' || c == '\t')
+            {
+                break (abs_start + key.len() + bracket_pos, abs_start);
+            }
+        }
+        // Not a valid match — skip past this occurrence and try again
+        search_from = abs_start + key.len();
+    };
+
+    // Find matching closing bracket, tracking nesting and skipping string contents
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape_count: usize = 0;
+    for (i, ch) in learn_output[array_start..].char_indices() {
+        if in_string {
+            if ch == '"' && escape_count.is_multiple_of(2) {
+                in_string = false;
+            }
+            escape_count = if ch == '\\' { escape_count + 1 } else { 0 };
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    let extracted = &learn_output[array_start..=array_start + i];
+                    return Some(format!("behavioral_semantics: {}", extracted));
+                }
+            }
+            _ => {}
+        }
+        escape_count = 0;
+    }
+    None
+}
 use super::normalizer;
 use crate::config::{ContainerConfig, PromptsConfig};
 use crate::lint::{Severity, SkillLinter};
@@ -156,6 +208,7 @@ pub struct Generator {
     parallel_extraction: bool,      // Run extract/map/learn in parallel
     existing_skill: Option<String>, // Existing SKILL.md for update mode
     model_name: Option<String>,     // For metadata.generated-by frontmatter field
+    debug_stage_dir: Option<std::path::PathBuf>, // Dump stage outputs here
 }
 
 impl Generator {
@@ -179,6 +232,7 @@ impl Generator {
             parallel_extraction: true,
             existing_skill: None,
             model_name: None,
+            debug_stage_dir: None,
         }
     }
 
@@ -264,6 +318,32 @@ impl Generator {
 
     pub fn with_parallel_extraction(mut self, parallel: bool) -> Self {
         self.parallel_extraction = parallel;
+        self
+    }
+
+    /// Write a stage's output to the debug directory if enabled.
+    fn dump_stage(&self, filename: &str, content: &str) {
+        if let Some(ref dir) = self.debug_stage_dir {
+            let path = dir.join(filename);
+            if let Err(e) = std::fs::write(&path, content) {
+                warn!("Failed to write debug stage file {}: {}", path.display(), e);
+            } else {
+                debug!("Wrote debug stage file: {}", path.display());
+            }
+        }
+    }
+
+    /// Dump each pipeline stage's raw output to the specified directory.
+    pub fn with_debug_stage_dir(mut self, dir_path: Option<String>) -> Self {
+        if let Some(path) = dir_path.filter(|s| !s.trim().is_empty()) {
+            let dir = std::path::PathBuf::from(path.trim());
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
+            } else {
+                info!("Debug stage files: {}", dir.display());
+                self.debug_stage_dir = Some(dir);
+            }
+        }
         self
     }
 
@@ -375,6 +455,10 @@ impl Generator {
 
         info!("extract/map/learn: All extractions complete");
 
+        self.dump_stage("1-extract.md", &api_surface);
+        self.dump_stage("2-map.md", &patterns);
+        self.dump_stage("3-learn.md", &context);
+
         // create: Synthesize SKILL.md
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
             // Update mode: patch existing SKILL.md
@@ -410,6 +494,8 @@ impl Generator {
                 .complete(&synthesis_prompt)
                 .await?
         };
+
+        self.dump_stage("4-create-raw.md", &skill_md);
 
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
@@ -652,6 +738,19 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 self.prompts_config.review_custom.clone(),
             );
 
+            // Pre-build static parts once (context/api_surface don't change between retries)
+            let behavioral = extract_behavioral_semantics(&context);
+            let fix_preamble = format!(
+                "Fix the issues listed below in this SKILL.md. Output ONLY the corrected \
+                 SKILL.md content — no preamble, no commentary, no summary of changes, \
+                 no \"here is the fixed version\", no changelog. Just the raw SKILL.md \
+                 from the opening --- to the last section. Darryl is reviewing your output \
+                 and will reject anything that isn't pure documentation.\n\n\
+                 For accuracy fixes: use the API surface below as ground truth for method \
+                 signatures, parameter names, and feature flags. Do not guess.\n\n\
+                 API Surface:\n{}",
+                api_surface
+            );
             let mut last_review_attempt = 0;
             let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {
@@ -661,8 +760,31 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     review_attempt + 1,
                     self.review_max_retries + 1
                 );
+                let result = review_agent
+                    .review(
+                        &skill_md,
+                        &data.language,
+                        Some(&api_surface),
+                        None, // patterns too large for review context
+                        behavioral.as_deref(),
+                    )
+                    .await?;
 
-                let result = review_agent.review(&skill_md, &data.language).await?;
+                self.dump_stage(
+                    &format!("5-review-attempt{}.txt", review_attempt + 1),
+                    &format!(
+                        "passed: {}\nmalformed: {}\nissues:\n{}\n\n--- raw verdict ---\n{}",
+                        result.passed,
+                        result.malformed,
+                        result
+                            .issues
+                            .iter()
+                            .map(|i| format!("  [{}][{}] {}", i.severity, i.category, i.complaint))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        result.raw_verdict
+                    ),
+                );
 
                 if result.malformed {
                     if review_attempt < self.review_max_retries {
@@ -776,8 +898,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 );
                 let feedback = ReviewAgent::format_feedback(&result);
                 let fix_prompt = format!(
-                    "Here is the current SKILL.md:\n\n{}\n\n{}",
-                    skill_md, feedback
+                    "{}\n\nCurrent SKILL.md:\n\n{}\n\n{}",
+                    fix_preamble, skill_md, feedback
                 );
                 skill_md = self.get_client("create").complete(&fix_prompt).await?;
                 skill_md = strip_markdown_fences(&skill_md);
@@ -830,6 +952,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             &data.project_urls,
             self.model_name.as_deref(),
         );
+
+        self.dump_stage("6-normalized.md", &skill_md);
 
         // Final security gate after normalization
         rescan_after_rewrite(&skill_md, self.enable_security_scan, "post-normalization")?;
@@ -2846,7 +2970,7 @@ testpkg.run()
     #[async_trait::async_trait]
     impl LlmClient for FailingReviewClient {
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-            if prompt.contains("quality gate for a generated SKILL.md") {
+            if prompt.contains("SKILL.MD UNDER REVIEW") {
                 Ok(r#"{"passed": false, "issues": [{"complaint": "Wrong function signature for foo.bar()", "severity": "error", "category": "accuracy", "evidence": "signature is bar(x) not bar()"}]}"#.to_string())
             } else {
                 // For extract/map/learn/create prompts, delegate to MockLlmClient
@@ -2861,7 +2985,7 @@ testpkg.run()
     #[async_trait::async_trait]
     impl LlmClient for MalformedReviewClient {
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-            if prompt.contains("quality gate for a generated SKILL.md") {
+            if prompt.contains("SKILL.MD UNDER REVIEW") {
                 Ok("I think this looks fine overall.".to_string())
             } else {
                 MockLlmClient::new().complete(prompt).await
@@ -2886,7 +3010,7 @@ testpkg.run()
     #[async_trait::async_trait]
     impl LlmClient for FailThenPassReviewClient {
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-            if prompt.contains("quality gate for a generated SKILL.md") {
+            if prompt.contains("SKILL.MD UNDER REVIEW") {
                 let n = self
                     .call_count
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -2909,7 +3033,7 @@ testpkg.run()
     #[async_trait::async_trait]
     impl LlmClient for SafetyReviewClient {
         async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-            if prompt.contains("quality gate for a generated SKILL.md") {
+            if prompt.contains("SKILL.MD UNDER REVIEW") {
                 Ok(r#"{"passed": false, "issues": [{"complaint": "Contains dangerous code execution pattern", "severity": "error", "category": "safety", "evidence": "line 42: executes arbitrary user input"}]}"#.to_string())
             } else {
                 MockLlmClient::new().complete(prompt).await
@@ -3174,5 +3298,224 @@ None known.
     #[test]
     fn test_bail_on_security_lint_empty_issues_passes() {
         assert!(bail_on_security_lint(&[]).is_ok());
+    }
+
+    // ========================================================================
+    // extract_behavioral_semantics() — standalone function tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_behavioral_semantics_valid_json() {
+        let input = r#"{"behavioral_semantics": ["immutable by default", "lazy evaluation"]}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!(
+            val.starts_with("behavioral_semantics: ["),
+            "Should start with 'behavioral_semantics: ['. Got: {}",
+            val
+        );
+        assert!(val.contains("immutable by default"));
+        assert!(val.contains("lazy evaluation"));
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_missing_key() {
+        let input = r#"{"other_key": "value", "patterns": ["a", "b"]}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(
+            result.is_none(),
+            "Should return None when behavioral_semantics key is absent"
+        );
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_null_with_later_array() {
+        // P1 bug: key is null but a later field has an array — should NOT grab it
+        let input = r#"{"behavioral_semantics": null, "patterns": ["x", "y"]}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(
+            result.is_none(),
+            "Should not grab a later array when value is null: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_malformed_json_no_bracket() {
+        // Key exists but no opening bracket follows
+        let input = r#"{"behavioral_semantics": "not an array"}"#;
+        let result = extract_behavioral_semantics(input);
+        // The function looks for '[' after the key. "not an array" has no '[',
+        // but '}' comes before any '[', so it depends on whether '[' is found.
+        // Actually: after the key, the remaining string is `: "not an array"}`.
+        // There is no '[' in that string, so find('[') returns None.
+        assert!(
+            result.is_none(),
+            "Should return None when value is not an array"
+        );
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_nested_brackets() {
+        let input =
+            r#"{"behavioral_semantics": [["nested", "array"], "top-level"], "other": true}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        // Should capture the full outer array including nested brackets
+        assert!(val.starts_with("behavioral_semantics: ["), "Got: {}", val);
+        assert!(
+            val.ends_with(']'),
+            "Should end with closing bracket. Got: {}",
+            val
+        );
+        assert!(val.contains("[\"nested\""));
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_empty_array() {
+        let input = r#"{"behavioral_semantics": []}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "behavioral_semantics: []");
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_empty_string() {
+        let result = extract_behavioral_semantics("");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_unclosed_bracket() {
+        // Truly unclosed: nested bracket that never closes
+        let input = r#"{"behavioral_semantics": ["item1", ["nested""#;
+        let result = extract_behavioral_semantics(input);
+        assert!(
+            result.is_none(),
+            "Should return None when brackets are not balanced"
+        );
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_key_in_prose() {
+        // The key appears embedded in prose-like learn output
+        let input = r#"Here is the analysis.
+
+{
+  "behavioral_semantics": ["builder pattern", "fluent API", "method chaining"],
+  "paradigms": ["OOP"]
+}
+
+End of analysis."#;
+        let result = extract_behavioral_semantics(input);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!(val.contains("builder pattern"));
+        assert!(val.contains("method chaining"));
+    }
+
+    #[test]
+    fn test_extract_behavioral_semantics_prose_mentions_key_before_json() {
+        // CodeRabbit: prose mentions the key name before the actual JSON block
+        let input = r#"The "behavioral_semantics" field is shown below.
+
+{"behavioral_semantics": [{"trigger": "auth", "behavior": "401"}]}"#;
+        let result = extract_behavioral_semantics(input);
+        assert!(
+            result.is_some(),
+            "Should skip prose mention and find the real JSON array"
+        );
+        assert!(result.unwrap().contains("401"));
+    }
+
+    // ========================================================================
+    // dump_stage() — write failure warn path
+    // ========================================================================
+
+    #[test]
+    fn test_dump_stage_write_failure_warns() {
+        // with_debug_stage_dir("/dev/null/...") will fail create_dir_all,
+        // leaving debug_stage_dir as None. Manually set it to force the
+        // write-failure path in dump_stage.
+        let mut gen = Generator::new(Box::new(MockLlmClient::new()), 1);
+        // /dev/null is a file, not a directory — writes underneath it fail
+        gen.debug_stage_dir = Some(std::path::PathBuf::from("/dev/null"));
+
+        // dump_stage tries to write /dev/null/<filename> which will fail
+        // because /dev/null is not a directory. This exercises the warn path.
+        gen.dump_stage("test-stage.txt", "test content");
+        // No panic = success. The warn log is emitted internally.
+    }
+
+    #[test]
+    fn test_dump_stage_success_writes_file() {
+        let tmp = std::env::temp_dir().join(format!("skilldo-test-dump-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_debug_stage_dir(Some(tmp.to_string_lossy().to_string()));
+
+        gen.dump_stage("extract.txt", "extract output");
+        let written = std::fs::read_to_string(tmp.join("extract.txt")).unwrap();
+        assert_eq!(written, "extract output");
+
+        // Cleanup
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_dump_stage_noop_when_not_configured() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1);
+        // debug_stage_dir is None by default — dump_stage should be a no-op
+        gen.dump_stage("test.txt", "content");
+        // No panic = success
+    }
+
+    // ========================================================================
+    // with_debug_stage_dir() — dir creation failure warn path
+    // ========================================================================
+
+    #[test]
+    fn test_with_debug_stage_dir_creation_failure() {
+        // /dev/null is a file — create_dir_all("/dev/null/subdir") will fail
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_debug_stage_dir(Some("/dev/null/impossible/subdir".to_string()));
+
+        assert!(
+            gen.debug_stage_dir.is_none(),
+            "debug_stage_dir should remain None when dir creation fails"
+        );
+    }
+
+    #[test]
+    fn test_with_debug_stage_dir_success() {
+        let tmp =
+            std::env::temp_dir().join(format!("skilldo-test-debug-dir-{}", std::process::id()));
+        // Ensure it doesn't exist yet
+        std::fs::remove_dir_all(&tmp).ok();
+
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_debug_stage_dir(Some(tmp.to_string_lossy().to_string()));
+
+        assert!(
+            gen.debug_stage_dir.is_some(),
+            "debug_stage_dir should be set when dir creation succeeds"
+        );
+        assert!(tmp.exists(), "directory should have been created");
+
+        // Cleanup
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_with_debug_stage_dir_none() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1).with_debug_stage_dir(None);
+
+        assert!(
+            gen.debug_stage_dir.is_none(),
+            "debug_stage_dir should be None when None is passed"
+        );
     }
 }

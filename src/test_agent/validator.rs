@@ -565,11 +565,10 @@ impl<'a> TestCodeValidator<'a> {
                     );
                 }
                 ExecutionResult::Fail(error) => {
-                    warn!("    ✗ Test failed (after retry)");
-                    debug!(
-                        "    Error: {}",
-                        error.lines().next().unwrap_or("(no error message)")
-                    );
+                    // Show first 5 lines of error at warn level for diagnosis
+                    let summary: String = error.lines().take(5).collect::<Vec<_>>().join("\n");
+                    warn!("    ✗ Test failed (after retry):\n{}", summary);
+                    debug!("    Full error:\n{}", error);
                 }
                 ExecutionResult::Timeout => {
                     warn!("    ⏱  Test timed out");
@@ -593,7 +592,17 @@ impl<'a> TestCodeValidator<'a> {
         if failed == 0 {
             info!("  ✓ All {} tests passed!", passed);
         } else {
-            warn!("  ✗ {} tests passed, {} failed", passed, failed);
+            let failed_names: Vec<&str> = test_cases
+                .iter()
+                .filter(|tc| !tc.result.is_pass())
+                .map(|tc| tc.pattern_name.as_str())
+                .collect();
+            warn!(
+                "  ✗ {} tests passed, {} failed: {}",
+                passed,
+                failed,
+                failed_names.join(", ")
+            );
         }
 
         Ok(TestResult {
@@ -1452,6 +1461,38 @@ mod tests {
         assert_eq!(result.passed, 0);
         assert_eq!(result.failed, 3);
         assert_eq!(result.test_cases.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_validate_failed_names_collected_for_failed_patterns() {
+        // Exercises the `failed_names` collection path in the test summary:
+        // when tests fail, the warn! branch collects their names.
+        let patterns = vec![basic_pattern(), config_pattern()];
+        let validator = make_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("code")),
+            Box::new(MockExecutor::failing_execution("module not found")),
+            ValidationMode::Thorough,
+            InstallSource::Registry,
+        );
+        let result = validator.validate("# SKILL.md").await.unwrap();
+        assert_eq!(result.failed, 2);
+        // Verify the pattern names are preserved in the failed test cases —
+        // these are the same names that feed into the warn! `failed_names` output.
+        let failed_names: Vec<&str> = result
+            .test_cases
+            .iter()
+            .filter(|tc| !tc.result.is_pass())
+            .map(|tc| tc.pattern_name.as_str())
+            .collect();
+        assert!(
+            failed_names.contains(&"Basic Usage"),
+            "expected Basic Usage in failed names"
+        );
+        assert!(
+            failed_names.contains(&"Configuration"),
+            "expected Configuration in failed names"
+        );
     }
 
     #[test]

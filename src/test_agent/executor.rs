@@ -532,6 +532,34 @@ pub(crate) fn extract_cargo_package_name(source: &str) -> Option<String> {
         })
 }
 
+/// Remove `optional = true` from a TOML dep spec string.
+/// Test binaries need all deps unconditionally — optional flags are meaningless.
+fn strip_optional_from_dep_spec(spec: &str) -> String {
+    // Only inline tables can have optional — plain version strings ("1.0") can't
+    if !spec.contains("optional") {
+        return spec.to_string();
+    }
+    // Remove `optional = true` with common spacing variants
+    let stripped = spec
+        .replace("optional = true, ", "")
+        .replace(", optional = true", "")
+        .replace("optional = true", "")
+        .replace("optional=true, ", "")
+        .replace(", optional=true", "")
+        .replace("optional=true", "");
+    // If stripping left us with just `{ version = "X" }`, simplify to `"X"`
+    if let Ok(val) = stripped.parse::<toml::Value>() {
+        if let Some(table) = val.as_table() {
+            if table.len() == 1 {
+                if let Some(v) = table.get("version") {
+                    return v.to_string();
+                }
+            }
+        }
+    }
+    stripped
+}
+
 /// Format a single structured Cargo.toml dependency line.
 /// If the dep matches the local package (dash/underscore normalized), emits a
 /// `path = "..."` override preserving any features/default-features from `raw_spec`.
@@ -570,9 +598,10 @@ fn format_cargo_structured_dep_line(
             };
         }
     }
-    // Use raw spec (preserves version + features)
+    // Use raw spec (preserves version + features), but strip `optional = true`
+    // since the test binary needs all deps available unconditionally.
     if let Some(ref spec) = dep.raw_spec {
-        format!("{} = {}", dep.name, spec)
+        format!("{} = {}", dep.name, strip_optional_from_dep_spec(spec))
     } else {
         format!("{} = \"*\"", dep.name)
     }
@@ -2221,6 +2250,59 @@ func main() {
         };
         let line = format_cargo_dep_line(&dep, None);
         assert_eq!(line, "serde = { version = \"1\", features = [\"derive\"] }");
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_strips_optional() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        let dep = StructuredDep {
+            name: "reqwest".to_string(),
+            raw_spec: Some(
+                "{ default-features = false, features = [\"json\"], optional = true, version = \"0.13\" }".to_string(),
+            ),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, None);
+        assert!(
+            !line.contains("optional"),
+            "optional should be stripped: {line}"
+        );
+        assert!(line.contains("reqwest"), "dep name preserved");
+        assert!(line.contains("0.13"), "version preserved");
+        assert!(line.contains("json"), "features preserved");
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_optional_only_simplifies_to_version() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        let dep = StructuredDep {
+            name: "oauth-mock".to_string(),
+            raw_spec: Some("{ optional = true, version = \"0.4\" }".to_string()),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, None);
+        assert!(!line.contains("optional"), "optional stripped: {line}");
+        assert!(line.contains("0.4"), "version preserved: {line}");
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_optional_with_non_version_single_key() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+        // When stripping optional leaves a single key that is NOT "version",
+        // the function should return the stripped spec as-is (no simplification).
+        let dep = StructuredDep {
+            name: "my-git-dep".to_string(),
+            raw_spec: Some(
+                "{ optional = true, git = \"https://github.com/example/repo\" }".to_string(),
+            ),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, None);
+        assert!(!line.contains("optional"), "optional stripped: {line}");
+        assert!(
+            line.contains("git = \"https://github.com/example/repo\""),
+            "git field preserved: {line}"
+        );
     }
 
     #[test]

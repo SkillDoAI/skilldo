@@ -691,8 +691,15 @@ async fn test_fence_incomplete_opening() {
     let generator = Generator::new(Box::new(IncompleteClient), 3);
     let output = generator.generate(&create_test_data()).await.unwrap();
 
-    // Should return original content if not properly fenced
-    assert!(output.skill_md.contains("```markdown"));
+    // Normalizer now strips unclosed ```markdown fences (v0.5.6 fix)
+    assert!(
+        !output.skill_md.contains("```markdown"),
+        "unclosed fence should be stripped"
+    );
+    assert!(
+        output.skill_md.contains("# Content without closing"),
+        "body content preserved"
+    );
 }
 
 #[tokio::test]
@@ -959,7 +966,7 @@ impl LlmClient for ReviewMockClient {
         }
 
         // Review verdict
-        if prompt.contains("quality gate for a generated SKILL.md") {
+        if prompt.contains("SKILL.MD UNDER REVIEW") {
             let mut count = self.review_call_count.lock().unwrap();
             let current = *count;
             *count += 1;
