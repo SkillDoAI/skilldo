@@ -97,12 +97,28 @@ if [ -n "$CR_INLINE" ]; then
     done
 fi
 
-# "Prompt for all review comments" from latest review
-CR_PROMPT_ALL=$(gh api "repos/${REPO}/pulls/${PR}/reviews" \
-    --jq '[.[] | select(.user.login == "coderabbitai[bot]")] | last | .body' \
-    | sed -n '/Prompt for all review comments/,/^<\/details>/p' \
-    | grep -v 'Prompt for all\|</details>\|<summary>\|````' \
-    | head -30)
+# "Prompt for all review comments" from ALL reviews AND issue comments
+CR_PROMPT_ALL=""
+
+# Search ALL review bodies for actionable "Prompt for all" + nit/inline findings
+# Uses --paginate to handle 100+ reviews
+# Bulk-fetch all CR review bodies and extract "Prompt for all" sections
+TMPFILE="/tmp/.pr-triage-cr-bulk-$$"
+gh api --paginate "repos/${REPO}/pulls/${PR}/reviews" \
+    --jq '.[] | select(.user.login == "coderabbitai[bot]") | .body // empty' \
+    > "$TMPFILE" 2>/dev/null
+CR_PROMPT_ALL=$(sed -n '/Verify each finding against the current code/,/^```$/p' "$TMPFILE" \
+    | grep -E '^In |^- Around|^- Line|^Inline|^Nitpick|^Duplicate' \
+    | sort -u | head -60)
+rm -f "$TMPFILE"
+
+# Issue comments don't typically contain "Prompt for all" — skip
+
+# Also check for "Prompt To Fix All" from Greptile in summary
+GREPTILE_FIX_ALL=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+    --jq '.[] | select(.user.login == "greptile-apps[bot]") | .body' \
+    | sed -n '/Prompt To Fix All/,/^`````$/p' \
+    | grep -v 'Prompt To Fix\|<summary>\|`````' | head -40)
 
 if [ -n "$CR_PROMPT_ALL" ]; then
     echo "  Aggregated fix prompts:"
@@ -113,6 +129,17 @@ fi
 
 if [ -z "$CR_INLINE" ] && [ -z "$CR_PROMPT_ALL" ]; then
     echo "  No findings"
+fi
+echo ""
+
+# --- Greptile "Prompt To Fix All" ---
+if [ -n "$GREPTILE_FIX_ALL" ]; then
+    echo "───────────────────────────────────────────────────"
+    echo "  GREPTILE — Prompt To Fix All"
+    echo "───────────────────────────────────────────────────"
+    echo "$GREPTILE_FIX_ALL" | while IFS= read -r line; do
+        echo "    $line"
+    done
 fi
 echo ""
 
