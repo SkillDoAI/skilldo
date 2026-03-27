@@ -122,7 +122,8 @@ PRIORITY: Focus on extracting PUBLIC user-facing APIs, NOT internal utilities.
 
 **How to identify PUBLIC APIs (language-specific hints may add more signals):**
 - Exported at the top-level module entry point → Public
-- Used in example/test code in the source tree → Public
+- Used in official examples or demos in the source tree → Public
+- Used only in tests → weak signal; do not override private/internal visibility
 - Has doc comments → likely Public
 - Internal/private modules or naming conventions → INTERNAL, deprioritize
 
