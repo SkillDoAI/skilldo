@@ -649,7 +649,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 info!("  → Running code validation (test agent)...");
 
                 let validation_result: Result<TestResult, anyhow::Error> =
-                    test_validator.validate(&skill_md).await;
+                    test_validator.validate(&skill_md, &data.dependencies).await;
                 match validation_result {
                     Ok(test_result) => {
                         if test_result.test_cases.is_empty() {
@@ -819,7 +819,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     if had_unresolved_errors && !last_review_tests_passed {
                         if let Some(ref tv) = test_validator {
                             info!("  → Re-running tests after review pass...");
-                            match tv.validate(&skill_md).await {
+                            match tv.validate(&skill_md, &data.dependencies).await {
                                 Ok(tr) if tr.all_passed() || tr.test_cases.is_empty() => {
                                     info!("  ✓ Re-test passed — clearing previous errors");
                                     last_review_tests_passed = true;
@@ -908,7 +908,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 // Single test pass after review rewrite — mark unresolved if broken.
                 last_review_tests_passed = true;
                 if let Some(ref tv) = test_validator {
-                    match tv.validate(&skill_md).await {
+                    match tv.validate(&skill_md, &data.dependencies).await {
                         Ok(tr) if !tr.all_passed() && !tr.test_cases.is_empty() => {
                             warn!("  ⚠ review rewrite broke {} test(s)", tr.failed);
                             last_review_tests_passed = false;
