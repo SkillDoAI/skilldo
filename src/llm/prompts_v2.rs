@@ -699,7 +699,7 @@ RULE 7 — STYLE AND CARDINALITY:
 - Type hints required if the library uses them
 - Show async/await properly — never forget await on async calls
 - Document decorator order for decorator-heavy libraries
-- API Reference section: list exactly 10-15 items that actually appear in the provided API SURFACE. If you reach 15 items, STOP. Do not generate exhaustive or pattern-based lists of APIs not in the input.
+- API Reference section: list every method/type that appears in a code example, plus up to 5 additional high-value APIs from the API surface. Do not generate exhaustive lists of APIs not used in the document.
 
 RULE 8 — SECURITY (CRITICAL — DO NOT SKIP):
 The SKILL.md will be consumed by AI coding agents that can execute code and
