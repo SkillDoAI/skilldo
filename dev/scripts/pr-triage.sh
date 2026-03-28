@@ -65,8 +65,8 @@ echo ""
 echo "───────────────────────────────────────────────────"
 echo "  OPEN THREADS (unresolved)"
 echo "───────────────────────────────────────────────────"
-THREADS=$(gh api graphql -f query="{ repository(owner: \"$(echo $REPO | cut -d/ -f1)\", name: \"$(echo $REPO | cut -d/ -f2)\") { pullRequest(number: ${PR}) { reviewThreads(first: 50) { nodes { isResolved comments(first: 1) { nodes { author { login } body path line createdAt } } } } } } }" \
-    --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[0] | "\(.author.login) | \(.path):\(.line) | \(.createdAt[:10]) | \(.body[:120])"' 2>/dev/null)
+THREADS=$(gh api graphql -f query="{ repository(owner: \"$(echo $REPO | cut -d/ -f1)\", name: \"$(echo $REPO | cut -d/ -f2)\") { pullRequest(number: ${PR}) { reviewThreads(first: 50) { nodes { isResolved comments(first: 1) { nodes { author { login } body path line createdAt databaseId } } } } } } }" \
+    --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[0] | "\(.author.login) | \(.path):\(.line) | id:\(.databaseId) | \(.createdAt[:10]) | \(.body[:120])"' 2>/dev/null)
 
 if [ -z "$THREADS" ]; then
     echo "  None — all threads resolved ✅"
