@@ -9,7 +9,7 @@ pub mod pkce;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::debug;
 
 /// Stored OAuth token set, persisted to disk.
@@ -169,7 +169,7 @@ pub async fn resolve_oauth_token(endpoint: &OAuthEndpoint) -> Result<Option<Stri
 /// Create directory with secure permissions (0o700 on Unix).
 /// Uses `DirBuilder::mode()` to set permissions at creation time, avoiding
 /// a TOCTOU race where the directory is briefly world-readable.
-fn ensure_secure_dir(path: &PathBuf) -> Result<()> {
+fn ensure_secure_dir(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -196,7 +196,7 @@ fn ensure_secure_dir(path: &PathBuf) -> Result<()> {
 /// Write file with secure permissions (0o600 on Unix).
 /// Uses `OpenOptions::mode()` to set permissions at creation time, and
 /// `set_permissions()` to re-harden existing files on update.
-fn write_secure_file(path: &PathBuf, content: &str) -> Result<()> {
+fn write_secure_file(path: &Path, content: &str) -> Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write;

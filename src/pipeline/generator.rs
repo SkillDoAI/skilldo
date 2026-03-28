@@ -833,7 +833,9 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     }
                     warn!("  ⚠ review: malformed verdict on final attempt, proceeding with unresolved error");
                     had_unresolved_errors = true;
-                    failed_stage = Some(FailedStage::Review);
+                    if failed_stage.is_none() {
+                        failed_stage = Some(FailedStage::Review);
+                    }
                     failure_reason = Some("malformed verdict after all retries".to_string());
                     break;
                 }
@@ -922,7 +924,9 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     }
                     unresolved_warnings = result.issues;
                     had_unresolved_errors = true;
-                    failed_stage = Some(FailedStage::Review);
+                    if failed_stage.is_none() {
+                        failed_stage = Some(FailedStage::Review);
+                    }
                     failure_reason = Some(format!(
                         "{} review issues after {} retries",
                         unresolved_warnings.len(),
