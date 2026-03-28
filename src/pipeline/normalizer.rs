@@ -530,11 +530,7 @@ fn strip_body_markdown_fence(content: &str) -> String {
     for (i, line) in lines.iter().enumerate().skip(body_start + 1) {
         let t = line.trim();
         if t.starts_with("```") || t.starts_with("~~~") {
-            let fence_prefix = if t.starts_with("```") {
-                "```"
-            } else {
-                "~~~"
-            };
+            let fence_prefix = if t.starts_with("```") { "```" } else { "~~~" };
             let after_fence = t[fence_prefix.len()..].trim();
             if !after_fence.is_empty() {
                 // Tagged fence (e.g., ```rust, ```1password) — opens a nested block
