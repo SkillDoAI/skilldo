@@ -1778,4 +1778,44 @@ mod tests {
             "Content should be preserved"
         );
     }
+
+    #[test]
+    fn test_strip_trailing_meta_text_skips_fenced_content() {
+        // Meta-like text inside a code block should NOT be stripped
+        let content = "---\nname: test\n---\n\n## API Reference\n\n**method()** — does stuff\n\n```python\nprint(\"changes made\")\nprint(\"summary of fixes\")\n```\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            result.contains("summary of fixes"),
+            "Fenced content should not be stripped. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_with_inner_code_blocks() {
+        // Wrapper fence containing inner code blocks — should strip wrapper, keep inner
+        let input = "---\nname: test\n---\n\n```markdown\n## Imports\n\n```rust\nuse foo::bar;\n```\n\n## Core Patterns\n\nContent\n```\n";
+        let result = strip_body_markdown_fence(input);
+        assert!(
+            result.contains("use foo::bar"),
+            "Inner code block content should be preserved. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.starts_with("---\n") || !result.contains("```markdown"),
+            "Wrapper fence should be stripped"
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_unclosed_with_inner_blocks() {
+        // Unclosed wrapper with inner code blocks — should not truncate at inner fence
+        let input = "---\nname: test\n---\n\n```markdown\n## Imports\n\n```rust\nuse foo::bar;\n```\n\n## More Content\n\nStuff here\n";
+        let result = strip_body_markdown_fence(input);
+        assert!(
+            result.contains("More Content"),
+            "Should not truncate at inner fence close. Got:\n{}",
+            result
+        );
+    }
 }
