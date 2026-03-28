@@ -281,4 +281,18 @@ mod tests {
         let findings = scan("perfectly normal text with no tricks");
         assert!(!findings.iter().any(|f| f.rule_id == "SD-004"));
     }
+
+    #[test]
+    fn strip_invisible_unicode_removes_zero_width_chars() {
+        let input = "hello\u{200B}world\u{FEFF}test\u{00AD}end";
+        let result = strip_invisible_unicode(input);
+        assert_eq!(result, "helloworldtestend");
+    }
+
+    #[test]
+    fn strip_invisible_unicode_clean_input_unchanged() {
+        let input = "normal text with no invisible chars";
+        let result = strip_invisible_unicode(input);
+        assert_eq!(result, input);
+    }
 }
