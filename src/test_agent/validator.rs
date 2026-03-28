@@ -2407,4 +2407,74 @@ mod tests {
         assert_eq!(result.passed, 1);
         assert!(result.all_passed());
     }
+
+    #[tokio::test]
+    async fn test_validate_rust_enrichment_upgrades_name_only_deps() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // SKILL.md has `use tokio::*` — parser finds tokio as name-only (no spec).
+        // Collected deps provide the real spec. Enrichment should upgrade, not skip.
+        let skill_md = "---\nname: test\nmetadata:\n  version: \"1.0\"\n  ecosystem: rust\n---\n\n## Imports\n\n```rust\nuse tokio::runtime::Runtime;\nuse serde_json::Value;\n```\n\n## Core Patterns\n\n### Basic\n\n```rust\nfn main() {}\n```\n";
+        let patterns = vec![basic_pattern()];
+        let validator = make_rust_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("fn main() {}")),
+            Box::new(MockExecutor::passing("ok")),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+            None,
+        );
+        let collected = vec![
+            // tokio: parser finds name-only, this provides the spec → upgrade path
+            StructuredDep {
+                name: "tokio".to_string(),
+                raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+                source: DepSource::Manifest,
+            },
+            // serde_json: parser finds name-only, this provides the spec → upgrade path
+            StructuredDep {
+                name: "serde_json".to_string(),
+                raw_spec: Some("\"1\"".to_string()),
+                source: DepSource::Manifest,
+            },
+            // axum: not in SKILL.md at all → None path (add new)
+            StructuredDep {
+                name: "axum".to_string(),
+                raw_spec: Some("\"0.8\"".to_string()),
+                source: DepSource::Manifest,
+            },
+        ];
+        let result = validator.validate(skill_md, &collected).await.unwrap();
+        assert_eq!(result.passed, 1);
+        assert!(result.all_passed());
+    }
+
+    #[tokio::test]
+    async fn test_validate_rust_enrichment_skips_deps_with_existing_spec() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // SKILL.md has a [dependencies] TOML block with tokio spec.
+        // Collected deps also have tokio spec. Enrichment should skip (not replace).
+        let skill_md = "---\nname: test\nmetadata:\n  version: \"1.0\"\n  ecosystem: rust\n---\n\n## Imports\n\n```rust\nuse tokio::runtime::Runtime;\n```\n\n```toml\n[dependencies]\ntokio = { version = \"1\", features = [\"rt\"] }\n```\n\n## Core Patterns\n\n### Basic\n\n```rust\nfn main() {}\n```\n";
+        let patterns = vec![basic_pattern()];
+        let validator = make_rust_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("fn main() {}")),
+            Box::new(MockExecutor::passing("ok")),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+            None,
+        );
+        let collected = vec![
+            // tokio: parser already has spec from TOML block → skip path (Some(_))
+            StructuredDep {
+                name: "tokio".to_string(),
+                raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+                source: DepSource::Manifest,
+            },
+        ];
+        let result = validator.validate(skill_md, &collected).await.unwrap();
+        assert_eq!(result.passed, 1);
+        assert!(result.all_passed());
+    }
 }
