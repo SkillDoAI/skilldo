@@ -3,6 +3,35 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.7
+
+### Added
+- **Dep enrichment from source manifest** — test validator merges deps from source Cargo.toml when model omits them from `## Imports`. Prevents compile failures (e.g., `serde_json` missing). Also upgrades name-only deps (`tokio = "*"`) with manifest specs (`tokio = { version = "1", features = ["full"] }`)
+- **RULE 13: custom_instructions override source** — when custom_instructions contradict source code comments, the model follows custom_instructions. Section headers explicitly signal override priority (security rules excluded)
+- **Conflict notes diagnostic channel** — model can append `<!-- SKILLDO-CONFLICT: description -->` when it detects contradictions. Logged at INFO level, stripped before security scan and normalizer. Zero-risk diagnostic for pipeline debugging
+- **API Reference completeness check** — VERIFY checklist requires scanning code examples and ensuring each library-owned method has an API Reference entry
+- **llmposter integration tests** — 3 tests using llmposter v0.4 (crates.io) as mock LLM backend: basic completion, fixture matching (simulates pipeline stages), 429 error handling
+
+### Changed
+- API Reference cardinality: removed 10-15 item cap; now covers all library-owned methods used in examples plus up to 5 additional high-value APIs
+- Custom instructions override style/content rules only; RULE 8 (Security) is explicitly non-overridable
+- Conflict notes stripped before fence unwrapping at all 4 sanitization sites (initial create + 3 rewrite paths)
+
+### Fixed
+- Extract prompt softens test-only usage signal for public API identification (CodeRabbit)
+- Conflict marker renamed from `<!-- CONFLICT: -->` to `<!-- SKILLDO-CONFLICT: -->` to avoid collisions with legitimate HTML comments
+- Normalizer test used wrong prefix, making assertion trivially true (Greptile P1)
+- Stale doc comment referenced old `<!-- CONFLICT: -->` prefix
+- Removed redundant `extract_conflict_notes()` from normalizer (generator already handles it)
+- Security audit exception for RUSTSEC-2023-0071 (rsa timing sidechannel, dev-dep only via llmposter → oauth-mock → rsa)
+
+### Findings (A/B testing: 12 sonnet runs + 8 gpt-oss runs + 2 opus runs)
+- **Sonnet 4.6**: 5 consecutive Greptile 5/5. 100% test pass rate (12/12 runs). Reliable for production
+- **Opus 4.6**: Unreliable — lint loops, crashes, prompt injection content. Dep enrichment fixed test compilation but instability persisted. Stopped testing after sonnet hit 5/5
+- **gpt-oss-120b (Cerebras)**: Greptile 3-4/5. 12.5% test pass rate (1/8 runs). 6x faster but inconsistent code quality
+- **GLM 4.7 (Cerebras)**: Dead — lint loops + LLM call failures. Can't sustain multi-stage pipeline
+- **Key insight**: models consistently put only 2/10 deps in `## Imports` — dep enrichment is critical. Source code comments override custom_instructions — RULE 13 + conflict notes address this
+
 ## 0.5.6
 
 ### Added

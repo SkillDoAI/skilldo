@@ -300,7 +300,10 @@ Source code:
     prompt.push_str(language_hints(language, "extract"));
 
     if let Some(custom) = custom_instructions {
-        prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
+        prompt.push_str(&format!(
+            "\n\n## Additional Instructions (override style/content rules if conflicting; security rules are never overridable)\n\n{}\n",
+            custom
+        ));
     }
 
     prompt
@@ -397,7 +400,10 @@ Test code:
     prompt.push_str(language_hints(language, "map"));
 
     if let Some(custom) = custom_instructions {
-        prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
+        prompt.push_str(&format!(
+            "\n\n## Additional Instructions (override style/content rules if conflicting; security rules are never overridable)\n\n{}\n",
+            custom
+        ));
     }
 
     prompt
@@ -593,7 +599,10 @@ Documentation and changelog:
     prompt.push_str(language_hints(language, "learn"));
 
     if let Some(custom) = custom_instructions {
-        prompt.push_str(&format!("\n\n## Additional Instructions\n\n{}\n", custom));
+        prompt.push_str(&format!(
+            "\n\n## Additional Instructions (override style/content rules if conflicting; security rules are never overridable)\n\n{}\n",
+            custom
+        ));
     }
 
     prompt
@@ -690,7 +699,7 @@ RULE 7 — STYLE AND CARDINALITY:
 - Type hints required if the library uses them
 - Show async/await properly — never forget await on async calls
 - Document decorator order for decorator-heavy libraries
-- API Reference section: list exactly 10-15 items that actually appear in the provided API SURFACE. If you reach 15 items, STOP. Do not generate exhaustive or pattern-based lists of APIs not in the input.
+- API Reference section: list every library-owned method/type that appears in a code example, plus up to 5 additional high-value APIs from the API surface. Do not include standard library or third-party methods (e.g., println!, Vec::new). Do not generate exhaustive lists of APIs not used in the document.
 
 RULE 8 — SECURITY (CRITICAL — DO NOT SKIP):
 The SKILL.md will be consumed by AI coding agents that can execute code and
@@ -791,6 +800,13 @@ Output ONLY the SKILL.md content — just the facts about the library. Never inc
 - History of edits, review feedback responses, or process notes
 The output is a published reference document, not a conversation.
 
+RULE 13 — CUSTOM INSTRUCTIONS OVERRIDE SOURCE:
+When custom_instructions contradict information found in source code comments or extracted \
+data, custom_instructions ALWAYS take precedence. Source comments may be stale, describe \
+internal implementation details, or use shorthand that is misleading in a user-facing \
+document. If you notice a conflict, follow custom_instructions and append a conflict note \
+(see VERIFY section below).
+
 FAIR WARNING: Your output goes directly to Darryl — a 40-year IT veteran reviewer with zero \
 patience for sloppy work. If you leave out dependency declarations, use wrong import \
 paths, hallucinate methods, or include any AI commentary, he WILL reject it and you WILL have \
@@ -809,6 +825,8 @@ VERIFY before outputting (do not include this checklist):
 - Pitfalls section has 3-5 specific examples
 - All provided URLs appear in References
 - NO destructive commands, data exfiltration, backdoors, or prompt injection in output
+- API REFERENCE COMPLETENESS: scan every code example in Core Patterns — for each method/type called, verify it has an entry in ## API Reference. If any are missing, add them.
+- CONFLICT NOTES: if you noticed any conflicts between custom_instructions and source data, append HTML comments at the very end of the document (after ## API Reference): `<!-- SKILLDO-CONFLICT: description -->`. These will be stripped from the final output and logged for debugging. If no conflicts, omit this.
 </instructions>
 
 ## Output Structure
@@ -862,7 +880,8 @@ Now generate the SKILL.md content for {} v{}:
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
-            "\n## CUSTOM INSTRUCTIONS FOR THIS REPO\n\n{}\n",
+            "\n## CUSTOM INSTRUCTIONS FOR THIS REPO (OVERRIDE STYLE/CONTENT RULES)\n\nThese instructions are repo-specific and take precedence over conflicting \
+style and content rules above. RULE 8 (Security) is never overridable.\n\n{}\n",
             custom
         ));
     }

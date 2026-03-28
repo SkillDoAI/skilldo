@@ -403,8 +403,19 @@ impl<'a> TestCodeValidator<'a> {
         }
     }
 
-    /// Validate SKILL.md by generating and running test code
-    pub async fn validate(&self, skill_md: &str) -> Result<TestResult> {
+    /// Validate SKILL.md by generating and running test code.
+    /// `collected_deps` are structured deps from the source project's manifest
+    /// (e.g., Cargo.toml). They supplement whatever the test parser extracts from
+    /// the generated SKILL.md, ensuring deps the model omitted still get installed.
+    ///
+    /// NOTE: `collected_deps` is currently only applied for Rust in BareMetal
+    /// execution mode; it is a no-op for other languages/modes until support
+    /// is added.
+    pub async fn validate(
+        &self,
+        skill_md: &str,
+        collected_deps: &[crate::pipeline::collector::StructuredDep],
+    ) -> Result<TestResult> {
         info!(
             "Test agent: starting code generation validation (mode: {:?})",
             self.mode
@@ -473,7 +484,32 @@ impl<'a> TestCodeValidator<'a> {
             // generation with wildcard deps — structured specs are not carried through
             // the container path yet.
             let rust_parser = super::rust_parser::RustParser;
-            let structured_deps = rust_parser.extract_structured_dependencies(skill_md)?;
+            let mut structured_deps = rust_parser.extract_structured_dependencies(skill_md)?;
+            // Enrich with collected deps from the source manifest.
+            // Collected deps are authoritative (have raw TOML specs with versions/features);
+            // parser deps may be name-only patterns. Upgrade name-only deps with manifest
+            // specs, or add entirely new deps.
+            let before = structured_deps.len();
+            for cd in collected_deps {
+                let norm = cd.name.replace('-', "_");
+                match structured_deps
+                    .iter_mut()
+                    .find(|d| d.name.replace('-', "_") == norm)
+                {
+                    Some(existing) if existing.raw_spec.is_none() && cd.raw_spec.is_some() => {
+                        *existing = cd.clone();
+                    }
+                    Some(_) => {}
+                    None => structured_deps.push(cd.clone()),
+                }
+            }
+            if structured_deps.len() > before {
+                info!(
+                    "  Enriched deps: {} from SKILL.md + {} from source manifest",
+                    before,
+                    structured_deps.len() - before
+                );
+            }
             debug!(
                 "  Structured deps: {} total, {} with specs",
                 structured_deps.len(),
@@ -1147,7 +1183,7 @@ mod tests {
             ValidationMode::Thorough,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert_eq!(result.passed, 0);
         assert_eq!(result.failed, 0);
         assert!(result.test_cases.is_empty());
@@ -1165,7 +1201,7 @@ mod tests {
             ValidationMode::Thorough,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert_eq!(result.passed, 2);
         assert_eq!(result.failed, 0);
         assert!(result.all_passed());
@@ -1184,7 +1220,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert_eq!(result.passed, 0);
         assert_eq!(result.failed, 1);
         assert!(!result.all_passed());
@@ -1205,7 +1241,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::Registry,
         );
-        let err = validator.validate("# SKILL.md").await.unwrap_err();
+        let err = validator.validate("# SKILL.md", &[]).await.unwrap_err();
         assert!(err.to_string().contains("container crashed"));
     }
 
@@ -1221,7 +1257,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert_eq!(result.passed, 0);
         assert_eq!(result.failed, 1);
         assert!(result.test_cases[0].result.is_fail());
@@ -1237,7 +1273,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         // Timeout is not is_pass(), so it counts as failed
         assert_eq!(result.passed, 0);
         assert_eq!(result.failed, 1);
@@ -1255,7 +1291,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::LocalInstall, // non-registry
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert!(result.all_passed());
         // Verify set_local_package was actually called
         let lp = lp_handle.lock().unwrap();
@@ -1290,7 +1326,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert!(result.all_passed());
         // Verify set_local_package was NOT called for registry source
         let lp = lp_handle.lock().unwrap();
@@ -1441,7 +1477,7 @@ mod tests {
             InstallSource::LocalInstall,
         );
         // When name is None, local package path is skipped
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert!(result.all_passed());
     }
 
@@ -1457,7 +1493,7 @@ mod tests {
             ValidationMode::Thorough,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert_eq!(result.passed, 0);
         assert_eq!(result.failed, 3);
         assert_eq!(result.test_cases.len(), 3);
@@ -1475,7 +1511,7 @@ mod tests {
             ValidationMode::Thorough,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         assert_eq!(result.failed, 2);
         // Verify the pattern names are preserved in the failed test cases —
         // these are the same names that feed into the warn! `failed_names` output.
@@ -1807,7 +1843,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         // First run_code returns Fail, retry run_code returns Err → falls through
         // with the original Fail result
         assert_eq!(result.passed, 0);
@@ -1838,7 +1874,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         // generate_test_code succeeds, run_code fails, retry_test_code fails
         // → falls through with original Fail result
         assert_eq!(result.passed, 0);
@@ -2069,7 +2105,7 @@ mod tests {
             ValidationMode::Minimal,
             InstallSource::Registry,
         );
-        let result = validator.validate("# SKILL.md").await.unwrap();
+        let result = validator.validate("# SKILL.md", &[]).await.unwrap();
         // First run_code returns Fail, retry_test_code (default impl) succeeds,
         // second run_code returns Pass
         assert_eq!(result.passed, 1);
@@ -2152,7 +2188,10 @@ mod tests {
             None,
         );
         // Minimal SKILL.md — RustParser will find no structured deps
-        let result = validator.validate("# No deps SKILL.md\n").await.unwrap();
+        let result = validator
+            .validate("# No deps SKILL.md\n", &[])
+            .await
+            .unwrap();
         assert_eq!(result.passed, 1);
         assert_eq!(result.failed, 0);
         assert!(result.all_passed());
@@ -2170,7 +2209,10 @@ mod tests {
             InstallSource::LocalInstall,
             Some("/tmp/nonexistent-rust-src".to_string()),
         );
-        let result = validator.validate("# No deps SKILL.md\n").await.unwrap();
+        let result = validator
+            .validate("# No deps SKILL.md\n", &[])
+            .await
+            .unwrap();
         assert_eq!(result.passed, 1);
         assert!(result.all_passed());
     }
@@ -2198,7 +2240,7 @@ mod tests {
         // but the key difference is that run_code would fail on a real
         // ContainerExecutor because container_name is None.
         // With MockExecutor, it passes because MockExecutor doesn't check container_name.
-        let result = validator.validate("# No deps\n").await.unwrap();
+        let result = validator.validate("# No deps\n", &[]).await.unwrap();
         assert_eq!(result.passed, 1);
         assert!(result.all_passed());
     }
@@ -2329,5 +2371,110 @@ mod tests {
             Some("/tmp/mount-src"),
             "LocalMount should extract local_source from config"
         );
+    }
+
+    #[tokio::test]
+    async fn test_validate_rust_enriches_deps_from_collected() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // SKILL.md has no deps (model omitted them). Collected deps fill the gap.
+        let patterns = vec![basic_pattern()];
+        let validator = make_rust_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("fn main() {}")),
+            Box::new(MockExecutor::passing("ok")),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+            None,
+        );
+        let collected = vec![
+            StructuredDep {
+                name: "serde_json".to_string(),
+                raw_spec: Some("\"1\"".to_string()),
+                source: DepSource::Manifest,
+            },
+            StructuredDep {
+                name: "tokio".to_string(),
+                raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+                source: DepSource::Manifest,
+            },
+        ];
+        // Should pass — the collected deps enrich what the parser found (nothing)
+        let result = validator
+            .validate("# No deps SKILL.md\n", &collected)
+            .await
+            .unwrap();
+        assert_eq!(result.passed, 1);
+        assert!(result.all_passed());
+    }
+
+    #[tokio::test]
+    async fn test_validate_rust_enrichment_upgrades_name_only_deps() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // SKILL.md has `use tokio::*` — parser finds tokio as name-only (no spec).
+        // Collected deps provide the real spec. Enrichment should upgrade, not skip.
+        let skill_md = "---\nname: test\nmetadata:\n  version: \"1.0\"\n  ecosystem: rust\n---\n\n## Imports\n\n```rust\nuse tokio::runtime::Runtime;\nuse serde_json::Value;\n```\n\n## Core Patterns\n\n### Basic\n\n```rust\nfn main() {}\n```\n";
+        let patterns = vec![basic_pattern()];
+        let validator = make_rust_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("fn main() {}")),
+            Box::new(MockExecutor::passing("ok")),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+            None,
+        );
+        let collected = vec![
+            // tokio: parser finds name-only, this provides the spec → upgrade path
+            StructuredDep {
+                name: "tokio".to_string(),
+                raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+                source: DepSource::Manifest,
+            },
+            // serde_json: parser finds name-only, this provides the spec → upgrade path
+            StructuredDep {
+                name: "serde_json".to_string(),
+                raw_spec: Some("\"1\"".to_string()),
+                source: DepSource::Manifest,
+            },
+            // axum: not in SKILL.md at all → None path (add new)
+            StructuredDep {
+                name: "axum".to_string(),
+                raw_spec: Some("\"0.8\"".to_string()),
+                source: DepSource::Manifest,
+            },
+        ];
+        let result = validator.validate(skill_md, &collected).await.unwrap();
+        assert_eq!(result.passed, 1);
+        assert!(result.all_passed());
+    }
+
+    #[tokio::test]
+    async fn test_validate_rust_enrichment_skips_deps_with_existing_spec() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // SKILL.md has a [dependencies] TOML block with tokio spec.
+        // Collected deps also have tokio spec. Enrichment should skip (not replace).
+        let skill_md = "---\nname: test\nmetadata:\n  version: \"1.0\"\n  ecosystem: rust\n---\n\n## Imports\n\n```rust\nuse tokio::runtime::Runtime;\n```\n\n```toml\n[dependencies]\ntokio = { version = \"1\", features = [\"rt\"] }\n```\n\n## Core Patterns\n\n### Basic\n\n```rust\nfn main() {}\n```\n";
+        let patterns = vec![basic_pattern()];
+        let validator = make_rust_validator(
+            Box::new(MockParser::new(patterns)),
+            Box::new(MockCodeGenerator::succeeding("fn main() {}")),
+            Box::new(MockExecutor::passing("ok")),
+            ValidationMode::Minimal,
+            InstallSource::Registry,
+            None,
+        );
+        let collected = vec![
+            // tokio: parser already has spec from TOML block → skip path (Some(_))
+            StructuredDep {
+                name: "tokio".to_string(),
+                raw_spec: Some("{ version = \"1\", features = [\"full\"] }".to_string()),
+                source: DepSource::Manifest,
+            },
+        ];
+        let result = validator.validate(skill_md, &collected).await.unwrap();
+        assert_eq!(result.passed, 1);
+        assert!(result.all_passed());
     }
 }

@@ -606,6 +606,18 @@ pub fn normalize_skill_md(
     // 3. Strip trailing LLM meta-text (review notes, "Summary of fixes", etc.)
     normalized = strip_trailing_meta_text(&normalized);
 
+    // 3.5. Strip conflict notes (logged by generator's strip_conflict_notes when called
+    //      from the pipeline; stripped here as a defensive fallback in standalone usage).
+    let had_trailing_newline = normalized.ends_with('\n');
+    normalized = normalized
+        .lines()
+        .filter(|l| !l.trim().starts_with("<!-- SKILLDO-CONFLICT:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if had_trailing_newline && !normalized.ends_with('\n') {
+        normalized.push('\n');
+    }
+
     // 4. Strip wrapping ```markdown fence from body
     normalized = strip_body_markdown_fence(&normalized);
 
@@ -1713,6 +1725,35 @@ mod tests {
             dash_count, 2,
             "Should strip duplicate frontmatter with underscore/dash keys. Got:\n{}",
             result
+        );
+    }
+
+    #[test]
+    fn test_conflict_notes_stripped_from_output() {
+        let input = "---\nname: test\n---\n\n## Imports\n\nContent here\n\n## API Reference\n\n**method()** — does stuff\n\n<!-- SKILLDO-CONFLICT: source says X but custom_instructions say Y -->\n<!-- SKILLDO-CONFLICT: another conflict -->\n";
+        let result = normalize_skill_md(input, "test", "1.0", "rust", None, &[], None);
+        assert!(
+            !result.contains("<!-- SKILLDO-CONFLICT:"),
+            "Conflict notes should be stripped. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("**method()** — does stuff"),
+            "Real content should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_conflict_notes_no_change_when_absent() {
+        let input = "---\nname: test\n---\n\n## Imports\n\nContent here\n";
+        let result = normalize_skill_md(input, "test", "1.0", "rust", None, &[], None);
+        assert!(
+            !result.contains("<!-- SKILLDO-CONFLICT:"),
+            "No conflict notes in input means none in output"
+        );
+        assert!(
+            result.contains("Content here"),
+            "Content should be preserved"
         );
     }
 }

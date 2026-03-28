@@ -146,6 +146,28 @@ fn strip_markdown_fences(content: &str) -> String {
     body.trim().to_string()
 }
 
+/// Strip `<!-- SKILLDO-CONFLICT: ... -->` notes from model output, logging each one.
+/// Must run before the security scan since these look like instruction injection.
+fn strip_conflict_notes(content: &str) -> String {
+    let mut result = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("<!-- SKILLDO-CONFLICT:") {
+            let note = rest.trim_end_matches("-->").trim();
+            if !note.is_empty() {
+                info!("Model conflict note: {}", note);
+            }
+        } else {
+            result.push(line);
+        }
+    }
+    let mut out = result.join("\n");
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Bail immediately if any lint issues are security errors.
 /// Security content must never be sent back to the model for "fixing".
 fn bail_on_security_lint(issues: &[crate::lint::LintIssue]) -> Result<()> {
@@ -497,6 +519,9 @@ impl Generator {
 
         self.dump_stage("4-create-raw.md", &skill_md);
 
+        // Strip conflict notes first — a trailing note after a closing fence blocks unwrapping
+        skill_md = strip_conflict_notes(&skill_md);
+
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
 
@@ -637,6 +662,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 );
 
                 skill_md = self.get_client("create").complete(&fix_prompt).await?;
+                skill_md = strip_conflict_notes(&skill_md);
                 skill_md = strip_markdown_fences(&skill_md);
                 rescan_after_rewrite(&skill_md, self.enable_security_scan, "lint fix")?;
                 continue;
@@ -649,7 +675,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 info!("  → Running code validation (test agent)...");
 
                 let validation_result: Result<TestResult, anyhow::Error> =
-                    test_validator.validate(&skill_md).await;
+                    test_validator.validate(&skill_md, &data.dependencies).await;
                 match validation_result {
                     Ok(test_result) => {
                         if test_result.test_cases.is_empty() {
@@ -676,6 +702,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
 
                                     skill_md =
                                         self.get_client("create").complete(&patch_prompt).await?;
+                                    skill_md = strip_conflict_notes(&skill_md);
                                     skill_md = strip_markdown_fences(&skill_md);
                                     rescan_after_rewrite(
                                         &skill_md,
@@ -819,7 +846,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     if had_unresolved_errors && !last_review_tests_passed {
                         if let Some(ref tv) = test_validator {
                             info!("  → Re-running tests after review pass...");
-                            match tv.validate(&skill_md).await {
+                            match tv.validate(&skill_md, &data.dependencies).await {
                                 Ok(tr) if tr.all_passed() || tr.test_cases.is_empty() => {
                                     info!("  ✓ Re-test passed — clearing previous errors");
                                     last_review_tests_passed = true;
@@ -902,13 +929,14 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     fix_preamble, skill_md, feedback
                 );
                 skill_md = self.get_client("create").complete(&fix_prompt).await?;
+                skill_md = strip_conflict_notes(&skill_md);
                 skill_md = strip_markdown_fences(&skill_md);
                 rescan_after_rewrite(&skill_md, self.enable_security_scan, "review fix")?;
 
                 // Single test pass after review rewrite — mark unresolved if broken.
                 last_review_tests_passed = true;
                 if let Some(ref tv) = test_validator {
-                    match tv.validate(&skill_md).await {
+                    match tv.validate(&skill_md, &data.dependencies).await {
                         Ok(tr) if !tr.all_passed() && !tr.test_cases.is_empty() => {
                             warn!("  ⚠ review rewrite broke {} test(s)", tr.failed);
                             last_review_tests_passed = false;
@@ -3517,5 +3545,33 @@ End of analysis."#;
             gen.debug_stage_dir.is_none(),
             "debug_stage_dir should be None when None is passed"
         );
+    }
+
+    #[test]
+    fn test_strip_conflict_notes_extracts_and_removes() {
+        let input = "## Imports\n\nContent\n\n<!-- SKILLDO-CONFLICT: source says bytes but custom says chars -->\n<!-- SKILLDO-CONFLICT: another conflict -->\n## API Reference\n";
+        let result = strip_conflict_notes(input);
+        assert!(
+            !result.contains("SKILLDO-CONFLICT"),
+            "Conflict notes should be stripped"
+        );
+        assert!(result.contains("## Imports"));
+        assert!(result.contains("## API Reference"));
+    }
+
+    #[test]
+    fn test_strip_conflict_notes_preserves_trailing_newline() {
+        let input = "Content here\n";
+        let result = strip_conflict_notes(input);
+        assert_eq!(result, "Content here\n");
+    }
+
+    #[test]
+    fn test_strip_conflict_notes_empty_note_ignored() {
+        let input = "Content\n<!-- SKILLDO-CONFLICT: -->\nMore\n";
+        let result = strip_conflict_notes(input);
+        assert!(result.contains("Content"));
+        assert!(result.contains("More"));
+        assert!(!result.contains("SKILLDO-CONFLICT"));
     }
 }

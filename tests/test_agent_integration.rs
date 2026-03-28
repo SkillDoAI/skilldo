@@ -333,7 +333,7 @@ async fn test_full_test_agent_flow_with_click() -> Result<()> {
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
 
-    let result = validator.validate(&skill_md).await?;
+    let result = validator.validate(&skill_md, &[]).await?;
 
     assert!(result.all_passed(), "All tests should pass");
     assert_eq!(result.passed, 3, "Should have 3 passed tests");
@@ -542,7 +542,7 @@ import sys
 None
 "#;
 
-    let result = validator.validate(skill_md).await?;
+    let result = validator.validate(skill_md, &[]).await?;
 
     // Should return 0 tests when no patterns found
     assert_eq!(result.passed, 0, "Should have 0 passed tests");
@@ -575,7 +575,7 @@ if __name__ == '__main__':
             .with_mode(ValidationMode::Minimal);
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
-    let result = validator.validate(&skill_md).await?;
+    let result = validator.validate(&skill_md, &[]).await?;
 
     // Minimal mode should only test 1 pattern
     assert_eq!(
@@ -610,7 +610,7 @@ if __name__ == '__main__':
             .with_mode(ValidationMode::Adaptive);
 
     let skill_md = fs::read_to_string("tests/fixtures/click-SKILL.md")?;
-    let result = validator.validate(&skill_md).await?;
+    let result = validator.validate(&skill_md, &[]).await?;
 
     // Adaptive mode currently acts like Minimal (1 pattern)
     assert_eq!(
@@ -838,7 +838,7 @@ func main() {
         TestCodeValidator::new(&skilldo::detector::Language::Go, &mock_client, config, None)?;
 
     let skill_md = fs::read_to_string("tests/fixtures/go-fmt-SKILL.md")?;
-    let result = validator.validate(&skill_md).await?;
+    let result = validator.validate(&skill_md, &[]).await?;
 
     // With mock client, code runs in container — all 3 patterns should pass
     // (fmt is stdlib, no deps to install)
@@ -884,7 +884,7 @@ async fn test_go_e2e_real_llm_fmt() -> Result<()> {
     )?;
 
     let skill_md = fs::read_to_string("tests/fixtures/go-fmt-SKILL.md")?;
-    let result = validator.validate(&skill_md).await?;
+    let result = validator.validate(&skill_md, &[]).await?;
 
     println!(
         "Go REAL LLM e2e: passed={}, failed={}",

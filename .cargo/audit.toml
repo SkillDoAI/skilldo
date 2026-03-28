@@ -1,0 +1,10 @@
+# Advisory exceptions for cargo-audit
+# https://rustsec.org/advisories/
+
+[advisories]
+ignore = [
+    # Marvin Attack timing sidechannel in rsa crate. No fix available upstream.
+    # Only affects us via dev-dep chain: llmposter → oauth-mock → rsa.
+    # We never perform RSA decryption — llmposter generates mock JWTs for testing.
+    "RUSTSEC-2023-0071",
+]
