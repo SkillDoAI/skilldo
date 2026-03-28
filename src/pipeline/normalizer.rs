@@ -527,8 +527,8 @@ fn strip_body_markdown_fence(content: &str) -> String {
     // ``` that opens an inner block looks like the wrapper close.
     let mut closing_fence_idx = None;
     let mut depth = 0;
-    for i in (body_start + 1)..lines.len() {
-        let t = lines[i].trim();
+    for (i, line) in lines.iter().enumerate().skip(body_start + 1) {
+        let t = line.trim();
         if t.starts_with("```") || t.starts_with("~~~") {
             if t.len() > 3 && t.chars().nth(3).is_some_and(|c| c.is_alphabetic()) {
                 // Tagged fence (e.g., ```rust) — opens a nested block
