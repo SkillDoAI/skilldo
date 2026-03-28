@@ -357,13 +357,18 @@ impl Generator {
 
     /// Dump each pipeline stage's raw output to the specified directory.
     pub fn with_debug_stage_dir(mut self, dir_path: Option<String>) -> Self {
-        if let Some(path) = dir_path.filter(|s| !s.trim().is_empty()) {
-            let dir = std::path::PathBuf::from(path.trim());
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
-            } else {
-                info!("Debug stage files: {}", dir.display());
-                self.debug_stage_dir = Some(dir);
+        match dir_path.filter(|s| !s.trim().is_empty()) {
+            Some(path) => {
+                let dir = std::path::PathBuf::from(path.trim());
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
+                } else {
+                    info!("Debug stage files: {}", dir.display());
+                    self.debug_stage_dir = Some(dir);
+                }
+            }
+            None => {
+                self.debug_stage_dir = None;
             }
         }
         self
@@ -3472,17 +3477,19 @@ End of analysis."#;
 
     #[test]
     fn test_dump_stage_write_failure_warns() {
-        // with_debug_stage_dir("/dev/null/...") will fail create_dir_all,
-        // leaving debug_stage_dir as None. Manually set it to force the
-        // write-failure path in dump_stage.
-        let mut gen = Generator::new(Box::new(MockLlmClient::new()), 1);
-        // /dev/null is a file, not a directory — writes underneath it fail
-        gen.debug_stage_dir = Some(std::path::PathBuf::from("/dev/null"));
+        // Point debug_stage_dir at a path that exists as a file (not a directory),
+        // so writes underneath it fail. Portable across Unix and Windows.
+        let tmp = std::env::temp_dir().join(format!("skilldo-dump-fail-{}", std::process::id()));
+        std::fs::write(&tmp, "not a directory").unwrap();
 
-        // dump_stage tries to write /dev/null/<filename> which will fail
-        // because /dev/null is not a directory. This exercises the warn path.
+        let mut gen = Generator::new(Box::new(MockLlmClient::new()), 1);
+        gen.debug_stage_dir = Some(tmp.clone());
+
+        // dump_stage tries to write <file>/<filename> which will fail
+        // because the path is a file, not a directory. Exercises the warn path.
         gen.dump_stage("test-stage.txt", "test content");
         // No panic = success. The warn log is emitted internally.
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
