@@ -26,10 +26,10 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Security audit exception for RUSTSEC-2023-0071 (rsa timing sidechannel, dev-dep only via llmposter → oauth-mock → rsa)
 
 ### Findings (A/B testing: 12 sonnet runs + 8 gpt-oss runs + 2 opus runs)
-- **Sonnet 4.6 (CLI)**: 5 consecutive Greptile 5/5. 100% test pass rate (12/12 runs). Avg 30 min. Reliable for production
-- **Opus 4.6 (CLI)**: Unreliable — lint loops, CLI crashes, prompt injection content. Not suitable for CLI mode
-- **gpt-oss-120b (Cerebras free)**: Greptile 3-4/5. 12.5% test pass rate (1/8 runs). Avg 5 min. 6x faster but inconsistent code quality
-- **GLM 4.7 (Cerebras free)**: Dead — lint loops + LLM call failures. Can't sustain multi-stage pipeline
+- **Sonnet 4.6**: 5 consecutive Greptile 5/5. 100% test pass rate (12/12 runs). Reliable for production
+- **Opus 4.6**: Unreliable via CLI pipe mode — lint loops, crashes, prompt injection content
+- **gpt-oss-120b (Cerebras)**: Greptile 3-4/5. 12.5% test pass rate (1/8 runs). 6x faster but inconsistent code quality
+- **GLM 4.7 (Cerebras)**: Dead — lint loops + LLM call failures. Can't sustain multi-stage pipeline
 - **Key insight**: models consistently put only 2/10 deps in `## Imports` — dep enrichment is critical. Source code comments override custom_instructions — RULE 13 + conflict notes address this
 
 ## 0.5.6
