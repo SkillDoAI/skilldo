@@ -82,3 +82,63 @@ async fn test_error_response_handled() {
     let response = LlmClient::complete(&client, "test").await;
     assert!(response.is_err(), "429 should produce an error");
 }
+
+/// Sequential calls reuse the same server (connection persistence).
+#[tokio::test]
+async fn test_sequential_calls_same_server() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("consistent"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = make_client(&server.url());
+    for i in 0..5 {
+        let text = LlmClient::complete(&client, &format!("call {i}"))
+            .await
+            .unwrap();
+        assert_eq!(text, "consistent", "call {i} should return same fixture");
+    }
+}
+
+/// Server returns 404 when no fixture matches.
+#[tokio::test]
+async fn test_no_fixture_match_returns_error() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("specific-keyword")
+                .respond_with_content("matched"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let c = make_client(&server.url());
+    // "unrelated" doesn't contain "specific-keyword" — no match → 404
+    let response = LlmClient::complete(&c, "unrelated prompt").await;
+    assert!(response.is_err(), "unmatched request should error");
+}
+
+/// Server handles concurrent requests.
+#[tokio::test]
+async fn test_concurrent_requests() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("concurrent ok"))
+        .build()
+        .await
+        .unwrap();
+
+    let url = server.url();
+    let mut handles = Vec::new();
+    for _ in 0..5 {
+        let c = make_client(&url);
+        handles.push(tokio::spawn(async move {
+            LlmClient::complete(&c, "parallel").await.unwrap()
+        }));
+    }
+    for h in handles {
+        let text = h.await.unwrap();
+        assert_eq!(text, "concurrent ok");
+    }
+}
