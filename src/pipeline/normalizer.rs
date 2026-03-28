@@ -520,22 +520,27 @@ fn strip_body_markdown_fence(content: &str) -> String {
         return content.to_string();
     }
 
-    // Find the matching closing ``` — scan backward from the end for a bare ```
-    // that's at fence depth 0 (not inside a nested code block).
-    // Can't just check the last non-empty line — the model may add content after
-    // closing the wrapper fence.
+    // Find the matching closing fence by scanning FORWARD from the opening.
+    // Track fence depth: tagged fences (```rust, ```toml) open a block,
+    // bare fences (```) close the current block. The wrapper close is the
+    // first bare ``` at depth 0. Scanning backward is wrong here — a bare
+    // ``` that opens an inner block looks like the wrapper close.
     let mut closing_fence_idx = None;
     let mut depth = 0;
-    for i in (body_start + 1..lines.len()).rev() {
+    for i in (body_start + 1)..lines.len() {
         let t = lines[i].trim();
-        if t == "```" || t == "~~~" {
-            if depth == 0 {
-                closing_fence_idx = Some(i);
-                break;
+        if t.starts_with("```") || t.starts_with("~~~") {
+            if t.len() > 3 && t.chars().nth(3).is_some_and(|c| c.is_alphabetic()) {
+                // Tagged fence (e.g., ```rust) — opens a nested block
+                depth += 1;
+            } else if t == "```" || t == "~~~" {
+                // Bare fence — closes current block or the wrapper
+                if depth == 0 {
+                    closing_fence_idx = Some(i);
+                    break;
+                }
+                depth -= 1;
             }
-            depth -= 1;
-        } else if t.starts_with("```") || t.starts_with("~~~") {
-            depth += 1;
         }
     }
 

@@ -362,6 +362,7 @@ impl Generator {
                 let dir = std::path::PathBuf::from(path.trim());
                 if let Err(e) = std::fs::create_dir_all(&dir) {
                     warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
+                    self.debug_stage_dir = None;
                 } else {
                     info!("Debug stage files: {}", dir.display());
                     self.debug_stage_dir = Some(dir);

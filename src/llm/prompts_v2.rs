@@ -127,8 +127,9 @@ PRIORITY: Focus on extracting PUBLIC user-facing APIs, NOT internal utilities.
 - Has doc comments → likely Public
 - Internal/private modules or naming conventions → INTERNAL, deprioritize
 - **IMPORTANT: Include public METHODS on public types**, not just the type definition. \
-List `TypeName::method_name` for each public method — the review agent cross-references \
-API Reference entries against this surface and flags methods not listed here as hallucinations.
+List `TypeName.method_name` (or `TypeName::method_name` for Rust) for each public method — \
+the review agent cross-references API Reference entries against this surface and flags \
+methods not listed here as hallucinations.
 
 **Scoring system:**
 For each API, assign a "publicity_score":
