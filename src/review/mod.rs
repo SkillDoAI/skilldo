@@ -203,8 +203,8 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                     response.chars().take(500).collect::<String>()
                 );
             }
-            // Conservative: treat parse failure as pass (don't block pipeline)
-            // but always flag as malformed so the caller knows.
+            // Security fix: treat parse failure as failed (don't silently bypass review gate)
+            // but always flag as malformed so the caller knows to retry.
             warn!("review: unparseable response — treating as failed (malformed)");
             return Ok(ReviewResult {
                 passed: false,

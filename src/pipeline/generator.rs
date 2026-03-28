@@ -835,8 +835,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     had_unresolved_errors = true;
                     if failed_stage.is_none() {
                         failed_stage = Some(FailedStage::Review);
+                        failure_reason = Some("malformed verdict after all retries".to_string());
                     }
-                    failure_reason = Some("malformed verdict after all retries".to_string());
                     break;
                 }
 
@@ -926,12 +926,12 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     had_unresolved_errors = true;
                     if failed_stage.is_none() {
                         failed_stage = Some(FailedStage::Review);
+                        failure_reason = Some(format!(
+                            "{} review issues after {} retries",
+                            unresolved_warnings.len(),
+                            review_attempt
+                        ));
                     }
-                    failure_reason = Some(format!(
-                        "{} review issues after {} retries",
-                        unresolved_warnings.len(),
-                        review_attempt
-                    ));
                     break;
                 }
 
