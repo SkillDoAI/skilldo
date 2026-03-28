@@ -1820,4 +1820,31 @@ mod tests {
             result
         );
     }
+
+    #[test]
+    fn test_strip_trailing_meta_text_meta_followed_by_fenced_block() {
+        // Meta pattern with fenced code after it — all_trailing should scan through fences
+        let content = "---\nname: test\n---\n\n## API Reference\n\n**method()** — stuff\n\nSummary of fixes:\n- fixed X\n```python\nprint('done')\n```\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("Summary of fixes"),
+            "Meta text with subordinate fenced content should be stripped. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_paired_with_trailing_content() {
+        // Wrapper closed but model adds content after — should strip wrapper, keep trailing
+        let input = "---\nname: test\n---\n\n```markdown\n## Imports\n\nContent here\n```\n\nTrailing commentary\n";
+        let result = strip_body_markdown_fence(input);
+        assert!(
+            result.contains("Content here"),
+            "Body content should be preserved"
+        );
+        assert!(
+            !result.contains("```markdown"),
+            "Wrapper fence should be stripped"
+        );
+    }
 }
