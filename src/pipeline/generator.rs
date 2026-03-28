@@ -3543,4 +3543,32 @@ End of analysis."#;
             "debug_stage_dir should be None when None is passed"
         );
     }
+
+    #[test]
+    fn test_strip_conflict_notes_extracts_and_removes() {
+        let input = "## Imports\n\nContent\n\n<!-- SKILLDO-CONFLICT: source says bytes but custom says chars -->\n<!-- SKILLDO-CONFLICT: another conflict -->\n## API Reference\n";
+        let result = strip_conflict_notes(input);
+        assert!(
+            !result.contains("SKILLDO-CONFLICT"),
+            "Conflict notes should be stripped"
+        );
+        assert!(result.contains("## Imports"));
+        assert!(result.contains("## API Reference"));
+    }
+
+    #[test]
+    fn test_strip_conflict_notes_preserves_trailing_newline() {
+        let input = "Content here\n";
+        let result = strip_conflict_notes(input);
+        assert_eq!(result, "Content here\n");
+    }
+
+    #[test]
+    fn test_strip_conflict_notes_empty_note_ignored() {
+        let input = "Content\n<!-- SKILLDO-CONFLICT: -->\nMore\n";
+        let result = strip_conflict_notes(input);
+        assert!(result.contains("Content"));
+        assert!(result.contains("More"));
+        assert!(!result.contains("SKILLDO-CONFLICT"));
+    }
 }

@@ -1747,7 +1747,7 @@ mod tests {
 
     #[test]
     fn test_conflict_notes_stripped_from_output() {
-        let input = "---\nname: test\n---\n\n## Imports\n\nContent here\n\n## API Reference\n\n**method()** — does stuff\n\n<!-- CONFLICT: source says X but custom_instructions say Y -->\n<!-- CONFLICT: another conflict -->\n";
+        let input = "---\nname: test\n---\n\n## Imports\n\nContent here\n\n## API Reference\n\n**method()** — does stuff\n\n<!-- SKILLDO-CONFLICT: source says X but custom_instructions say Y -->\n<!-- SKILLDO-CONFLICT: another conflict -->\n";
         let result = normalize_skill_md(input, "test", "1.0", "rust", None, &[], None);
         assert!(
             !result.contains("<!-- SKILLDO-CONFLICT:"),

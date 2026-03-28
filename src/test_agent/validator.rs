@@ -487,15 +487,20 @@ impl<'a> TestCodeValidator<'a> {
             let mut structured_deps = rust_parser.extract_structured_dependencies(skill_md)?;
             // Enrich with collected deps from the source manifest.
             // Collected deps are authoritative (have raw TOML specs with versions/features);
-            // parser deps may be name-only patterns. Add any collected dep not already present.
+            // parser deps may be name-only patterns. Upgrade name-only deps with manifest
+            // specs, or add entirely new deps.
             let before = structured_deps.len();
             for cd in collected_deps {
                 let norm = cd.name.replace('-', "_");
-                if !structured_deps
-                    .iter()
-                    .any(|d| d.name.replace('-', "_") == norm)
+                match structured_deps
+                    .iter_mut()
+                    .find(|d| d.name.replace('-', "_") == norm)
                 {
-                    structured_deps.push(cd.clone());
+                    Some(existing) if existing.raw_spec.is_none() && cd.raw_spec.is_some() => {
+                        *existing = cd.clone();
+                    }
+                    Some(_) => {}
+                    None => structured_deps.push(cd.clone()),
                 }
             }
             if structured_deps.len() > before {
