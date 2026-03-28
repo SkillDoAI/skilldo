@@ -38,6 +38,20 @@ if [ "$FAILS" -gt 0 ]; then
     echo "$CI_OUTPUT" | grep 'fail' | while IFS= read -r line; do
         echo "    ✗ $line"
     done
+    # Extract error details from ALL failing CI runs
+    BRANCH=$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq '.headRefName' 2>/dev/null)
+    if [ -n "$BRANCH" ]; then
+        RUNS=$(gh run list --repo "$REPO" -b "$BRANCH" --limit 3 --json databaseId,status,conclusion --jq '.[] | select(.conclusion == "failure") | .databaseId' 2>/dev/null)
+        for RUN_ID in $RUNS; do
+            FAILED_LOG=$(gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>&1 | grep -E "error\[|error:|warning\[|FAILED|panicked|assertion.*failed" | head -10)
+            if [ -n "$FAILED_LOG" ]; then
+                echo "  Error details (run $RUN_ID):"
+                echo "$FAILED_LOG" | while IFS= read -r line; do
+                    echo "    → $line"
+                done
+            fi
+        done
+    fi
 fi
 if [ "$PENDING" -gt 0 ]; then
     echo "  Pending:"
