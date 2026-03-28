@@ -371,14 +371,22 @@ fn strip_trailing_meta_text(content: &str) -> String {
         }
         if meta_patterns.iter().any(|p| trimmed.starts_with(p)) {
             // Check if everything after this line to EOF is subordinate
-            // (blank, bullets, indented, or more meta patterns)
+            // (blank, bullets, indented, fenced content, or more meta patterns).
+            // Track fence state so code like `print("changes made")` inside a
+            // fenced block doesn't false-positive as a meta pattern.
+            let mut tail_in_fence = false;
             let all_trailing = lines[i + 1..].iter().all(|l| {
                 let t = l.trim();
-                t.is_empty()
+                let is_fence_boundary = t.starts_with("```") || t.starts_with("~~~");
+                if is_fence_boundary {
+                    tail_in_fence = !tail_in_fence;
+                }
+                tail_in_fence
+                    || t.is_empty()
                     || t.starts_with('-')
                     || t.starts_with('*')
-                    || t.starts_with("```")
-                    || t.chars().next().is_some_and(|c| c.is_ascii_digit()) // numbered lists
+                    || is_fence_boundary
+                    || t.chars().next().is_some_and(|c| c.is_ascii_digit())
                     || l.starts_with("  ")
                     || l.starts_with('\t')
                     || meta_patterns.iter().any(|p| t.to_lowercase().contains(p))
@@ -506,27 +514,36 @@ fn strip_body_markdown_fence(content: &str) -> String {
         None => return content.to_string(),
     };
 
-    // Check if body starts with ```markdown (or ```md)
+    // Check if body starts with a wrapping fence (```markdown, ```md, ```text)
     let first_body = lines[body_start].trim();
-    if first_body != "```markdown" && first_body != "```md" {
+    if first_body != "```markdown" && first_body != "```md" && first_body != "```text" {
         return content.to_string();
     }
 
-    // Check if last non-empty line is a closing ```
-    let last_nonempty = lines.iter().rposition(|l| !l.trim().is_empty());
-    let has_closing_fence = matches!(last_nonempty, Some(i) if lines[i].trim() == "```");
+    // Find the matching closing ``` — scan backward from the end for a bare ```
+    // that's at fence depth 0 (not inside a nested code block).
+    // Can't just check the last non-empty line — the model may add content after
+    // closing the wrapper fence.
+    let mut closing_fence_idx = None;
+    let mut depth = 0;
+    for i in (body_start + 1..lines.len()).rev() {
+        let t = lines[i].trim();
+        if t == "```" || t == "~~~" {
+            if depth == 0 {
+                closing_fence_idx = Some(i);
+                break;
+            }
+            depth -= 1;
+        } else if t.starts_with("```") || t.starts_with("~~~") {
+            depth += 1;
+        }
+    }
 
-    // Strip the opening fence (and closing fence if present).
-    // Unclosed fences happen when the LLM forgets to close or output is truncated.
-    let body_end = if has_closing_fence {
-        last_nonempty.unwrap()
-    } else {
-        lines.len()
-    };
+    let body_end = closing_fence_idx.unwrap_or(lines.len());
 
     warn!(
         "Stripping wrapping ```markdown fence from body ({})",
-        if has_closing_fence {
+        if closing_fence_idx.is_some() {
             "paired"
         } else {
             "unclosed"
