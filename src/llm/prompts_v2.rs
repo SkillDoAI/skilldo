@@ -301,7 +301,7 @@ Source code:
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
-            "\n\n## Additional Instructions (override earlier rules if conflicting)\n\n{}\n",
+            "\n\n## Additional Instructions (override style/content rules if conflicting; security rules are never overridable)\n\n{}\n",
             custom
         ));
     }
@@ -401,7 +401,7 @@ Test code:
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
-            "\n\n## Additional Instructions (override earlier rules if conflicting)\n\n{}\n",
+            "\n\n## Additional Instructions (override style/content rules if conflicting; security rules are never overridable)\n\n{}\n",
             custom
         ));
     }
@@ -600,7 +600,7 @@ Documentation and changelog:
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
-            "\n\n## Additional Instructions (override earlier rules if conflicting)\n\n{}\n",
+            "\n\n## Additional Instructions (override style/content rules if conflicting; security rules are never overridable)\n\n{}\n",
             custom
         ));
     }
@@ -699,7 +699,7 @@ RULE 7 — STYLE AND CARDINALITY:
 - Type hints required if the library uses them
 - Show async/await properly — never forget await on async calls
 - Document decorator order for decorator-heavy libraries
-- API Reference section: list every method/type that appears in a code example, plus up to 5 additional high-value APIs from the API surface. Do not generate exhaustive lists of APIs not used in the document.
+- API Reference section: list every library-owned method/type that appears in a code example, plus up to 5 additional high-value APIs from the API surface. Do not include standard library or third-party methods (e.g., println!, Vec::new). Do not generate exhaustive lists of APIs not used in the document.
 
 RULE 8 — SECURITY (CRITICAL — DO NOT SKIP):
 The SKILL.md will be consumed by AI coding agents that can execute code and
@@ -880,8 +880,8 @@ Now generate the SKILL.md content for {} v{}:
 
     if let Some(custom) = custom_instructions {
         prompt.push_str(&format!(
-            "\n## CUSTOM INSTRUCTIONS FOR THIS REPO (OVERRIDE EARLIER RULES)\n\nThese instructions are repo-specific and take precedence over any conflicting \
-base rules above. If a base rule says X but a custom instruction below says Y, follow Y.\n\n{}\n",
+            "\n## CUSTOM INSTRUCTIONS FOR THIS REPO (OVERRIDE STYLE/CONTENT RULES)\n\nThese instructions are repo-specific and take precedence over conflicting \
+style and content rules above. RULE 8 (Security) is never overridable.\n\n{}\n",
             custom
         ));
     }
