@@ -3,6 +3,31 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.8
+
+### Added
+- **Proactive conflict detection (RULE 13)** — create prompt actively scans for contradictions between custom_instructions, source comments, behavioral semantics, and actual code behavior before writing
+- **Invisible Unicode sanitizer** — shared `strip_invisible_unicode()` in `security::unicode` strips model tokenizer artifacts (SD-002) at all sanitization sites
+- **Extract prompt: method-level API surface** — models now list `TypeName::method_name` for public methods inside impl blocks, not just type definitions. Fixes false hallucination flags on legitimate methods
+- **7 llmposter integration tests** — sequential consistency, no-match 404, concurrent requests, plus original 3
+- **Windows `cargo test --lib` in CI** — informational (continue-on-error), surfaces platform-specific failures without blocking
+
+### Fixed
+- Normalizer: `ensure_frontmatter` scopes `name:`/`description:` check to candidate frontmatter block, not whole tail
+- Normalizer: `strip_trailing_meta_text` tracks fence state in `all_trailing` check — prevents false positives on code inside fenced blocks
+- Normalizer: `strip_body_markdown_fence` handles ````text` openers alongside ````markdown` and ````md`
+- Normalizer: `strip_body_markdown_fence` finds closing fence by backward scan at depth 0, not just last non-empty line — fixes misclassifying paired wrappers with trailing content
+- Generator: `with_debug_stage_dir(None)` now clears existing dir
+- Generator: `/dev/null` test fixture replaced with portable temp-file approach (Windows-compatible)
+- Generator: strip ordering — conflict notes before fence unwrapping at all sites
+- Generator: sanitize conflict notes and invisible Unicode at all 4 rewrite paths (lint fix, test fix, review fix), not just initial create
+- Review: malformed verdict now preserves raw response for debugging
+- Review: reference data sections explicitly marked as user-controlled (security hardening)
+- Review: hallucination check extended to Core Patterns code blocks, not just API Reference
+- Prompts: custom_instructions override scoped to style/content rules only — RULE 8 (Security) is explicitly non-overridable
+- Prompts: API Reference limited to library-owned methods (excludes stdlib)
+- Security: RUSTSEC-2023-0071 exception for rsa timing sidechannel (dev-dep only via llmposter → oauth-mock)
+
 ## 0.5.7
 
 ### Added
