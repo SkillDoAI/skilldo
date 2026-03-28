@@ -26,7 +26,7 @@ set -euo pipefail
 
 PR="${1:?Usage: reply-reviewer.sh <pr> <bot> <search-or-id> <body> [repo]}"
 BOT="${2:?Missing bot name (coderabbitai or greptile-apps)}"
-SEARCH="${3:?Missing search pattern or comment ID}"
+SEARCH="${3:-}"
 BODY="${4:?Missing reply body}"
 REPO="${5:-SkillDoAI/skilldo}"
 BOT_LOGIN="${BOT}[bot]"

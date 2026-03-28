@@ -1139,8 +1139,9 @@ REVIEW CRITERIA:
    - **Import consistency**: Are all names used in code blocks actually imported in the
      ## Imports section? Are there imports listed that are never used in any example?
    - **Hallucination in code examples**: If a Known API Surface is provided, check that \
-     methods called in Core Patterns and Pitfalls code blocks actually exist in the surface. \
-     Fabricated methods in code examples are just as harmful as fabricated API Reference entries.
+     methods called in Core Patterns and Pitfalls `### Right:` code blocks actually exist in \
+     the surface. Skip `### Wrong:` blocks — they intentionally show incorrect usage. \
+     Fabricated methods in runnable examples are just as harmful as fabricated API Reference entries.
    - **Parameter descriptions**: Do they contradict the signature or the code examples?
    - **Module paths**: Are documented import paths consistent throughout the document?
    - **API Reference vs custom_instructions**: If ADDITIONAL INSTRUCTIONS are provided,
