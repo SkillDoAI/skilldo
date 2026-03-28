@@ -69,7 +69,7 @@ async fn test_fixture_matching_simulates_pipeline_stages() {
     assert!(r3.contains("Default"), "default response: {r3}");
 }
 
-/// 429 error responses are handled gracefully.
+/// Raw client 429 error propagation (no RetryClient wrapping).
 #[tokio::test]
 async fn test_error_response_handled() {
     let server = ServerBuilder::new()
