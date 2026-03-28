@@ -27,7 +27,7 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 
 ### Findings (A/B testing: 12 sonnet runs + 8 gpt-oss runs + 2 opus runs)
 - **Sonnet 4.6**: 5 consecutive Greptile 5/5. 100% test pass rate (12/12 runs). Reliable for production
-- **Opus 4.6**: Unreliable via CLI pipe mode — lint loops, crashes, prompt injection content
+- **Opus 4.6**: Unreliable via CLI pipe mode — lint loops, crashes, prompt injection content. Dep enrichment fixed test compilation but CLI instability persisted. Stopped testing after sonnet hit 5/5
 - **gpt-oss-120b (Cerebras)**: Greptile 3-4/5. 12.5% test pass rate (1/8 runs). 6x faster but inconsistent code quality
 - **GLM 4.7 (Cerebras)**: Dead — lint loops + LLM call failures. Can't sustain multi-stage pipeline
 - **Key insight**: models consistently put only 2/10 deps in `## Imports` — dep enrichment is critical. Source code comments override custom_instructions — RULE 13 + conflict notes address this
