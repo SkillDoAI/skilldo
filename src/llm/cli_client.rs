@@ -386,10 +386,11 @@ mod tests {
     #[tokio::test]
     #[cfg(windows)]
     async fn test_cli_client_timeout() {
-        // `timeout /t 10` with a 1-second timeout — Windows equivalent of `sleep 10`
+        // `ping -n 11 127.0.0.1` waits ~10 seconds (Windows-compatible, works with stdin redirection)
+        // timeout.exe doesn't work with redirected stdin — it exits immediately.
         let client = CliClient::new(
-            "timeout".to_string(),
-            vec!["/t".to_string(), "10".to_string()],
+            "ping".to_string(),
+            vec!["-n".to_string(), "11".to_string(), "127.0.0.1".to_string()],
             None,
             1,
         );
