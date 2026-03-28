@@ -208,6 +208,7 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
             warn!("review: treating unparseable response as pass (malformed)");
             return Ok(ReviewResult {
                 malformed: true,
+                raw_verdict: response.to_string(),
                 ..ReviewResult::default()
             });
         }

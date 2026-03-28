@@ -44,3 +44,4 @@ skilldo-*.toml
 
 # Logs
 *.log
+dev/scripts/

@@ -11,6 +11,41 @@
 // Technical Report #36 (Unicode Security Considerations).
 
 use super::{line_number, snippet_at, Category, Finding, Severity};
+use tracing::warn;
+
+/// Invisible Unicode characters that models sometimes emit as tokenizer artifacts.
+/// These trigger SD-002 in the YARA scanner. Shared between detection (YARA) and
+/// cleanup (strip_invisible_unicode) to keep the list in one place.
+pub const INVISIBLE_CHARS: &[char] = &[
+    '\u{200B}', // zero-width space
+    '\u{200C}', // zero-width non-joiner
+    '\u{200D}', // zero-width joiner
+    '\u{FEFF}', // byte order mark
+    '\u{00AD}', // soft hyphen
+    '\u{2060}', // word joiner
+    '\u{2061}', // function application
+    '\u{2062}', // invisible times
+    '\u{2063}', // invisible separator
+    '\u{2064}', // invisible plus
+    '\u{180E}', // mongolian vowel separator
+];
+
+/// Strip invisible Unicode characters from model output.
+/// Logs a warning with the count of removed characters.
+pub fn strip_invisible_unicode(content: &str) -> String {
+    let cleaned: String = content
+        .chars()
+        .filter(|c| !INVISIBLE_CHARS.contains(c))
+        .collect();
+    if cleaned.len() != content.len() {
+        let removed = content.chars().count() - cleaned.chars().count();
+        warn!(
+            "Stripped {} invisible Unicode character(s) from model output",
+            removed
+        );
+    }
+    cleaned
+}
 
 /// Known homoglyph pairs: (non-Latin char, Latin lookalike).
 /// Cyrillic and Greek characters that are visually identical to Latin.
@@ -245,5 +280,19 @@ mod tests {
     fn rlo_not_found_on_clean_text() {
         let findings = scan("perfectly normal text with no tricks");
         assert!(!findings.iter().any(|f| f.rule_id == "SD-004"));
+    }
+
+    #[test]
+    fn strip_invisible_unicode_removes_zero_width_chars() {
+        let input = "hello\u{200B}world\u{FEFF}test\u{00AD}end";
+        let result = strip_invisible_unicode(input);
+        assert_eq!(result, "helloworldtestend");
+    }
+
+    #[test]
+    fn strip_invisible_unicode_clean_input_unchanged() {
+        let input = "normal text with no invisible chars";
+        let result = strip_invisible_unicode(input);
+        assert_eq!(result, input);
     }
 }

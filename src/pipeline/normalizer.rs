@@ -42,10 +42,10 @@ pub fn ensure_frontmatter(
     if !trimmed.starts_with("---") {
         if let Some(fm_start) = trimmed.find("\n---\n") {
             let after = &trimmed[fm_start + 5..]; // skip the \n---\n (5 bytes)
-            if after.contains("name:") && after.contains("description:") {
-                if let Some(fm_end) = after.find("\n---") {
+            if let Some(fm_end) = after.find("\n---") {
+                let fm_block = &after[..fm_end];
+                if fm_block.contains("name:") && fm_block.contains("description:") {
                     // Found valid frontmatter after preamble — reconstruct without preamble
-                    let fm_block = &after[..fm_end];
                     let body = &after[fm_end + 4..]; // skip \n---
                     let reconstructed = format!("---\n{}\n---\n{}", fm_block, body);
                     // Recurse to handle generated-by injection on the clean content
@@ -371,14 +371,22 @@ fn strip_trailing_meta_text(content: &str) -> String {
         }
         if meta_patterns.iter().any(|p| trimmed.starts_with(p)) {
             // Check if everything after this line to EOF is subordinate
-            // (blank, bullets, indented, or more meta patterns)
+            // (blank, bullets, indented, fenced content, or more meta patterns).
+            // Track fence state so code like `print("changes made")` inside a
+            // fenced block doesn't false-positive as a meta pattern.
+            let mut tail_in_fence = false;
             let all_trailing = lines[i + 1..].iter().all(|l| {
                 let t = l.trim();
-                t.is_empty()
+                let is_fence_boundary = t.starts_with("```") || t.starts_with("~~~");
+                if is_fence_boundary {
+                    tail_in_fence = !tail_in_fence;
+                }
+                tail_in_fence
+                    || t.is_empty()
                     || t.starts_with('-')
                     || t.starts_with('*')
-                    || t.starts_with("```")
-                    || t.chars().next().is_some_and(|c| c.is_ascii_digit()) // numbered lists
+                    || is_fence_boundary
+                    || t.chars().next().is_some_and(|c| c.is_ascii_digit())
                     || l.starts_with("  ")
                     || l.starts_with('\t')
                     || meta_patterns.iter().any(|p| t.to_lowercase().contains(p))
@@ -506,27 +514,43 @@ fn strip_body_markdown_fence(content: &str) -> String {
         None => return content.to_string(),
     };
 
-    // Check if body starts with ```markdown (or ```md)
+    // Check if body starts with a wrapping fence (```markdown, ```md, ```text)
     let first_body = lines[body_start].trim();
-    if first_body != "```markdown" && first_body != "```md" {
+    if first_body != "```markdown" && first_body != "```md" && first_body != "```text" {
         return content.to_string();
     }
 
-    // Check if last non-empty line is a closing ```
-    let last_nonempty = lines.iter().rposition(|l| !l.trim().is_empty());
-    let has_closing_fence = matches!(last_nonempty, Some(i) if lines[i].trim() == "```");
+    // Find the matching closing fence by scanning FORWARD from the opening.
+    // Track fence depth: tagged fences (```rust, ```toml) open a block,
+    // bare fences (```) close the current block. The wrapper close is the
+    // first bare ``` at depth 0. Scanning backward is wrong here — a bare
+    // ``` that opens an inner block looks like the wrapper close.
+    let mut closing_fence_idx = None;
+    let mut depth = 0;
+    for (i, line) in lines.iter().enumerate().skip(body_start + 1) {
+        let t = line.trim();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            let fence_prefix = if t.starts_with("```") { "```" } else { "~~~" };
+            let after_fence = t[fence_prefix.len()..].trim();
+            if !after_fence.is_empty() {
+                // Tagged fence (e.g., ```rust, ```1password) — opens a nested block
+                depth += 1;
+            } else if t == "```" || t == "~~~" {
+                // Bare fence — closes current block or the wrapper
+                if depth == 0 {
+                    closing_fence_idx = Some(i);
+                    break;
+                }
+                depth -= 1;
+            }
+        }
+    }
 
-    // Strip the opening fence (and closing fence if present).
-    // Unclosed fences happen when the LLM forgets to close or output is truncated.
-    let body_end = if has_closing_fence {
-        last_nonempty.unwrap()
-    } else {
-        lines.len()
-    };
+    let body_end = closing_fence_idx.unwrap_or(lines.len());
 
     warn!(
         "Stripping wrapping ```markdown fence from body ({})",
-        if has_closing_fence {
+        if closing_fence_idx.is_some() {
             "paired"
         } else {
             "unclosed"
@@ -1754,6 +1778,73 @@ mod tests {
         assert!(
             result.contains("Content here"),
             "Content should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_skips_fenced_content() {
+        // Meta-like text inside a code block should NOT be stripped
+        let content = "---\nname: test\n---\n\n## API Reference\n\n**method()** — does stuff\n\n```python\nprint(\"changes made\")\nprint(\"summary of fixes\")\n```\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            result.contains("summary of fixes"),
+            "Fenced content should not be stripped. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_with_inner_code_blocks() {
+        // Wrapper fence containing inner code blocks — should strip wrapper, keep inner
+        let input = "---\nname: test\n---\n\n```markdown\n## Imports\n\n```rust\nuse foo::bar;\n```\n\n## Core Patterns\n\nContent\n```\n";
+        let result = strip_body_markdown_fence(input);
+        assert!(
+            result.contains("use foo::bar"),
+            "Inner code block content should be preserved. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.starts_with("---\n") || !result.contains("```markdown"),
+            "Wrapper fence should be stripped"
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_unclosed_with_inner_blocks() {
+        // Unclosed wrapper with inner code blocks — should not truncate at inner fence
+        let input = "---\nname: test\n---\n\n```markdown\n## Imports\n\n```rust\nuse foo::bar;\n```\n\n## More Content\n\nStuff here\n";
+        let result = strip_body_markdown_fence(input);
+        assert!(
+            result.contains("More Content"),
+            "Should not truncate at inner fence close. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_text_meta_followed_by_fenced_block() {
+        // Meta pattern with fenced code after it — all_trailing should scan through fences
+        let content = "---\nname: test\n---\n\n## API Reference\n\n**method()** — stuff\n\nSummary of fixes:\n- fixed X\n```python\nprint('done')\n```\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            !result.contains("Summary of fixes"),
+            "Meta text with subordinate fenced content should be stripped. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_paired_with_trailing_content() {
+        // Wrapper closed but model adds content after — should strip wrapper, keep trailing
+        let input = "---\nname: test\n---\n\n```markdown\n## Imports\n\nContent here\n```\n\nTrailing commentary\n";
+        let result = strip_body_markdown_fence(input);
+        assert!(
+            result.contains("Content here"),
+            "Body content should be preserved"
+        );
+        assert!(
+            !result.contains("```markdown"),
+            "Wrapper fence should be stripped"
         );
     }
 }
