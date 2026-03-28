@@ -170,7 +170,9 @@ pub async fn create_client_from_llm_config(
         ),
 
         Provider::Cli => {
-            unreachable!("Provider::Cli is handled by the early return above")
+            anyhow::bail!(
+                "Provider::Cli should have been handled by the early return above — this is a bug"
+            )
         }
     };
 

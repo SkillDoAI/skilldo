@@ -594,6 +594,15 @@ impl Collector {
             total_chars,
             paths.len()
         );
+        // Only bail if we had budget AND files but got nothing — indicates read failures.
+        // Budget exhaustion (header doesn't fit) is not a read failure.
+        if content.is_empty() && !paths.is_empty() && max_chars > 200 {
+            warn!(
+                "Read 0 bytes from {} source files with {}B budget — check file permissions",
+                paths.len(),
+                max_chars
+            );
+        }
         Ok(content)
     }
 
