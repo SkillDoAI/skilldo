@@ -158,7 +158,8 @@ jobs:
         env:
           TAP_TOKEN: ${{ secrets.SKILLDO_RELEASE }}
         run: |
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/SkillDoAI/homebrew-tap.git" tap
+          git clone "https://github.com/SkillDoAI/homebrew-tap.git" tap
+          git -C tap remote set-url origin "https://x-access-token:${TAP_TOKEN}@github.com/SkillDoAI/homebrew-tap.git"
           mkdir -p tap/Formula
           cp skilldo.rb tap/Formula/skilldo.rb
           cd tap
