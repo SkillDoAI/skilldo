@@ -349,6 +349,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(windows)]
+    async fn test_cli_client_broken_pipe() {
+        // `cmd /c exit 0` exits immediately — Windows equivalent of `true`
+        let client = CliClient::new(
+            "cmd".to_string(),
+            vec!["/c".to_string(), "exit".to_string(), "0".to_string()],
+            None,
+            TEST_TIMEOUT,
+        );
+        let large_prompt = "x".repeat(1_000_000);
+        let result = client.complete(&large_prompt).await;
+        assert!(result.is_ok(), "BrokenPipe should be handled gracefully");
+    }
+
+    #[tokio::test]
     #[cfg(unix)]
     async fn test_cli_client_timeout() {
         // `sleep 10` with a 1-second timeout should fail with a clear message
@@ -357,6 +372,26 @@ mod tests {
             vec!["10".to_string()],
             None,
             1, // 1-second timeout
+        );
+        let result = client.complete("").await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("timed out"),
+            "Expected timeout message, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn test_cli_client_timeout() {
+        // `timeout /t 10` with a 1-second timeout — Windows equivalent of `sleep 10`
+        let client = CliClient::new(
+            "timeout".to_string(),
+            vec!["/t".to_string(), "10".to_string()],
+            None,
+            1,
         );
         let result = client.complete("").await;
         assert!(result.is_err());
