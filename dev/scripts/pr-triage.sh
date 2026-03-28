@@ -29,9 +29,22 @@ SCORE=$(gh api "repos/${REPO}/issues/${PR}/comments" \
 echo "Greptile: ${SCORE:-not reviewed}"
 
 # --- CI Status ---
-FAILS=$(gh pr checks "$PR" --repo "$REPO" 2>&1 | grep -c 'fail' || true)
-PENDING=$(gh pr checks "$PR" --repo "$REPO" 2>&1 | grep -c 'pending' || true)
+CI_OUTPUT=$(gh pr checks "$PR" --repo "$REPO" 2>&1 || true)
+FAILS=$(echo "$CI_OUTPUT" | grep -c 'fail' || true)
+PENDING=$(echo "$CI_OUTPUT" | grep -c 'pending' || true)
 echo "CI: ${FAILS} failures, ${PENDING} pending"
+if [ "$FAILS" -gt 0 ]; then
+    echo "  Failed:"
+    echo "$CI_OUTPUT" | grep 'fail' | while IFS= read -r line; do
+        echo "    ✗ $line"
+    done
+fi
+if [ "$PENDING" -gt 0 ]; then
+    echo "  Pending:"
+    echo "$CI_OUTPUT" | grep 'pending' | while IFS= read -r line; do
+        echo "    ⏳ $line"
+    done
+fi
 echo ""
 
 # --- Open Threads ---
