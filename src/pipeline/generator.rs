@@ -146,7 +146,7 @@ fn strip_markdown_fences(content: &str) -> String {
     body.trim().to_string()
 }
 
-/// Strip `<!-- CONFLICT: ... -->` notes from model output, logging each one.
+/// Strip `<!-- SKILLDO-CONFLICT: ... -->` notes from model output, logging each one.
 /// Must run before the security scan since these look like instruction injection.
 fn strip_conflict_notes(content: &str) -> String {
     let mut result = Vec::new();

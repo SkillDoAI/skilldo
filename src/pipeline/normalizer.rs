@@ -1,7 +1,7 @@
 //! Lightweight post-processing to ensure critical elements exist.
 //! Only fixes what models consistently miss - tries not to rewrite everything.
 
-use tracing::{info, warn};
+use tracing::warn;
 
 /// Create proper frontmatter (agentskills.io compliant)
 fn create_frontmatter(
@@ -568,21 +568,6 @@ fn fix_unclosed_code_blocks(content: &str) -> String {
     content.to_string()
 }
 
-/// Extract `<!-- CONFLICT: ... -->` notes from the model's output, log them,
-/// and strip them. These are diagnostic messages from the create stage when the
-/// model detected contradictions between custom_instructions and source data.
-fn extract_conflict_notes(content: &str) {
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("<!-- SKILLDO-CONFLICT:") {
-            let note = rest.trim_end_matches("-->").trim();
-            if !note.is_empty() {
-                info!("Model conflict note: {}", note);
-            }
-        }
-    }
-}
-
 /// Apply all normalizations (lightweight - only critical fixes)
 pub fn normalize_skill_md(
     content: &str,
@@ -594,9 +579,6 @@ pub fn normalize_skill_md(
     generated_with: Option<&str>,
 ) -> String {
     let mut normalized = content.to_string();
-
-    // 0. Extract and log conflict notes (<!-- CONFLICT: ... --> comments)
-    extract_conflict_notes(&normalized);
 
     // 1. Ensure frontmatter (critical)
     normalized = ensure_frontmatter(
