@@ -82,6 +82,10 @@ jobs:
           shared-key: ci-windows
           cache-all-crates: true
       - run: cargo check --all-targets
+      # Run lib tests on Windows to surface platform-specific failures early
+      - name: run tests (informational)
+        run: cargo test --lib
+        continue-on-error: true  # Windows tests not yet fully ported — tracking failures without blocking
 
   fmt:
     name: cargo fmt
