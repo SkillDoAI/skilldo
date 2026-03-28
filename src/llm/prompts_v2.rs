@@ -126,6 +126,9 @@ PRIORITY: Focus on extracting PUBLIC user-facing APIs, NOT internal utilities.
 - Used only in tests → weak signal; do not override private/internal visibility
 - Has doc comments → likely Public
 - Internal/private modules or naming conventions → INTERNAL, deprioritize
+- **IMPORTANT: Include public METHODS on public types**, not just the type definition. \
+List `TypeName::method_name` for each public method — the review agent cross-references \
+API Reference entries against this surface and flags methods not listed here as hallucinations.
 
 **Scoring system:**
 For each API, assign a "publicity_score":
@@ -1381,6 +1384,8 @@ fn rust_hints(stage: &str) -> &'static str {
 \n\
 PUBLIC API DETECTION (Rust):\n\
 - `pub fn`, `pub struct`, `pub enum`, `pub trait` = public API\n\
+- `pub fn` inside `impl StructName` blocks = public METHODS — list these as `StructName::method_name`. \
+Do NOT only list the struct; enumerate its public methods from `impl` blocks\n\
 - `pub(crate)`, `pub(super)`, no visibility modifier = NOT public\n\
 - `pub use` in `lib.rs` = re-exported at crate root (highest priority)\n\
 - Items behind `#[cfg(feature = \"...\")]` are feature-gated — note the required feature\n\

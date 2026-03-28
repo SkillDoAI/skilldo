@@ -525,6 +525,9 @@ impl Generator {
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
 
+        // Strip invisible Unicode artifacts from model output (triggers SD-002)
+        skill_md = crate::security::unicode::strip_invisible_unicode(&skill_md);
+
         // Security scan (YARA + unicode + injection) — bail immediately, no retries.
         if self.enable_security_scan {
             let scan_report = crate::security::scan_skill(&skill_md);
@@ -664,6 +667,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 skill_md = self.get_client("create").complete(&fix_prompt).await?;
                 skill_md = strip_conflict_notes(&skill_md);
                 skill_md = strip_markdown_fences(&skill_md);
+                skill_md = crate::security::unicode::strip_invisible_unicode(&skill_md);
                 rescan_after_rewrite(&skill_md, self.enable_security_scan, "lint fix")?;
                 continue;
             }
@@ -704,6 +708,9 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                                         self.get_client("create").complete(&patch_prompt).await?;
                                     skill_md = strip_conflict_notes(&skill_md);
                                     skill_md = strip_markdown_fences(&skill_md);
+                                    skill_md = crate::security::unicode::strip_invisible_unicode(
+                                        &skill_md,
+                                    );
                                     rescan_after_rewrite(
                                         &skill_md,
                                         self.enable_security_scan,
@@ -931,6 +938,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 skill_md = self.get_client("create").complete(&fix_prompt).await?;
                 skill_md = strip_conflict_notes(&skill_md);
                 skill_md = strip_markdown_fences(&skill_md);
+                skill_md = crate::security::unicode::strip_invisible_unicode(&skill_md);
                 rescan_after_rewrite(&skill_md, self.enable_security_scan, "review fix")?;
 
                 // Single test pass after review rewrite — mark unresolved if broken.

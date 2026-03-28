@@ -42,10 +42,10 @@ pub fn ensure_frontmatter(
     if !trimmed.starts_with("---") {
         if let Some(fm_start) = trimmed.find("\n---\n") {
             let after = &trimmed[fm_start + 5..]; // skip the \n---\n (5 bytes)
-            if after.contains("name:") && after.contains("description:") {
-                if let Some(fm_end) = after.find("\n---") {
+            if let Some(fm_end) = after.find("\n---") {
+                let fm_block = &after[..fm_end];
+                if fm_block.contains("name:") && fm_block.contains("description:") {
                     // Found valid frontmatter after preamble — reconstruct without preamble
-                    let fm_block = &after[..fm_end];
                     let body = &after[fm_end + 4..]; // skip \n---
                     let reconstructed = format!("---\n{}\n---\n{}", fm_block, body);
                     // Recurse to handle generated-by injection on the clean content
