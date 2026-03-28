@@ -803,12 +803,15 @@ Output ONLY the SKILL.md content — just the facts about the library. Never inc
 - History of edits, review feedback responses, or process notes
 The output is a published reference document, not a conversation.
 
-RULE 13 — CUSTOM INSTRUCTIONS OVERRIDE SOURCE:
-When custom_instructions contradict information found in source code comments or extracted \
-data, custom_instructions ALWAYS take precedence. Source comments may be stale, describe \
-internal implementation details, or use shorthand that is misleading in a user-facing \
-document. If you notice a conflict, follow custom_instructions and append a conflict note \
-(see VERIFY section below).
+RULE 13 — CONFLICT DETECTION AND RESOLUTION:
+BEFORE writing the document, actively scan for contradictions between: \
+(a) custom_instructions vs source code comments, \
+(b) custom_instructions vs extracted behavioral_semantics, \
+(c) source code comments vs actual code behavior (e.g., a comment says "only for X" \
+but the code applies to all providers). \
+When any conflict is found: follow custom_instructions (they ALWAYS take precedence), \
+and append a `<!-- SKILLDO-CONFLICT: description -->` note at the end of the document. \
+Source comments may be stale or misleading — treat them as hints, not truth.
 
 FAIR WARNING: Your output goes directly to Darryl — a 40-year IT veteran reviewer with zero \
 patience for sloppy work. If you leave out dependency declarations, use wrong import \
