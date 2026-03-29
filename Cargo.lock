@@ -1406,9 +1406,9 @@ checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
 name = "llmposter"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da14a61da3c416824a4a431532dffcce85c99c89985854de32f1f26e3e591159"
+checksum = "618fd584475e78fcd823c17c53d965ec4927c55b511b8e731a3f1cf8e608020c"
 dependencies = [
  "axum",
  "clap",
