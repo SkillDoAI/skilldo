@@ -187,7 +187,8 @@ impl<'a> ReviewAgent<'a> {
 
 /// Parse the LLM's JSON verdict response into a ReviewResult.
 ///
-/// When `strict` is false (pipeline mode), unparseable responses default to pass.
+/// When `strict` is false (pipeline mode), unparseable responses return `passed: false`
+/// with `malformed: true` — the review gate is NOT bypassed.
 /// When `strict` is true (standalone mode), unparseable responses return an error.
 fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
     // Try to extract JSON from the response (may be wrapped in fences or have preamble)

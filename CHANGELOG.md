@@ -8,7 +8,7 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 ### Fixed
 - **Normalizer recursion depth limit** — `ensure_frontmatter` capped at 3 recursions, preventing stack overflow on pathological input
 - **Malformed review → failed** — unparseable review verdicts now default to `passed: false` instead of silently bypassing the review gate
-- **`unreachable!()` → `bail!()`** — factory.rs CLI arm returns an explicit error instead of panicking
+- **`unreachable!()` formatting** — factory.rs CLI arm brace-style cleaned up (one-liner)
 - **Collector warns on empty source** — logs warning when 0 bytes read from source files with available budget
 - **Auth body errors logged** — `response.text().await.unwrap_or_default()` now logs the read error before defaulting (4 sites in oauth.rs/device_code.rs)
 - **`failed_stage` preserves root cause** — review failures no longer overwrite an earlier test failure stage
