@@ -124,10 +124,13 @@ cleanup = true
 Generate a SKILL.md for a library repository.
 
 Key flags:
-- `--language <LANG>` — force language (python, javascript, rust, go, java)
-- `--config <PATH>` — config file path
+- `--language <LANG>` — force language (python, javascript, rust, go, java). Auto-detected if omitted
+- `--config <PATH>` — config file path (defaults to `./skilldo.toml` or `~/.config/skilldo/config.toml`)
 - `--model <MODEL>` — override LLM model
+- `--provider <PROVIDER>` — LLM provider: anthropic, openai, chatgpt, gemini, openai-compatible
+- `--base-url <URL>` — base URL for openai-compatible providers
 - `-i, --input <PATH>` — existing SKILL.md to use as reference for updates
+- `-o <PATH>` — output file (default: SKILL.md)
 - `--debug-stage-files <DIR>` — dump each pipeline stage's raw output for debugging
 - `--no-test` — skip test validation
 - `--no-review` — skip review validation
@@ -136,7 +139,19 @@ Key flags:
 - `--best-effort` — exit 0 even with errors
 - `--telemetry` / `--no-telemetry` — toggle run logging
 - `--container` — run test agent in container (default: bare-metal)
-- `-o <PATH>` — output file (default: SKILL.md)
+- `--install-source <MODE>` — test install: registry, local-install, local-mount
+- `--source-path <PATH>` — local source path for local-install/local-mount modes
+- `--test-mode <MODE>` — test validation: thorough, adaptive, minimal
+- `--review-model <MODEL>` — override review stage model
+- `--review-provider <PROVIDER>` — override review stage provider
+- `--test-model <MODEL>` — override test stage model
+- `--test-provider <PROVIDER>` — override test stage provider
+- `--max-retries <N>` — override max generation retries
+- `--skill-version <VER>` — explicit library version override
+- `--version-from <STRATEGY>` — version extraction: git-tag, package, branch, commit
+- `-q, --quiet` — suppress informational output
+- `-v, --verbose` — show detailed debug output
+- `--dry-run` — use mock LLM client for testing
 
 ### `skilldo lint <PATH>`
 Lint a SKILL.md for structural errors (frontmatter, sections, code blocks).
