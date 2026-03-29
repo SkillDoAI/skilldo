@@ -64,7 +64,8 @@ enum Commands {
         #[arg(long = "skill-version")]
         skill_version: Option<String>,
 
-        /// Version extraction strategy: git-tag, package, branch, commit
+        /// How to detect library version: package (Cargo.toml/pyproject.toml),
+        /// git-tag, branch, commit
         #[arg(long)]
         version_from: Option<String>,
 
@@ -100,7 +101,7 @@ enum Commands {
         #[arg(long = "no-test")]
         no_test: bool,
 
-        /// Test stage validation mode: thorough, adaptive, minimal
+        /// Test validation mode: thorough (3 patterns), minimal (1), adaptive (starts 1, expands)
         #[arg(long = "test-mode")]
         test_mode: Option<String>,
 
@@ -112,15 +113,17 @@ enum Commands {
         #[arg(long)]
         timeout: Option<u64>,
 
-        /// Test stage install source: registry, local-install, local-mount
+        /// How the test agent installs the library for code validation:
+        /// registry (from crates.io/PyPI/npm), local-install (mount + build),
+        /// local-mount (mount + set module path, no build)
         #[arg(long)]
         install_source: Option<String>,
 
-        /// Path to local source for local-install/local-mount modes
+        /// Local source path for local-install/local-mount test modes
         #[arg(long)]
         source_path: Option<String>,
 
-        /// Run test agent in container mode (default: bare-metal with uv)
+        /// Run test agent in container (default: bare-metal with uv/cargo)
         #[arg(long)]
         container: bool,
 
