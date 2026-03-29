@@ -2531,6 +2531,17 @@ setup(
             "Critical file should be read before low-priority file"
         );
     }
+
+    #[test]
+    fn test_read_files_smart_all_unreadable_warns() {
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path();
+        // All paths are nonexistent — budget > 200 triggers warning
+        let missing1 = repo.join("missing1.py");
+        let missing2 = repo.join("missing2.py");
+        let result = Collector::read_files_smart(&[missing1, missing2], 10_000, repo).unwrap();
+        assert!(result.is_empty(), "All unreadable files should yield empty");
+    }
 }
 
 /// Where a dependency was discovered.

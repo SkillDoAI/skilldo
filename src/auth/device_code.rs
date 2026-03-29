@@ -91,10 +91,7 @@ pub async fn device_code_login(endpoint: &OAuthEndpoint) -> Result<super::TokenS
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|e| {
-            debug!("Failed to read response body: {e}");
-            String::new()
-        });
+        let body = response.text().await.unwrap_or_default();
         bail!("Device code request failed ({status}): {body}");
     }
 
@@ -201,10 +198,7 @@ pub async fn device_code_login(endpoint: &OAuthEndpoint) -> Result<super::TokenS
 
     if !token_response.status().is_success() {
         let status = token_response.status();
-        let body = token_response.text().await.unwrap_or_else(|e| {
-            debug!("Failed to read response body: {e}");
-            String::new()
-        });
+        let body = token_response.text().await.unwrap_or_default();
         bail!("Device code token exchange failed ({status}): {body}");
     }
 

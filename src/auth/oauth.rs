@@ -263,10 +263,7 @@ pub async fn exchange_code(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|e| {
-            debug!("Failed to read response body: {e}");
-            String::new()
-        });
+        let body = response.text().await.unwrap_or_default();
         bail!("Token exchange failed ({}): {}", status, body);
     }
 
@@ -300,10 +297,7 @@ pub async fn refresh_tokens(endpoint: &OAuthEndpoint, refresh_token: &str) -> Re
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|e| {
-            debug!("Failed to read response body: {e}");
-            String::new()
-        });
+        let body = response.text().await.unwrap_or_default();
         bail!(
             "Token refresh failed ({}): {} — you may need to run `skilldo auth login` again",
             status,
