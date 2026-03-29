@@ -41,7 +41,9 @@ async fn test_openai_client_basic() {
 /// Anthropic client against llmposter /v1/messages endpoint.
 #[tokio::test]
 async fn test_anthropic_client_basic() {
-    let _server = ServerBuilder::new()
+    use skilldo::llm::client_impl::AnthropicClient;
+
+    let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
                 .for_provider(Provider::Anthropic)
@@ -51,31 +53,49 @@ async fn test_anthropic_client_basic() {
         .await
         .unwrap();
 
-    let client = skilldo::llm::client_impl::AnthropicClient::new(
+    let client = AnthropicClient::with_base_url(
         "fake-api-key".to_string(),
         "mock-model".to_string(),
+        server.url(),
         8192,
         30,
     )
     .unwrap();
 
-    // AnthropicClient posts to /v1/messages
-    let text = LlmClient::complete(&client, "Hello from Anthropic").await;
-    // May fail if AnthropicClient hardcodes api.anthropic.com — that's a finding
-    match text {
-        Ok(t) => assert_eq!(t, "Anthropic mock response"),
-        Err(e) => {
-            // AnthropicClient doesn't have with_base_url — hits real API or fails
-            let err = e.to_string();
-            assert!(
-                err.contains("error sending request")
-                    || err.contains("connection refused")
-                    || err.contains("401")
-                    || err.contains("authentication"),
-                "Expected connection/auth error (no base_url override), got: {err}"
-            );
-        }
-    }
+    let text = LlmClient::complete(&client, "Hello from Anthropic")
+        .await
+        .unwrap();
+    assert_eq!(text, "Anthropic mock response");
+}
+
+/// Gemini client against llmposter /v1beta/models endpoint.
+#[tokio::test]
+async fn test_gemini_client_basic() {
+    use skilldo::llm::client_impl::GeminiClient;
+
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .for_provider(Provider::Gemini)
+                .respond_with_content("Gemini mock response"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = GeminiClient::with_base_url(
+        "fake-api-key".to_string(),
+        "mock-model".to_string(),
+        server.url(),
+        8192,
+        30,
+    )
+    .unwrap();
+
+    let text = LlmClient::complete(&client, "Hello from Gemini")
+        .await
+        .unwrap();
+    assert_eq!(text, "Gemini mock response");
 }
 
 /// Fixture matching simulates pipeline stages (extract/map/learn).

@@ -116,10 +116,20 @@ pub async fn create_client_from_llm_config(
     let timeout = llm_config.request_timeout_secs;
 
     let client: Box<dyn LlmClient> = match llm_config.provider {
-        Provider::Anthropic => Box::new(
-            AnthropicClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
-                .with_extra_headers(extra_headers),
-        ),
+        Provider::Anthropic => {
+            let client = if let Some(ref base_url) = llm_config.base_url {
+                AnthropicClient::with_base_url(
+                    api_key,
+                    llm_config.model.clone(),
+                    base_url.clone(),
+                    max_tokens,
+                    timeout,
+                )?
+            } else {
+                AnthropicClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
+            };
+            Box::new(client.with_extra_headers(extra_headers))
+        }
 
         Provider::OpenAI => Box::new(
             OpenAIClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
@@ -163,11 +173,24 @@ pub async fn create_client_from_llm_config(
             )
         }
 
-        Provider::Gemini => Box::new(
-            GeminiClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
-                .with_bearer_auth(use_bearer)
-                .with_extra_headers(extra_headers),
-        ),
+        Provider::Gemini => {
+            let client = if let Some(ref base_url) = llm_config.base_url {
+                GeminiClient::with_base_url(
+                    api_key,
+                    llm_config.model.clone(),
+                    base_url.clone(),
+                    max_tokens,
+                    timeout,
+                )?
+            } else {
+                GeminiClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
+            };
+            Box::new(
+                client
+                    .with_bearer_auth(use_bearer)
+                    .with_extra_headers(extra_headers),
+            )
+        }
 
         Provider::Cli => {
             unreachable!("Provider::Cli is handled by the early return above")

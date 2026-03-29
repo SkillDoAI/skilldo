@@ -81,6 +81,7 @@ pub struct AnthropicClient {
     model: String,
     max_tokens: u32,
     client: Client,
+    base_url: String,
     extra_headers: Vec<(String, String)>,
 }
 
@@ -115,6 +116,24 @@ impl AnthropicClient {
             model,
             max_tokens,
             client: build_http_client(timeout_secs)?,
+            base_url: "https://api.anthropic.com".to_string(),
+            extra_headers: Vec::new(),
+        })
+    }
+
+    pub fn with_base_url(
+        api_key: String,
+        model: String,
+        base_url: String,
+        max_tokens: u32,
+        timeout_secs: u64,
+    ) -> Result<Self> {
+        Ok(Self {
+            api_key: api_key.into(),
+            model,
+            max_tokens,
+            client: build_http_client(timeout_secs)?,
+            base_url,
             extra_headers: Vec::new(),
         })
     }
@@ -146,7 +165,7 @@ impl LlmClient for AnthropicClient {
 
         let mut req = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", self.api_key.expose())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json");
@@ -421,6 +440,7 @@ pub struct GeminiClient {
     model: String,
     max_tokens: u32,
     client: Client,
+    base_url: String,
     /// When true, use `Authorization: Bearer` header instead of `x-goog-api-key`.
     /// Set when using OAuth tokens instead of API keys.
     use_bearer_auth: bool,
@@ -489,6 +509,25 @@ impl GeminiClient {
             model,
             max_tokens,
             client: build_http_client(timeout_secs)?,
+            base_url: "https://generativelanguage.googleapis.com".to_string(),
+            use_bearer_auth: false,
+            extra_headers: Vec::new(),
+        })
+    }
+
+    pub fn with_base_url(
+        api_key: String,
+        model: String,
+        base_url: String,
+        max_tokens: u32,
+        timeout_secs: u64,
+    ) -> Result<Self> {
+        Ok(Self {
+            api_key: api_key.into(),
+            model,
+            max_tokens,
+            client: build_http_client(timeout_secs)?,
+            base_url,
             use_bearer_auth: false,
             extra_headers: Vec::new(),
         })
@@ -527,8 +566,8 @@ impl LlmClient for GeminiClient {
         debug!("Calling Gemini API with model: {}", self.model);
 
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            self.model
+            "{}/v1beta/models/{}:generateContent",
+            self.base_url, self.model
         );
 
         let mut req = self
