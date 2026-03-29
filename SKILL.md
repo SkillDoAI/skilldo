@@ -138,20 +138,18 @@ Key flags:
 - `--no-parallel` — run extract/map/learn sequentially (for local models)
 - `--best-effort` — exit 0 even with errors
 - `--telemetry` / `--no-telemetry` — toggle run logging
-- `--container` — run test agent in container (default: bare-metal)
-- `--install-source <MODE>` — test install: registry, local-install, local-mount
+- `--container` — run test agent in container (default: bare-metal with uv/cargo)
+- `--install-source <MODE>` — how the test agent installs the library for code validation: `registry` (from crates.io/PyPI/npm, default), `local-install` (mounts local repo and builds via package manager), `local-mount` (mounts repo and sets module path directly, no build step)
 - `--source-path <PATH>` — local source path for local-install/local-mount modes
-- `--test-mode <MODE>` — test validation: thorough, adaptive, minimal
-- `--review-model <MODEL>` — override review stage model
-- `--review-provider <PROVIDER>` — override review stage provider
-- `--test-model <MODEL>` — override test stage model
-- `--test-provider <PROVIDER>` — override test stage provider
-- `--max-retries <N>` — override max generation retries
-- `--skill-version <VER>` — explicit library version override
-- `--version-from <STRATEGY>` — version extraction: git-tag, package, branch, commit
-- `-q, --quiet` — suppress informational output
-- `-v, --verbose` — show detailed debug output
-- `--dry-run` — use mock LLM client for testing
+- `--test-mode <MODE>` — `thorough` tests 3 patterns (default), `minimal` tests 1, `adaptive` starts with 1 and expands
+- `--review-model <MODEL>` / `--review-provider <PROVIDER>` — override model/provider for the review stage only
+- `--test-model <MODEL>` / `--test-provider <PROVIDER>` — override model/provider for the test code generation stage only
+- `--max-retries <N>` — max create→validate retries before giving up (default: from config)
+- `--skill-version <VER>` — force a specific library version in frontmatter (e.g., "2.1.0") instead of auto-detecting
+- `--version-from <STRATEGY>` — how to detect version: `package` (Cargo.toml/pyproject.toml), `git-tag`, `branch`, `commit`
+- `-q, --quiet` — suppress informational output (only warnings/errors)
+- `-v, --verbose` — show detailed debug output (equivalent to RUST_LOG=debug)
+- `--dry-run` — use mock LLM client for testing (no API calls)
 
 ### `skilldo lint <PATH>`
 Lint a SKILL.md for structural errors (frontmatter, sections, code blocks).
