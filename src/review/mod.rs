@@ -187,7 +187,8 @@ impl<'a> ReviewAgent<'a> {
 
 /// Parse the LLM's JSON verdict response into a ReviewResult.
 ///
-/// When `strict` is false (pipeline mode), unparseable responses default to pass.
+/// When `strict` is false (pipeline mode), unparseable responses return `passed: false`
+/// with `malformed: true` — the review gate is NOT bypassed.
 /// When `strict` is true (standalone mode), unparseable responses return an error.
 fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
     // Try to extract JSON from the response (may be wrapped in fences or have preamble)
@@ -203,10 +204,11 @@ fn parse_review_response(response: &str, strict: bool) -> Result<ReviewResult> {
                     response.chars().take(500).collect::<String>()
                 );
             }
-            // Conservative: treat parse failure as pass (don't block pipeline)
-            // but always flag as malformed so the caller knows.
-            warn!("review: treating unparseable response as pass (malformed)");
+            // Security fix: treat parse failure as failed (don't silently bypass review gate)
+            // but always flag as malformed so the caller knows to retry.
+            warn!("review: unparseable response — treating as failed (malformed)");
             return Ok(ReviewResult {
+                passed: false,
                 malformed: true,
                 raw_verdict: response.to_string(),
                 ..ReviewResult::default()
@@ -385,10 +387,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_review_response_malformed_treats_as_pass() {
+    fn test_parse_review_response_malformed_treats_as_failed() {
         let response = "I couldn't analyze this properly, here are some thoughts...";
         let result = parse_review_response(response, false).unwrap();
-        assert!(result.passed); // Conservative: unparseable = pass (pipeline mode)
+        assert!(!result.passed); // Malformed = failed (don't silently bypass review gate)
         assert!(
             result.malformed,
             "malformed should be true on parse failure"
@@ -568,7 +570,7 @@ mod tests {
     fn test_parse_review_response_malformed_but_contains_passed_true() {
         let response = "I found no issues. The result is \"passed\": true so all good.";
         let result = parse_review_response(response, false).unwrap();
-        assert!(result.passed);
+        assert!(!result.passed); // Malformed = failed regardless of prose content
         assert!(
             result.malformed,
             "malformed should be true even when text heuristic matches"

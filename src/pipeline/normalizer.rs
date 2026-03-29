@@ -34,12 +34,33 @@ pub fn ensure_frontmatter(
     license: Option<&str>,
     generated_with: Option<&str>,
 ) -> String {
+    ensure_frontmatter_inner(
+        content,
+        package_name,
+        version,
+        ecosystem,
+        license,
+        generated_with,
+        0,
+    )
+}
+
+fn ensure_frontmatter_inner(
+    content: &str,
+    package_name: &str,
+    version: &str,
+    ecosystem: &str,
+    license: Option<&str>,
+    generated_with: Option<&str>,
+    depth: usize,
+) -> String {
+    const MAX_DEPTH: usize = 3;
     let trimmed = content.trim_start();
 
     // If content doesn't start with --- but has frontmatter nearby (LLMs sometimes
     // prepend preamble text), extract the existing frontmatter and strip the preamble
     // instead of blindly adding a new block.
-    if !trimmed.starts_with("---") {
+    if !trimmed.starts_with("---") && depth < MAX_DEPTH {
         if let Some(fm_start) = trimmed.find("\n---\n") {
             let after = &trimmed[fm_start + 5..]; // skip the \n---\n (5 bytes)
             if let Some(fm_end) = after.find("\n---") {
@@ -49,13 +70,14 @@ pub fn ensure_frontmatter(
                     let body = &after[fm_end + 4..]; // skip \n---
                     let reconstructed = format!("---\n{}\n---\n{}", fm_block, body);
                     // Recurse to handle generated-by injection on the clean content
-                    return ensure_frontmatter(
+                    return ensure_frontmatter_inner(
                         &reconstructed,
                         package_name,
                         version,
                         ecosystem,
                         license,
                         generated_with,
+                        depth + 1,
                     );
                 }
             }

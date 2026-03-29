@@ -3,6 +3,21 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.9
+
+### Fixed
+- **Normalizer recursion depth limit** — `ensure_frontmatter` capped at 3 recursions, preventing stack overflow on pathological input
+- **Malformed review → failed** — unparseable review verdicts now default to `passed: false` instead of silently bypassing the review gate
+- **Collector warns on empty source** — logs warning when 0 bytes read from source files with available budget
+- **Auth body errors logged** — `response.text().await.unwrap_or_default()` now logs the read error before defaulting (4 sites in oauth.rs/device_code.rs)
+- **`failed_stage` preserves root cause** — review failures no longer overwrite an earlier test failure stage
+- **`&PathBuf` → `&Path`** — `ensure_secure_dir` and `write_secure_file` accept `&Path` (API improvement)
+- **Homebrew tap clone security** — PAT no longer embedded in git clone URL (same fix as llmposter)
+
+### Changed
+- Removed `claude-code-review.yml` and `claude.yml` CI workflows (noisy, not useful)
+- SKILL.md updated to v0.5.9: added `--input`, `--debug-stage-files`, `--no-parallel` flags, CLI provider config, Java language support
+
 ## 0.5.8
 
 ### Added
@@ -438,3 +453,4 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Container-based code validation
 - YAML frontmatter + Markdown output format
 - Regex-based security scanning
+
