@@ -142,3 +142,47 @@ async fn test_concurrent_requests() {
         assert_eq!(text, "concurrent ok");
     }
 }
+
+/// Test /code/{N} utility endpoint for HTTP status code testing.
+#[tokio::test]
+async fn test_code_endpoint_status_codes() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("fallback"))
+        .build()
+        .await
+        .unwrap();
+
+    let http = reqwest::Client::new();
+
+    // 200 OK
+    let resp = http
+        .get(format!("{}/code/200", server.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // 429 Too Many Requests
+    let resp = http
+        .get(format!("{}/code/429", server.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+
+    // 500 Internal Server Error
+    let resp = http
+        .get(format!("{}/code/500", server.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 500);
+
+    // Invalid code returns 400
+    let resp = http
+        .get(format!("{}/code/999", server.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}

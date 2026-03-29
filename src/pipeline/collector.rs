@@ -594,6 +594,15 @@ impl Collector {
             total_chars,
             paths.len()
         );
+        // Only bail if we had budget AND files but got nothing — indicates read failures.
+        // Budget exhaustion (header doesn't fit) is not a read failure.
+        if content.is_empty() && !paths.is_empty() && max_chars > 200 {
+            warn!(
+                "Read 0 bytes from {} source files with {}B budget — check file permissions",
+                paths.len(),
+                max_chars
+            );
+        }
         Ok(content)
     }
 
@@ -2521,6 +2530,17 @@ setup(
             init_pos < priv_pos,
             "Critical file should be read before low-priority file"
         );
+    }
+
+    #[test]
+    fn test_read_files_smart_all_unreadable_warns() {
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path();
+        // All paths are nonexistent — budget > 200 triggers warning
+        let missing1 = repo.join("missing1.py");
+        let missing2 = repo.join("missing2.py");
+        let result = Collector::read_files_smart(&[missing1, missing2], 10_000, repo).unwrap();
+        assert!(result.is_empty(), "All unreadable files should yield empty");
     }
 }
 

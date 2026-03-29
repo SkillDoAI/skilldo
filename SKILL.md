@@ -5,7 +5,7 @@ license: AGPL-3.0
 compatibility: Requires an LLM API key (Anthropic, OpenAI, Gemini, or OpenAI-compatible). Optional container runtime (docker/podman) for test validation.
 metadata:
   author: SkillDoAI
-  version: "0.5.0"
+  version: "0.5.9"
 ---
 
 # Skilldo CLI
@@ -96,6 +96,19 @@ base_url = "http://localhost:11434/v1"
 api_key_env = "none"            # Ollama doesn't need a key
 ```
 
+### CLI provider (use existing CLI tools as LLM backend)
+
+```toml
+[llm]
+provider_type = "cli"
+model = "claude-sonnet-4-6"
+cli_command = "claude"
+cli_args = ["-p", "--no-session-persistence", "--output-format", "text", "--dangerously-skip-permissions"]
+request_timeout_secs = 900
+```
+
+Supported CLI tools: `claude`, `codex`, `gemini`. The prompt is piped via stdin; response captured from stdout.
+
 ### Container settings (optional)
 
 ```toml
@@ -111,12 +124,15 @@ cleanup = true
 Generate a SKILL.md for a library repository.
 
 Key flags:
-- `--language <LANG>` — force language (python, javascript, rust, go)
+- `--language <LANG>` — force language (python, javascript, rust, go, java)
 - `--config <PATH>` — config file path
 - `--model <MODEL>` — override LLM model
+- `-i, --input <PATH>` — existing SKILL.md to use as reference for updates
+- `--debug-stage-files <DIR>` — dump each pipeline stage's raw output for debugging
 - `--no-test` — skip test validation
 - `--no-review` — skip review validation
 - `--no-security-scan` — skip YARA/unicode/injection scanning
+- `--no-parallel` — run extract/map/learn sequentially (for local models)
 - `--best-effort` — exit 0 even with errors
 - `--telemetry` / `--no-telemetry` — toggle run logging
 - `--container` — run test agent in container (default: bare-metal)

@@ -169,9 +169,7 @@ pub async fn create_client_from_llm_config(
                 .with_extra_headers(extra_headers),
         ),
 
-        Provider::Cli => {
-            unreachable!("Provider::Cli is handled by the early return above")
-        }
+        Provider::Cli => unreachable!("Provider::Cli is handled by the early return above"),
     };
 
     Ok(Box::new(RetryClient::new(
