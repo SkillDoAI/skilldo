@@ -452,21 +452,22 @@ async fn test_anthropic_streaming_response() {
     );
 }
 
-/// OpenAI-compatible client with /v1/responses URL — documents the body format mismatch.
-/// The client sends Chat Completions JSON but the Responses endpoint expects a different schema.
+/// OpenAI-compatible client preserves custom endpoint URLs.
+/// Verifies /v1/responses URL is not rewritten to /chat/completions.
 #[tokio::test]
-async fn test_openai_compatible_responses_endpoint() {
+async fn test_openai_compatible_preserves_responses_url() {
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
                 .for_provider(Provider::Responses)
                 .respond_with_content("responses api content"),
         )
+        .fixture(Fixture::new().respond_with_content("chat completions fallback"))
         .build()
         .await
         .unwrap();
 
-    // Client pointed at /v1/responses — sends Chat Completions body
+    // Client pointed at /v1/responses — URL should be preserved, not rewritten
     let client = OpenAIClient::with_base_url(
         "fake-key".to_string(),
         "mock-model".to_string(),
@@ -476,24 +477,16 @@ async fn test_openai_compatible_responses_endpoint() {
     )
     .unwrap();
 
-    // The URL is preserved (no /chat/completions appended) but the body format
-    // is Chat Completions, not Responses API. llmposter routes by URL path,
-    // so this exercises the path-preservation logic.
     let result = LlmClient::complete(&client, "test").await;
-    // May succeed or fail depending on how llmposter handles the schema mismatch
-    match result {
-        Ok(text) => assert!(!text.is_empty(), "Got response from responses endpoint"),
-        Err(e) => {
-            // Expected: body format doesn't match what responses endpoint expects
-            let err = e.to_string();
-            assert!(
-                err.contains("404")
-                    || err.contains("error")
-                    || err.contains("parse")
-                    || err.contains("status"),
-                "Expected format/routing error, got: {err}"
-            );
-        }
+    // The URL IS preserved (/v1/responses, not /chat/completions) but the body
+    // format is Chat Completions JSON. llmposter's Responses provider may or may
+    // not accept it. Either way, we should NOT get "chat completions fallback"
+    // which would mean the URL was rewritten.
+    if let Ok(text) = &result {
+        assert_ne!(
+            text, "chat completions fallback",
+            "URL should be preserved as /v1/responses, not rewritten to /chat/completions"
+        );
     }
 }
 
