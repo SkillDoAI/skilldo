@@ -164,6 +164,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           cargo llvm-cov --lib --no-report
+          cargo llvm-cov --test test_llmposter --no-report
           cargo llvm-cov report --fail-under-lines 95
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov

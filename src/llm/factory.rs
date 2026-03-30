@@ -116,10 +116,21 @@ pub async fn create_client_from_llm_config(
     let timeout = llm_config.request_timeout_secs;
 
     let client: Box<dyn LlmClient> = match llm_config.provider {
-        Provider::Anthropic => Box::new(
-            AnthropicClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
-                .with_extra_headers(extra_headers),
-        ),
+        Provider::Anthropic => {
+            let client = match llm_config.base_url {
+                Some(ref url) => AnthropicClient::with_base_url(
+                    api_key,
+                    llm_config.model.clone(),
+                    url.clone(),
+                    max_tokens,
+                    timeout,
+                )?,
+                None => {
+                    AnthropicClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
+                }
+            };
+            Box::new(client.with_extra_headers(extra_headers))
+        }
 
         Provider::OpenAI => Box::new(
             OpenAIClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
@@ -163,11 +174,23 @@ pub async fn create_client_from_llm_config(
             )
         }
 
-        Provider::Gemini => Box::new(
-            GeminiClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
-                .with_bearer_auth(use_bearer)
-                .with_extra_headers(extra_headers),
-        ),
+        Provider::Gemini => {
+            let client = match llm_config.base_url {
+                Some(ref url) => GeminiClient::with_base_url(
+                    api_key,
+                    llm_config.model.clone(),
+                    url.clone(),
+                    max_tokens,
+                    timeout,
+                )?,
+                None => GeminiClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?,
+            };
+            Box::new(
+                client
+                    .with_bearer_auth(use_bearer)
+                    .with_extra_headers(extra_headers),
+            )
+        }
 
         Provider::Cli => {
             unreachable!("Provider::Cli is handled by the early return above")
@@ -520,6 +543,42 @@ mod tests {
         let config = make_llm_config(Provider::OpenAICompatible, Some(""), None);
         let result = create_client_from_llm_config(&config, false).await;
         assert!(result.is_ok(), "empty api_key_env should be accepted");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_anthropic_client_with_base_url() {
+        env::set_var("SKILLDO_TEST_FACTORY_ANTHRO_BU", "test_key");
+        let config = make_llm_config(
+            Provider::Anthropic,
+            Some("SKILLDO_TEST_FACTORY_ANTHRO_BU"),
+            Some("https://proxy.example.com/anthropic"),
+        );
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(
+            result.is_ok(),
+            "Anthropic with base_url should succeed: {:?}",
+            result.err()
+        );
+        env::remove_var("SKILLDO_TEST_FACTORY_ANTHRO_BU");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_gemini_client_with_base_url() {
+        env::set_var("SKILLDO_TEST_FACTORY_GEMINI_BU", "test_key");
+        let config = make_llm_config(
+            Provider::Gemini,
+            Some("SKILLDO_TEST_FACTORY_GEMINI_BU"),
+            Some("https://proxy.example.com/gemini"),
+        );
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(
+            result.is_ok(),
+            "Gemini with base_url should succeed: {:?}",
+            result.err()
+        );
+        env::remove_var("SKILLDO_TEST_FACTORY_GEMINI_BU");
     }
 
     #[tokio::test]

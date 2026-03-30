@@ -1,0 +1,12 @@
+passed: true
+malformed: false
+issues:
+
+
+--- raw verdict ---
+```json
+{
+  "passed": true,
+  "issues": []
+}
+```

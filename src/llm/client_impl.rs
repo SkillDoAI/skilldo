@@ -81,6 +81,7 @@ pub struct AnthropicClient {
     model: String,
     max_tokens: u32,
     client: Client,
+    base_url: String,
     extra_headers: Vec<(String, String)>,
 }
 
@@ -110,11 +111,28 @@ struct AnthropicContent {
 
 impl AnthropicClient {
     pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Result<Self> {
+        Self::with_base_url(
+            api_key,
+            model,
+            "https://api.anthropic.com".to_string(),
+            max_tokens,
+            timeout_secs,
+        )
+    }
+
+    pub fn with_base_url(
+        api_key: String,
+        model: String,
+        base_url: String,
+        max_tokens: u32,
+        timeout_secs: u64,
+    ) -> Result<Self> {
         Ok(Self {
             api_key: api_key.into(),
             model,
             max_tokens,
             client: build_http_client(timeout_secs)?,
+            base_url,
             extra_headers: Vec::new(),
         })
     }
@@ -146,7 +164,10 @@ impl LlmClient for AnthropicClient {
 
         let mut req = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(format!(
+                "{}/v1/messages",
+                self.base_url.trim_end_matches('/')
+            ))
             .header("x-api-key", self.api_key.expose())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json");
@@ -421,6 +442,7 @@ pub struct GeminiClient {
     model: String,
     max_tokens: u32,
     client: Client,
+    base_url: String,
     /// When true, use `Authorization: Bearer` header instead of `x-goog-api-key`.
     /// Set when using OAuth tokens instead of API keys.
     use_bearer_auth: bool,
@@ -484,11 +506,28 @@ struct GeminiResponsePart {
 
 impl GeminiClient {
     pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Result<Self> {
+        Self::with_base_url(
+            api_key,
+            model,
+            "https://generativelanguage.googleapis.com".to_string(),
+            max_tokens,
+            timeout_secs,
+        )
+    }
+
+    pub fn with_base_url(
+        api_key: String,
+        model: String,
+        base_url: String,
+        max_tokens: u32,
+        timeout_secs: u64,
+    ) -> Result<Self> {
         Ok(Self {
             api_key: api_key.into(),
             model,
             max_tokens,
             client: build_http_client(timeout_secs)?,
+            base_url,
             use_bearer_auth: false,
             extra_headers: Vec::new(),
         })
@@ -527,7 +566,8 @@ impl LlmClient for GeminiClient {
         debug!("Calling Gemini API with model: {}", self.model);
 
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            "{}/v1beta/models/{}:generateContent",
+            self.base_url.trim_end_matches('/'),
             self.model
         );
 
@@ -1563,5 +1603,113 @@ mod tests {
         let json = r#"{"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}"#;
         let response: GeminiResponse = serde_json::from_str(json).unwrap();
         assert!(response.usage_metadata.is_none());
+    }
+
+    // --- Coverage: AnthropicClient::with_base_url ---
+
+    #[test]
+    fn test_anthropic_client_with_custom_base_url() {
+        let client = AnthropicClient::with_base_url(
+            "test_key".to_string(),
+            "claude-3-haiku".to_string(),
+            "https://proxy.example.com/anthropic".to_string(),
+            4096,
+            120,
+        )
+        .unwrap();
+        assert_eq!(client.base_url, "https://proxy.example.com/anthropic");
+        assert_eq!(client.api_key.expose(), "test_key");
+        assert_eq!(client.model, "claude-3-haiku");
+        assert_eq!(client.max_tokens, 4096);
+        assert!(client.extra_headers.is_empty());
+    }
+
+    // --- Coverage: GeminiClient::with_base_url ---
+
+    #[test]
+    fn test_gemini_client_with_custom_base_url() {
+        let client = GeminiClient::with_base_url(
+            "test_key".to_string(),
+            "gemini-pro".to_string(),
+            "https://proxy.example.com/gemini".to_string(),
+            8192,
+            120,
+        )
+        .unwrap();
+        assert_eq!(client.base_url, "https://proxy.example.com/gemini");
+        assert_eq!(client.api_key.expose(), "test_key");
+        assert_eq!(client.model, "gemini-pro");
+        assert_eq!(client.max_tokens, 8192);
+        assert!(!client.use_bearer_auth);
+        assert!(client.extra_headers.is_empty());
+    }
+
+    #[test]
+    fn test_openai_request_max_tokens_nonzero_gpt5() {
+        let max_tokens_cfg: u32 = 4096;
+        let model = "gpt-5.2";
+        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
+            (None, None)
+        } else if model.starts_with("gpt-5") {
+            (None, Some(max_tokens_cfg))
+        } else {
+            (Some(max_tokens_cfg), None)
+        };
+        assert!(max_tokens.is_none());
+        assert_eq!(max_completion_tokens, Some(4096));
+    }
+
+    #[test]
+    fn test_openai_request_max_tokens_nonzero_non_gpt5() {
+        let max_tokens_cfg: u32 = 4096;
+        let model = "gpt-4o";
+        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
+            (None, None)
+        } else if model.starts_with("gpt-5") {
+            (None, Some(max_tokens_cfg))
+        } else {
+            (Some(max_tokens_cfg), None)
+        };
+        assert_eq!(max_tokens, Some(4096));
+        assert!(max_completion_tokens.is_none());
+    }
+
+    #[test]
+    fn test_gemini_request_max_tokens_nonzero_includes_config() {
+        let max_tokens: u32 = 8192;
+        let request = GeminiRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart {
+                    text: "test".to_string(),
+                }],
+            }],
+            generation_config: if max_tokens == 0 {
+                None
+            } else {
+                Some(GeminiGenerationConfig {
+                    max_output_tokens: max_tokens,
+                })
+            },
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["generationConfig"]["maxOutputTokens"], 8192);
+    }
+
+    #[test]
+    fn test_chatgpt_request_max_tokens_nonzero_includes_field() {
+        let max_tokens: u32 = 4096;
+        let req = ResponsesRequest {
+            model: "gpt-5.2".to_string(),
+            instructions: "test".to_string(),
+            input: vec![],
+            max_output_tokens: if max_tokens == 0 {
+                None
+            } else {
+                Some(max_tokens)
+            },
+            store: false,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["max_output_tokens"], 4096);
     }
 }

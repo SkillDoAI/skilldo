@@ -1,6 +1,6 @@
 [package]
 name = "skilldo"
-version = "0.5.9"
+version = "0.5.10"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -34,7 +34,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 
 [dev-dependencies]
-llmposter = "0.4.1"
+llmposter = "0.4.2"
 mockito = "1"
 serial_test = "3"
 

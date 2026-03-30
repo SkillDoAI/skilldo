@@ -1252,6 +1252,7 @@ fn test_create_update_prompt_basic() {
         "Context",
         &Language::Python,
         &[],
+        None,
     );
     assert!(prompt.contains("requests"));
     assert!(prompt.contains("2.32.0"));
@@ -1331,6 +1332,7 @@ fn test_create_update_contains_security_rule() {
         "context",
         &Language::Python,
         &[],
+        None,
     );
     // Security section exists in update prompt too
     assert!(
@@ -1374,6 +1376,7 @@ fn test_create_update_prompt_injects_rust_deps() {
         "context",
         &Language::Rust,
         &deps,
+        None,
     );
     assert!(
         prompt.contains("[dependencies]"),
@@ -1400,6 +1403,7 @@ fn test_create_update_prompt_empty_deps_rust_guidance() {
         "context",
         &Language::Rust,
         &[],
+        None,
     );
     assert!(
         prompt.contains("Do NOT invent or guess dependency versions"),
@@ -1423,6 +1427,7 @@ fn test_create_update_prompt_no_deps_for_non_rust() {
         "context",
         &Language::Python,
         &deps,
+        None,
     );
     // Python update prompt should NOT inject the Rust-specific deps block
     assert!(
@@ -1521,6 +1526,7 @@ fn test_create_update_prompt_rust_has_language_hints() {
         "context",
         &Language::Rust,
         &[],
+        None,
     );
     assert!(
         prompt.contains("RUST-SPECIFIC HINTS"),
@@ -1543,6 +1549,7 @@ fn test_create_update_prompt_python_has_language_hints() {
         "context",
         &Language::Python,
         &[],
+        None,
     );
     assert!(
         prompt.contains("PYTHON-SPECIFIC HINTS"),
@@ -1561,6 +1568,7 @@ fn test_create_update_prompt_go_has_language_hints() {
         "context",
         &Language::Go,
         &[],
+        None,
     );
     assert!(
         prompt.contains("GO-SPECIFIC HINTS"),
@@ -1579,6 +1587,7 @@ fn test_create_update_prompt_js_no_language_hints() {
         "context",
         &Language::JavaScript,
         &[],
+        None,
     );
     // JavaScript has no specific hints yet
     assert!(
@@ -1614,6 +1623,7 @@ fn test_create_update_prompt_deps_block_format() {
         "context",
         &Language::Rust,
         &deps,
+        None,
     );
     // Verify the toml block structure
     assert!(
@@ -1650,6 +1660,7 @@ fn test_create_update_prompt_dep_none_raw_spec_gets_wildcard() {
         "context",
         &Language::Rust,
         &deps,
+        None,
     );
     assert!(
         prompt.contains("rand = \"*\"\n"),
@@ -1680,6 +1691,7 @@ fn test_create_update_prompt_mixed_deps_some_none_raw_spec() {
         "context",
         &Language::Rust,
         &deps,
+        None,
     );
     assert!(
         prompt.contains("tokio = \"1.0\"\n"),
@@ -1702,6 +1714,7 @@ fn test_create_update_prompt_uses_ecosystem_term() {
         "context",
         &Language::Rust,
         &[],
+        None,
     );
     assert!(
         prompt.contains("crate \"tokio\""),
@@ -1720,6 +1733,7 @@ fn test_create_update_prompt_uses_lang_str_in_instructions() {
         "context",
         &Language::Rust,
         &[],
+        None,
     );
     assert!(
         prompt.contains("rust code examples"),
@@ -1738,6 +1752,7 @@ fn test_create_update_prompt_version_in_instructions() {
         "context",
         &Language::Rust,
         &[],
+        None,
     );
     // version appears twice: once in the header and once in instruction #2
     assert!(
@@ -1758,6 +1773,7 @@ fn test_create_update_prompt_preserves_existing_skill_content() {
         "context",
         &Language::Rust,
         &[],
+        None,
     );
     assert!(
         prompt.contains("old pattern here"),
@@ -1992,6 +2008,7 @@ fn test_create_update_prompt_java_has_language_hints() {
         "context",
         &Language::Java,
         &[],
+        None,
     );
     assert!(
         prompt.contains("JAVA-SPECIFIC HINTS"),
@@ -2015,6 +2032,7 @@ fn test_create_update_prompt_java_no_deps_block() {
         "context",
         &Language::Java,
         &deps,
+        None,
     );
     assert!(
         !prompt.contains("[dependencies]"),

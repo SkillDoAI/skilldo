@@ -3,6 +3,21 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.10
+
+### Added
+- **`with_base_url` for Anthropic and Gemini clients** — custom base URLs for Bedrock (Anthropic on AWS), Vertex AI (Gemini on GCP), and other private instances. Factory wires `base_url` from config when present
+- **16 llmposter integration tests** — 3 tiers: client coverage (OpenAI, Anthropic, Gemini, 429, auth), failure handling (latency, corrupt body, provider routing), deterministic pipeline (full extract→map→learn→create→review against fixtures)
+- **Deterministic pipeline test** — full pipeline runs against llmposter with canned responses. Zero LLM calls, fully reproducible. Validates plumbing end-to-end
+- **Coverage sweep** — config loading fallbacks, Go ecosystem branches, rust parser dep sanitization, telemetry HOME dir path, factory base_url wiring. 2702 tests total
+
+### Changed
+- CI coverage now includes llmposter integration tests (`--test test_llmposter`) for client method coverage
+- llmposter bumped to 0.4.2 in dev-dependencies
+- `AnthropicClient::new()` and `GeminiClient::new()` delegate to `with_base_url()` (DRY, matches OpenAI pattern)
+- Factory uses `match` for base_url routing instead of `if let` (cleaner)
+- Documentation: `base_url` support noted for Anthropic and Gemini in provider table
+
 ## 0.5.9
 
 ### Fixed
@@ -453,4 +468,5 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - Container-based code validation
 - YAML frontmatter + Markdown output format
 - Regex-based security scanning
+
 

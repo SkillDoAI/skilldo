@@ -1,0 +1,89 @@
+passed: false
+malformed: false
+issues:
+  [error][consistency] OAuthConfig is listed in the ## Imports section but never used by name in any code example
+  [error][completeness] OAuth-issued token automatically accepted on LLM endpoints is not documented or demonstrated
+  [error][completeness] Empty regex pattern {regex: ''} rejection is not documented anywhere in the SKILL.md
+  [error][completeness] Blank tool name in a ToolCall being rejected at validation is not documented
+  [error][completeness] Regex DFA size limit (1 MB) rejection is not documented in any user-facing section
+  [error][completeness] x-request-id response header is not documented anywhere in the SKILL.md
+  [error][completeness] Provider-specific rate limit headers included on 429 responses are not documented
+  [error][completeness] Global uniqueness of tool-call IDs across multi-turn sessions is not documented
+  [error][completeness] Gemini safety-blocked response may omit Content.role — not documented
+  [error][completeness] 413 (body too large) responses including x-request-id is not documented
+  [warning][consistency] MockServer is listed in the top-level ## Imports block but never appears by name in any code example
+
+--- raw verdict ---
+```json
+{
+  "passed": false,
+  "issues": [
+    {
+      "severity": "error",
+      "category": "consistency",
+      "complaint": "OAuthConfig is listed in the ## Imports section but never used by name in any code example",
+      "evidence": "The ## Imports section includes `use llmposter::OAuthConfig;` as a standalone import. Scanning every code block in the document: test_basic_text_response, test_sse_streaming, test_tool_call, test_error_and_failure, test_bearer_auth, test_server_options, test_yaml_loading, test_provider_scoping, test_oauth_defaults, and all Pitfalls examples — none reference OAuthConfig by name. The test_oauth_defaults example only imports `use llmposter::ServerBuilder`. The `with_oauth(config: OAuthConfig)` method exists in the API surface but has no corresponding code example that would require the import."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "OAuth-issued token automatically accepted on LLM endpoints is not documented or demonstrated",
+      "evidence": "behavioral_semantics entry: trigger = 'OAuth-issued token used on an LLM endpoint', behavior = 'Token is automatically accepted as valid on LLM endpoints without additional configuration', assertion = 'response status equals 200'. The test_oauth_defaults example only constructs a server and prints its URL — it never demonstrates obtaining an OAuth token and presenting it to an LLM endpoint, nor does any prose section describe this automatic acceptance behavior."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "Empty regex pattern {regex: ''} rejection is not documented anywhere in the SKILL.md",
+      "evidence": "behavioral_semantics entry: trigger = 'Fixture match.user_message is {regex: \"\"} (empty regex)', behavior = 'Rejected at fixture validation'. The Pitfalls section covers empty substring string rejection for match_user_message(\"\") but says nothing about {regex: ''} being separately validated and rejected. A user who reads this doc and tries an empty regex would not be warned."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "Blank tool name in a ToolCall being rejected at validation is not documented",
+      "evidence": "behavioral_semantics entry: trigger = 'Fixture defines a tool call with a blank tool name', behavior = 'Rejected at fixture validation'. The Pitfalls section covers non-object arguments but never mentions that an empty name string fails validation. The ToolCall struct description in the API surface does not note this constraint either."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "Regex DFA size limit (1 MB) rejection is not documented in any user-facing section",
+      "evidence": "behavioral_semantics entry: trigger = 'Fixture defines a regex pattern that would compile to a DFA larger than 1 MB', behavior = 'Rejected at fixture load with a size-limit error — prevents OOM from malicious patterns'. The size limit appears only in the Known API Surface note for RegexMatch ('Regex size-limited to 1MB NFA/DFA') and not in any SKILL.md section visible to users — not in Pitfalls, Configuration, YAML format, or API Reference."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "x-request-id response header is not documented anywhere in the SKILL.md",
+      "evidence": "behavioral_semantics entry: trigger = 'Any request to any endpoint', behavior = 'Response includes x-request-id header with deterministic value req-llmposter-{N} where N is a monotonically increasing counter', assertion = 'response headers contain x-request-id matching pattern req-llmposter-\\d+'. This header is not mentioned in Core Patterns, Configuration, Pitfalls, or API Reference sections — not even a single prose sentence."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "Provider-specific rate limit headers included on 429 responses are not documented",
+      "evidence": "behavioral_semantics entry: trigger = 'Error response with status 429', behavior = 'Provider-specific rate limit headers are included: OpenAI/Responses get x-ratelimit-{limit,remaining,reset}-requests; Anthropic gets anthropic-ratelimit-requests-{limit,remaining,reset}; Gemini gets retry-after only'. The test_error_and_failure example shows constructing a 429 fixture and asserts the status code but says nothing about the rate limit headers that will be attached — a gap that will surprise users writing assertions against the full response."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "Global uniqueness of tool-call IDs across multi-turn sessions is not documented",
+      "evidence": "behavioral_semantics entry: trigger = 'Multiple tool-call responses in the same server session', behavior = 'Tool-call IDs are globally unique across all responses via a server-wide counter', assertion = 'all tool-call IDs in a multi-turn session are distinct'. No section of the SKILL.md mentions this property. The test_tool_call example only checks a single response; the uniqueness guarantee across turns is invisible to users."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "Gemini safety-blocked response may omit Content.role — not documented",
+      "evidence": "behavioral_semantics entry: trigger = 'Gemini response for a safety-blocked message', behavior = 'Content.role may be absent (None) in the response — do not assume role is always present'. No section of the SKILL.md warns users that Gemini candidate content may lack a role field, nor is there a Pitfall or note flagging this as a provider-specific edge case."
+    },
+    {
+      "severity": "error",
+      "category": "completeness",
+      "complaint": "413 (body too large) responses including x-request-id is not documented",
+      "evidence": "behavioral_semantics entry: trigger = 'Request body exceeds the default body size limit (413)', behavior = '413 response still includes x-request-id header because DefaultBodyLimit layer is configured as inner'. Neither the 413 body-size behavior nor the presence of x-request-id on that 413 is mentioned anywhere in the SKILL.md."
+    },
+    {
+      "severity": "warning",
+      "category": "consistency",
+      "complaint": "MockServer is listed in the top-level ## Imports block but never appears by name in any code example",
+      "evidence": "Scanning every code block: MockServer instances are always held in inferred-type bindings (server, err_server, trunc_server, server_dir, etc.) — the identifier MockServer never appears as a token in any example body. Per the unused-import rule this is borderline since MockServer IS the primary return type and users writing explicit type annotations would need it; flagging as warning rather than error given that ambiguity."
+    }
+  ]
+}
+```

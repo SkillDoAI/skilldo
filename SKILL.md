@@ -5,7 +5,7 @@ license: AGPL-3.0
 compatibility: Requires an LLM API key (Anthropic, OpenAI, Gemini, or OpenAI-compatible). Optional container runtime (docker/podman) for test validation.
 metadata:
   author: SkillDoAI
-  version: "0.5.9"
+  version: "0.5.10"
 ---
 
 # Skilldo CLI
@@ -108,6 +108,22 @@ request_timeout_secs = 900
 ```
 
 Supported CLI tools: `claude`, `codex`, `gemini`. The prompt is piped via stdin; response captured from stdout.
+
+### Custom base URL (Bedrock, Vertex AI, proxies)
+
+All providers support optional `base_url` for custom endpoints:
+
+```toml
+# Anthropic via AWS Bedrock
+[llm]
+provider_type = "anthropic"
+base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
+
+# Gemini via Google Vertex AI
+[llm]
+provider_type = "gemini"
+base_url = "https://us-central1-aiplatform.googleapis.com"
+```
 
 ### Container settings (optional)
 

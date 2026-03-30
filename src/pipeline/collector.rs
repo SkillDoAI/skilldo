@@ -2542,6 +2542,138 @@ setup(
         let result = Collector::read_files_smart(&[missing1, missing2], 10_000, repo).unwrap();
         assert!(result.is_empty(), "All unreadable files should yield empty");
     }
+
+    // -- detect_package_name: "unknown" fallback via non-existent path --
+
+    #[test]
+    fn test_detect_package_name_unknown_from_nonexistent_dotdot() {
+        // A path whose file_name() is ".." — canonicalize fails (doesn't exist),
+        // and file_name ".." is filtered out, reaching the "unknown" fallback.
+        let result = Collector::detect_package_name(Path::new("/nonexistent/path/..")).unwrap();
+        // canonicalize fails on non-existent path, file_name is ".." which
+        // is filtered, so we reach the final "unknown" fallback
+        assert_eq!(result, "unknown");
+    }
+
+    // -- read_files: tiny budget can only fit header, not content --
+
+    #[test]
+    fn test_read_files_tiny_budget_breaks_immediately() {
+        // Budget of 1 byte — enter loop but can't fit any header.
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("file.py");
+        fs::write(&file_path, "content here").unwrap();
+
+        let result = Collector::read_files(&[file_path], 1).unwrap();
+        assert_eq!(result, "", "Budget of 1 byte should yield empty");
+    }
+
+    // -- read_files: second file triggers header-too-large break --
+
+    #[test]
+    fn test_read_files_second_file_budget_exhausted_by_first() {
+        // First file exactly fills the budget; second file's header doesn't fit.
+        let dir = TempDir::new().unwrap();
+        let f1 = dir.path().join("a.py");
+        let f2 = dir.path().join("b.py");
+        fs::write(&f1, "x".repeat(10)).unwrap();
+        fs::write(&f2, "y".repeat(10)).unwrap();
+
+        let h1 = format!("\n\n// File: {}\n", f1.display()).len();
+        // Budget exactly covers f1's header + content
+        let result = Collector::read_files(&[f1, f2], h1 + 10).unwrap();
+        assert!(result.contains("a.py"), "First file should be included");
+        assert!(
+            !result.contains("b.py"),
+            "Second file should be skipped — no budget remaining"
+        );
+    }
+
+    // -- read_files_smart: budget exhausted between files --
+
+    #[test]
+    fn test_read_files_smart_budget_exhausted_after_first_file() {
+        // First file consumes most budget; second file has no room.
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path();
+        let pkg = repo.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+
+        // critical priority file (priority 0, __init__.py) — gets usize::MAX file_budget
+        let init = pkg.join("__init__.py");
+        fs::write(&init, "x".repeat(500)).unwrap();
+
+        // another file in the same dir
+        let other = pkg.join("api.py");
+        fs::write(&other, "y".repeat(500)).unwrap();
+
+        // Budget only enough for the first file + its header
+        let result = Collector::read_files_smart(&[init, other], 550, repo).unwrap();
+        // At least one file should be present
+        assert!(!result.is_empty());
+    }
+
+    // -- detect_package_name: pyproject.toml with name containing bracket --
+
+    #[test]
+    fn test_detect_package_name_pyproject_bracket_name_falls_to_setup_py() {
+        // pyproject.toml has name with "[", setup.py provides the real name
+        let dir = TempDir::new().unwrap();
+        let base = dir.path();
+        fs::write(
+            base.join("pyproject.toml"),
+            "[project]\nname = \"[section-header]\"\n",
+        )
+        .unwrap();
+        fs::write(base.join("setup.py"), "setup(\n    name=\"real-pkg\",\n)\n").unwrap();
+
+        let name = Collector::detect_package_name(base).unwrap();
+        assert_eq!(name, "real-pkg");
+    }
+
+    // -- detect_package_name: setup.py with name= on comment line --
+
+    #[test]
+    fn test_detect_package_name_setup_py_comment_with_name_eq() {
+        // setup.py has "name=" in a comment — should be parsed but value
+        // extraction fails (or extracts the comment value), then falls through
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("comment-proj");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(
+            base.join("setup.py"),
+            "# This is name=placeholder, not real\nsetup(version='1.0')\n",
+        )
+        .unwrap();
+
+        let name = Collector::detect_package_name(&base).unwrap();
+        // The comment line triggers name= check. "placeholder," is extracted
+        // as name (between the implicit quotes... actually the comma breaks it).
+        // Since there's no quote, it falls through to dirname.
+        assert_eq!(name, "comment-proj");
+    }
+
+    // -- read_files: truncation with multibyte boundary --
+
+    #[test]
+    fn test_read_files_truncation_cjk_char_boundary() {
+        // Ensure truncation mid-CJK-char produces valid UTF-8 via floor_char_boundary
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("mixed.py");
+        // Many 3-byte CJK chars to ensure truncation is forced
+        let content = "\u{4E16}".repeat(100); // 300 bytes total
+        fs::write(&file_path, &content).unwrap();
+
+        let trunc_header = format!("\n\n// File: {} (truncated)\n", file_path.display());
+        // Budget: header + 5 bytes of content. 5 is not a multiple of 3,
+        // so floor_char_boundary clamps to byte 3 (one CJK char).
+        let budget = trunc_header.len() + 5;
+        let result = Collector::read_files(&[file_path], budget).unwrap();
+        // Must be valid UTF-8 — this would panic if not
+        assert!(result.contains("truncated"));
+        // Should contain at least the first CJK char
+        assert!(result.contains('\u{4E16}'));
+    }
 }
 
 /// Where a dependency was discovered.

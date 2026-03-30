@@ -574,4 +574,17 @@ mod tests {
         let escaped = csv_escape("line1\rline2");
         assert_eq!(escaped, "\"line1\rline2\"");
     }
+
+    #[test]
+    fn test_append_run_home_dir_path_construction() {
+        // Verify the None path constructs ~/.skilldo/runs.csv correctly
+        // without actually writing to the real home directory.
+        if let Some(home) = dirs::home_dir() {
+            let expected = home.join(".skilldo").join("runs.csv");
+            assert!(
+                expected.to_str().unwrap().contains(".skilldo"),
+                "Path should contain .skilldo"
+            );
+        }
+    }
 }

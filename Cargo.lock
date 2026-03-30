@@ -1406,9 +1406,9 @@ checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
 name = "llmposter"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "618fd584475e78fcd823c17c53d965ec4927c55b511b8e731a3f1cf8e608020c"
+checksum = "912dbf4ee6f9c16a2bc847dde110ba6e17d36f76b1418b609e67fd1c360c2204"
 dependencies = [
  "axum",
  "clap",
@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "skilldo"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "anyhow",
  "async-trait",
