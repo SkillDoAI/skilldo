@@ -574,4 +574,31 @@ mod tests {
         let escaped = csv_escape("line1\rline2");
         assert_eq!(escaped, "\"line1\rline2\"");
     }
+
+    #[test]
+    fn test_append_run_default_path_uses_home_dir() {
+        // Covers the None path in append_run (lines 131-143)
+        let record = sample_record();
+        let result = append_run(&record, None);
+        // Should succeed if HOME is set (normal dev/CI environment)
+        assert!(
+            result.is_ok(),
+            "append_run(None) should use ~/.skilldo/runs.csv: {:?}",
+            result.err()
+        );
+        // Clean up — don't leave test data in real home dir
+        if let Some(home) = dirs::home_dir() {
+            let csv = home.join(".skilldo").join("runs.csv");
+            if csv.exists() {
+                // Read and remove only the last line (our test record)
+                if let Ok(content) = fs::read_to_string(&csv) {
+                    let lines: Vec<&str> = content.lines().collect();
+                    if lines.len() > 1 {
+                        let trimmed = lines[..lines.len() - 1].join("\n") + "\n";
+                        let _ = fs::write(&csv, trimmed);
+                    }
+                }
+            }
+        }
+    }
 }
