@@ -14,6 +14,9 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 ### Changed
 - CI coverage now includes llmposter integration tests (`--test test_llmposter`) for client method coverage
 - llmposter bumped to 0.4.1 in dev-dependencies
+- `AnthropicClient::new()` and `GeminiClient::new()` delegate to `with_base_url()` (DRY, matches OpenAI pattern)
+- Factory uses `match` for base_url routing instead of `if let` (cleaner)
+- Documentation: `base_url` support noted for Anthropic and Gemini in provider table
 
 ## 0.5.9
 

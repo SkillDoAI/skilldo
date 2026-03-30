@@ -117,16 +117,17 @@ pub async fn create_client_from_llm_config(
 
     let client: Box<dyn LlmClient> = match llm_config.provider {
         Provider::Anthropic => {
-            let client = if let Some(ref base_url) = llm_config.base_url {
-                AnthropicClient::with_base_url(
+            let client = match llm_config.base_url {
+                Some(ref url) => AnthropicClient::with_base_url(
                     api_key,
                     llm_config.model.clone(),
-                    base_url.clone(),
+                    url.clone(),
                     max_tokens,
                     timeout,
-                )?
-            } else {
-                AnthropicClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
+                )?,
+                None => {
+                    AnthropicClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
+                }
             };
             Box::new(client.with_extra_headers(extra_headers))
         }
@@ -174,16 +175,15 @@ pub async fn create_client_from_llm_config(
         }
 
         Provider::Gemini => {
-            let client = if let Some(ref base_url) = llm_config.base_url {
-                GeminiClient::with_base_url(
+            let client = match llm_config.base_url {
+                Some(ref url) => GeminiClient::with_base_url(
                     api_key,
                     llm_config.model.clone(),
-                    base_url.clone(),
+                    url.clone(),
                     max_tokens,
                     timeout,
-                )?
-            } else {
-                GeminiClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?
+                )?,
+                None => GeminiClient::new(api_key, llm_config.model.clone(), max_tokens, timeout)?,
             };
             Box::new(
                 client

@@ -2495,7 +2495,6 @@ model = "gemini-2.5-pro-cwd-test"
 
     #[test]
     #[serial]
-    #[serial]
     fn test_load_fallback_to_defaults_when_no_config_anywhere() {
         // When CWD has no skilldo.toml and repo_path is None, the chain
         // falls through git root, user config dir, and finally returns defaults.

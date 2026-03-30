@@ -180,10 +180,10 @@ cleanup = true
 
 | Provider | Config `provider_type` | Needs API Key | Notes |
 |----------|------------------------|---------------|-------|
-| **Anthropic** | `"anthropic"` | Yes (`ANTHROPIC_API_KEY`) | Claude models |
+| **Anthropic** | `"anthropic"` | Yes (`ANTHROPIC_API_KEY`) | Claude models. Optional `base_url` for Bedrock or custom proxies. |
 | **OpenAI** | `"openai"` | Yes (`OPENAI_API_KEY`) | GPT models. Handles `max_completion_tokens` for GPT-5+. |
 | **ChatGPT** | `"chatgpt"` | Yes (OAuth or `OPENAI_API_KEY`) | Uses the Responses API. Models: `gpt-5.2-codex`, `gpt-5.1-codex-mini`, etc. See [Authentication](authentication.md). |
-| **Google Gemini** | `"gemini"` | Yes (`GEMINI_API_KEY`) | Gemini models |
+| **Google Gemini** | `"gemini"` | Yes (`GEMINI_API_KEY`) | Gemini models. Optional `base_url` for Vertex AI or custom endpoints. |
 | **OpenAI-compatible** | `"openai-compatible"` | Varies | Ollama, DeepSeek, Groq, Together, Fireworks, xAI, Mistral, vLLM, etc. Set `base_url`. |
 | **CLI** | `"cli"` | No (CLI handles auth) | Shell out to Claude CLI, Codex CLI, Gemini CLI. See below. |
 
