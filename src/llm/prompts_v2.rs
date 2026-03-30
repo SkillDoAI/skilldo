@@ -2291,6 +2291,26 @@ mod tests {
         assert!(prompt.contains("GO-SPECIFIC HINTS"));
     }
 
+    #[test]
+    fn test_update_prompt_with_custom_instructions() {
+        use crate::pipeline::collector::StructuredDep;
+        let deps: Vec<StructuredDep> = vec![];
+        let prompt = create_update_prompt(
+            "test",
+            "2.0",
+            "existing",
+            "apis",
+            "patterns",
+            "context",
+            &Language::Rust,
+            &deps,
+            Some("Use #[tokio::test] style"),
+        );
+        assert!(prompt.contains("CUSTOM INSTRUCTIONS"));
+        assert!(prompt.contains("Use #[tokio::test] style"));
+        assert!(prompt.contains("MINOR UPDATE"));
+    }
+
     // --- Coverage: review_verdict_prompt optional params (lines 990-1024) ---
 
     #[test]
