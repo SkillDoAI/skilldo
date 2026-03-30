@@ -1375,4 +1375,72 @@ serde = { version = "1", features = ["derive"] }
             deps
         );
     }
+
+    /// sanitize_dep_name correctly validates dep names extracted by extract_dependencies.
+    /// The retain filter at lines 237-243 is a defensive guard: all current regex
+    /// patterns (USE_IMPORT_RE, CARGO_TOML_DEP_RE, etc.) produce names that always
+    /// pass sanitize_dep_name. This test verifies the guard exists and that valid
+    /// deps pass through unchanged.
+    #[test]
+    fn extract_dependencies_retains_valid_deps_through_sanitize() {
+        let parser = RustParser;
+        // Dep names with hyphens and underscores — edge cases for sanitize_dep_name
+        let skill = r#"---
+name: test
+---
+
+## Imports
+
+```toml
+[dependencies]
+my-crate = "1"
+my_crate2 = "2"
+A123 = "0.1"
+```
+
+## Core Patterns
+
+### Example
+
+```rust
+fn main() {}
+```
+"#;
+        let deps = parser.extract_dependencies(skill).unwrap();
+        assert!(
+            deps.contains(&"my-crate".to_string()),
+            "hyphenated dep should pass sanitize: {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&"my_crate2".to_string()),
+            "underscored dep should pass sanitize: {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&"A123".to_string()),
+            "alphanumeric dep should pass sanitize: {:?}",
+            deps
+        );
+    }
+
+    /// sanitize_dep_name rejects names with invalid characters.
+    /// This tests the sanitize function directly since the regex extractors
+    /// cannot produce names that fail sanitization.
+    #[test]
+    fn sanitize_dep_name_rejects_invalid_chars() {
+        use crate::util::sanitize_dep_name;
+        assert!(sanitize_dep_name("valid-name").is_ok());
+        assert!(sanitize_dep_name("also_valid").is_ok());
+        // Space is not allowed
+        assert!(sanitize_dep_name("bad name").is_err());
+        // Semicolon is not allowed
+        assert!(sanitize_dep_name("bad;name").is_err());
+        // Backtick is not allowed
+        assert!(sanitize_dep_name("bad`name").is_err());
+        // Empty is rejected
+        assert!(sanitize_dep_name("").is_err());
+        // Leading hyphen (flag injection)
+        assert!(sanitize_dep_name("-e").is_err());
+    }
 }

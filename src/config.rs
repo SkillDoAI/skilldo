@@ -2438,4 +2438,129 @@ api_key_env = "none"
             "missing config should fall back to defaults"
         );
     }
+
+    #[test]
+    fn test_config_load_no_path_delegates() {
+        // Config::load() calls load_with_path(None) which runs the fallback chain.
+        // In CI/test environments, this either finds a config or returns defaults.
+        let result = Config::load();
+        assert!(result.is_ok(), "Config::load() should succeed (fallback to defaults)");
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_with_path_and_repo_cwd_skilldo_toml() {
+        // Exercise the CWD `skilldo.toml` fallback (lines 824-831).
+        // We change CWD to a temp dir containing a skilldo.toml.
+        let dir = tempfile::tempdir().unwrap();
+        let config_content = r#"
+[llm]
+provider = "gemini"
+model = "gemini-2.5-pro-cwd-test"
+"#;
+        std::fs::write(dir.path().join("skilldo.toml"), config_content).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = Config::load_with_path_and_repo(None, None);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        let config = result.unwrap();
+        assert_eq!(config.llm.provider, Provider::Gemini);
+        assert_eq!(config.llm.model, "gemini-2.5-pro-cwd-test");
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_with_path_and_repo_cwd_parse_error_surfaces() {
+        // Malformed skilldo.toml in CWD should surface parse error (line 830).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("skilldo.toml"), "not valid {{{ toml").unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = Config::load_with_path_and_repo(None, None);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        assert!(result.is_err(), "malformed CWD skilldo.toml should error");
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_fallback_to_defaults_when_no_config_anywhere() {
+        // When CWD has no skilldo.toml and repo_path is None, the chain
+        // falls through git root, user config dir, and finally returns defaults.
+        let dir = tempfile::tempdir().unwrap();
+        // Empty dir — no skilldo.toml, not a git repo.
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = Config::load_with_path_and_repo(None, None);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        let config = result.unwrap();
+        // Should get defaults (Anthropic provider)
+        assert_eq!(config.llm.provider, Provider::Anthropic);
+    }
+
+    #[test]
+    fn test_container_config_runtime_defaults_from_detection() {
+        // When runtime is not set in TOML, serde uses default_runtime()
+        // which calls detect_container_runtime().
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+
+[generation.container]
+timeout = 120
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        // runtime should be auto-detected (podman or docker), never empty
+        assert!(
+            config.generation.container.runtime == "podman"
+                || config.generation.container.runtime == "docker",
+            "runtime should be auto-detected, got '{}'",
+            config.generation.container.runtime
+        );
+    }
+
+    #[test]
+    fn test_install_source_from_str_all_valid_variants() {
+        assert_eq!(
+            "registry".parse::<InstallSource>().unwrap(),
+            InstallSource::Registry
+        );
+        assert_eq!(
+            "local-install".parse::<InstallSource>().unwrap(),
+            InstallSource::LocalInstall
+        );
+        assert_eq!(
+            "local-mount".parse::<InstallSource>().unwrap(),
+            InstallSource::LocalMount
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_try_load_from_path_permission_denied() {
+        // Cover the non-NotFound IO error path (line 898).
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unreadable.toml");
+        std::fs::write(&path, "[llm]\nprovider = \"anthropic\"\nmodel = \"test\"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = Config::try_load_from_path(&path);
+
+        // Restore permissions for cleanup
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(result.is_err(), "permission denied should propagate as error");
+    }
 }

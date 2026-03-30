@@ -2184,4 +2184,187 @@ mod tests {
         let content = "package version\n\nMajor: 2,\nMinor: 0,\nPatch: 1,\n";
         assert_eq!(extract_version_constant(content), Some("2.0.1".to_string()));
     }
+
+    // ── Recursive traversal into subdirectories ─────────────────────
+
+    #[test]
+    fn collect_docs_recursive_enters_subdirectories() {
+        // Exercises the `else if ft.is_dir()` branch in collect_docs_recursive
+        // (line 362-364) with a nested subdir containing a doc file.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir_all(root.join("docs").join("guides")).unwrap();
+        fs::write(
+            root.join("docs").join("guides").join("quickstart.md"),
+            "# Quick Start\n",
+        )
+        .unwrap();
+
+        let handler = GoHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        assert!(
+            docs.iter()
+                .any(|p| p.file_name().is_some_and(|n| n == "quickstart.md")),
+            "should find docs in nested subdirectory: {:?}",
+            docs.iter()
+                .map(|p| p.file_name())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn collect_docs_recursive_skips_non_doc_extensions() {
+        // Exercises the branch where a file exists in docs/ but has an extension
+        // that is neither .md nor .rst — it should be skipped.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::create_dir(root.join("docs")).unwrap();
+        fs::write(root.join("docs").join("notes.txt"), "some notes\n").unwrap();
+        fs::write(root.join("docs").join("data.json"), "{}").unwrap();
+        fs::write(root.join("docs").join("real.md"), "# Real Doc\n").unwrap();
+
+        let handler = GoHandler::new(root);
+        let docs = handler.find_docs().unwrap();
+        let names: Vec<&str> = docs
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"real.md"), "should find .md files");
+        assert!(!names.contains(&"notes.txt"), "should skip .txt files");
+        assert!(!names.contains(&"data.json"), "should skip .json files");
+    }
+
+    #[test]
+    fn collect_all_go_in_dir_recurses_into_nested_example_dirs() {
+        // Exercises the `else if ft.is_dir()` branch in collect_all_go_in_dir
+        // (line 290-296) with a two-level deep example structure.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+        fs::create_dir_all(root.join("examples").join("grpc").join("server")).unwrap();
+        fs::write(
+            root.join("examples")
+                .join("grpc")
+                .join("server")
+                .join("main.go"),
+            "package main\n",
+        )
+        .unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|p| p.ends_with("grpc/server/main.go")),
+            "should find deeply nested example file: {:?}",
+            files
+        );
+    }
+
+    #[test]
+    fn collect_example_test_files_recurses_into_nested_dirs() {
+        // Exercises the recursive branch of collect_example_test_files
+        // (lines 320-327) with a nested dir containing example_*_test.go.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+        fs::create_dir_all(root.join("internal").join("api")).unwrap();
+        fs::write(
+            root.join("internal")
+                .join("api")
+                .join("example_handler_test.go"),
+            "package api\n",
+        )
+        .unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_examples().unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|p| p.file_name().is_some_and(|n| n == "example_handler_test.go")),
+            "should find example_*_test.go in nested subdirectory: {:?}",
+            files
+        );
+    }
+
+    #[test]
+    fn collect_go_files_recurses_into_multi_level_dirs() {
+        // Exercises the recursive branch of collect_go_files (lines 256-264)
+        // with a multi-level directory structure.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(root.join("main.go"), "package main\n").unwrap();
+        fs::create_dir_all(root.join("cmd").join("server")).unwrap();
+        fs::write(
+            root.join("cmd").join("server").join("main.go"),
+            "package main\n",
+        )
+        .unwrap();
+
+        let handler = GoHandler::new(root);
+        let files = handler.find_source_files().unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|p| p.ends_with("cmd/server/main.go")),
+            "should find source files in nested dirs: {:?}",
+            files
+        );
+    }
+
+    #[test]
+    fn version_from_source_version_txt_fallback() {
+        // Exercises version_from_source lines 437-445:
+        // VERSION.txt file should be detected when version.go is absent.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(dir.path().join("VERSION.txt"), "7.2.1\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(
+            handler.get_version().unwrap(),
+            "7.2.1",
+            "should detect version from VERSION.txt"
+        );
+    }
+
+    #[test]
+    fn version_from_source_version_file_dev_placeholder_skipped() {
+        // VERSION file containing a dev placeholder should be skipped,
+        // falling through to version subdirs or "latest".
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(dir.path().join("VERSION"), "dev\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(
+            handler.get_version().unwrap(),
+            "latest",
+            "dev placeholder in VERSION file should be skipped"
+        );
+    }
+
+    #[test]
+    fn version_from_source_version_go_dev_falls_to_version_file() {
+        // version.go has a dev placeholder, but VERSION file has a real version.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("version.go"),
+            "package mylib\n\nvar Version = \"dev\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("VERSION"), "4.5.6\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert_eq!(
+            handler.get_version().unwrap(),
+            "4.5.6",
+            "should fall through from dev version.go to VERSION file"
+        );
+    }
 }
