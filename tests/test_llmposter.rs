@@ -566,24 +566,18 @@ async fn test_disconnect_mid_stream() {
         .send()
         .await;
 
-    match result {
-        Ok(resp) => {
-            // Connection may succeed initially but body read fails
-            let body_result = resp.text().await;
-            // Either the body is incomplete or the read errors out
-            match body_result {
-                Ok(body) => {
-                    // Got partial body before disconnect
-                    assert!(
-                        !body.contains("[DONE]"),
-                        "Disconnected stream should not have [DONE] marker"
-                    );
-                }
-                Err(_) => {} // Body read failed — expected for disconnect
-            }
+    if let Ok(resp) = result {
+        // Connection may succeed initially but body read fails
+        if let Ok(body) = resp.text().await {
+            // Got partial body before disconnect
+            assert!(
+                !body.contains("[DONE]"),
+                "Disconnected stream should not have [DONE] marker"
+            );
         }
-        Err(_) => {} // Connection failed entirely — also valid for disconnect
+        // Body read failure is expected for disconnect
     }
+    // Connection failure is also valid for disconnect
 }
 
 // ============================================================================
