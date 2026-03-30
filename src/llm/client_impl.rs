@@ -164,7 +164,10 @@ impl LlmClient for AnthropicClient {
 
         let mut req = self
             .client
-            .post(format!("{}/v1/messages", self.base_url))
+            .post(format!(
+                "{}/v1/messages",
+                self.base_url.trim_end_matches('/')
+            ))
             .header("x-api-key", self.api_key.expose())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json");
@@ -564,7 +567,8 @@ impl LlmClient for GeminiClient {
 
         let url = format!(
             "{}/v1beta/models/{}:generateContent",
-            self.base_url, self.model
+            self.base_url.trim_end_matches('/'),
+            self.model
         );
 
         let mut req = self
