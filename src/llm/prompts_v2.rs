@@ -908,6 +908,7 @@ pub fn create_update_prompt(
     context: &str,
     language: &Language,
     deps: &[crate::pipeline::collector::StructuredDep],
+    custom_instructions: Option<&str>,
 ) -> String {
     let ecosystem_term = language.ecosystem_term();
     let lang_str = language.as_str();
@@ -976,9 +977,24 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
         version,
         ecosystem_term = ecosystem_term
     );
+    prompt.push_str(
+        "\n\nIMPORTANT: This is a MINOR UPDATE, not a full rewrite. The existing SKILL.md has \
+been reviewed and approved. Make the minimum changes needed — update versions, add new APIs, \
+fix inaccuracies. If nothing changed, return the existing content as-is. Reviewers will reject \
+unnecessary rewrites.\n",
+    );
+
     prompt.push_str(language_hints(language, "create"));
 
     append_rust_deps_section(&mut prompt, language, deps);
+
+    if let Some(custom) = custom_instructions {
+        prompt.push_str(&format!(
+            "\n## CUSTOM INSTRUCTIONS FOR THIS REPO (OVERRIDE STYLE/CONTENT RULES)\n\nThese instructions are repo-specific and take precedence over conflicting \
+style and content rules above. RULE 8 (Security) is never overridable.\n\n{}\n",
+            custom
+        ));
+    }
 
     prompt
 }
@@ -2150,6 +2166,7 @@ mod tests {
             "context",
             &Language::Rust,
             &deps,
+            None,
         );
         assert!(prompt.contains("[dependencies]"));
         assert!(prompt.contains("tokio = { version = \"1\", features = [\"full\"] }"));
@@ -2169,6 +2186,7 @@ mod tests {
             "context",
             &Language::Rust,
             &deps,
+            None,
         );
         assert!(prompt.contains("Do NOT invent or guess dependency versions"));
         assert!(prompt.contains("Dependencies Note"));
@@ -2191,6 +2209,7 @@ mod tests {
             "context",
             &Language::Rust,
             &deps,
+            None,
         );
         assert!(prompt.contains("rand = \"*\""));
     }
@@ -2212,6 +2231,7 @@ mod tests {
             "context",
             &Language::Python,
             &deps,
+            None,
         );
         assert!(!prompt.contains("[dependencies]"));
     }
@@ -2229,6 +2249,7 @@ mod tests {
             "context",
             &Language::Rust,
             &deps,
+            None,
         );
         assert!(prompt.contains("RUST-SPECIFIC HINTS"));
     }
@@ -2246,6 +2267,7 @@ mod tests {
             "context",
             &Language::Python,
             &deps,
+            None,
         );
         assert!(prompt.contains("Security (CRITICAL)"));
     }
@@ -2263,6 +2285,7 @@ mod tests {
             "context",
             &Language::Go,
             &deps,
+            None,
         );
         assert!(prompt.contains("old content here"));
         assert!(prompt.contains("GO-SPECIFIC HINTS"));

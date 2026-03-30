@@ -500,6 +500,7 @@ impl Generator {
                 &context,
                 &data.language,
                 &data.dependencies,
+                self.prompts_config.create_custom.as_deref(),
             );
             self.get_client("create").complete(&update_prompt).await?
         } else {
