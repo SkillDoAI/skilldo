@@ -111,14 +111,13 @@ struct AnthropicContent {
 
 impl AnthropicClient {
     pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Result<Self> {
-        Ok(Self {
-            api_key: api_key.into(),
+        Self::with_base_url(
+            api_key,
             model,
+            "https://api.anthropic.com".to_string(),
             max_tokens,
-            client: build_http_client(timeout_secs)?,
-            base_url: "https://api.anthropic.com".to_string(),
-            extra_headers: Vec::new(),
-        })
+            timeout_secs,
+        )
     }
 
     pub fn with_base_url(
@@ -504,15 +503,13 @@ struct GeminiResponsePart {
 
 impl GeminiClient {
     pub fn new(api_key: String, model: String, max_tokens: u32, timeout_secs: u64) -> Result<Self> {
-        Ok(Self {
-            api_key: api_key.into(),
+        Self::with_base_url(
+            api_key,
             model,
+            "https://generativelanguage.googleapis.com".to_string(),
             max_tokens,
-            client: build_http_client(timeout_secs)?,
-            base_url: "https://generativelanguage.googleapis.com".to_string(),
-            use_bearer_auth: false,
-            extra_headers: Vec::new(),
-        })
+            timeout_secs,
+        )
     }
 
     pub fn with_base_url(
