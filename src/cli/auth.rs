@@ -1160,6 +1160,93 @@ provider_name = "test-multi-logout-b"
     }
 
     #[test]
+    fn group_by_oauth_app_skips_empty_scopes_on_grouped_endpoint() {
+        // When a second endpoint in the same group has empty scopes,
+        // the scope-union block should be skipped (exercising the `if !ep.scopes.is_empty()` false branch).
+        let endpoints = vec![
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "first".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "".to_string(), // empty scopes
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "second".to_string(),
+            },
+        ];
+        let groups = group_by_oauth_app(&endpoints);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].1.len(), 2);
+        // Scopes should remain unchanged — only "openid" from the first endpoint
+        let merged_scopes: HashSet<&str> = groups[0].0.scopes.split_whitespace().collect();
+        assert_eq!(merged_scopes.len(), 1);
+        assert!(merged_scopes.contains("openid"));
+    }
+
+    #[test]
+    fn group_by_oauth_app_both_empty_scopes() {
+        // When all endpoints in a group have empty scopes, the merged scopes stay empty.
+        let endpoints = vec![
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "ep-a".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "ep-b".to_string(),
+            },
+        ];
+        let groups = group_by_oauth_app(&endpoints);
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].0.scopes.is_empty());
+    }
+
+    #[test]
+    fn group_by_oauth_app_no_duplicate_scopes_on_overlap() {
+        // When scopes fully overlap, no duplicates should appear in the merged result.
+        let endpoints = vec![
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid profile email".to_string(),
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "ep-x".to_string(),
+            },
+            OAuthEndpoint {
+                auth_url: "https://auth.example.com/authorize".to_string(),
+                token_url: "https://auth.example.com/token".to_string(),
+                scopes: "openid profile email".to_string(), // exact same scopes
+                client_id: "shared-cid".to_string(),
+                client_secret: None,
+                provider_name: "ep-y".to_string(),
+            },
+        ];
+        let groups = group_by_oauth_app(&endpoints);
+        assert_eq!(groups.len(), 1);
+        let merged_scopes: HashSet<&str> = groups[0].0.scopes.split_whitespace().collect();
+        assert_eq!(merged_scopes.len(), 3);
+        // Verify the raw string has no extra spaces or duplicates
+        let parts: Vec<&str> = groups[0].0.scopes.split_whitespace().collect();
+        assert_eq!(parts.len(), 3);
+    }
+
+    #[test]
     #[serial]
     fn status_to_multiple_providers_mixed_states() {
         let env_var = "SKILLDO_TEST_STATUS_TO_MIX";
