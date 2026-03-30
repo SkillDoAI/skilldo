@@ -547,6 +547,42 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    async fn test_create_anthropic_client_with_base_url() {
+        env::set_var("SKILLDO_TEST_FACTORY_ANTHRO_BU", "test_key");
+        let config = make_llm_config(
+            Provider::Anthropic,
+            Some("SKILLDO_TEST_FACTORY_ANTHRO_BU"),
+            Some("https://proxy.example.com/anthropic"),
+        );
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(
+            result.is_ok(),
+            "Anthropic with base_url should succeed: {:?}",
+            result.err()
+        );
+        env::remove_var("SKILLDO_TEST_FACTORY_ANTHRO_BU");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_gemini_client_with_base_url() {
+        env::set_var("SKILLDO_TEST_FACTORY_GEMINI_BU", "test_key");
+        let config = make_llm_config(
+            Provider::Gemini,
+            Some("SKILLDO_TEST_FACTORY_GEMINI_BU"),
+            Some("https://proxy.example.com/gemini"),
+        );
+        let result = create_client_from_llm_config(&config, false).await;
+        assert!(
+            result.is_ok(),
+            "Gemini with base_url should succeed: {:?}",
+            result.err()
+        );
+        env::remove_var("SKILLDO_TEST_FACTORY_GEMINI_BU");
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn test_create_chatgpt_client_with_extra_body_succeeds() {
         // Cover lines 131-132: extra_body set for ChatGPT triggers a warning (logged, not asserted)
         env::set_var("SKILLDO_TEST_FACTORY_CHATGPT_EB", "test_key");

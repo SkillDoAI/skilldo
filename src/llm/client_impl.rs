@@ -1603,4 +1603,43 @@ mod tests {
         let response: GeminiResponse = serde_json::from_str(json).unwrap();
         assert!(response.usage_metadata.is_none());
     }
+
+    // --- Coverage: AnthropicClient::with_base_url ---
+
+    #[test]
+    fn test_anthropic_client_with_custom_base_url() {
+        let client = AnthropicClient::with_base_url(
+            "test_key".to_string(),
+            "claude-3-haiku".to_string(),
+            "https://proxy.example.com/anthropic".to_string(),
+            4096,
+            120,
+        )
+        .unwrap();
+        assert_eq!(client.base_url, "https://proxy.example.com/anthropic");
+        assert_eq!(client.api_key.expose(), "test_key");
+        assert_eq!(client.model, "claude-3-haiku");
+        assert_eq!(client.max_tokens, 4096);
+        assert!(client.extra_headers.is_empty());
+    }
+
+    // --- Coverage: GeminiClient::with_base_url ---
+
+    #[test]
+    fn test_gemini_client_with_custom_base_url() {
+        let client = GeminiClient::with_base_url(
+            "test_key".to_string(),
+            "gemini-pro".to_string(),
+            "https://proxy.example.com/gemini".to_string(),
+            8192,
+            120,
+        )
+        .unwrap();
+        assert_eq!(client.base_url, "https://proxy.example.com/gemini");
+        assert_eq!(client.api_key.expose(), "test_key");
+        assert_eq!(client.model, "gemini-pro");
+        assert_eq!(client.max_tokens, 8192);
+        assert!(!client.use_bearer_auth);
+        assert!(client.extra_headers.is_empty());
+    }
 }
