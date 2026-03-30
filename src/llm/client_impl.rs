@@ -1639,4 +1639,73 @@ mod tests {
         assert!(!client.use_bearer_auth);
         assert!(client.extra_headers.is_empty());
     }
+
+    #[test]
+    fn test_openai_request_max_tokens_nonzero_gpt5() {
+        let max_tokens_cfg: u32 = 4096;
+        let model = "gpt-5.2";
+        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
+            (None, None)
+        } else if model.starts_with("gpt-5") {
+            (None, Some(max_tokens_cfg))
+        } else {
+            (Some(max_tokens_cfg), None)
+        };
+        assert!(max_tokens.is_none());
+        assert_eq!(max_completion_tokens, Some(4096));
+    }
+
+    #[test]
+    fn test_openai_request_max_tokens_nonzero_non_gpt5() {
+        let max_tokens_cfg: u32 = 4096;
+        let model = "gpt-4o";
+        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
+            (None, None)
+        } else if model.starts_with("gpt-5") {
+            (None, Some(max_tokens_cfg))
+        } else {
+            (Some(max_tokens_cfg), None)
+        };
+        assert_eq!(max_tokens, Some(4096));
+        assert!(max_completion_tokens.is_none());
+    }
+
+    #[test]
+    fn test_gemini_request_max_tokens_nonzero_includes_config() {
+        let max_tokens: u32 = 8192;
+        let request = GeminiRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart {
+                    text: "test".to_string(),
+                }],
+            }],
+            generation_config: if max_tokens == 0 {
+                None
+            } else {
+                Some(GeminiGenerationConfig {
+                    max_output_tokens: max_tokens,
+                })
+            },
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["generationConfig"]["maxOutputTokens"], 8192);
+    }
+
+    #[test]
+    fn test_chatgpt_request_max_tokens_nonzero_includes_field() {
+        let max_tokens: u32 = 4096;
+        let req = ResponsesRequest {
+            model: "gpt-5.2".to_string(),
+            instructions: "test".to_string(),
+            input: vec![],
+            max_output_tokens: if max_tokens == 0 {
+                None
+            } else {
+                Some(max_tokens)
+            },
+            store: false,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["max_output_tokens"], 4096);
+    }
 }
