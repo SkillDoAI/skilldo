@@ -2207,9 +2207,7 @@ mod tests {
             docs.iter()
                 .any(|p| p.file_name().is_some_and(|n| n == "quickstart.md")),
             "should find docs in nested subdirectory: {:?}",
-            docs.iter()
-                .map(|p| p.file_name())
-                .collect::<Vec<_>>()
+            docs.iter().map(|p| p.file_name()).collect::<Vec<_>>()
         );
     }
 
@@ -2257,9 +2255,7 @@ mod tests {
         let handler = GoHandler::new(root);
         let files = handler.find_examples().unwrap();
         assert!(
-            files
-                .iter()
-                .any(|p| p.ends_with("grpc/server/main.go")),
+            files.iter().any(|p| p.ends_with("grpc/server/main.go")),
             "should find deeply nested example file: {:?}",
             files
         );
@@ -2285,9 +2281,9 @@ mod tests {
         let handler = GoHandler::new(root);
         let files = handler.find_examples().unwrap();
         assert!(
-            files
-                .iter()
-                .any(|p| p.file_name().is_some_and(|n| n == "example_handler_test.go")),
+            files.iter().any(|p| p
+                .file_name()
+                .is_some_and(|n| n == "example_handler_test.go")),
             "should find example_*_test.go in nested subdirectory: {:?}",
             files
         );
@@ -2311,9 +2307,7 @@ mod tests {
         let handler = GoHandler::new(root);
         let files = handler.find_source_files().unwrap();
         assert!(
-            files
-                .iter()
-                .any(|p| p.ends_with("cmd/server/main.go")),
+            files.iter().any(|p| p.ends_with("cmd/server/main.go")),
             "should find source files in nested dirs: {:?}",
             files
         );

@@ -2444,7 +2444,10 @@ api_key_env = "none"
         // Config::load() calls load_with_path(None) which runs the fallback chain.
         // In CI/test environments, this either finds a config or returns defaults.
         let result = Config::load();
-        assert!(result.is_ok(), "Config::load() should succeed (fallback to defaults)");
+        assert!(
+            result.is_ok(),
+            "Config::load() should succeed (fallback to defaults)"
+        );
     }
 
     #[test]
@@ -2561,6 +2564,9 @@ timeout = 120
         // Restore permissions for cleanup
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert!(result.is_err(), "permission denied should propagate as error");
+        assert!(
+            result.is_err(),
+            "permission denied should propagate as error"
+        );
     }
 }
