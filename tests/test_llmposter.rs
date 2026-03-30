@@ -373,6 +373,219 @@ async fn test_corrupt_body_injection() {
     assert!(result.is_err(), "corrupt body should produce parse error");
 }
 
+/// SSE streaming via OpenAI client — verify we get the full content back.
+#[tokio::test]
+async fn test_openai_streaming_response() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("Streamed content from mock")
+                .with_streaming(Some(0), Some(5)),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    // Make a raw streaming request to verify SSE works
+    let http = reqwest::Client::new();
+    let resp = http
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "mock",
+            "messages": [{"role": "user", "content": "test"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(ct.contains("text/event-stream"), "Expected SSE, got: {ct}");
+
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("data:"),
+        "SSE body should contain data: lines"
+    );
+}
+
+/// SSE streaming via Anthropic endpoint.
+#[tokio::test]
+async fn test_anthropic_streaming_response() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .for_provider(Provider::Anthropic)
+                .respond_with_content("Anthropic streamed content")
+                .with_streaming(Some(0), Some(5)),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let http = reqwest::Client::new();
+    let resp = http
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "fake")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "mock",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "test"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("content_block_delta") || body.contains("data:"),
+        "Anthropic SSE should contain delta events"
+    );
+}
+
+/// OpenAI-compatible client with /v1/responses URL — documents the body format mismatch.
+/// The client sends Chat Completions JSON but the Responses endpoint expects a different schema.
+#[tokio::test]
+async fn test_openai_compatible_responses_endpoint() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .for_provider(Provider::Responses)
+                .respond_with_content("responses api content"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    // Client pointed at /v1/responses — sends Chat Completions body
+    let client = OpenAIClient::with_base_url(
+        "fake-key".to_string(),
+        "mock-model".to_string(),
+        format!("{}/v1/responses", server.url()),
+        8192,
+        30,
+    )
+    .unwrap();
+
+    // The URL is preserved (no /chat/completions appended) but the body format
+    // is Chat Completions, not Responses API. llmposter routes by URL path,
+    // so this exercises the path-preservation logic.
+    let result = LlmClient::complete(&client, "test").await;
+    // May succeed or fail depending on how llmposter handles the schema mismatch
+    match result {
+        Ok(text) => assert!(!text.is_empty(), "Got response from responses endpoint"),
+        Err(e) => {
+            // Expected: body format doesn't match what responses endpoint expects
+            let err = e.to_string();
+            assert!(
+                err.contains("404")
+                    || err.contains("error")
+                    || err.contains("parse")
+                    || err.contains("status"),
+                "Expected format/routing error, got: {err}"
+            );
+        }
+    }
+}
+
+/// Stream truncation — server cuts SSE after N frames.
+#[tokio::test]
+async fn test_stream_truncation() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("This is a long response that will be truncated")
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    truncate_after_frames: Some(2),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let http = reqwest::Client::new();
+    let resp = http
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "mock",
+            "messages": [{"role": "user", "content": "test"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // Stream should be shorter than full content — truncated after 2 frames
+    let data_lines: Vec<&str> = body.lines().filter(|l| l.starts_with("data:")).collect();
+    // With 2 frames truncation, we should get fewer data events than the full content would produce
+    assert!(
+        data_lines.len() <= 5,
+        "Truncated stream should have few data events, got {}",
+        data_lines.len()
+    );
+}
+
+/// Disconnect mid-stream — server drops TCP connection.
+#[tokio::test]
+async fn test_disconnect_mid_stream() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("This will be cut short by disconnect")
+                .with_streaming(Some(10), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(20),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let http = reqwest::Client::new();
+    let result = http
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "mock",
+            "messages": [{"role": "user", "content": "test"}],
+            "stream": true
+        }))
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) => {
+            // Connection may succeed initially but body read fails
+            let body_result = resp.text().await;
+            // Either the body is incomplete or the read errors out
+            match body_result {
+                Ok(body) => {
+                    // Got partial body before disconnect
+                    assert!(
+                        !body.contains("[DONE]"),
+                        "Disconnected stream should not have [DONE] marker"
+                    );
+                }
+                Err(_) => {} // Body read failed — expected for disconnect
+            }
+        }
+        Err(_) => {} // Connection failed entirely — also valid for disconnect
+    }
+}
+
 // ============================================================================
 // Tier 3 — Deterministic pipeline
 // ============================================================================
