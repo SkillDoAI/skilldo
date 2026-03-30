@@ -801,10 +801,7 @@ print(response.json())
             }],
             score: 70,
         };
-        assert!(
-            !report.passed(),
-            "Critical severity finding should fail"
-        );
+        assert!(!report.passed(), "Critical severity finding should fail");
     }
 
     #[test]
@@ -820,10 +817,7 @@ print(response.json())
             }],
             score: 95,
         };
-        assert!(
-            report.passed(),
-            "Medium-only findings should pass"
-        );
+        assert!(report.passed(), "Medium-only findings should pass");
     }
 
     #[test]
@@ -846,7 +840,7 @@ print(response.json())
         // Verify the PartialOrd boundary used by passed()
         assert!(Severity::High >= Severity::High);
         assert!(Severity::Critical >= Severity::High);
-        assert!(!(Severity::Medium >= Severity::High));
+        assert!(Severity::Medium < Severity::High);
     }
 
     #[test]
@@ -876,8 +870,7 @@ print(response.json())
         // and verify the score formula: 100 - sum(deductions), clamped to [0,100]
         let content = include_str!("../../tests/fixtures/security/evasive-06-unicode-injection.md");
         let report = scan_skill(content);
-        let expected_deductions: i32 =
-            report.findings.iter().map(|f| f.severity.deduction()).sum();
+        let expected_deductions: i32 = report.findings.iter().map(|f| f.severity.deduction()).sum();
         let expected_score = (100i32 - expected_deductions).clamp(0, 100) as u8;
         assert_eq!(
             report.score, expected_score,

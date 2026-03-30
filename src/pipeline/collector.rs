@@ -2549,8 +2549,7 @@ setup(
     fn test_detect_package_name_unknown_from_nonexistent_dotdot() {
         // A path whose file_name() is ".." — canonicalize fails (doesn't exist),
         // and file_name ".." is filtered out, reaching the "unknown" fallback.
-        let result =
-            Collector::detect_package_name(Path::new("/nonexistent/path/..")).unwrap();
+        let result = Collector::detect_package_name(Path::new("/nonexistent/path/..")).unwrap();
         // canonicalize fails on non-existent path, file_name is ".." which
         // is filtered, so we reach the final "unknown" fallback
         assert_eq!(result, "unknown");
@@ -2626,11 +2625,7 @@ setup(
             "[project]\nname = \"[section-header]\"\n",
         )
         .unwrap();
-        fs::write(
-            base.join("setup.py"),
-            "setup(\n    name=\"real-pkg\",\n)\n",
-        )
-        .unwrap();
+        fs::write(base.join("setup.py"), "setup(\n    name=\"real-pkg\",\n)\n").unwrap();
 
         let name = Collector::detect_package_name(base).unwrap();
         assert_eq!(name, "real-pkg");
