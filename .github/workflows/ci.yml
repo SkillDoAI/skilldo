@@ -242,20 +242,20 @@ jobs:
             tag: "8.3.1"
             flag: "--language python"
           - lang: go
-            repo: spf13/cobra
-            tag: v1.9.1
+            repo: fatih/color
+            tag: v1.18.0
             flag: "--language go"
           - lang: javascript
-            repo: lodash/lodash
-            tag: "4.17.21"
+            repo: chalk/chalk
+            tag: v5.4.1
             flag: "--language javascript"
           - lang: rust
-            repo: matklad/once_cell
-            tag: v1.21.3
+            repo: dtolnay/thiserror
+            tag: "2.0.12"
             flag: "--language rust"
           - lang: java
-            repo: google/gson
-            tag: gson-parent-2.12.1
+            repo: BrunoEberhard/minimal-j
+            tag: "2.7.0.0"
             flag: "--language java"
     env:
       CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
