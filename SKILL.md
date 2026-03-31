@@ -213,7 +213,7 @@ The model reports uncertainty via HTML comments in the output (stripped before f
 - `<!-- SKILLDO-CONFLICT: description -->` — docs vs code conflicts found
 - `<!-- SKILLDO-UNVERIFIED: description -->` — APIs the model couldn't verify from source
 
-View these with `RUST_LOG=warn` or `RUST_LOG=debug`. CONFLICT logs at info, UNVERIFIED at warn.
+View these with `RUST_LOG=info` or `RUST_LOG=debug`. CONFLICT logs at info, UNVERIFIED at warn.
 
 ## Common Workflows
 
