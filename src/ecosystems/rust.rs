@@ -101,7 +101,8 @@ impl RustHandler {
                 if let Some(eq_pos) = trimmed.find('=') {
                     let lhs = trimmed[..eq_pos].trim();
                     let rhs = trimmed[eq_pos + 1..].trim();
-                    if lhs == dotted && rhs == "true" {
+                    let rhs_clean = rhs.split('#').next().unwrap_or("").trim();
+                    if lhs == dotted && rhs_clean == "true" {
                         return true;
                     }
                 }
