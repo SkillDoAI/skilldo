@@ -438,14 +438,17 @@ impl LlmClient for OpenAIClient {
 
             log_usage(&self.provider_label, &self.model, &api_response.usage);
 
-            api_response
+            let text: String = api_response
                 .output
                 .iter()
                 .filter_map(|o| o.content.as_ref())
                 .flatten()
-                .filter_map(|c| c.text.clone())
-                .next()
-                .context("Responses API returned no content")
+                .filter_map(|c| c.text.as_deref())
+                .collect();
+            if text.is_empty() {
+                bail!("Responses API returned no content")
+            }
+            Ok(text)
         } else {
             let api_response: OpenAIResponse = response
                 .json()

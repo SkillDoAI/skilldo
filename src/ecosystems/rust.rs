@@ -785,11 +785,13 @@ fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::Pat
         if let Some((prefix, _suffix)) = member.split_once('*') {
             let search_dir = repo_root.join(prefix);
             if let Ok(entries) = fs::read_dir(&search_dir) {
-                return entries
+                let mut paths: Vec<_> = entries
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
                     .map(|e| e.path())
                     .collect();
+                paths.sort();
+                return paths;
             }
         }
         Vec::new()
