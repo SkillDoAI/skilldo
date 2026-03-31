@@ -196,7 +196,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     env:
-      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -208,8 +208,8 @@ jobs:
       - name: Check API access
         id: check-secret
         run: |
-          if [ -z "$CEREBRAS_API_KEY" ]; then
-            echo "::warning::CEREBRAS_API_KEY not configured — skipping E2E"
+          if [ -z "$CEREBRAS2_API_KEY" ]; then
+            echo "::warning::CEREBRAS2_API_KEY not configured — skipping E2E"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -258,7 +258,7 @@ jobs:
             tag: gson-parent-2.12.1
             flag: "--language java"
     env:
-      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
     steps:
       - uses: astral-sh/setup-uv@v7
         if: matrix.lang == 'python'
@@ -292,7 +292,7 @@ jobs:
             ${{ matrix.flag }} \
             -o /tmp/test-SKILL.md
         env:
-          OPENAI_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
 
       - name: "Validate ${{ matrix.lang }} output"
         run: |
