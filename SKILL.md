@@ -56,7 +56,7 @@ model = "claude-sonnet-4-6"
 api_key_env = "ANTHROPIC_API_KEY"  # env var name containing the key
 
 [generation]
-max_retries = 5                 # retry on lint/test failures
+max_retries = 10                # retry on lint/test failures
 # telemetry = true              # opt-in: log runs to ~/.skilldo/runs.csv
 ```
 
@@ -205,7 +205,7 @@ Key `[generation]` fields:
 | `enable_test` | `true`/`false` | Toggle test validation (default: true) |
 | `enable_review` | `true`/`false` | Toggle review validation (default: true) |
 | `test_mode` | `thorough`/`minimal`/`adaptive` | Test 3/1/1+ patterns |
-| `max_retries` | integer | Max create→validate retries (default: 5) |
+| `max_retries` | integer | Max create→validate retries (default: 10) |
 
 ### Model Communication
 
