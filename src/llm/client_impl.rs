@@ -361,7 +361,7 @@ impl LlmClient for OpenAIClient {
         let body = if is_responses_api {
             let responses_req = ResponsesRequest {
                 model: self.model.clone(),
-                instructions: "You are a helpful assistant.".to_string(),
+                instructions: "Follow the user's instructions precisely.".to_string(),
                 input: vec![ResponsesInputMessage {
                     msg_type: "message".to_string(),
                     role: "user".to_string(),

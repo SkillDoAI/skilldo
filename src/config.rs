@@ -506,7 +506,7 @@ pub struct GenerationConfig {
     #[serde(default)]
     pub language: Option<String>,
 
-    /// Max retries for create -> lint/test feedback loop (default: 5).
+    /// Max retries for create -> lint/test feedback loop (default: 10).
     /// Each retry sends lint/test errors back to the LLM for correction.
     #[serde(default = "default_max_retries")]
     pub max_retries: usize,

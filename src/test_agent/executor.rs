@@ -16,20 +16,19 @@ use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 
 // Global because classify_result is called from multiple executor impls
 // that share no common context struct — threading would require trait changes.
-static REDACT_VARS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+// RwLock (not OnceLock) so the list can be reset between runs.
+static REDACT_VARS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
 
-/// Set the list of env var names to redact from test output. Called once from pipeline setup.
+/// Set the list of env var names to redact from test output.
+/// Can be called multiple times — each call replaces the previous list.
 pub fn set_redact_vars(vars: Vec<String>) {
-    if let Err(attempted) = REDACT_VARS.set(vars) {
-        warn!(
-            "redact_env_vars already set (ignored {} new vars) — only first call takes effect",
-            attempted.len()
-        );
+    if let Ok(mut guard) = REDACT_VARS.write() {
+        *guard = vars;
     }
 }
 
-fn get_redact_vars() -> &'static [String] {
-    REDACT_VARS.get().map(|v| v.as_slice()).unwrap_or(&[])
+fn get_redact_vars_snapshot() -> Vec<String> {
+    REDACT_VARS.read().map(|v| v.clone()).unwrap_or_default()
 }
 
 /// Check if a CLI tool is available in PATH.
@@ -78,12 +77,14 @@ fn classify_result(
     match result {
         Ok(output) => {
             if output.status.success() {
-                let stdout =
-                    redact_secrets(&String::from_utf8_lossy(&output.stdout), get_redact_vars());
+                let stdout = redact_secrets(
+                    &String::from_utf8_lossy(&output.stdout),
+                    &get_redact_vars_snapshot(),
+                );
                 debug!("{} code execution passed", lang);
                 Ok(ExecutionResult::Pass(stdout))
             } else {
-                let msg = redact_secrets(&fail_output(&output), get_redact_vars());
+                let msg = redact_secrets(&fail_output(&output), &get_redact_vars_snapshot());
                 debug!("{} code execution failed:\n{}", lang, msg);
                 Ok(ExecutionResult::Fail(msg))
             }
@@ -4123,19 +4124,14 @@ dependencies = []
     // --- set_redact_vars duplicate-call warning path ---
 
     #[test]
-    fn test_set_redact_vars_second_call_is_ignored() {
-        // OnceLock is process-global — first test to call set_redact_vars wins.
-        // Either we ARE the first caller (set succeeds) or another test already set it
-        // (set was already done). Either way, a second call with different data should
-        // be silently ignored (warn log emitted, but no panic).
+    fn test_set_redact_vars_replaces_on_second_call() {
+        // RwLock allows replacement — second call overwrites the first.
         set_redact_vars(vec!["FIRST_CALL_VAR".to_string()]);
-        // Second call with different values — exercises the Err branch (lines 21-23)
         set_redact_vars(vec!["SECOND_CALL_VAR".to_string(), "EXTRA".to_string()]);
-        // The function should not panic — the original value should be retained.
-        // We can't assert which value won (depends on test ordering), but we can
-        // verify get_redact_vars returns without panicking.  The slice may be empty
-        // if another test set the OnceLock with an empty vec first.
-        let _vars = get_redact_vars();
+        let vars = get_redact_vars_snapshot();
+        assert_eq!(vars.len(), 2);
+        assert!(vars.contains(&"SECOND_CALL_VAR".to_string()));
+        assert!(vars.contains(&"EXTRA".to_string()));
     }
 
     // --- redact_secrets direct tests ---
