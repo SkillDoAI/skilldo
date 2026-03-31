@@ -1946,7 +1946,7 @@ This content has no required sections and no code blocks.
         // A kept temp file should exist in the output dir (the kept temp path from
         // `into_temp_path().keep()`). Tempfile names are opaque, but we verify at least
         // one non-SKILL.md file was created by the pipeline in the output dir.
-        let _extra_files: Vec<_> = fs::read_dir(repo.path())
+        let extra_files: Vec<_> = fs::read_dir(repo.path())
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| {
@@ -1958,6 +1958,10 @@ This content has no required sections and no code blocks.
                     && name != "tests"
             })
             .collect();
+        assert!(
+            !extra_files.is_empty(),
+            "a kept temp file should exist when errors are unresolved"
+        );
     }
 
     /// Write a config TOML with redact_env_vars set.

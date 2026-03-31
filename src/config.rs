@@ -718,7 +718,7 @@ fn default_test_mode() -> String {
 }
 
 fn default_max_retries() -> usize {
-    5
+    10
 }
 
 fn default_max_source_tokens() -> usize {
@@ -1019,7 +1019,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.llm.provider, Provider::Anthropic);
         assert_eq!(config.llm.api_key_env, None); // Inferred from provider
-        assert_eq!(config.generation.max_retries, 5);
+        assert_eq!(config.generation.max_retries, 10);
         assert!(!config.prompts.override_prompts);
     }
 

@@ -13,6 +13,9 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - **OpenAI Responses API auto-detection** — `openai-compatible` provider detects `/responses` endpoint URLs and automatically uses the Responses API request/response format instead of Chat Completions
 - **`typescript`/`ts` language aliases** — `--language typescript` now works (maps to JavaScript ecosystem)
 
+### Changed
+- **Default `max_retries` raised from 5 to 10** — better matches real-world usage where models need more iterations to converge
+
 ### Fixed
 - **Linter `"nc "` false positive** — 2-character substring matched `sync `, `func `, etc. Removed from exfil commands; `netcat`/`ncat` still detected
 - **Linter `"api_key"` false positive** — legitimate API parameter name flagged as exfiltration target. Removed; real secrets covered by `.env`, `credentials`, `.ssh/`, etc.
