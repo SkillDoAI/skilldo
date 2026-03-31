@@ -45,10 +45,7 @@ impl JavaHandler {
         let mut files = crate::util::filter_within_boundary(files, &self.repo_path);
 
         if files.is_empty() {
-            bail!(
-                "No tests found in {}. Tests are required for generating skills.",
-                self.repo_path.display()
-            );
+            warn!("No test files found in {}", self.repo_path.display());
         }
 
         files.sort();
@@ -1331,10 +1328,11 @@ dependencies {
     }
 
     #[test]
-    fn no_test_files_errors() {
+    fn no_test_files_returns_empty() {
         let tmp = TempDir::new().unwrap();
         let handler = JavaHandler::new(tmp.path());
-        assert!(handler.find_test_files().is_err());
+        let result = handler.find_test_files().unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]

@@ -238,8 +238,8 @@ jobs:
       matrix:
         include:
           - lang: python
-            repo: pallets/click
-            tag: "8.3.1"
+            repo: benjaminp/six
+            tag: "1.17.0"
             flag: "--language python"
           - lang: go
             repo: fatih/color
@@ -254,8 +254,8 @@ jobs:
             tag: "2.0.12"
             flag: "--language rust"
           - lang: java
-            repo: square/javapoet
-            tag: "javapoet-1.13.0"
+            repo: AshurAxelR/JParsedown
+            tag: "1.0.4"
             flag: "--language java"
     env:
       CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}

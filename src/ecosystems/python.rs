@@ -5,7 +5,7 @@
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Extract a clean version string from pyproject.toml `[project]` section content.
 /// Strips bracket/brace wrappers and rejects dynamic versions (attr, file references).
@@ -131,10 +131,7 @@ impl PythonHandler {
         let test_files = crate::util::filter_within_boundary(test_files, &self.repo_path);
 
         if test_files.is_empty() {
-            bail!(
-                "No tests found in {}. Tests are required for generating rules.",
-                self.repo_path.display()
-            );
+            warn!("No test files found in {}", self.repo_path.display());
         }
 
         info!("Found {} Python test files", test_files.len());
@@ -773,14 +770,13 @@ mod tests {
     }
 
     #[test]
-    fn test_find_test_files_empty_errors() {
+    fn test_find_test_files_empty_returns_empty_vec() {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("core.py"), "# not a test").unwrap();
 
         let handler = PythonHandler::new(dir.path());
-        let result = handler.find_test_files();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No tests found"));
+        let result = handler.find_test_files().unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]

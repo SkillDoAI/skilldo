@@ -5,7 +5,7 @@
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 pub struct GoHandler {
     repo_path: PathBuf,
@@ -45,10 +45,7 @@ impl GoHandler {
         let files = crate::util::filter_within_boundary(files, &self.repo_path);
 
         if files.is_empty() {
-            bail!(
-                "No tests found in {}. Tests are required for generating skills.",
-                self.repo_path.display()
-            );
+            warn!("No test files found in {}", self.repo_path.display());
         }
 
         info!("Found {} Go test files", files.len());
@@ -785,12 +782,13 @@ mod tests {
     }
 
     #[test]
-    fn find_test_files_no_tests_errors() {
+    fn find_test_files_no_tests_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
         fs::write(dir.path().join("main.go"), "package main\n").unwrap();
         let handler = GoHandler::new(dir.path());
-        assert!(handler.find_test_files().is_err());
+        let result = handler.find_test_files().unwrap();
+        assert!(result.is_empty());
     }
 
     // ── Metadata tests ────────────────────────────────────────────────
