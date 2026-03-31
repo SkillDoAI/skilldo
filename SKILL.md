@@ -192,6 +192,29 @@ Manage OAuth tokens for providers that use OAuth (e.g., ChatGPT).
 | Rust | cargo, Cargo.toml | `*.rs`, `Cargo.toml` |
 | Java | Maven/Gradle, pom.xml, build.gradle | `*.java`, `pom.xml`, `build.gradle` |
 
+## Configuration (skilldo.toml)
+
+Key `[generation]` fields:
+
+| Field | Values | Description |
+|-------|--------|-------------|
+| `language` | `python`, `javascript` (or `typescript`/`ts`/`js`), `rust`, `go`, `java` | Override auto-detection |
+| `security_context` | `"api-client"` or omit | Relaxes security scan for API client SDKs that discuss credentials/auth |
+| `redact_env_vars` | `["VAR_NAME", ...]` | Env var values masked with `***REDACTED***` in test output/logs |
+| `custom_instructions` | `"""..."""` | Repo-specific instructions for the create stage (overrides style/content rules) |
+| `enable_test` | `true`/`false` | Toggle test validation (default: true) |
+| `enable_review` | `true`/`false` | Toggle review validation (default: true) |
+| `test_mode` | `thorough`/`minimal`/`adaptive` | Test 3/1/1+ patterns |
+| `max_retries` | integer | Max create→validate retries (default: 5) |
+
+### Model Communication
+
+The model reports uncertainty via HTML comments in the output (stripped before final SKILL.md):
+- `<!-- SKILLDO-CONFLICT: description -->` — docs vs code conflicts found
+- `<!-- SKILLDO-UNVERIFIED: description -->` — APIs the model couldn't verify from source
+
+View these with `RUST_LOG=warn` or `RUST_LOG=debug`. CONFLICT logs at info, UNVERIFIED at warn.
+
 ## Common Workflows
 
 ### Generate with Anthropic
@@ -218,6 +241,24 @@ for repo in /path/to/repos/*/; do
 done
 ```
 
+### Generate for an API client SDK
+```toml
+# skilldo.toml — for libraries that discuss API keys/auth
+[generation]
+security_context = "api-client"
+redact_env_vars = ["MY_API_KEY"]
+```
+```bash
+export MY_API_KEY="..."  # needed for test validation
+skilldo generate . --config skilldo.toml
+```
+
+### Debug pipeline stages
+```bash
+skilldo generate . --debug-stage-files ./debug-output/
+# Writes: 1-extract.md, 2-map.md, 3-learn.md, 4-create-raw.md, 5-review-*.txt, 6-normalized.md
+```
+
 ### Review an existing SKILL.md
 ```bash
 skilldo review SKILL.md --config skilldo.toml
@@ -239,3 +280,7 @@ Data is local only — nothing is sent anywhere.
 - **Rate limited** — increase `retry_delay` in config, or switch to a local model.
 - **OAuth errors** — run `skilldo auth status --config <path>` to check token state.
 - **install_source errors on non-Python** — `local-install`/`local-mount` only works for Python. Use default `registry` for other languages.
+
+## Documentation
+
+Full docs — configuration, languages, architecture, authentication, best practices, and telemetry: [docs/](https://github.com/SkillDoAI/skilldo/tree/main/docs)
