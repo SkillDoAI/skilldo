@@ -7,23 +7,30 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 
 ### Added
 - **`security_context` config** — set to `"api-client"` to relax security scan rules for API client SDKs that inherently discuss API keys, auth tokens, and credentials. Suppresses SD-202 false positives
-- **`redact_env_vars` config** — list of env var names whose values are replaced with `***REDACTED***` in test output and logs, preventing secret leakage in CI
+- **`redact_env_vars` config** — list of env var names whose values are replaced with `***REDACTED***` in test output and logs, preventing secret leakage in CI (uses RwLock — resettable between runs)
 - **Anti-hallucination prompt** — create and update prompts now instruct the model that a hallucinated API detail is 3x worse than a missing one. Model flags uncertainty via `<!-- SKILLDO-UNVERIFIED: -->` comments
+- **Strong identity anchor** — create prompt explicitly states "you are a documentation generator, not an assistant" to prevent mode confusion
 - **Generic `<!-- SKILLDO-* -->` comment stripping** — all model communication comments are stripped from final output and logged. Future tag types work without code changes
 - **OpenAI Responses API auto-detection** — `openai-compatible` provider detects `/responses` endpoint URLs and automatically uses the Responses API request/response format instead of Chat Completions
 - **`typescript`/`ts` language aliases** — `--language typescript` now works (maps to JavaScript ecosystem)
+- **`skilldo config sample`** — prints quick-start config with link to full docs
+- **Workspace glob expansion** — `crates/*` patterns in workspace members are expanded
+- **`docs/README.md`** — index page for the docs directory
 
 ### Changed
 - **Default `max_retries` raised from 5 to 10** — better matches real-world usage where models need more iterations to converge
+- **`requires-python` removed from test agent** — lets uv handle Python version discovery natively, eliminating version floor mismatches
+- **`ScanReport::recalculate_score()`** — DRY score calculation used by both `scan_skill` and `scan_skill_with_context`
 
 ### Fixed
 - **Linter `"nc "` false positive** — 2-character substring matched `sync `, `func `, etc. Removed from exfil commands; `netcat`/`ncat` still detected
 - **Linter `"api_key"` false positive** — legitimate API parameter name flagged as exfiltration target. Removed; real secrets covered by `.env`, `credentials`, `.ssh/`, etc.
-- **Python version floor** — test agent now detects installed Python version instead of hardcoding `>=3.8`, fixing dep resolution failures for SDKs requiring newer Python
-- **Windows `test_with_debug_stage_dir_creation_failure`** — used `/dev/null` path (Unix-only); now uses `NUL` on Windows
-- **Cargo workspace root support** — `skilldo generate` on a workspace root now finds the first member crate's name and version instead of failing with "No package name found"
+- **Cargo workspace root support** — `skilldo generate` on workspace roots finds first member crate name/version, with glob expansion and path traversal guard
 - **YARA SD-211 split** — binary bytes detection (critical) separated from executable extension references (high, prose-only). `.bin` removed as false positive for document-processing libraries
-- **`--dry-run` is non-destructive** — no files written, lint skipped (mock output produces false warnings). Validates config, language detection, collection, and provider setup without API calls
+- **`--dry-run` is non-destructive** — no files written, no telemetry, lint skipped
+- **Temp file cleanup on all paths** — stale temp files from previous failed runs cleaned up before writing new output
+- **Windows `test_with_debug_stage_dir_creation_failure`** — used `/dev/null` path (Unix-only); now uses `NUL` on Windows
+- **CI: uv installed on Windows runner** — fixes 4 executor test failures
 
 ## 0.5.10
 
