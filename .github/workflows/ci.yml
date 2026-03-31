@@ -277,13 +277,16 @@ jobs:
       - name: "Clone ${{ matrix.lang }} test library"
         run: git clone --branch ${{ matrix.tag }} --depth 1 https://github.com/${{ matrix.repo }}.git /tmp/test-lib
 
+      - name: "Checkout e2e config"
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/e2e-config.toml
+          path: skilldo-src
+
       - name: "Generate ${{ matrix.lang }} SKILL.md"
         run: |
           ./bin/skilldo generate /tmp/test-lib \
-            --provider openai-compatible \
-            --model qwen/qwen3.5-122b-a10b \
-            --base-url https://openrouter.ai/api/v1 \
-            --max-retries 5 \
+            --config skilldo-src/.github/e2e-config.toml \
             --best-effort \
             ${{ matrix.flag }} \
             -o /tmp/test-SKILL.md
