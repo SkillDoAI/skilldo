@@ -254,6 +254,8 @@ enum ConfigAction {
         #[arg(long)]
         strict: bool,
     },
+    /// Print a fully documented sample config to stdout
+    Sample,
 }
 
 #[derive(Subcommand)]
@@ -385,6 +387,25 @@ async fn main() -> Result<()> {
             ConfigAction::Check { config, strict } => {
                 cli::config_check::run(config, strict)?;
             }
+            ConfigAction::Sample => {
+                println!("# Full documented sample config:");
+                println!("# https://github.com/SkillDoAI/skilldo/blob/main/docs/configuration.md");
+                println!("#");
+                println!("# Quick start — copy and customize:\n");
+                println!("[llm]");
+                println!("provider_type = \"anthropic\"");
+                println!("model = \"claude-sonnet-4-6\"");
+                println!("api_key_env = \"ANTHROPIC_API_KEY\"\n");
+                println!("[generation]");
+                println!("max_retries = 10");
+                println!("enable_test = true");
+                println!("enable_review = true");
+                println!("# security_context = \"api-client\"  # for API client SDKs");
+                println!("# redact_env_vars = [\"MY_API_KEY\"]  # mask secrets in CI logs");
+                println!("# custom_instructions = \"\"\"");
+                println!("# Repo-specific instructions here.");
+                println!("# \"\"\"");
+            }
         },
         Commands::ShowPrompts { language, stage } => {
             cli::show_prompts::run(&language, stage.as_deref())?;
@@ -471,7 +492,9 @@ mod tests {
             let Commands::Config { action } = $cli.command else {
                 panic!("Expected Config command");
             };
-            let ConfigAction::Check { $field, .. } = action;
+            let ConfigAction::Check { $field, .. } = action else {
+                panic!("Expected Check action");
+            };
             $body
         };
     }
@@ -590,7 +613,9 @@ mod tests {
         let Commands::Config { action } = cli.command else {
             panic!("Expected Config command");
         };
-        let ConfigAction::Check { strict, .. } = action;
+        let ConfigAction::Check { strict, .. } = action else {
+            panic!("Expected Check action");
+        };
         assert!(strict);
     }
 
