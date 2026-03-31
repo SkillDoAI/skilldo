@@ -1904,6 +1904,11 @@ This content has no required sections and no code blocks.
     async fn test_run_non_dry_run_unresolved_errors_keeps_temp_file() {
         // Exercises the `has_unresolved_errors && !best_effort` branch (lines 490-494):
         // temp file is kept for inspection, original output is NOT overwritten.
+        //
+        // Activate a tracing subscriber so info!() format args are evaluated by llvm-cov.
+        // try_init() is idempotent — safe to call from multiple tests.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
         let server = llmposter::ServerBuilder::new()
             .fixture(llmposter::Fixture::new().respond_with_content(BAD_SKILL_MD))
             .build()

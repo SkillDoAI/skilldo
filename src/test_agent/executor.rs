@@ -4121,6 +4121,42 @@ dependencies = []
         assert_eq!(install_args[2], "lodash");
     }
 
+    // --- set_redact_vars poisoned RwLock path ---
+
+    #[test]
+    fn test_set_redact_vars_handles_poisoned_lock() {
+        // Exercise the `if let Ok(...)` error branch in set_redact_vars (line 25-26).
+        // A poisoned RwLock returns Err on write() — set_redact_vars should silently
+        // skip the update rather than panicking. After the test, clear_poison()
+        // restores the lock so other tests are unaffected.
+
+        // Step 1: Poison the global lock by panicking while holding the write guard.
+        let _ = std::thread::spawn(|| {
+            let _guard = REDACT_VARS.write().unwrap();
+            panic!("intentional poison for coverage");
+        })
+        .join();
+
+        // Lock is now poisoned — write() returns Err.
+        assert!(
+            REDACT_VARS.write().is_err(),
+            "REDACT_VARS should be poisoned after thread panic"
+        );
+
+        // Step 2: set_redact_vars should handle the poisoned lock gracefully (no-op).
+        set_redact_vars(vec!["SHOULD_NOT_APPEAR".to_string()]);
+
+        // Step 3: get_redact_vars_snapshot also handles poison via unwrap_or_default.
+        let snapshot = get_redact_vars_snapshot();
+        assert!(
+            !snapshot.contains(&"SHOULD_NOT_APPEAR".to_string()),
+            "poisoned lock should prevent set_redact_vars from writing"
+        );
+
+        // Step 4: Restore the lock so other tests are unaffected.
+        REDACT_VARS.clear_poison();
+    }
+
     // --- set_redact_vars duplicate-call warning path ---
 
     #[test]
