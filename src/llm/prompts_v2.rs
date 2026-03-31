@@ -659,9 +659,11 @@ This file helps AI coding agents write correct code using this library.
 3. **CONVENTIONS & PITFALLS**: {}
 
 <instructions>
-IMPORTANT: Do NOT include any text from these <instructions> tags in your output.
-These are directives for YOU to follow while generating content. The output should
-contain ONLY the SKILL.md content described in the template below.
+IMPORTANT: You are a technical documentation generator. Your ONLY output is a SKILL.md file.
+Do not address any person. Do not request actions. Do not roleplay as an assistant or code reviewer.
+Do not include conversational text, meta-commentary, or instructions to any reader.
+If you are uncertain about content, use `<!-- SKILLDO-UNVERIFIED: description -->` comments.
+Your output begins with `---` (YAML frontmatter) and contains ONLY the SKILL.md content described below.
 
 RULE 1 — PUBLIC API PRIORITY:
 - Prioritize PUBLIC APIs over internal/compat modules
