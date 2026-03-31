@@ -1,7 +1,7 @@
 # SkillDo YARA Rules
 
 YARA rules for detecting security threats in AI agent skill files (SKILL.md).
-24 rules across 3 files, designed for fast static analysis of LLM-generated content.
+25 rules across 3 files, designed for fast static analysis of LLM-generated content.
 
 ## Rules
 

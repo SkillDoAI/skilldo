@@ -467,10 +467,9 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         generator = generator.with_existing_skill(skill.clone());
     }
 
-    // Set up secret redaction for test agent output
-    if !config.generation.redact_env_vars.is_empty() {
-        crate::test_agent::executor::set_redact_vars(config.generation.redact_env_vars.clone());
-    }
+    // Set up secret redaction for test agent output (always set, even if empty,
+    // so a previous run's config doesn't leak into this one via the OnceLock).
+    crate::test_agent::executor::set_redact_vars(config.generation.redact_env_vars.clone());
 
     let output_result = generator.generate(&collected_data).await?;
 
@@ -520,8 +519,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         println!("Consider adjusting your review prompts via the review_custom config option.");
     }
 
-    // Record telemetry (non-fatal — warn on failure)
-    if config.generation.telemetry {
+    // Record telemetry (non-fatal — warn on failure). Skip in dry-run.
+    if config.generation.telemetry && !dry_run {
         let duration = start.elapsed();
         let test_llm = config.generation.test_llm.as_ref();
         let review_llm = config.generation.review_llm.as_ref();

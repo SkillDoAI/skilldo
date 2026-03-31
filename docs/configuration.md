@@ -42,10 +42,9 @@ model = "claude-sonnet-4-6"
 # Set to "none" for local models (Ollama) that don't need a key.
 api_key_env = "ANTHROPIC_API_KEY"
 
-# Base URL — only needed for openai-compatible providers.
+# Base URL — for openai-compatible, Anthropic (Bedrock), or Gemini (Vertex AI/proxies).
 # If the URL ends in /responses, the Responses API format is used automatically
 # instead of Chat Completions (e.g., NVIDIA inference endpoints).
-# For Anthropic/Gemini, set base_url for Bedrock, Vertex AI, or proxies.
 # base_url = "http://localhost:11434/v1"
 
 # Override max output tokens per LLM request.

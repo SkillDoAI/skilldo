@@ -241,6 +241,10 @@ impl RustHandler {
                 if let Some(members) = workspace.get("members").and_then(|v| v.as_array()) {
                     for member in members {
                         if let Some(member_path) = member.as_str() {
+                            // Reject paths that escape the repo root
+                            if member_path.contains("..") {
+                                continue;
+                            }
                             let member_cargo = self.repo_path.join(member_path).join("Cargo.toml");
                             if let Ok(member_content) = fs::read_to_string(&member_cargo) {
                                 if let Some(name) = cargo_toml_field(&member_content, "name") {
