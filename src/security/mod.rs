@@ -1015,4 +1015,49 @@ Configure your .ssh/ directory and .aws/ credentials for remote access.
             "SD-202 should not be suppressed for unknown context"
         );
     }
+
+    #[test]
+    fn scan_skill_with_context_api_client_score_becomes_100_when_only_sd202() {
+        // Content that triggers SD-202 and no other findings.
+        // After api-client suppression, findings should be empty and score should be 100.
+        // This directly exercises the `recalculate_score()` call at the suppression site.
+        let content = "\
+---
+name: cloud-auth
+version: \"1.0\"
+---
+
+# Cloud Auth
+
+Access the .ssh/ key store.
+";
+        let base = scan_skill(content);
+        // Confirm the only findings are SD-202
+        let non_sd202: Vec<_> = base
+            .findings
+            .iter()
+            .filter(|f| f.rule_id != "SD-202")
+            .collect();
+        assert!(
+            non_sd202.is_empty(),
+            "Expected only SD-202 findings, but also got: {:?}",
+            non_sd202.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+        assert!(
+            !base.findings.is_empty(),
+            "Expected at least one SD-202 finding"
+        );
+        assert!(
+            base.score < 100,
+            "Baseline score should be < 100 due to SD-202"
+        );
+
+        // With api-client context, all findings suppressed → recalculate_score → 100
+        let ctx = scan_skill_with_context(content, Some("api-client"));
+        assert!(ctx.findings.is_empty(), "All findings should be suppressed");
+        assert_eq!(
+            ctx.score, 100,
+            "Score must be 100 after recalculate_score with no findings"
+        );
+    }
 }

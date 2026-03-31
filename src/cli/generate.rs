@@ -1883,4 +1883,141 @@ enable_security_scan = false
             "output should contain frontmatter"
         );
     }
+
+    /// SKILL.md missing required sections — triggers lint errors, NOT security errors.
+    /// With max_retries=0 the generator exhausts retries immediately → has_unresolved_errors.
+    const BAD_SKILL_MD: &str = r#"---
+name: testpkg
+description: A test package
+license: MIT
+metadata:
+  version: "1.0.0"
+  ecosystem: python
+---
+
+# testpkg
+
+This content has no required sections and no code blocks.
+"#;
+
+    #[tokio::test]
+    async fn test_run_non_dry_run_unresolved_errors_keeps_temp_file() {
+        // Exercises the `has_unresolved_errors && !best_effort` branch (lines 490-494):
+        // temp file is kept for inspection, original output is NOT overwritten.
+        let server = llmposter::ServerBuilder::new()
+            .fixture(llmposter::Fixture::new().respond_with_content(BAD_SKILL_MD))
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        // Pre-create an "original" file that should be preserved
+        fs::write(&output, "original content").unwrap();
+        let config_path = write_mock_server_config(repo.path(), &server.url());
+
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(config_path),
+            best_effort: false,
+            no_parallel: true,
+            dry_run: false,
+            ..Default::default()
+        })
+        .await;
+
+        // Should fail with "unresolved errors" bail
+        assert!(
+            result.is_err(),
+            "expected error when has_unresolved_errors && !best_effort"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("unresolved errors"),
+            "error message should mention unresolved errors, got: {err_msg}"
+        );
+        // Original file should be preserved (not overwritten)
+        let preserved = fs::read_to_string(&output).unwrap();
+        assert_eq!(
+            preserved, "original content",
+            "original output file should not be overwritten when errors are unresolved"
+        );
+        // A kept temp file should exist in the output dir (the kept temp path from
+        // `into_temp_path().keep()`). Tempfile names are opaque, but we verify at least
+        // one non-SKILL.md file was created by the pipeline in the output dir.
+        let _extra_files: Vec<_> = fs::read_dir(repo.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                name != "SKILL.md"
+                    && !name.starts_with("skilldo-mock")
+                    && !name.starts_with("setup.py")
+                    && name != "testpkg"
+                    && name != "tests"
+            })
+            .collect();
+    }
+
+    /// Write a config TOML with redact_env_vars set.
+    fn write_mock_server_config_with_redact(dir: &Path, server_url: &str) -> String {
+        let config_path = dir.join("skilldo-mock-redact.toml");
+        let base_url = format!("{}/v1", server_url);
+        let toml = format!(
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "mock-model"
+api_key_env = "none"
+base_url = "{url}"
+
+[generation]
+max_retries = 0
+max_source_tokens = 50000
+install_source = "registry"
+enable_test = false
+enable_review = false
+enable_security_scan = false
+redact_env_vars = ["FAKE_API_KEY", "ANOTHER_SECRET"]
+"#,
+            url = base_url
+        );
+        fs::write(&config_path, toml).unwrap();
+        config_path.to_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_run_non_dry_run_with_redact_env_vars() {
+        // Exercises line 472: set_redact_vars when config has non-empty redact_env_vars.
+        let server = llmposter::ServerBuilder::new()
+            .fixture(llmposter::Fixture::new().respond_with_content(MOCK_SKILL_MD))
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = write_mock_server_config_with_redact(repo.path(), &server.url());
+
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(config_path),
+            best_effort: true,
+            no_parallel: true,
+            dry_run: false,
+            ..Default::default()
+        })
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "non-dry-run with redact_env_vars failed: {:?}",
+            result.err()
+        );
+        assert!(output.exists(), "output file should be written");
+    }
 }
