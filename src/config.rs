@@ -545,7 +545,7 @@ pub struct GenerationConfig {
     /// - "api-client": relaxes rules about API key/credential discussion in prose,
     ///   suppresses SD-202 (credential store access), and tells the review agent to
     ///   expect auth/token patterns. Use for API client SDKs.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_security_context")]
     pub security_context: Option<String>,
 
     /// Max retries for review -> create feedback loop (default: 10)
@@ -711,6 +711,22 @@ fn default_timeout() -> u64 {
 
 fn default_true() -> bool {
     true
+}
+
+fn deserialize_security_context<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    if let Some(ref ctx) = value {
+        if ctx != "api-client" {
+            return Err(serde::de::Error::custom(format!(
+                "invalid security_context '{}' — valid values: \"api-client\"",
+                ctx
+            )));
+        }
+    }
+    Ok(value)
 }
 
 fn default_test_mode() -> String {
