@@ -658,10 +658,8 @@ setup(name="testpkg", version="1.0.0")
         })
         .await;
         assert!(result.is_ok(), "dry run failed: {:?}", result.err());
-        assert!(output.exists(), "SKILL.md should be written");
-        let content = fs::read_to_string(&output).unwrap();
-        assert!(content.contains("---"), "should contain frontmatter");
-        assert!(!content.is_empty());
+        // Dry-run is non-destructive — no files should be written
+        assert!(!output.exists(), "dry-run should not write files");
     }
 
     #[tokio::test]
@@ -682,7 +680,8 @@ setup(name="testpkg", version="1.0.0")
         })
         .await;
         assert!(result.is_ok());
-        assert!(output.exists());
+        // dry-run — no file written
+        assert!(!output.exists(), "dry-run should not write files");
     }
 
     #[tokio::test]
@@ -1138,10 +1137,8 @@ install_source = "registry"
             "custom output path failed: {:?}",
             result.err()
         );
-        assert!(
-            output.exists(),
-            "SKILL.md should exist at custom output path"
-        );
+        // Dry-run is non-destructive — no files should be written
+        assert!(!output.exists(), "dry-run should not write files");
     }
 
     #[tokio::test]
@@ -1425,7 +1422,7 @@ parallel_extraction = true
         })
         .await;
         assert!(result.is_ok(), "Java dry run failed: {:?}", result.err());
-        assert!(output.exists(), "SKILL.md should be written");
+        assert!(!output.exists(), "dry-run should not write files");
     }
 
     #[tokio::test]
