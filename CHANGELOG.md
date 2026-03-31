@@ -20,6 +20,7 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - **Windows `test_with_debug_stage_dir_creation_failure`** — used `/dev/null` path (Unix-only); now uses `NUL` on Windows
 - **Cargo workspace root support** — `skilldo generate` on a workspace root now finds the first member crate's name and version instead of failing with "No package name found"
 - **YARA SD-211 split** — binary bytes detection (critical) separated from executable extension references (high, prose-only). `.bin` removed as false positive for document-processing libraries
+- **`--dry-run` is non-destructive** — no files written, lint skipped (mock output produces false warnings). Validates config, language detection, collection, and provider setup without API calls
 
 ## 0.5.10
 
