@@ -174,6 +174,12 @@ impl ScanReport {
             .filter(|f| f.severity == severity)
             .count()
     }
+
+    /// Recalculate score from current findings.
+    fn recalculate_score(&mut self) {
+        let deductions: i32 = self.findings.iter().map(|f| f.severity.deduction()).sum();
+        self.score = (100i32 - deductions).clamp(0, 100) as u8;
+    }
 }
 
 /// Scan a SKILL.md content string for security issues.
@@ -195,9 +201,7 @@ pub fn scan_skill_with_context(content: &str, security_context: Option<&str>) ->
                 "Security context 'api-client': suppressed {} SD-202 finding(s)",
                 suppressed
             );
-            // Recalculate score without suppressed findings
-            let deductions: i32 = report.findings.iter().map(|f| f.severity.deduction()).sum();
-            report.score = (100i32 - deductions).clamp(0, 100) as u8;
+            report.recalculate_score();
         }
     }
     report
@@ -229,12 +233,9 @@ pub fn scan_skill(content: &str) -> ScanReport {
     // Deduplicate cross-scanner findings by (rule_id, line)
     dedup_findings(&mut findings);
 
-    // Score: start at 100, deduct per finding weighted by severity
-    let deductions: i32 = findings.iter().map(|f| f.severity.deduction()).sum();
-
-    let score = (100i32 - deductions).clamp(0, 100) as u8;
-
-    ScanReport { findings, score }
+    let mut report = ScanReport { findings, score: 0 };
+    report.recalculate_score();
+    report
 }
 
 #[cfg(test)]

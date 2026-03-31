@@ -51,13 +51,17 @@ fn redact_secrets(text: &str, redact_vars: &[String]) -> String {
     if redact_vars.is_empty() {
         return text.to_string();
     }
+    // Collect values and sort longest-first to avoid partial replacement
+    // when one secret is a substring of another.
+    let mut values: Vec<String> = redact_vars
+        .iter()
+        .filter_map(|var_name| std::env::var(var_name).ok())
+        .filter(|v| !v.is_empty())
+        .collect();
+    values.sort_by_key(|v| std::cmp::Reverse(v.len()));
     let mut result = text.to_string();
-    for var_name in redact_vars {
-        if let Ok(value) = std::env::var(var_name) {
-            if !value.is_empty() {
-                result = result.replace(&value, "***REDACTED***");
-            }
-        }
+    for value in &values {
+        result = result.replace(value.as_str(), "***REDACTED***");
     }
     result
 }
