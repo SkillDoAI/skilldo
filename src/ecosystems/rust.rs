@@ -1332,6 +1332,8 @@ mod tests {
     fn get_version_member_crate_resolves_workspace_root() {
         // Handler points at the MEMBER crate, not the workspace root.
         // version.workspace = true should walk up to find the root version.
+        // Tracing subscriber ensures debug!() format args execute for coverage.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("Cargo.toml"),
@@ -3933,6 +3935,22 @@ mod tests {
         assert!(names.contains(&"foo-macros".to_string()));
         assert!(names.contains(&"bar-macros".to_string()));
         assert!(!names.contains(&"foo-core".to_string()));
+    }
+
+    #[test]
+    fn has_dotted_workspace_key_falls_through_non_matching_lines() {
+        // Lines in [package] with '=' that don't match the dotted key
+        // should fall through (exercises line 107 closing brace).
+        let content = "[package]\nname = \"test\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\n";
+        assert!(!RustHandler::has_dotted_workspace_key(content, "version"));
+    }
+
+    #[test]
+    fn version_from_workspace_root_at_filesystem_root() {
+        // When repo_path is "/" (filesystem root), dir.pop() returns false
+        // immediately, exercising line 119.
+        let handler = RustHandler::new(std::path::Path::new("/"));
+        assert!(handler.version_from_workspace_root().is_none());
     }
 
     #[test]
