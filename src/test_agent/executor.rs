@@ -4160,4 +4160,54 @@ dependencies = []
         assert_eq!(install_args[1], "express");
         assert_eq!(install_args[2], "lodash");
     }
+
+    // -- redact_secrets tests --
+
+    #[test]
+    fn test_redact_secrets_empty_vars_returns_original() {
+        let text = "hello world api_key=abc123";
+        let result = redact_secrets(text, &[]);
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn test_redact_secrets_replaces_env_var_value() {
+        let var = "SKILLDO_TEST_REDACT_1";
+        std::env::set_var(var, "supersecret99");
+        let text = "Error: key supersecret99 is invalid";
+        let result = redact_secrets(text, &[var.to_string()]);
+        assert!(result.contains("***REDACTED***"));
+        assert!(!result.contains("supersecret99"));
+        std::env::remove_var(var);
+    }
+
+    #[test]
+    fn test_redact_secrets_skips_unset_var() {
+        let text = "nothing to redact here";
+        let result = redact_secrets(text, &["SKILLDO_NONEXISTENT_VAR_XYZ".to_string()]);
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn test_redact_secrets_longest_first() {
+        let short = "SKILLDO_TEST_SHORT";
+        let long = "SKILLDO_TEST_LONG";
+        std::env::set_var(short, "abc");
+        std::env::set_var(long, "abcdef");
+        let text = "value is abcdef here";
+        let result = redact_secrets(text, &[short.to_string(), long.to_string()]);
+        // "abcdef" should be replaced first (longest), not "abc" partially
+        assert_eq!(result, "value is ***REDACTED*** here");
+        std::env::remove_var(short);
+        std::env::remove_var(long);
+    }
+
+    #[tokio::test]
+    async fn test_detect_python_minor_version_format() {
+        let version = detect_python_minor_version().await;
+        let parts: Vec<&str> = version.split('.').collect();
+        assert_eq!(parts.len(), 2, "Expected major.minor, got: {}", version);
+        assert!(parts[0].parse::<u32>().is_ok());
+        assert!(parts[1].parse::<u32>().is_ok());
+    }
 }
