@@ -970,37 +970,37 @@ max_source_tokens = 50000
 install_source = "registry"
 
 [generation.extract_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-extract"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.map_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-map"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.learn_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-learn"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.create_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-create"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.review_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-review"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.test_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-test"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
@@ -1651,13 +1651,13 @@ max_source_tokens = 50000
 telemetry = true
 
 [generation.test_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-test"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.review_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-review"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
@@ -1828,7 +1828,7 @@ hello()
         let toml = format!(
             r#"
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "mock-model"
 api_key_env = "none"
 base_url = "{url}"
@@ -1977,7 +1977,7 @@ This content has no required sections and no code blocks.
         let toml = format!(
             r#"
 [llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "mock-model"
 api_key_env = "none"
 base_url = "{url}"

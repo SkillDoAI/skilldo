@@ -4123,8 +4123,12 @@ dependencies = []
 
     // --- set_redact_vars poisoned RwLock path ---
 
+    // Serialize tests that mutate the global REDACT_VARS RwLock
+    static REDACT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_set_redact_vars_handles_poisoned_lock() {
+        let _lock = REDACT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Exercise the `if let Ok(...)` error branch in set_redact_vars (line 25-26).
         // A poisoned RwLock returns Err on write() — set_redact_vars should silently
         // skip the update rather than panicking. After the test, clear_poison()
@@ -4161,7 +4165,7 @@ dependencies = []
 
     #[test]
     fn test_set_redact_vars_replaces_on_second_call() {
-        // RwLock allows replacement — second call overwrites the first.
+        let _lock = REDACT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_redact_vars(vec!["FIRST_CALL_VAR".to_string()]);
         set_redact_vars(vec!["SECOND_CALL_VAR".to_string(), "EXTRA".to_string()]);
         let vars = get_redact_vars_snapshot();
