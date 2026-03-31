@@ -120,7 +120,7 @@ pub enum Provider {
 }
 
 /// Security context hint for adjusting scan sensitivity.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SecurityContext {
     /// Standard security checks (default).

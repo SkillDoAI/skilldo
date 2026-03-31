@@ -473,7 +473,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         .with_container_config(config.generation.container.clone())
         .with_parallel_extraction(config.generation.parallel_extraction)
         .with_debug_stage_dir(debug_stage_files)
-        .with_security_context(config.generation.security_context.clone());
+        .with_security_context(config.generation.security_context);
 
     if let Some(ref skill) = existing_skill {
         generator = generator.with_existing_skill(skill.clone());
