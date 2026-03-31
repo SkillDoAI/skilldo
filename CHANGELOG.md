@@ -18,6 +18,8 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - **Linter `"api_key"` false positive** — legitimate API parameter name flagged as exfiltration target. Removed; real secrets covered by `.env`, `credentials`, `.ssh/`, etc.
 - **Python version floor** — test agent now detects installed Python version instead of hardcoding `>=3.8`, fixing dep resolution failures for SDKs requiring newer Python
 - **Windows `test_with_debug_stage_dir_creation_failure`** — used `/dev/null` path (Unix-only); now uses `NUL` on Windows
+- **Cargo workspace root support** — `skilldo generate` on a workspace root now finds the first member crate's name and version instead of failing with "No package name found"
+- **YARA SD-211 split** — binary bytes detection (critical) separated from executable extension references (high, prose-only). `.bin` removed as false positive for document-processing libraries
 
 ## 0.5.10
 
