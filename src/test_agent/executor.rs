@@ -14,6 +14,23 @@ use tracing::{debug, info, warn};
 use super::LanguageExecutor;
 use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 
+// Global because classify_result is called from multiple executor impls
+// that share no common context struct — threading would require trait changes.
+// RwLock (not OnceLock) so the list can be reset between runs.
+static REDACT_VARS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Set the list of env var names to redact from test output.
+/// Can be called multiple times — each call replaces the previous list.
+pub fn set_redact_vars(vars: Vec<String>) {
+    if let Ok(mut guard) = REDACT_VARS.write() {
+        *guard = vars;
+    }
+}
+
+fn get_redact_vars_snapshot() -> Vec<String> {
+    REDACT_VARS.read().map(|v| v.clone()).unwrap_or_default()
+}
+
 /// Check if a CLI tool is available in PATH.
 pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
     Command::new(cmd)
@@ -26,8 +43,31 @@ pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Redact env var values from output strings.
+/// Takes an explicit list of env var names from config — no heuristic guessing.
+/// Values are replaced with `***REDACTED***` to prevent leaking in CI logs.
+fn redact_secrets(text: &str, redact_vars: &[String]) -> String {
+    if redact_vars.is_empty() {
+        return text.to_string();
+    }
+    // Collect values and sort longest-first to avoid partial replacement
+    // when one secret is a substring of another.
+    let mut values: Vec<String> = redact_vars
+        .iter()
+        .filter_map(|var_name| std::env::var(var_name).ok())
+        .filter(|v| !v.is_empty())
+        .collect();
+    values.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    let mut result = text.to_string();
+    for value in &values {
+        result = result.replace(value.as_str(), "***REDACTED***");
+    }
+    result
+}
+
 /// Classify a command execution result into Pass/Fail/Timeout.
 /// `fail_output` extracts the error message from the output on failure.
+/// All output is redacted to prevent leaking secret env var values.
 fn classify_result(
     result: Result<Output>,
     timeout_secs: u64,
@@ -37,11 +77,14 @@ fn classify_result(
     match result {
         Ok(output) => {
             if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stdout = redact_secrets(
+                    &String::from_utf8_lossy(&output.stdout),
+                    &get_redact_vars_snapshot(),
+                );
                 debug!("{} code execution passed", lang);
                 Ok(ExecutionResult::Pass(stdout))
             } else {
-                let msg = fail_output(&output);
+                let msg = redact_secrets(&fail_output(&output), &get_redact_vars_snapshot());
                 debug!("{} code execution failed:\n{}", lang, msg);
                 Ok(ExecutionResult::Fail(msg))
             }
@@ -228,11 +271,13 @@ impl LanguageExecutor for PythonUvExecutor {
                 .join("\n")
         };
 
+        // Omit requires-python — let uv use whatever Python it discovers.
+        // This avoids version floor mismatches where we'd say >=3.8 but the
+        // SDK needs >=3.9.2. uv resolves for the actual installed version.
         let pyproject_content = format!(
             r#"[project]
 name = "skilldo-test"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = [
 {}
 ]
@@ -3251,7 +3296,6 @@ edition = "2021"
             r#"[project]
 name = "skilldo-test"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = [
 {}
 ]
@@ -3271,7 +3315,6 @@ dependencies = [
             r#"[project]
 name = "skilldo-test"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = [
 {}
 ]
@@ -3323,7 +3366,6 @@ version = "0.1.0"
         let pyproject = r#"[project]
 name = "my-lib"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = ["requests"]
 "#;
         std::fs::write(tmp.path().join("pyproject.toml"), pyproject).unwrap();
@@ -3880,7 +3922,6 @@ edition = "2021"
         let pyproject = r#"[project]
 name = "my-cool-lib"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = []
 "#;
         std::fs::write(tmp.path().join("pyproject.toml"), pyproject).unwrap();
@@ -4078,5 +4119,159 @@ dependencies = []
         assert_eq!(install_args[0], source);
         assert_eq!(install_args[1], "express");
         assert_eq!(install_args[2], "lodash");
+    }
+
+    // --- set_redact_vars poisoned RwLock path ---
+
+    // Serialize tests that mutate the global REDACT_VARS RwLock
+    static REDACT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_set_redact_vars_handles_poisoned_lock() {
+        let _lock = REDACT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Exercise the `if let Ok(...)` error branch in set_redact_vars (line 25-26).
+        // A poisoned RwLock returns Err on write() — set_redact_vars should silently
+        // skip the update rather than panicking. After the test, clear_poison()
+        // restores the lock so other tests are unaffected.
+
+        // Step 1: Poison the global lock by panicking while holding the write guard.
+        let _ = std::thread::spawn(|| {
+            let _guard = REDACT_VARS.write().unwrap();
+            panic!("intentional poison for coverage");
+        })
+        .join();
+
+        // Lock is now poisoned — write() returns Err.
+        assert!(
+            REDACT_VARS.write().is_err(),
+            "REDACT_VARS should be poisoned after thread panic"
+        );
+
+        // Step 2: set_redact_vars should handle the poisoned lock gracefully (no-op).
+        set_redact_vars(vec!["SHOULD_NOT_APPEAR".to_string()]);
+
+        // Step 3: get_redact_vars_snapshot also handles poison via unwrap_or_default.
+        let snapshot = get_redact_vars_snapshot();
+        assert!(
+            !snapshot.contains(&"SHOULD_NOT_APPEAR".to_string()),
+            "poisoned lock should prevent set_redact_vars from writing"
+        );
+
+        // Step 4: Restore the lock so other tests are unaffected.
+        REDACT_VARS.clear_poison();
+    }
+
+    // --- set_redact_vars duplicate-call warning path ---
+
+    #[test]
+    fn test_set_redact_vars_replaces_on_second_call() {
+        let _lock = REDACT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_redact_vars(vec!["FIRST_CALL_VAR".to_string()]);
+        set_redact_vars(vec!["SECOND_CALL_VAR".to_string(), "EXTRA".to_string()]);
+        let vars = get_redact_vars_snapshot();
+        assert_eq!(vars.len(), 2);
+        assert!(vars.contains(&"SECOND_CALL_VAR".to_string()));
+        assert!(vars.contains(&"EXTRA".to_string()));
+    }
+
+    // --- redact_secrets direct tests ---
+    // These tests mutate process-global env vars — serialize with a mutex.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_redact_secrets_empty_vars_returns_original() {
+        let text = "some output with SECRET_VALUE in it";
+        let result = redact_secrets(text, &[]);
+        assert_eq!(
+            result, text,
+            "empty redact list should return original text"
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_replaces_env_var_value() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let var_name = "SKILLDO_TEST_REDACT_SECRET_ABC";
+        let secret_value = "super-secret-token-12345";
+        std::env::set_var(var_name, secret_value);
+
+        let text = format!(
+            "connection string: postgres://user:{}@host/db",
+            secret_value
+        );
+        let redact_list = vec![var_name.to_string()];
+        let result = redact_secrets(&text, &redact_list);
+
+        assert!(
+            !result.contains(secret_value),
+            "secret value should be redacted"
+        );
+        assert!(
+            result.contains("***REDACTED***"),
+            "redacted placeholder should be present"
+        );
+        assert!(
+            result.contains("postgres://user:"),
+            "non-secret parts should be preserved"
+        );
+
+        // Clean up
+        std::env::remove_var(var_name);
+    }
+
+    #[test]
+    fn test_redact_secrets_skips_unset_env_vars() {
+        let var_name = "SKILLDO_TEST_DEFINITELY_UNSET_VAR_XYZ";
+        // Ensure it's not set
+        std::env::remove_var(var_name);
+
+        let text = "output with no secrets";
+        let redact_list = vec![var_name.to_string()];
+        let result = redact_secrets(text, &redact_list);
+
+        assert_eq!(result, text, "unset var should leave text unchanged");
+    }
+
+    #[test]
+    fn test_redact_secrets_skips_empty_env_var_value() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let var_name = "SKILLDO_TEST_EMPTY_VAR_DEF";
+        std::env::set_var(var_name, "");
+
+        let text = "output text here";
+        let redact_list = vec![var_name.to_string()];
+        let result = redact_secrets(text, &redact_list);
+
+        assert_eq!(
+            result, text,
+            "empty env var value should not cause replacement"
+        );
+
+        std::env::remove_var(var_name);
+    }
+
+    #[test]
+    fn test_redact_secrets_multiple_vars_and_occurrences() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let var1 = "SKILLDO_TEST_REDACT_KEY_1";
+        let var2 = "SKILLDO_TEST_REDACT_KEY_2";
+        std::env::set_var(var1, "key-aaa");
+        std::env::set_var(var2, "key-bbb");
+
+        let text = "auth: key-aaa, token: key-bbb, retry: key-aaa";
+        let redact_list = vec![var1.to_string(), var2.to_string()];
+        let result = redact_secrets(text, &redact_list);
+
+        assert!(!result.contains("key-aaa"), "var1 value should be redacted");
+        assert!(!result.contains("key-bbb"), "var2 value should be redacted");
+        // "key-aaa" appears twice — both should be replaced
+        assert_eq!(
+            result.matches("***REDACTED***").count(),
+            3,
+            "all three occurrences should be redacted"
+        );
+
+        std::env::remove_var(var1);
+        std::env::remove_var(var2);
     }
 }

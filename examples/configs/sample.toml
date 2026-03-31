@@ -1,0 +1,90 @@
+# ============================================================================
+# Skilldo Sample Configuration
+# ============================================================================
+# Copy this file to your project as `skilldo.toml` and customize.
+# Full docs: https://github.com/SkillDoAI/skilldo/tree/main/docs
+# ============================================================================
+
+# ── LLM Provider ──────────────────────────────────────────────
+[llm]
+# Provider type: "anthropic", "openai", "chatgpt", "gemini", "openai-compatible", or "cli"
+provider_type = "anthropic"
+
+# Model name (provider-specific)
+model = "claude-sonnet-4-6"
+
+# Environment variable containing the API key.
+# Set to "none" for local models (Ollama) that don't need a key.
+api_key_env = "ANTHROPIC_API_KEY"
+
+# Base URL — only needed for openai-compatible, Bedrock, or Vertex AI.
+# If the URL ends in /responses, the Responses API format is used automatically.
+# base_url = "http://localhost:11434/v1"
+
+# Override max output tokens (default varies by provider).
+# Set to 0 to let the provider decide.
+# max_tokens = 8192
+
+# Network retry settings
+# network_retries = 10
+# retry_delay = 120
+# request_timeout_secs = 120
+
+# Extra HTTP headers for every LLM request
+# extra_headers = ["ChatGPT-Account-ID: acct_abc123"]
+
+# ── Generation Settings ───────────────────────────────────────
+[generation]
+# Max retries for the generate→validate loop (default: 10)
+max_retries = 10
+
+# Run extract/map/learn in parallel (default: true)
+parallel_extraction = true
+
+# Enable test code validation (default: true)
+enable_test = true
+
+# Test mode: "thorough" (all patterns), "adaptive", or "minimal" (1 pattern)
+test_mode = "thorough"
+
+# Enable review validation (default: true)
+enable_review = true
+
+# Security context — set to "api-client" for API client SDKs that discuss
+# credentials, auth tokens, and API keys (suppresses false positives).
+# security_context = "api-client"
+
+# Env var names to redact from test output/logs (prevents CI leaks).
+# redact_env_vars = ["MY_API_KEY", "MY_SECRET_TOKEN"]
+
+# Language override (skips auto-detection).
+# Supported: python, javascript/typescript, rust, go, java
+# language = "python"
+
+# Repo-specific instructions for the create stage.
+# custom_instructions = """
+# Use keyword arguments for all API calls.
+# The default strategy is HI_RES, not auto.
+# """
+
+# ── Per-Stage LLM Overrides (Optional) ────────────────────────
+# Run individual stages on different providers/models.
+# Each is optional — if not set, the stage uses [llm].
+#
+# [generation.review_llm]
+# provider_type = "anthropic"
+# model = "claude-haiku-4-5-20251001"
+# api_key_env = "ANTHROPIC_API_KEY"
+#
+# Also available: extract_llm, map_llm, learn_llm, create_llm, test_llm
+
+# ── Container / Execution Settings ────────────────────────────
+[generation.container]
+# Container runtime: "podman" or "docker" (auto-detected by default)
+# runtime = "docker"
+
+# Test execution timeout in seconds (default: 60)
+timeout = 60
+
+# Library install source: "registry" (default), "local-install", "local-mount"
+# install_source = "registry"

@@ -506,7 +506,7 @@ pub struct GenerationConfig {
     #[serde(default)]
     pub language: Option<String>,
 
-    /// Max retries for create -> lint/test feedback loop (default: 5).
+    /// Max retries for create -> lint/test feedback loop (default: 10).
     /// Each retry sends lint/test errors back to the LLM for correction.
     #[serde(default = "default_max_retries")]
     pub max_retries: usize,
@@ -533,6 +533,21 @@ pub struct GenerationConfig {
     /// Enable security scan (YARA + unicode + injection) on generated output (default: true)
     #[serde(default = "default_true")]
     pub enable_security_scan: bool,
+
+    /// Env var names whose values should be redacted from test output/logs.
+    /// Values are replaced with ***REDACTED*** to prevent leaking in CI.
+    /// Example: ["UNSTRUCTURED_API_KEY", "MY_SECRET_TOKEN"]
+    #[serde(default)]
+    pub redact_env_vars: Vec<String>,
+
+    /// Security context hint for the library type. Adjusts security scan sensitivity.
+    /// Omit for standard security checks (default behavior).
+    /// - "api-client": relaxes rules about API key/credential discussion in prose,
+    ///   suppresses SD-202 (credential store access). Use for API client SDKs.
+    ///
+    /// Invalid values are rejected at config parse time.
+    #[serde(default, deserialize_with = "deserialize_security_context")]
+    pub security_context: Option<String>,
 
     /// Max retries for review -> create feedback loop (default: 10)
     #[serde(default = "default_review_max_retries")]
@@ -699,12 +714,28 @@ fn default_true() -> bool {
     true
 }
 
+fn deserialize_security_context<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    if let Some(ref ctx) = value {
+        if ctx != "api-client" {
+            return Err(serde::de::Error::custom(format!(
+                "invalid security_context '{}' — valid values: \"api-client\"",
+                ctx
+            )));
+        }
+    }
+    Ok(value)
+}
+
 fn default_test_mode() -> String {
     "thorough".to_string()
 }
 
 fn default_max_retries() -> usize {
-    5
+    10
 }
 
 fn default_max_source_tokens() -> usize {
@@ -989,6 +1020,8 @@ impl Default for GenerationConfig {
             version_from: None,
             telemetry: false,
             container: ContainerConfig::default(),
+            redact_env_vars: Vec::new(),
+            security_context: None,
         }
     }
 }
@@ -1003,7 +1036,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.llm.provider, Provider::Anthropic);
         assert_eq!(config.llm.api_key_env, None); // Inferred from provider
-        assert_eq!(config.generation.max_retries, 5);
+        assert_eq!(config.generation.max_retries, 10);
         assert!(!config.prompts.override_prompts);
     }
 
@@ -1032,6 +1065,8 @@ mod tests {
         assert!(gen.review_llm.is_none());
         assert!(gen.test_llm.is_none());
         assert!(gen.version_from.is_none());
+        assert!(gen.redact_env_vars.is_empty());
+        assert!(gen.security_context.is_none());
     }
 
     #[test]
@@ -1151,6 +1186,8 @@ mod tests {
             version_from: None,
             telemetry: false,
             container: ContainerConfig::default(),
+            redact_env_vars: Vec::new(),
+            security_context: None,
         };
         assert_eq!(
             gen.get_test_mode(),
@@ -2546,6 +2583,56 @@ timeout = 120
             "local-mount".parse::<InstallSource>().unwrap(),
             InstallSource::LocalMount
         );
+    }
+
+    #[test]
+    fn test_security_context_valid_api_client() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+
+[generation]
+security_context = "api-client"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.generation.security_context,
+            Some("api-client".to_string())
+        );
+    }
+
+    #[test]
+    fn test_security_context_invalid_value_rejected() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+
+[generation]
+security_context = "invalid-context"
+"#;
+        let result: std::result::Result<Config, _> = toml::from_str(toml_str);
+        assert!(
+            result.is_err(),
+            "invalid security_context should be rejected"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid security_context"),
+            "error should mention invalid security_context, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_security_context_omitted_is_none() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.generation.security_context, None);
     }
 
     #[cfg(unix)]

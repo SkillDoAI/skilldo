@@ -73,3 +73,16 @@ Three-layer scanning runs during the review stage:
 YARA rules are evaluated at runtime via [boreal](https://github.com/vthib/boreal), a pure Rust YARA engine. All SkillDo and Cisco rules ship in `rules/`.
 
 Security scanning is code-block-aware: prose-only rules skip matches inside fenced code blocks, since code examples legitimately contain patterns like `os.remove()` or `shutil.rmtree()`.
+
+For API client SDKs that inherently discuss API keys and credentials, set `security_context = "api-client"` in the config to suppress SD-202 (credential store access) false positives.
+
+## Model Communication
+
+The model can communicate uncertainty and conflicts back to the pipeline via HTML comments:
+
+- `<!-- SKILLDO-CONFLICT: description -->` — conflicts between custom_instructions and source data
+- `<!-- SKILLDO-UNVERIFIED: description -->` — APIs or behaviors the model discovered but couldn't fully verify from the provided source code
+
+All `<!-- SKILLDO-* -->` comments are stripped from the final output and logged for debugging. CONFLICT notes log at `info` level, UNVERIFIED notes at `warn`. Use `RUST_LOG=info` or `RUST_LOG=debug` to see them.
+
+This mechanism encourages accuracy over completeness — the model is instructed that a hallucinated API detail is 3x worse than a missing one, and to flag uncertainty rather than guess.

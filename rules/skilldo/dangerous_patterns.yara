@@ -242,12 +242,27 @@ rule SD_211_binary_content
         id = "SD-211"
         severity = "critical"
         category = "obfuscation"
-        description = "Binary or executable content embedded in skill file"
+        description = "Actual binary/executable bytes embedded in skill file (ELF or PE headers)"
 
     strings:
         $elf = { 7F 45 4C 46 }
         $pe = { 4D 5A 90 00 }
-        $exe_ext = /\.(exe|dll|so|dylib|bin|scr|bat|cmd|ps1|vbs|wsf)\b/i
+
+    condition:
+        any of them
+}
+
+rule SD_212_executable_extension_reference
+{
+    meta:
+        id = "SD-212"
+        severity = "high"
+        category = "obfuscation"
+        description = "References to executable file extensions in prose"
+        prose_only = true
+
+    strings:
+        $exe_ext = /\.(exe|dll|so|dylib|scr|bat|cmd|ps1|vbs|wsf)\b/i
 
     condition:
         any of them

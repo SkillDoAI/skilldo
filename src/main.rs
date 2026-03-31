@@ -254,6 +254,8 @@ enum ConfigAction {
         #[arg(long)]
         strict: bool,
     },
+    /// Print a fully documented sample config to stdout
+    Sample,
 }
 
 #[derive(Subcommand)]
@@ -385,6 +387,9 @@ async fn main() -> Result<()> {
             ConfigAction::Check { config, strict } => {
                 cli::config_check::run(config, strict)?;
             }
+            ConfigAction::Sample => {
+                println!("{}", cli::config_sample::sample_config_text());
+            }
         },
         Commands::ShowPrompts { language, stage } => {
             cli::show_prompts::run(&language, stage.as_deref())?;
@@ -471,7 +476,9 @@ mod tests {
             let Commands::Config { action } = $cli.command else {
                 panic!("Expected Config command");
             };
-            let ConfigAction::Check { $field, .. } = action;
+            let ConfigAction::Check { $field, .. } = action else {
+                panic!("Expected Check action");
+            };
             $body
         };
     }
@@ -590,7 +597,9 @@ mod tests {
         let Commands::Config { action } = cli.command else {
             panic!("Expected Config command");
         };
-        let ConfigAction::Check { strict, .. } = action;
+        let ConfigAction::Check { strict, .. } = action else {
+            panic!("Expected Check action");
+        };
         assert!(strict);
     }
 
@@ -601,6 +610,15 @@ mod tests {
         assert_config_check!(cli, |config| {
             assert_eq!(config.unwrap(), "my.toml");
         });
+    }
+
+    #[test]
+    fn test_parse_config_sample() {
+        let cli = Cli::try_parse_from(["skilldo", "config", "sample"]).unwrap();
+        let Commands::Config { action } = cli.command else {
+            panic!("Expected Config command");
+        };
+        assert!(matches!(action, ConfigAction::Sample));
     }
 
     #[test]

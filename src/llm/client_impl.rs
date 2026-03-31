@@ -345,10 +345,10 @@ impl LlmClient for OpenAIClient {
             self.base_url, self.model
         );
 
-        // Only append /chat/completions when the base URL doesn't already
-        // specify a concrete endpoint (e.g. /v1/responses).
+        // Resolve endpoint URL and detect Responses API format.
         let base = self.base_url.trim_end_matches('/');
-        let url = if base.ends_with("/chat/completions") {
+        let is_responses_api = base.ends_with("/responses");
+        let url = if base.ends_with("/chat/completions") || base.ends_with("/responses") {
             base.to_string()
         } else if base.contains("/v1/") {
             // Path continues past /v1/ — user specified a full endpoint URL
@@ -357,13 +357,38 @@ impl LlmClient for OpenAIClient {
             format!("{}/chat/completions", base)
         };
 
+        // Build request body — Responses API uses a different format than Chat Completions.
+        let body = if is_responses_api {
+            let responses_req = ResponsesRequest {
+                model: self.model.clone(),
+                instructions: "Follow the user's instructions precisely.".to_string(),
+                input: vec![ResponsesInputMessage {
+                    msg_type: "message".to_string(),
+                    role: "user".to_string(),
+                    content: vec![ResponsesInputContent {
+                        content_type: "input_text".to_string(),
+                        text: prompt.to_string(),
+                    }],
+                }],
+                max_output_tokens: if self.max_tokens == 0 {
+                    None
+                } else {
+                    Some(self.max_tokens)
+                },
+                store: false,
+            };
+            serde_json::to_value(&responses_req).context("Failed to serialize Responses request")?
+        } else {
+            serde_json::to_value(&request).context("Failed to serialize request")?
+        };
+
         // Merge extra_body fields into the request JSON.
         // Intentional: extra_body may override core fields (e.g., temperature).
         // This is user-controlled via TOML config, not untrusted input.
         let body = if self.extra_body.is_empty() {
-            serde_json::to_value(&request).context("Failed to serialize request")?
+            body
         } else {
-            let mut body = serde_json::to_value(&request).context("Failed to serialize request")?;
+            let mut body = body;
             if let serde_json::Value::Object(ref mut map) = body {
                 for (key, value) in &self.extra_body {
                     map.insert(key.clone(), value.clone());
@@ -404,29 +429,50 @@ impl LlmClient for OpenAIClient {
             bail!("OpenAI API error {}: {}", status, error_text);
         }
 
-        let api_response: OpenAIResponse = response
-            .json()
-            .await
-            .context("Failed to parse OpenAI API response")?;
+        // Parse response — Responses API has a different response shape.
+        if is_responses_api {
+            let api_response: ResponsesResponse = response
+                .json()
+                .await
+                .context("Failed to parse Responses API response")?;
 
-        log_usage(&self.provider_label, &self.model, &api_response.usage);
+            log_usage(&self.provider_label, &self.model, &api_response.usage);
 
-        let choice = api_response
-            .choices
-            .first()
-            .context("No choices in OpenAI response")?;
+            let text: String = api_response
+                .output
+                .iter()
+                .filter_map(|o| o.content.as_ref())
+                .flatten()
+                .filter_map(|c| c.text.as_deref())
+                .collect();
+            if text.is_empty() {
+                bail!("Responses API returned no content")
+            }
+            Ok(text)
+        } else {
+            let api_response: OpenAIResponse = response
+                .json()
+                .await
+                .context("Failed to parse OpenAI API response")?;
 
-        match &choice.message.content {
-            Some(content) if !content.is_empty() => Ok(content.clone()),
-            _ => {
-                // Reasoning model exhausted max_tokens on reasoning before generating content
-                if choice.message.reasoning.is_some() {
-                    bail!(
-                        "Reasoning model returned no content (reasoning exhausted max_tokens). \
-                         Increase max_tokens in your config."
-                    )
-                } else {
-                    bail!("OpenAI response contained no content")
+            log_usage(&self.provider_label, &self.model, &api_response.usage);
+
+            let choice = api_response
+                .choices
+                .first()
+                .context("No choices in OpenAI response")?;
+
+            match &choice.message.content {
+                Some(content) if !content.is_empty() => Ok(content.clone()),
+                _ => {
+                    if choice.message.reasoning.is_some() {
+                        bail!(
+                            "Reasoning model returned no content (reasoning exhausted max_tokens). \
+                             Increase max_tokens in your config."
+                        )
+                    } else {
+                        bail!("OpenAI response contained no content")
+                    }
                 }
             }
         }
@@ -1258,6 +1304,22 @@ mod tests {
     }
 
     #[test]
+    fn test_openai_url_detects_responses_api() {
+        // /v1/responses endpoint → should use Responses API format
+        let base = "https://inference-api.nvidia.com/v1/responses";
+        let trimmed = base.trim_end_matches('/');
+        assert!(trimmed.ends_with("/responses"));
+        // Chat completions endpoint → should NOT use Responses API format
+        let base2 = "https://api.openai.com/v1/chat/completions";
+        let trimmed2 = base2.trim_end_matches('/');
+        assert!(!trimmed2.ends_with("/responses"));
+        // Bare /v1 → should NOT use Responses API format
+        let base3 = "https://api.openai.com/v1";
+        let trimmed3 = base3.trim_end_matches('/');
+        assert!(!trimmed3.ends_with("/responses"));
+    }
+
+    #[test]
     fn test_chatgpt_client_creation_backend() {
         let client = ChatGPTClient::new(
             "key".to_string(),
@@ -1711,5 +1773,37 @@ mod tests {
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["max_output_tokens"], 4096);
+    }
+
+    #[tokio::test]
+    async fn test_openai_responses_api_end_to_end() {
+        // Exercises the Responses API parsing branch in OpenAIClient::complete()
+        // (filter_map chains on ResponsesResponse.output).
+        let server = llmposter::ServerBuilder::new()
+            .fixture(llmposter::Fixture::new().respond_with_content("hello from responses api"))
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-test".to_string(),
+            format!("{}/v1/responses", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("say hello").await;
+        assert!(
+            result.is_ok(),
+            "Responses API call failed: {:?}",
+            result.err()
+        );
+        let text = result.unwrap();
+        assert!(
+            text.contains("hello from responses api"),
+            "Expected response content, got: {text}"
+        );
     }
 }

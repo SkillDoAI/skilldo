@@ -42,7 +42,9 @@ model = "claude-sonnet-4-6"
 # Set to "none" for local models (Ollama) that don't need a key.
 api_key_env = "ANTHROPIC_API_KEY"
 
-# Base URL — only needed for openai-compatible providers
+# Base URL — for openai-compatible, Anthropic (Bedrock), or Gemini (Vertex AI/proxies).
+# If the URL ends in /responses, the Responses API format is used automatically
+# instead of Chat Completions (e.g., NVIDIA inference endpoints).
 # base_url = "http://localhost:11434/v1"
 
 # Override max output tokens per LLM request.
@@ -73,8 +75,8 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 # ── Generation Settings ───────────────────────────────────────
 [generation]
-# Max retry attempts for the generate→validate loop (default: 5)
-max_retries = 5
+# Max retry attempts for the generate→validate loop (default: 10)
+max_retries = 10
 
 # Run extract/map/learn in parallel (default: true). CLI: --no-parallel
 parallel_extraction = true
@@ -116,6 +118,17 @@ enable_review = true
 # Set to false to skip security scanning (e.g., for trusted internal repos)
 # enable_security_scan = true
 
+# Security context hint — adjusts scan sensitivity for the library type.
+# "api-client": relaxes rules about API key/credential discussion in prose and
+#   suppresses SD-202 (credential store access). Use for API client SDKs that
+#   inherently discuss auth tokens, API keys, and credential configuration.
+# Omit for standard libraries (default behavior).
+# security_context = "api-client"
+
+# Env var names whose values should be redacted from test output and logs.
+# Prevents leaking secrets in CI. Values are replaced with ***REDACTED***.
+# redact_env_vars = ["UNSTRUCTURED_API_KEY", "MY_SECRET_TOKEN"]
+
 # Output path override (default: "SKILL.md" in CWD)
 # output = "SKILL.md"
 
@@ -123,6 +136,7 @@ enable_review = true
 # input = "existing-SKILL.md"
 
 # Language override (skips auto-detection)
+# Supported: python, javascript (also typescript/ts/js), rust, go, java
 # language = "python"
 
 # ── Container / Execution Settings ────────────────────────────

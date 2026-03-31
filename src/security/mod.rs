@@ -174,12 +174,39 @@ impl ScanReport {
             .filter(|f| f.severity == severity)
             .count()
     }
+
+    /// Recalculate score from current findings.
+    fn recalculate_score(&mut self) {
+        let deductions: i32 = self.findings.iter().map(|f| f.severity.deduction()).sum();
+        self.score = (100i32 - deductions).clamp(0, 100) as u8;
+    }
 }
 
 /// Scan a SKILL.md content string for security issues.
 ///
 /// Runs all three detection layers and returns a consolidated report:
 /// YARA rules, unicode analysis, and injection analysis.
+/// Scan with optional security context. "api-client" suppresses rules that
+/// fire on legitimate API client SDK content (credential discussion, auth patterns).
+pub fn scan_skill_with_context(content: &str, security_context: Option<&str>) -> ScanReport {
+    let mut report = scan_skill(content);
+    if security_context == Some("api-client") {
+        // Suppress SD-202 (credential store access) — API client SDKs legitimately
+        // discuss API keys, auth tokens, and credential configuration.
+        let before = report.findings.len();
+        report.findings.retain(|f| f.rule_id != "SD-202");
+        let suppressed = before - report.findings.len();
+        if suppressed > 0 {
+            tracing::info!(
+                "Security context 'api-client': suppressed {} SD-202 finding(s)",
+                suppressed
+            );
+            report.recalculate_score();
+        }
+    }
+    report
+}
+
 pub fn scan_skill(content: &str) -> ScanReport {
     let mut findings = Vec::new();
 
@@ -206,12 +233,9 @@ pub fn scan_skill(content: &str) -> ScanReport {
     // Deduplicate cross-scanner findings by (rule_id, line)
     dedup_findings(&mut findings);
 
-    // Score: start at 100, deduct per finding weighted by severity
-    let deductions: i32 = findings.iter().map(|f| f.severity.deduction()).sum();
-
-    let score = (100i32 - deductions).clamp(0, 100) as u8;
-
-    ScanReport { findings, score }
+    let mut report = ScanReport { findings, score: 0 };
+    report.recalculate_score();
+    report
 }
 
 #[cfg(test)]
@@ -890,5 +914,203 @@ print(response.json())
         }];
         dedup_findings(&mut findings);
         assert_eq!(findings.len(), 1);
+    }
+
+    // --- scan_skill_with_context tests ---
+
+    /// Content with SD-202 trigger strings in prose (outside code blocks).
+    /// ".ssh/" and ".aws/" trigger SD_202_credential_file_access.
+    const SD202_PROSE_CONTENT: &str = "\
+---
+name: ssh-manager
+version: \"1.0\"
+---
+
+# SSH Manager
+
+Configure your .ssh/ directory and .aws/ credentials for remote access.
+";
+
+    #[test]
+    fn scan_skill_with_context_none_matches_scan_skill() {
+        let base = scan_skill(SD202_PROSE_CONTENT);
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, None);
+
+        assert_eq!(base.score, ctx.score);
+        assert_eq!(base.findings.len(), ctx.findings.len());
+        for (b, c) in base.findings.iter().zip(ctx.findings.iter()) {
+            assert_eq!(b.rule_id, c.rule_id);
+            assert_eq!(b.line, c.line);
+        }
+    }
+
+    #[test]
+    fn scan_skill_with_context_api_client_suppresses_sd202() {
+        // Confirm baseline has SD-202 findings
+        let base = scan_skill(SD202_PROSE_CONTENT);
+        let sd202_count = base
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "SD-202")
+            .count();
+        assert!(
+            sd202_count > 0,
+            "Test content must trigger SD-202 in baseline scan"
+        );
+
+        // With "api-client" context, SD-202 should be suppressed
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+        assert!(
+            !ctx.findings.iter().any(|f| f.rule_id == "SD-202"),
+            "SD-202 should be suppressed with api-client context"
+        );
+        assert!(
+            ctx.findings.len() < base.findings.len(),
+            "api-client context should have fewer findings"
+        );
+    }
+
+    #[test]
+    fn scan_skill_with_context_api_client_recalculates_score() {
+        let base = scan_skill(SD202_PROSE_CONTENT);
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+
+        // Score should be recalculated without the SD-202 deductions
+        let expected_deductions: i32 = ctx.findings.iter().map(|f| f.severity.deduction()).sum();
+        let expected_score = (100i32 - expected_deductions).clamp(0, 100) as u8;
+        assert_eq!(
+            ctx.score, expected_score,
+            "Score must be recalculated after suppressing SD-202"
+        );
+        // With SD-202 (High = 15pt deduction) removed, score should be higher
+        assert!(
+            ctx.score > base.score,
+            "Score with api-client context ({}) should be higher than baseline ({})",
+            ctx.score,
+            base.score
+        );
+    }
+
+    #[test]
+    fn scan_skill_with_context_unknown_context_matches_none() {
+        let none_report = scan_skill_with_context(SD202_PROSE_CONTENT, None);
+        let unknown_report = scan_skill_with_context(SD202_PROSE_CONTENT, Some("unknown-context"));
+
+        assert_eq!(none_report.score, unknown_report.score);
+        assert_eq!(none_report.findings.len(), unknown_report.findings.len());
+        // SD-202 should NOT be suppressed for unknown contexts
+        assert!(
+            unknown_report
+                .findings
+                .iter()
+                .any(|f| f.rule_id == "SD-202"),
+            "SD-202 should not be suppressed for unknown context"
+        );
+    }
+
+    #[test]
+    fn scan_skill_with_context_api_client_score_becomes_100_when_only_sd202() {
+        // Content that triggers SD-202 and no other findings.
+        // After api-client suppression, findings should be empty and score should be 100.
+        // This directly exercises the `recalculate_score()` call at the suppression site.
+        let content = "\
+---
+name: cloud-auth
+version: \"1.0\"
+---
+
+# Cloud Auth
+
+Access the .ssh/ key store.
+";
+        let base = scan_skill(content);
+        // Confirm the only findings are SD-202
+        let non_sd202: Vec<_> = base
+            .findings
+            .iter()
+            .filter(|f| f.rule_id != "SD-202")
+            .collect();
+        assert!(non_sd202.is_empty(), "Expected only SD-202 findings");
+        assert!(
+            !base.findings.is_empty(),
+            "Expected at least one SD-202 finding"
+        );
+        assert!(
+            base.score < 100,
+            "Baseline score should be < 100 due to SD-202"
+        );
+
+        // With api-client context, all findings suppressed → recalculate_score → 100
+        let ctx = scan_skill_with_context(content, Some("api-client"));
+        assert!(ctx.findings.is_empty(), "All findings should be suppressed");
+        assert_eq!(
+            ctx.score, 100,
+            "Score must be 100 after recalculate_score with no findings"
+        );
+    }
+
+    #[test]
+    fn recalculate_score_resets_to_100_when_findings_empty() {
+        let mut report = ScanReport {
+            findings: vec![Finding {
+                rule_id: "SD-999".to_string(),
+                severity: Severity::High,
+                category: Category::CredentialAccess,
+                message: "test".to_string(),
+                line: 1,
+                snippet: String::new(),
+            }],
+            score: 0,
+        };
+        report.recalculate_score();
+        assert_eq!(report.score, 85, "High = 15pt deduction → 100 - 15 = 85");
+
+        report.findings.clear();
+        report.recalculate_score();
+        assert_eq!(report.score, 100, "No findings → score must be 100");
+    }
+
+    #[test]
+    fn recalculate_score_clamps_at_zero() {
+        let findings: Vec<Finding> = (0..10)
+            .map(|i| Finding {
+                rule_id: format!("SD-{i}"),
+                severity: Severity::Critical,
+                category: Category::CodeExecution,
+                message: "test".to_string(),
+                line: 1,
+                snippet: String::new(),
+            })
+            .collect();
+        let mut report = ScanReport {
+            findings,
+            score: 100,
+        };
+        report.recalculate_score();
+        assert_eq!(report.score, 0, "Massive deductions should clamp at 0");
+    }
+
+    #[test]
+    fn scan_skill_with_context_api_client_recalculate_verified_via_score_delta() {
+        // Use SD202_PROSE_CONTENT which triggers SD-202 AND other findings.
+        // After api-client suppression, SD-202 is removed but others remain.
+        // The score delta must exactly equal the SD-202 deductions removed.
+        let base = scan_skill(SD202_PROSE_CONTENT);
+        let sd202_deductions: i32 = base
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "SD-202")
+            .map(|f| f.severity.deduction())
+            .sum();
+        assert!(sd202_deductions > 0, "SD-202 must produce deductions");
+
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+        // Score delta should exactly match the removed SD-202 deductions,
+        // proving recalculate_score ran and recomputed from remaining findings.
+        let delta = ctx.score as i32 - base.score as i32;
+        assert_eq!(
+            delta, sd202_deductions,
+            "Score delta ({delta}) must equal removed SD-202 deductions ({sd202_deductions})"
+        );
     }
 }

@@ -460,40 +460,54 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         .with_review_max_retries(config.generation.review_max_retries)
         .with_container_config(config.generation.container.clone())
         .with_parallel_extraction(config.generation.parallel_extraction)
-        .with_debug_stage_dir(debug_stage_files);
+        .with_debug_stage_dir(debug_stage_files)
+        .with_security_context(config.generation.security_context.clone());
 
     if let Some(ref skill) = existing_skill {
         generator = generator.with_existing_skill(skill.clone());
     }
 
+    // Set up secret redaction for test agent output.
+    crate::test_agent::executor::set_redact_vars(config.generation.redact_env_vars.clone());
+
     let output_result = generator.generate(&collected_data).await?;
 
-    // Write output — use NamedTempFile + persist() for cross-platform atomic
-    // replacement (handles Windows where fs::rename fails if dest exists).
+    // Write output — skip entirely in dry-run (non-destructive: no files written).
     let output_path = Path::new(&output);
     let output_dir = output_path.parent().unwrap_or(Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(output_dir)?;
-    std::io::Write::write_all(&mut tmp, output_result.skill_md.as_bytes())?;
+    if !dry_run {
+        let mut tmp = tempfile::NamedTempFile::new_in(output_dir)?;
+        std::io::Write::write_all(&mut tmp, output_result.skill_md.as_bytes())?;
 
-    // Only promote to final path if the run succeeded (or --best-effort)
-    if !output_result.has_unresolved_errors || best_effort {
-        tmp.persist(output_path).map_err(|e| e.error)?;
-        info!("✓ Generated SKILL.md written to {}", output);
+        // Only promote to final path if the run succeeded (or --best-effort)
+        // Clean up stale temp files from previous failed runs before writing new output
         cleanup_stale_tmp_files(output_dir, output_path);
-    } else {
-        // Keep the temp file around for inspection instead of auto-deleting
-        let kept_path = tmp.into_temp_path().keep().map_err(|e| e.error)?;
-        info!(
-            "⚠ Output written to {} (unresolved errors — original preserved)",
-            kept_path.display()
-        );
+
+        if !output_result.has_unresolved_errors || best_effort {
+            tmp.persist(output_path).map_err(|e| e.error)?;
+            info!("✓ Generated SKILL.md written to {}", output);
+        } else {
+            // Keep the temp file around for inspection instead of auto-deleting
+            let kept_path = tmp.into_temp_path().keep().map_err(|e| e.error)?;
+            info!(
+                "⚠ Output written to {} (unresolved errors — original preserved)",
+                kept_path.display()
+            );
+        }
     }
 
-    // Lint the generated file
-    info!("Running linter...");
-    let linter = crate::lint::SkillLinter::new();
-    let issues = linter.lint(&output_result.skill_md)?;
-    linter.print_issues(&issues);
+    // Lint the generated file (skip in dry-run — mock output produces false warnings)
+    let issues: Vec<crate::lint::LintIssue> = if dry_run {
+        info!("Dry run complete — skipping lint (mock LLM output is not real content)");
+        info!("Validated: file collection, config loading, language detection, provider setup");
+        Vec::new()
+    } else {
+        info!("Running linter...");
+        let linter = crate::lint::SkillLinter::new();
+        let issues = linter.lint(&output_result.skill_md)?;
+        linter.print_issues(&issues);
+        issues
+    };
 
     // Surface unresolved review warnings to the user
     if !output_result.unresolved_warnings.is_empty() {
@@ -506,8 +520,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         println!("Consider adjusting your review prompts via the review_custom config option.");
     }
 
-    // Record telemetry (non-fatal — warn on failure)
-    if config.generation.telemetry {
+    // Record telemetry (non-fatal — warn on failure). Skip in dry-run.
+    if config.generation.telemetry && !dry_run {
         let duration = start.elapsed();
         let test_llm = config.generation.test_llm.as_ref();
         let review_llm = config.generation.review_llm.as_ref();
@@ -644,10 +658,8 @@ setup(name="testpkg", version="1.0.0")
         })
         .await;
         assert!(result.is_ok(), "dry run failed: {:?}", result.err());
-        assert!(output.exists(), "SKILL.md should be written");
-        let content = fs::read_to_string(&output).unwrap();
-        assert!(content.contains("---"), "should contain frontmatter");
-        assert!(!content.is_empty());
+        // Dry-run is non-destructive — no files should be written
+        assert!(!output.exists(), "dry-run should not write files");
     }
 
     #[tokio::test]
@@ -668,7 +680,8 @@ setup(name="testpkg", version="1.0.0")
         })
         .await;
         assert!(result.is_ok());
-        assert!(output.exists());
+        // dry-run — no file written
+        assert!(!output.exists(), "dry-run should not write files");
     }
 
     #[tokio::test]
@@ -957,37 +970,37 @@ max_source_tokens = 50000
 install_source = "registry"
 
 [generation.extract_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-extract"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.map_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-map"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.learn_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-learn"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.create_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-create"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.review_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-review"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.test_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-test"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
@@ -1124,10 +1137,8 @@ install_source = "registry"
             "custom output path failed: {:?}",
             result.err()
         );
-        assert!(
-            output.exists(),
-            "SKILL.md should exist at custom output path"
-        );
+        // Dry-run is non-destructive — no files should be written
+        assert!(!output.exists(), "dry-run should not write files");
     }
 
     #[tokio::test]
@@ -1411,7 +1422,7 @@ parallel_extraction = true
         })
         .await;
         assert!(result.is_ok(), "Java dry run failed: {:?}", result.err());
-        assert!(output.exists(), "SKILL.md should be written");
+        assert!(!output.exists(), "dry-run should not write files");
     }
 
     #[tokio::test]
@@ -1640,13 +1651,13 @@ max_source_tokens = 50000
 telemetry = true
 
 [generation.test_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-test"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
 [generation.review_llm]
-provider = "openai-compatible"
+provider_type = "openai-compatible"
 model = "local-review"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
@@ -1758,5 +1769,264 @@ base_url = "http://localhost:11434/v1"
         .await;
         // May fail if no git tags, but should not panic
         let _ = result;
+    }
+
+    /// Valid SKILL.md fixture response for mock LLM server.
+    /// Must pass basic frontmatter + section linting so the file-write path executes.
+    const MOCK_SKILL_MD: &str = r#"---
+name: testpkg
+description: A test package
+license: MIT
+metadata:
+  version: "1.0.0"
+  ecosystem: python
+---
+
+## Imports
+
+```python
+import testpkg
+```
+
+## Core Patterns
+
+### Basic Usage
+
+```python
+from testpkg import hello
+result = hello()
+```
+
+## Configuration
+
+No special configuration required.
+
+## Pitfalls
+
+### Wrong: Missing import
+
+```python
+hello()  # NameError
+```
+
+### Right: Import first
+
+```python
+from testpkg import hello
+hello()
+```
+
+## References
+
+- https://example.com/testpkg
+"#;
+
+    /// Write a config TOML pointing all LLM stages at a local mock server.
+    fn write_mock_server_config(dir: &Path, server_url: &str) -> String {
+        let config_path = dir.join("skilldo-mock.toml");
+        let base_url = format!("{}/v1", server_url);
+        let toml = format!(
+            r#"
+[llm]
+provider_type = "openai-compatible"
+model = "mock-model"
+api_key_env = "none"
+base_url = "{url}"
+
+[generation]
+max_retries = 0
+max_source_tokens = 50000
+install_source = "registry"
+enable_test = false
+enable_review = false
+enable_security_scan = false
+"#,
+            url = base_url
+        );
+        fs::write(&config_path, toml).unwrap();
+        config_path.to_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_run_non_dry_run_writes_file() {
+        // Exercises the non-dry-run code paths:
+        // - File write via tempfile + persist (lines 481-488)
+        // - Linter execution on real output (lines 505-509)
+        let server = llmposter::ServerBuilder::new()
+            .fixture(llmposter::Fixture::new().respond_with_content(MOCK_SKILL_MD))
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = write_mock_server_config(repo.path(), &server.url());
+
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(config_path),
+            best_effort: true,
+            no_parallel: true,
+            dry_run: false,
+            ..Default::default()
+        })
+        .await;
+
+        assert!(result.is_ok(), "non-dry-run failed: {:?}", result.err());
+        // Non-dry-run should write the SKILL.md file
+        assert!(output.exists(), "non-dry-run should write the output file");
+        let content = fs::read_to_string(&output).unwrap();
+        assert!(
+            content.contains("name: testpkg"),
+            "output should contain frontmatter"
+        );
+    }
+
+    /// SKILL.md missing required sections — triggers lint errors, NOT security errors.
+    /// With max_retries=0 the generator exhausts retries immediately → has_unresolved_errors.
+    const BAD_SKILL_MD: &str = r#"---
+name: testpkg
+description: A test package
+license: MIT
+metadata:
+  version: "1.0.0"
+  ecosystem: python
+---
+
+# testpkg
+
+This content has no required sections and no code blocks.
+"#;
+
+    #[tokio::test]
+    async fn test_run_non_dry_run_unresolved_errors_keeps_temp_file() {
+        // Exercises the `has_unresolved_errors && !best_effort` branch (lines 490-494):
+        // temp file is kept for inspection, original output is NOT overwritten.
+        //
+        // Activate a tracing subscriber so info!() format args are evaluated by llvm-cov.
+        // try_init() is idempotent — safe to call from multiple tests.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let server = llmposter::ServerBuilder::new()
+            .fixture(llmposter::Fixture::new().respond_with_content(BAD_SKILL_MD))
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        // Pre-create an "original" file that should be preserved
+        fs::write(&output, "original content").unwrap();
+        let config_path = write_mock_server_config(repo.path(), &server.url());
+
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(config_path),
+            best_effort: false,
+            no_parallel: true,
+            dry_run: false,
+            ..Default::default()
+        })
+        .await;
+
+        // Should fail with "unresolved errors" bail
+        assert!(
+            result.is_err(),
+            "expected error when has_unresolved_errors && !best_effort"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("unresolved errors"),
+            "error message should mention unresolved errors, got: {err_msg}"
+        );
+        // Original file should be preserved (not overwritten)
+        let preserved = fs::read_to_string(&output).unwrap();
+        assert_eq!(
+            preserved, "original content",
+            "original output file should not be overwritten when errors are unresolved"
+        );
+        // A kept temp file should exist in the output dir (the kept temp path from
+        // `into_temp_path().keep()`). Tempfile names are opaque, but we verify at least
+        // one non-SKILL.md file was created by the pipeline in the output dir.
+        let extra_files: Vec<_> = fs::read_dir(repo.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                name != "SKILL.md"
+                    && !name.starts_with("skilldo-mock")
+                    && !name.starts_with("setup.py")
+                    && name != "testpkg"
+                    && name != "tests"
+            })
+            .collect();
+        assert!(
+            !extra_files.is_empty(),
+            "a kept temp file should exist when errors are unresolved"
+        );
+    }
+
+    /// Write a config TOML with redact_env_vars set.
+    fn write_mock_server_config_with_redact(dir: &Path, server_url: &str) -> String {
+        let config_path = dir.join("skilldo-mock-redact.toml");
+        let base_url = format!("{}/v1", server_url);
+        let toml = format!(
+            r#"
+[llm]
+provider_type = "openai-compatible"
+model = "mock-model"
+api_key_env = "none"
+base_url = "{url}"
+
+[generation]
+max_retries = 0
+max_source_tokens = 50000
+install_source = "registry"
+enable_test = true
+enable_review = false
+enable_security_scan = false
+redact_env_vars = ["FAKE_API_KEY", "ANOTHER_SECRET"]
+"#,
+            url = base_url
+        );
+        fs::write(&config_path, toml).unwrap();
+        config_path.to_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_run_non_dry_run_with_redact_env_vars() {
+        // Exercises line 472: set_redact_vars when config has non-empty redact_env_vars.
+        let server = llmposter::ServerBuilder::new()
+            .fixture(llmposter::Fixture::new().respond_with_content(MOCK_SKILL_MD))
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = write_mock_server_config_with_redact(repo.path(), &server.url());
+
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(config_path),
+            best_effort: true,
+            no_parallel: true,
+            dry_run: false,
+            ..Default::default()
+        })
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "non-dry-run with redact_env_vars failed: {:?}",
+            result.err()
+        );
+        assert!(output.exists(), "output file should be written");
     }
 }

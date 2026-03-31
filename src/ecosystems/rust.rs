@@ -224,16 +224,57 @@ impl RustHandler {
     // ── Metadata extraction ────────────────────────────────────────────
 
     /// Extract package name from Cargo.toml `[package]` section.
+    /// For workspace roots (no `[package]`), finds the first member crate's name.
     pub fn get_package_name(&self) -> Result<String> {
         let cargo_toml = self.repo_path.join("Cargo.toml");
         let content = fs::read_to_string(&cargo_toml)
             .map_err(|e| anyhow::anyhow!("Cannot read Cargo.toml: {e}"))?;
 
-        cargo_toml_field(&content, "name")
-            .ok_or_else(|| anyhow::anyhow!("No package name found in Cargo.toml"))
+        // Try direct [package].name first
+        if let Some(name) = cargo_toml_field(&content, "name") {
+            return Ok(name);
+        }
+
+        // Workspace root — find the first member with a [package] section
+        if let Ok(parsed) = content.parse::<toml::Table>() {
+            if let Some(workspace) = parsed.get("workspace").and_then(|v| v.as_table()) {
+                if let Some(members) = workspace.get("members").and_then(|v| v.as_array()) {
+                    for member in members {
+                        if let Some(member_path) = member.as_str() {
+                            // Reject paths that escape the repo root
+                            let member_rel = Path::new(member_path);
+                            if member_rel.is_absolute()
+                                || member_rel
+                                    .components()
+                                    .any(|c| c == std::path::Component::ParentDir)
+                            {
+                                continue;
+                            }
+                            // Expand glob patterns like "crates/*"
+                            let resolved_paths =
+                                expand_workspace_member(&self.repo_path, member_path);
+                            for resolved in &resolved_paths {
+                                let member_cargo = resolved.join("Cargo.toml");
+                                if let Ok(member_content) = fs::read_to_string(&member_cargo) {
+                                    if let Some(name) = cargo_toml_field(&member_content, "name") {
+                                        tracing::info!(
+                                            "Workspace root — using first member crate: {}",
+                                            name
+                                        );
+                                        return Ok(name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!("No package name found in Cargo.toml (not a package or workspace)")
     }
 
-    /// Extract version from Cargo.toml, falling back to git tags, then "latest".
+    /// Extract version from Cargo.toml, falling back to workspace, git tags, then "latest".
     pub fn get_version(&self) -> Result<String> {
         // Strategy 1: Cargo.toml [package] version (most authoritative for Rust)
         let cargo_toml = self.repo_path.join("Cargo.toml");
@@ -242,6 +283,20 @@ impl RustHandler {
                 // Reject workspace-inherited versions like { workspace = true }
                 if !Self::is_workspace_placeholder(&version) && version.contains('.') {
                     return Ok(version);
+                }
+            }
+
+            // Strategy 1b: workspace.package.version
+            if let Ok(parsed) = content.parse::<toml::Table>() {
+                if let Some(ver) = parsed
+                    .get("workspace")
+                    .and_then(|w| w.get("package"))
+                    .and_then(|p| p.get("version"))
+                    .and_then(|v| v.as_str())
+                {
+                    if ver.contains('.') {
+                        return Ok(ver.to_string());
+                    }
                 }
             }
         }
@@ -726,6 +781,33 @@ impl RustHandler {
 
 // ── Free functions ──────────────────────────────────────────────────────
 
+/// Expand a workspace member path, handling simple glob patterns like "crates/*".
+/// Returns a list of resolved directory paths. For literal paths, returns a single entry.
+fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::PathBuf> {
+    if member.contains('*') {
+        // Simple glob: split at *, match prefix and suffix against directory names.
+        // e.g., "crates/*-macros" matches crates/foo-macros but not crates/foo-core.
+        if let Some((prefix, suffix)) = member.split_once('*') {
+            let search_dir = repo_root.join(prefix);
+            if let Ok(entries) = fs::read_dir(&search_dir) {
+                let mut paths: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                    .filter(|e| {
+                        suffix.is_empty() || e.file_name().to_string_lossy().ends_with(suffix)
+                    })
+                    .map(|e| e.path())
+                    .collect();
+                paths.sort();
+                return paths;
+            }
+        }
+        Vec::new()
+    } else {
+        vec![repo_root.join(member)]
+    }
+}
+
 /// Parse a git tag into a version string. Strips `v` prefix and validates semver shape.
 fn parse_version_tag(tag: &str) -> Option<String> {
     if tag.is_empty() {
@@ -1128,6 +1210,46 @@ mod tests {
         .unwrap();
         let handler = RustHandler::new(dir.path());
         assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_from_workspace_root() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace root with no [package]
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/mylib\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        // Member crate with [package]
+        let member_dir = dir.path().join("crates/mylib");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_package_name().unwrap(), "mylib");
+    }
+
+    #[test]
+    fn get_version_from_workspace_package() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\"]\n\n[workspace.package]\nversion = \"2.0.0\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/a");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"a\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "2.0.0");
     }
 
     #[test]
@@ -3470,5 +3592,223 @@ mod tests {
             json_count, 1,
             "json should appear exactly once (deduped), found {json_count} times in: {raw}"
         );
+    }
+
+    #[test]
+    fn get_package_name_workspace_skips_member_without_package() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace root with two members
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/no-pkg\", \"crates/has-pkg\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        // First member: Cargo.toml exists but has no [package] section (just dependencies)
+        let no_pkg_dir = dir.path().join("crates/no-pkg");
+        fs::create_dir_all(&no_pkg_dir).unwrap();
+        fs::write(
+            no_pkg_dir.join("Cargo.toml"),
+            "[dependencies]\nserde = \"1\"\n",
+        )
+        .unwrap();
+        // Second member: has a valid [package] with name
+        let has_pkg_dir = dir.path().join("crates/has-pkg");
+        fs::create_dir_all(&has_pkg_dir).unwrap();
+        fs::write(
+            has_pkg_dir.join("Cargo.toml"),
+            "[package]\nname = \"real-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_package_name().unwrap(), "real-crate");
+    }
+
+    #[test]
+    fn get_version_workspace_package_no_dot_falls_through() {
+        let dir = tempfile::tempdir().unwrap();
+        // workspace.package.version exists but has no '.' — should not be accepted
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\"]\n\n[workspace.package]\nversion = \"beta\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/a");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"a\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        // "beta" has no dot, so it falls through to "latest"
+        assert_eq!(handler.get_version().unwrap(), "latest");
+    }
+
+    #[test]
+    fn get_package_name_workspace_member_dir_missing() {
+        // Workspace member listed but its directory doesn't exist on disk.
+        // fs::read_to_string fails → loop continues → eventually errors.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/ghost\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        // Don't create the member directory at all
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_workspace_non_string_member() {
+        // Workspace members array contains a non-string value (integer).
+        // member.as_str() returns None → loop continues → eventually errors.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [42]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_workspace_no_members_key() {
+        // Workspace table exists but has no `members` key.
+        // Falls through the members check → errors.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_invalid_toml_no_package() {
+        // Content has no [package] name and is not valid TOML.
+        // cargo_toml_field returns None, content.parse fails → errors.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "this is not valid toml {{{\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_version_invalid_toml_falls_through() {
+        // Cargo.toml exists but is not valid TOML and has no [package] version.
+        // cargo_toml_field returns None, TOML parse fails → falls through to "latest".
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "this is not valid toml {{{\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "latest");
+    }
+
+    #[test]
+    fn get_package_name_workspace_rejects_dotdot_member_path() {
+        // Member paths containing ".." should be skipped (path traversal guard).
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"../escape\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        // The ".." member is skipped, no valid members remain → error
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_workspace_glob_members() {
+        // Workspace with glob pattern "crates/*" should expand and find member
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/mylib");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_package_name().unwrap(), "mylib");
+    }
+
+    #[test]
+    fn expand_workspace_member_literal_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let member = dir.path().join("crates/foo");
+        fs::create_dir_all(&member).unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/foo");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], dir.path().join("crates/foo"));
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("crates/alpha");
+        let b = dir.path().join("crates/beta");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        // Also create a file (should be filtered out — only dirs)
+        fs::write(dir.path().join("crates/README.md"), "hi").unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/*");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_no_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("crates")).unwrap();
+        // Empty directory — no subdirs
+        let result = super::expand_workspace_member(dir.path(), "crates/*");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_with_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("crates/foo-macros")).unwrap();
+        fs::create_dir_all(dir.path().join("crates/foo-core")).unwrap();
+        fs::create_dir_all(dir.path().join("crates/bar-macros")).unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/*-macros");
+        assert_eq!(
+            result.len(),
+            2,
+            "should only match -macros dirs: {:?}",
+            result
+        );
+        let names: Vec<_> = result
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert!(names.contains(&"foo-macros".to_string()));
+        assert!(names.contains(&"bar-macros".to_string()));
+        assert!(!names.contains(&"foo-core".to_string()));
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_nonexistent_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        // Don't create the "crates" directory — read_dir should fail,
+        // falling through to Vec::new()
+        let result = super::expand_workspace_member(dir.path(), "crates/*");
+        assert!(result.is_empty());
     }
 }
