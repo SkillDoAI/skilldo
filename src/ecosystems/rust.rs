@@ -128,11 +128,7 @@ impl RustHandler {
                         .and_then(|v| v.as_str())
                     {
                         if ver.contains('.') {
-                            debug!(
-                                "resolved workspace version {} from {}",
-                                ver,
-                                candidate.display()
-                            );
+                            debug!("resolved workspace version {ver} from workspace root");
                             return Some(ver.to_string());
                         }
                     }
