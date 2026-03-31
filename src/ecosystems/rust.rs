@@ -3602,4 +3602,75 @@ mod tests {
         // "beta" has no dot, so it falls through to "latest"
         assert_eq!(handler.get_version().unwrap(), "latest");
     }
+
+    #[test]
+    fn get_package_name_workspace_member_dir_missing() {
+        // Workspace member listed but its directory doesn't exist on disk.
+        // fs::read_to_string fails → loop continues → eventually errors.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/ghost\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        // Don't create the member directory at all
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_workspace_non_string_member() {
+        // Workspace members array contains a non-string value (integer).
+        // member.as_str() returns None → loop continues → eventually errors.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [42]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_workspace_no_members_key() {
+        // Workspace table exists but has no `members` key.
+        // Falls through the members check → errors.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_invalid_toml_no_package() {
+        // Content has no [package] name and is not valid TOML.
+        // cargo_toml_field returns None, content.parse fails → errors.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "this is not valid toml {{{\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_version_invalid_toml_falls_through() {
+        // Cargo.toml exists but is not valid TOML and has no [package] version.
+        // cargo_toml_field returns None, TOML parse fails → falls through to "latest".
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "this is not valid toml {{{\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "latest");
+    }
 }
