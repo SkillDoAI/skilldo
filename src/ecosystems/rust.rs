@@ -3677,4 +3677,18 @@ mod tests {
         let handler = RustHandler::new(dir.path());
         assert_eq!(handler.get_version().unwrap(), "latest");
     }
+
+    #[test]
+    fn get_package_name_workspace_rejects_dotdot_member_path() {
+        // Member paths containing ".." should be skipped (path traversal guard).
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"../escape\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        // The ".." member is skipped, no valid members remain → error
+        assert!(handler.get_package_name().is_err());
+    }
 }

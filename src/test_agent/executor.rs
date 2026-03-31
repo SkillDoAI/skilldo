@@ -196,6 +196,20 @@ pub(crate) fn filter_java_deps_by_artifact_id(
     }
 }
 
+/// Parse `python3 --version` stdout into "major.minor", falling back to "3.9".
+fn parse_python_version(stdout: &str) -> String {
+    if let Some(ver) = stdout.strip_prefix("Python ") {
+        let parts: Vec<&str> = ver.trim().split('.').collect();
+        if parts.len() >= 2 {
+            format!("{}.{}", parts[0], parts[1])
+        } else {
+            "3.9".to_string()
+        }
+    } else {
+        "3.9".to_string()
+    }
+}
+
 /// Detect the installed Python minor version (e.g., "3.12") for requires-python.
 /// Cached after first call — Python version doesn't change during a pipeline run.
 /// Falls back to "3.9" (oldest widely-deployed version) if detection fails.
@@ -210,16 +224,7 @@ async fn detect_python_minor_version() -> String {
         .await;
     let version = if let Ok(out) = result {
         let version_str = String::from_utf8_lossy(&out.stdout);
-        if let Some(ver) = version_str.strip_prefix("Python ") {
-            let parts: Vec<&str> = ver.trim().split('.').collect();
-            if parts.len() >= 2 {
-                format!("{}.{}", parts[0], parts[1])
-            } else {
-                "3.9".to_string()
-            }
-        } else {
-            "3.9".to_string()
-        }
+        parse_python_version(&version_str)
     } else {
         "3.9".to_string()
     };
@@ -4312,5 +4317,34 @@ dependencies = []
         let v1 = detect_python_minor_version().await;
         let v2 = detect_python_minor_version().await;
         assert_eq!(v1, v2, "cached value should match first call");
+    }
+
+    // --- parse_python_version unit tests ---
+
+    #[test]
+    fn parse_python_version_normal() {
+        assert_eq!(parse_python_version("Python 3.12.1\n"), "3.12");
+    }
+
+    #[test]
+    fn parse_python_version_two_parts_only() {
+        assert_eq!(parse_python_version("Python 3.9\n"), "3.9");
+    }
+
+    #[test]
+    fn parse_python_version_single_part_falls_back() {
+        // Only one part (no dot) → fallback to "3.9"
+        assert_eq!(parse_python_version("Python 3\n"), "3.9");
+    }
+
+    #[test]
+    fn parse_python_version_no_prefix_falls_back() {
+        // Missing "Python " prefix → fallback to "3.9"
+        assert_eq!(parse_python_version("3.12.1"), "3.9");
+    }
+
+    #[test]
+    fn parse_python_version_empty_falls_back() {
+        assert_eq!(parse_python_version(""), "3.9");
     }
 }

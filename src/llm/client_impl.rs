@@ -1771,4 +1771,36 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["max_output_tokens"], 4096);
     }
+
+    #[tokio::test]
+    async fn test_openai_responses_api_end_to_end() {
+        // Exercises the Responses API parsing branch in OpenAIClient::complete()
+        // (filter_map chains on ResponsesResponse.output).
+        let server = llmposter::ServerBuilder::new()
+            .fixture(llmposter::Fixture::new().respond_with_content("hello from responses api"))
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-test".to_string(),
+            format!("{}/v1/responses", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("say hello").await;
+        assert!(
+            result.is_ok(),
+            "Responses API call failed: {:?}",
+            result.err()
+        );
+        let text = result.unwrap();
+        assert!(
+            text.contains("hello from responses api"),
+            "Expected response content, got: {text}"
+        );
+    }
 }
