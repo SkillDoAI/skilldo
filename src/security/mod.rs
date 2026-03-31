@@ -1060,4 +1060,69 @@ Access the .ssh/ key store.
             "Score must be 100 after recalculate_score with no findings"
         );
     }
+
+    #[test]
+    fn recalculate_score_resets_to_100_when_findings_empty() {
+        let mut report = ScanReport {
+            findings: vec![Finding {
+                rule_id: "SD-999".to_string(),
+                severity: Severity::High,
+                category: Category::CredentialAccess,
+                message: "test".to_string(),
+                line: 1,
+                snippet: String::new(),
+            }],
+            score: 0,
+        };
+        report.recalculate_score();
+        assert_eq!(report.score, 85, "High = 15pt deduction → 100 - 15 = 85");
+
+        report.findings.clear();
+        report.recalculate_score();
+        assert_eq!(report.score, 100, "No findings → score must be 100");
+    }
+
+    #[test]
+    fn recalculate_score_clamps_at_zero() {
+        let findings: Vec<Finding> = (0..10)
+            .map(|i| Finding {
+                rule_id: format!("SD-{i}"),
+                severity: Severity::Critical,
+                category: Category::CodeExecution,
+                message: "test".to_string(),
+                line: 1,
+                snippet: String::new(),
+            })
+            .collect();
+        let mut report = ScanReport {
+            findings,
+            score: 100,
+        };
+        report.recalculate_score();
+        assert_eq!(report.score, 0, "Massive deductions should clamp at 0");
+    }
+
+    #[test]
+    fn scan_skill_with_context_api_client_recalculate_verified_via_score_delta() {
+        // Use SD202_PROSE_CONTENT which triggers SD-202 AND other findings.
+        // After api-client suppression, SD-202 is removed but others remain.
+        // The score delta must exactly equal the SD-202 deductions removed.
+        let base = scan_skill(SD202_PROSE_CONTENT);
+        let sd202_deductions: i32 = base
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "SD-202")
+            .map(|f| f.severity.deduction())
+            .sum();
+        assert!(sd202_deductions > 0, "SD-202 must produce deductions");
+
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+        // Score delta should exactly match the removed SD-202 deductions,
+        // proving recalculate_score ran and recomputed from remaining findings.
+        let delta = ctx.score as i32 - base.score as i32;
+        assert_eq!(
+            delta, sd202_deductions,
+            "Score delta ({delta}) must equal removed SD-202 deductions ({sd202_deductions})"
+        );
+    }
 }
