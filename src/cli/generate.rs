@@ -1770,4 +1770,117 @@ base_url = "http://localhost:11434/v1"
         // May fail if no git tags, but should not panic
         let _ = result;
     }
+
+    /// Valid SKILL.md fixture response for mock LLM server.
+    /// Must pass basic frontmatter + section linting so the file-write path executes.
+    const MOCK_SKILL_MD: &str = r#"---
+name: testpkg
+description: A test package
+license: MIT
+metadata:
+  version: "1.0.0"
+  ecosystem: python
+---
+
+## Imports
+
+```python
+import testpkg
+```
+
+## Core Patterns
+
+### Basic Usage
+
+```python
+from testpkg import hello
+result = hello()
+```
+
+## Configuration
+
+No special configuration required.
+
+## Pitfalls
+
+### Wrong: Missing import
+
+```python
+hello()  # NameError
+```
+
+### Right: Import first
+
+```python
+from testpkg import hello
+hello()
+```
+
+## References
+
+- https://example.com/testpkg
+"#;
+
+    /// Write a config TOML pointing all LLM stages at a local mock server.
+    fn write_mock_server_config(dir: &Path, server_url: &str) -> String {
+        let config_path = dir.join("skilldo-mock.toml");
+        let base_url = format!("{}/v1", server_url);
+        let toml = format!(
+            r#"
+[llm]
+provider = "openai-compatible"
+model = "mock-model"
+api_key_env = "none"
+base_url = "{url}"
+
+[generation]
+max_retries = 0
+max_source_tokens = 50000
+install_source = "registry"
+enable_test = false
+enable_review = false
+enable_security_scan = false
+"#,
+            url = base_url
+        );
+        fs::write(&config_path, toml).unwrap();
+        config_path.to_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_run_non_dry_run_writes_file() {
+        // Exercises the non-dry-run code paths:
+        // - File write via tempfile + persist (lines 481-488)
+        // - Linter execution on real output (lines 505-509)
+        let server = llmposter::ServerBuilder::new()
+            .fixture(llmposter::Fixture::new().respond_with_content(MOCK_SKILL_MD))
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = write_mock_server_config(repo.path(), &server.url());
+
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("python".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(config_path),
+            best_effort: true,
+            no_parallel: true,
+            dry_run: false,
+            ..Default::default()
+        })
+        .await;
+
+        assert!(result.is_ok(), "non-dry-run failed: {:?}", result.err());
+        // Non-dry-run should write the SKILL.md file
+        assert!(output.exists(), "non-dry-run should write the output file");
+        let content = fs::read_to_string(&output).unwrap();
+        assert!(
+            content.contains("name: testpkg"),
+            "output should contain frontmatter"
+        );
+    }
 }

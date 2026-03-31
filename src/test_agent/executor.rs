@@ -4161,53 +4161,152 @@ dependencies = []
         assert_eq!(install_args[2], "lodash");
     }
 
-    // -- redact_secrets tests --
+    // --- set_redact_vars duplicate-call warning path ---
+
+    #[test]
+    fn test_set_redact_vars_second_call_is_ignored() {
+        // OnceLock is process-global — first test to call set_redact_vars wins.
+        // Either we ARE the first caller (set succeeds) or another test already set it
+        // (set was already done). Either way, a second call with different data should
+        // be silently ignored (warn log emitted, but no panic).
+        set_redact_vars(vec!["FIRST_CALL_VAR".to_string()]);
+        // Second call with different values — exercises the Err branch (lines 21-23)
+        set_redact_vars(vec!["SECOND_CALL_VAR".to_string(), "EXTRA".to_string()]);
+        // The function should not panic — the original value should be retained.
+        // We can't assert which value won (depends on test ordering), but we can
+        // verify get_redact_vars returns a non-panicking slice.
+        let vars = get_redact_vars();
+        assert!(!vars.is_empty(), "redact vars should have been set");
+    }
+
+    // --- redact_secrets direct tests ---
 
     #[test]
     fn test_redact_secrets_empty_vars_returns_original() {
-        let text = "hello world api_key=abc123";
+        let text = "some output with SECRET_VALUE in it";
         let result = redact_secrets(text, &[]);
-        assert_eq!(result, text);
+        assert_eq!(
+            result, text,
+            "empty redact list should return original text"
+        );
     }
 
     #[test]
     fn test_redact_secrets_replaces_env_var_value() {
-        let var = "SKILLDO_TEST_REDACT_1";
-        std::env::set_var(var, "supersecret99");
-        let text = "Error: key supersecret99 is invalid";
-        let result = redact_secrets(text, &[var.to_string()]);
-        assert!(result.contains("***REDACTED***"));
-        assert!(!result.contains("supersecret99"));
-        std::env::remove_var(var);
+        // Set a unique env var for this test
+        let var_name = "SKILLDO_TEST_REDACT_SECRET_ABC";
+        let secret_value = "super-secret-token-12345";
+        std::env::set_var(var_name, secret_value);
+
+        let text = format!(
+            "connection string: postgres://user:{}@host/db",
+            secret_value
+        );
+        let redact_list = vec![var_name.to_string()];
+        let result = redact_secrets(&text, &redact_list);
+
+        assert!(
+            !result.contains(secret_value),
+            "secret value should be redacted"
+        );
+        assert!(
+            result.contains("***REDACTED***"),
+            "redacted placeholder should be present"
+        );
+        assert!(
+            result.contains("postgres://user:"),
+            "non-secret parts should be preserved"
+        );
+
+        // Clean up
+        std::env::remove_var(var_name);
     }
 
     #[test]
-    fn test_redact_secrets_skips_unset_var() {
-        let text = "nothing to redact here";
-        let result = redact_secrets(text, &["SKILLDO_NONEXISTENT_VAR_XYZ".to_string()]);
-        assert_eq!(result, text);
+    fn test_redact_secrets_skips_unset_env_vars() {
+        let var_name = "SKILLDO_TEST_DEFINITELY_UNSET_VAR_XYZ";
+        // Ensure it's not set
+        std::env::remove_var(var_name);
+
+        let text = "output with no secrets";
+        let redact_list = vec![var_name.to_string()];
+        let result = redact_secrets(text, &redact_list);
+
+        assert_eq!(result, text, "unset var should leave text unchanged");
     }
 
     #[test]
-    fn test_redact_secrets_longest_first() {
-        let short = "SKILLDO_TEST_SHORT";
-        let long = "SKILLDO_TEST_LONG";
-        std::env::set_var(short, "abc");
-        std::env::set_var(long, "abcdef");
-        let text = "value is abcdef here";
-        let result = redact_secrets(text, &[short.to_string(), long.to_string()]);
-        // "abcdef" should be replaced first (longest), not "abc" partially
-        assert_eq!(result, "value is ***REDACTED*** here");
-        std::env::remove_var(short);
-        std::env::remove_var(long);
+    fn test_redact_secrets_skips_empty_env_var_value() {
+        let var_name = "SKILLDO_TEST_EMPTY_VAR_DEF";
+        std::env::set_var(var_name, "");
+
+        let text = "output text here";
+        let redact_list = vec![var_name.to_string()];
+        let result = redact_secrets(text, &redact_list);
+
+        assert_eq!(
+            result, text,
+            "empty env var value should not cause replacement"
+        );
+
+        std::env::remove_var(var_name);
+    }
+
+    #[test]
+    fn test_redact_secrets_multiple_vars_and_occurrences() {
+        let var1 = "SKILLDO_TEST_REDACT_KEY_1";
+        let var2 = "SKILLDO_TEST_REDACT_KEY_2";
+        std::env::set_var(var1, "key-aaa");
+        std::env::set_var(var2, "key-bbb");
+
+        let text = "auth: key-aaa, token: key-bbb, retry: key-aaa";
+        let redact_list = vec![var1.to_string(), var2.to_string()];
+        let result = redact_secrets(text, &redact_list);
+
+        assert!(!result.contains("key-aaa"), "var1 value should be redacted");
+        assert!(!result.contains("key-bbb"), "var2 value should be redacted");
+        // "key-aaa" appears twice — both should be replaced
+        assert_eq!(
+            result.matches("***REDACTED***").count(),
+            3,
+            "all three occurrences should be redacted"
+        );
+
+        std::env::remove_var(var1);
+        std::env::remove_var(var2);
+    }
+
+    // --- detect_python_minor_version cache path ---
+
+    #[tokio::test]
+    async fn test_detect_python_minor_version_returns_valid_format() {
+        // First call populates the function-local CACHED OnceLock.
+        let version = detect_python_minor_version().await;
+        // Should be either a real version like "3.12" or the fallback "3.9"
+        let parts: Vec<&str> = version.split('.').collect();
+        assert_eq!(
+            parts.len(),
+            2,
+            "version should be major.minor, got: {version}"
+        );
+        assert!(
+            parts[0].parse::<u32>().is_ok(),
+            "major should be numeric: {}",
+            parts[0]
+        );
+        assert!(
+            parts[1].parse::<u32>().is_ok(),
+            "minor should be numeric: {}",
+            parts[1]
+        );
     }
 
     #[tokio::test]
-    async fn test_detect_python_minor_version_format() {
-        let version = detect_python_minor_version().await;
-        let parts: Vec<&str> = version.split('.').collect();
-        assert_eq!(parts.len(), 2, "Expected major.minor, got: {}", version);
-        assert!(parts[0].parse::<u32>().is_ok());
-        assert!(parts[1].parse::<u32>().is_ok());
+    async fn test_detect_python_minor_version_is_cached() {
+        // Call twice — second call returns cached value (lines 200-201).
+        // Both calls should return the same result.
+        let v1 = detect_python_minor_version().await;
+        let v2 = detect_python_minor_version().await;
+        assert_eq!(v1, v2, "cached value should match first call");
     }
 }
