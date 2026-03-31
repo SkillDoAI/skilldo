@@ -1247,11 +1247,13 @@ install_source = "registry"
 
     #[tokio::test]
     async fn test_run_with_container_flag() {
+        // Verifies --container flag threads through pipeline options.
+        // Test agent disabled — we're testing flag wiring, not Docker.
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
         let result = run(GenerateOptions {
             container: true,
-            best_effort: true, // container test agent may fail when Docker images aren't pre-pulled (e.g. Windows CI)
+            no_test: true,
             ..test_opts(&repo, &output)
         })
         .await;
