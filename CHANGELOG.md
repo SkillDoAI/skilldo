@@ -48,6 +48,9 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - **Temp file cleanup on all paths** — stale temp files from previous failed runs cleaned up before writing new output
 - **Windows `test_with_debug_stage_dir_creation_failure`** — used `/dev/null` path (Unix-only); now uses `NUL` on Windows
 - **CI: uv installed on Windows runner** — fixes 4 executor test failures
+- **E2E: switch to qwen3.5-122b on OpenRouter** — Cerebras gpt-oss-120b replaced; fixes JS and Rust e2e failures
+- **`--provider` CLI override resets `api_key_env`** — prevents silent auth failures when local config has `api_key_env = "none"`
+- **OpenAI response parser handles `reasoning_details` array** — fixes "error decoding response body" with reasoning models on OpenRouter
 
 ## 0.5.10
 
