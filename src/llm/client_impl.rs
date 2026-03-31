@@ -245,6 +245,13 @@ struct OpenAIMessage {
     // useful for debugging). Not present on standard models.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning: Option<String>,
+    // Some providers (OpenRouter/Nemotron/Qwen) return reasoning as a structured
+    // array instead of a string. Ignored — we only need content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_details: Option<serde_json::Value>,
+    // OpenRouter may include a refusal field. Ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refusal: Option<serde_json::Value>,
 }
 
 impl OpenAIMessage {
@@ -253,6 +260,8 @@ impl OpenAIMessage {
             role: "user".to_string(),
             content: Some(prompt.to_string()),
             reasoning: None,
+            reasoning_details: None,
+            refusal: None,
         }
     }
 }
