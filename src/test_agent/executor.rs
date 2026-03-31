@@ -4174,9 +4174,9 @@ dependencies = []
         set_redact_vars(vec!["SECOND_CALL_VAR".to_string(), "EXTRA".to_string()]);
         // The function should not panic — the original value should be retained.
         // We can't assert which value won (depends on test ordering), but we can
-        // verify get_redact_vars returns a non-panicking slice.
-        let vars = get_redact_vars();
-        assert!(!vars.is_empty(), "redact vars should have been set");
+        // verify get_redact_vars returns without panicking.  The slice may be empty
+        // if another test set the OnceLock with an empty vec first.
+        let _vars = get_redact_vars();
     }
 
     // --- redact_secrets direct tests ---
