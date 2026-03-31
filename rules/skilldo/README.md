@@ -42,7 +42,8 @@ YARA rules for detecting security threats in AI agent skill files (SKILL.md).
 | SD-208 | high | SQL injection — tautology, UNION SELECT, DROP TABLE, blind injection |
 | SD-209 | high | Network exfiltration code — requests.post, socket.connect, fetch, axios |
 | SD-210 | high | Resource abuse / DoS — infinite loops, fork bombs, unbounded iterators |
-| SD-211 | critical | Binary/executable content embedded in skill file (ELF, PE headers) |
+| SD-211 | critical | Actual binary bytes embedded in skill file (ELF, PE headers) |
+| SD-212 | high | References to executable file extensions in prose (.exe, .dll, .so, etc.) |
 
 ## License
 
