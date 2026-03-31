@@ -482,10 +482,12 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         std::io::Write::write_all(&mut tmp, output_result.skill_md.as_bytes())?;
 
         // Only promote to final path if the run succeeded (or --best-effort)
+        // Clean up stale temp files from previous failed runs before writing new output
+        cleanup_stale_tmp_files(output_dir, output_path);
+
         if !output_result.has_unresolved_errors || best_effort {
             tmp.persist(output_path).map_err(|e| e.error)?;
             info!("✓ Generated SKILL.md written to {}", output);
-            cleanup_stale_tmp_files(output_dir, output_path);
         } else {
             // Keep the temp file around for inspection instead of auto-deleting
             let kept_path = tmp.into_temp_path().keep().map_err(|e| e.error)?;

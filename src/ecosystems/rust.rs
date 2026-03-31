@@ -245,14 +245,19 @@ impl RustHandler {
                             if member_path.contains("..") {
                                 continue;
                             }
-                            let member_cargo = self.repo_path.join(member_path).join("Cargo.toml");
-                            if let Ok(member_content) = fs::read_to_string(&member_cargo) {
-                                if let Some(name) = cargo_toml_field(&member_content, "name") {
-                                    tracing::info!(
-                                        "Workspace root — using first member crate: {}",
-                                        name
-                                    );
-                                    return Ok(name);
+                            // Expand glob patterns like "crates/*"
+                            let resolved_paths =
+                                expand_workspace_member(&self.repo_path, member_path);
+                            for resolved in &resolved_paths {
+                                let member_cargo = resolved.join("Cargo.toml");
+                                if let Ok(member_content) = fs::read_to_string(&member_cargo) {
+                                    if let Some(name) = cargo_toml_field(&member_content, "name") {
+                                        tracing::info!(
+                                            "Workspace root — using first member crate: {}",
+                                            name
+                                        );
+                                        return Ok(name);
+                                    }
                                 }
                             }
                         }
@@ -772,6 +777,27 @@ impl RustHandler {
 // ── Free functions ──────────────────────────────────────────────────────
 
 /// Parse a git tag into a version string. Strips `v` prefix and validates semver shape.
+/// Expand a workspace member path, handling simple glob patterns like "crates/*".
+/// Returns a list of resolved directory paths. For literal paths, returns a single entry.
+fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::PathBuf> {
+    if member.contains('*') {
+        // Simple glob: split at the *, list directories matching the prefix
+        if let Some((prefix, _suffix)) = member.split_once('*') {
+            let search_dir = repo_root.join(prefix);
+            if let Ok(entries) = fs::read_dir(&search_dir) {
+                return entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                    .map(|e| e.path())
+                    .collect();
+            }
+        }
+        Vec::new()
+    } else {
+        vec![repo_root.join(member)]
+    }
+}
+
 fn parse_version_tag(tag: &str) -> Option<String> {
     if tag.is_empty() {
         return None;
@@ -3690,5 +3716,57 @@ mod tests {
         let handler = RustHandler::new(dir.path());
         // The ".." member is skipped, no valid members remain → error
         assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_workspace_glob_members() {
+        // Workspace with glob pattern "crates/*" should expand and find member
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/mylib");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_package_name().unwrap(), "mylib");
+    }
+
+    #[test]
+    fn expand_workspace_member_literal_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let member = dir.path().join("crates/foo");
+        fs::create_dir_all(&member).unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/foo");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], dir.path().join("crates/foo"));
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("crates/alpha");
+        let b = dir.path().join("crates/beta");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        // Also create a file (should be filtered out — only dirs)
+        fs::write(dir.path().join("crates/README.md"), "hi").unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/*");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_no_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("crates")).unwrap();
+        // Empty directory — no subdirs
+        let result = super::expand_workspace_member(dir.path(), "crates/*");
+        assert!(result.is_empty());
     }
 }
