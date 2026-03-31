@@ -1,0 +1,12 @@
+# E2E test config — used by CI for all e2e language tests.
+# Overrides model, provider, and timeout for reasoning models on OpenRouter.
+
+[llm]
+provider_type = "openai-compatible"
+model = "qwen/qwen3.5-122b-a10b"
+api_key_env = "OPENAI_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+request_timeout_secs = 1800
+
+[generation]
+max_retries = 5

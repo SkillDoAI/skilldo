@@ -232,7 +232,7 @@ jobs:
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true' && needs.e2e-build.outputs.skip != 'true'
     needs: [changes, e2e-build]
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -277,13 +277,17 @@ jobs:
       - name: "Clone ${{ matrix.lang }} test library"
         run: git clone --branch ${{ matrix.tag }} --depth 1 https://github.com/${{ matrix.repo }}.git /tmp/test-lib
 
+      - name: "Checkout e2e config"
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/e2e-config.toml
+          sparse-checkout-cone-mode: false
+          path: skilldo-src
+
       - name: "Generate ${{ matrix.lang }} SKILL.md"
         run: |
           ./bin/skilldo generate /tmp/test-lib \
-            --provider openai-compatible \
-            --model qwen/qwen3.5-122b-a10b \
-            --base-url https://openrouter.ai/api/v1 \
-            --max-retries 5 \
+            --config skilldo-src/.github/e2e-config.toml \
             --best-effort \
             ${{ matrix.flag }} \
             -o /tmp/test-SKILL.md
