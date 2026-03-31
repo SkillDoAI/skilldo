@@ -4180,6 +4180,8 @@ dependencies = []
     }
 
     // --- redact_secrets direct tests ---
+    // These tests mutate process-global env vars — serialize with a mutex.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn test_redact_secrets_empty_vars_returns_original() {
@@ -4193,7 +4195,7 @@ dependencies = []
 
     #[test]
     fn test_redact_secrets_replaces_env_var_value() {
-        // Set a unique env var for this test
+        let _lock = ENV_LOCK.lock().unwrap();
         let var_name = "SKILLDO_TEST_REDACT_SECRET_ABC";
         let secret_value = "super-secret-token-12345";
         std::env::set_var(var_name, secret_value);
@@ -4237,6 +4239,7 @@ dependencies = []
 
     #[test]
     fn test_redact_secrets_skips_empty_env_var_value() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let var_name = "SKILLDO_TEST_EMPTY_VAR_DEF";
         std::env::set_var(var_name, "");
 
@@ -4254,6 +4257,7 @@ dependencies = []
 
     #[test]
     fn test_redact_secrets_multiple_vars_and_occurrences() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let var1 = "SKILLDO_TEST_REDACT_KEY_1";
         let var2 = "SKILLDO_TEST_REDACT_KEY_2";
         std::env::set_var(var1, "key-aaa");
