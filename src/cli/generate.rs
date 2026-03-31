@@ -467,8 +467,9 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         generator = generator.with_existing_skill(skill.clone());
     }
 
-    // Set up secret redaction for test agent output (always set, even if empty,
-    // so a previous run's config doesn't leak into this one via the OnceLock).
+    // Set up secret redaction for test agent output.
+    // NOTE: REDACT_VARS is a OnceLock — only the first call per process takes effect.
+    // For CLI usage (one process per invocation) this is always the first call.
     crate::test_agent::executor::set_redact_vars(config.generation.redact_env_vars.clone());
 
     let output_result = generator.generate(&collected_data).await?;

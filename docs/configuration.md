@@ -75,8 +75,8 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 # ── Generation Settings ───────────────────────────────────────
 [generation]
-# Max retry attempts for the generate→validate loop (default: 5)
-max_retries = 5
+# Max retry attempts for the generate→validate loop (default: 10)
+max_retries = 10
 
 # Run extract/map/learn in parallel (default: true). CLI: --no-parallel
 parallel_extraction = true
