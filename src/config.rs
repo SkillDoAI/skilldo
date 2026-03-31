@@ -541,10 +541,11 @@ pub struct GenerationConfig {
     pub redact_env_vars: Vec<String>,
 
     /// Security context hint for the library type. Adjusts security scan sensitivity.
-    /// - "default" (or omitted): standard security checks
+    /// Omit for standard security checks (default behavior).
     /// - "api-client": relaxes rules about API key/credential discussion in prose,
-    ///   suppresses SD-202 (credential store access), and tells the review agent to
-    ///   expect auth/token patterns. Use for API client SDKs.
+    ///   suppresses SD-202 (credential store access). Use for API client SDKs.
+    ///
+    /// Invalid values are rejected at config parse time.
     #[serde(default, deserialize_with = "deserialize_security_context")]
     pub security_context: Option<String>,
 
@@ -1064,6 +1065,8 @@ mod tests {
         assert!(gen.review_llm.is_none());
         assert!(gen.test_llm.is_none());
         assert!(gen.version_from.is_none());
+        assert!(gen.redact_env_vars.is_empty());
+        assert!(gen.security_context.is_none());
     }
 
     #[test]

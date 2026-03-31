@@ -81,9 +81,9 @@ jobs:
         with:
           shared-key: ci-windows
           cache-all-crates: true
-      - name: install uv
-        run: irm https://astral.sh/uv/0.11.2/install.ps1 | iex
-        shell: pwsh
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.2"
       - run: cargo check --all-targets
       # Run lib tests on Windows to surface platform-specific failures early
       - name: run tests (informational)

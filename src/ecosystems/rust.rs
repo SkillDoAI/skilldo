@@ -784,7 +784,15 @@ fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::Pat
         // Simple glob: split at *, list directories under the prefix.
         // NOTE: suffix after * is ignored (e.g., "crates/*-macros" matches all dirs
         // under crates/). Full glob matching would need the glob crate.
-        if let Some((prefix, _suffix)) = member.split_once('*') {
+        if let Some((prefix, suffix)) = member.split_once('*') {
+            if !suffix.is_empty() {
+                tracing::warn!(
+                    "Workspace glob '{}' — suffix '{}' ignored; all dirs under '{}' considered",
+                    member,
+                    suffix,
+                    prefix
+                );
+            }
             let search_dir = repo_root.join(prefix);
             if let Ok(entries) = fs::read_dir(&search_dir) {
                 let mut paths: Vec<_> = entries
