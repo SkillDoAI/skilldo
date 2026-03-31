@@ -232,7 +232,7 @@ jobs:
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true' && needs.e2e-build.outputs.skip != 'true'
     needs: [changes, e2e-build]
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -258,7 +258,7 @@ jobs:
             tag: gson-parent-2.12.1
             flag: "--language java"
     env:
-      CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - uses: astral-sh/setup-uv@v7
         if: matrix.lang == 'python'
@@ -281,14 +281,14 @@ jobs:
         run: |
           ./bin/skilldo generate /tmp/test-lib \
             --provider openai-compatible \
-            --model gpt-oss-120b \
-            --base-url https://api.cerebras.ai/v1 \
+            --model qwen/qwen3.5-122b-a10b \
+            --base-url https://openrouter.ai/api/v1 \
             --max-retries 5 \
             --best-effort \
             ${{ matrix.flag }} \
             -o /tmp/test-SKILL.md
         env:
-          OPENAI_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: "Validate ${{ matrix.lang }} output"
         run: |
