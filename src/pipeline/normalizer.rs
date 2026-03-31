@@ -652,7 +652,7 @@ pub fn normalize_skill_md(
     // 3. Strip trailing LLM meta-text (review notes, "Summary of fixes", etc.)
     normalized = strip_trailing_meta_text(&normalized);
 
-    // 3.5. Strip conflict notes (logged by generator's strip_conflict_notes when called
+    // 3.5. Strip SKILLDO-* notes (logged by generator's strip_skilldo_notes when called
     //      from the pipeline; stripped here as a defensive fallback in standalone usage).
     let had_trailing_newline = normalized.ends_with('\n');
     normalized = normalized

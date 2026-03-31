@@ -148,7 +148,7 @@ fn strip_markdown_fences(content: &str) -> String {
 
 /// Strip `<!-- SKILLDO-*: ... -->` notes from model output, logging each one.
 /// Must run before the security scan since these look like instruction injection.
-fn strip_conflict_notes(content: &str) -> String {
+fn strip_skilldo_notes(content: &str) -> String {
     let mut result = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -243,7 +243,7 @@ pub struct Generator {
     existing_skill: Option<String>, // Existing SKILL.md for update mode
     model_name: Option<String>,     // For metadata.generated-by frontmatter field
     debug_stage_dir: Option<std::path::PathBuf>, // Dump stage outputs here
-    security_context: Option<String>, // "api-client" relaxes credential-related rules
+    security_context: Option<String>,
 }
 
 impl Generator {
@@ -546,7 +546,7 @@ impl Generator {
         self.dump_stage("4-create-raw.md", &skill_md);
 
         // Strip conflict notes first — a trailing note after a closing fence blocks unwrapping
-        skill_md = strip_conflict_notes(&skill_md);
+        skill_md = strip_skilldo_notes(&skill_md);
 
         // Strip markdown code fences if present (models sometimes wrap output)
         skill_md = strip_markdown_fences(&skill_md);
@@ -694,7 +694,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 );
 
                 skill_md = self.get_client("create").complete(&fix_prompt).await?;
-                skill_md = strip_conflict_notes(&skill_md);
+                skill_md = strip_skilldo_notes(&skill_md);
                 skill_md = strip_markdown_fences(&skill_md);
                 skill_md = crate::security::unicode::strip_invisible_unicode(&skill_md);
                 rescan_after_rewrite(
@@ -740,7 +740,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
 
                                     skill_md =
                                         self.get_client("create").complete(&patch_prompt).await?;
-                                    skill_md = strip_conflict_notes(&skill_md);
+                                    skill_md = strip_skilldo_notes(&skill_md);
                                     skill_md = strip_markdown_fences(&skill_md);
                                     skill_md = crate::security::unicode::strip_invisible_unicode(
                                         &skill_md,
@@ -975,7 +975,7 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     fix_preamble, skill_md, feedback
                 );
                 skill_md = self.get_client("create").complete(&fix_prompt).await?;
-                skill_md = strip_conflict_notes(&skill_md);
+                skill_md = strip_skilldo_notes(&skill_md);
                 skill_md = strip_markdown_fences(&skill_md);
                 skill_md = crate::security::unicode::strip_invisible_unicode(&skill_md);
                 rescan_after_rewrite(
@@ -3614,9 +3614,9 @@ End of analysis."#;
     }
 
     #[test]
-    fn test_strip_conflict_notes_extracts_and_removes() {
+    fn test_strip_skilldo_notes_extracts_and_removes() {
         let input = "## Imports\n\nContent\n\n<!-- SKILLDO-CONFLICT: source says bytes but custom says chars -->\n<!-- SKILLDO-CONFLICT: another conflict -->\n## API Reference\n";
-        let result = strip_conflict_notes(input);
+        let result = strip_skilldo_notes(input);
         assert!(
             !result.contains("SKILLDO-CONFLICT"),
             "Conflict notes should be stripped"
@@ -3626,16 +3626,16 @@ End of analysis."#;
     }
 
     #[test]
-    fn test_strip_conflict_notes_preserves_trailing_newline() {
+    fn test_strip_skilldo_notes_preserves_trailing_newline() {
         let input = "Content here\n";
-        let result = strip_conflict_notes(input);
+        let result = strip_skilldo_notes(input);
         assert_eq!(result, "Content here\n");
     }
 
     #[test]
-    fn test_strip_conflict_notes_empty_note_ignored() {
+    fn test_strip_skilldo_notes_empty_note_ignored() {
         let input = "Content\n<!-- SKILLDO-CONFLICT: -->\nMore\n";
-        let result = strip_conflict_notes(input);
+        let result = strip_skilldo_notes(input);
         assert!(result.contains("Content"));
         assert!(result.contains("More"));
         assert!(!result.contains("SKILLDO-CONFLICT"));

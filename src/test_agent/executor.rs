@@ -14,12 +14,18 @@ use tracing::{debug, info, warn};
 use super::LanguageExecutor;
 use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 
-/// Global redact list set from config at pipeline start.
+// Global because classify_result is called from multiple executor impls
+// that share no common context struct — threading would require trait changes.
 static REDACT_VARS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 
 /// Set the list of env var names to redact from test output. Called once from pipeline setup.
 pub fn set_redact_vars(vars: Vec<String>) {
-    let _ = REDACT_VARS.set(vars);
+    if let Err(attempted) = REDACT_VARS.set(vars) {
+        warn!(
+            "redact_env_vars already set (ignored {} new vars) — only first call takes effect",
+            attempted.len()
+        );
+    }
 }
 
 fn get_redact_vars() -> &'static [String] {
@@ -187,23 +193,34 @@ pub(crate) fn filter_java_deps_by_artifact_id(
 }
 
 /// Detect the installed Python minor version (e.g., "3.12") for requires-python.
-/// Falls back to "3.9" if detection fails.
+/// Cached after first call — Python version doesn't change during a pipeline run.
+/// Falls back to "3.9" (oldest widely-deployed version) if detection fails.
 async fn detect_python_minor_version() -> String {
-    let output = tokio::process::Command::new("python3")
+    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(v) = CACHED.get() {
+        return v.clone();
+    }
+    let result = tokio::process::Command::new("python3")
         .args(["--version"])
         .output()
         .await;
-    if let Ok(out) = output {
+    let version = if let Ok(out) = result {
         let version_str = String::from_utf8_lossy(&out.stdout);
-        // "Python 3.12.4" → "3.12"
         if let Some(ver) = version_str.strip_prefix("Python ") {
             let parts: Vec<&str> = ver.trim().split('.').collect();
             if parts.len() >= 2 {
-                return format!("{}.{}", parts[0], parts[1]);
+                format!("{}.{}", parts[0], parts[1])
+            } else {
+                "3.9".to_string()
             }
+        } else {
+            "3.9".to_string()
         }
-    }
-    "3.9".to_string()
+    } else {
+        "3.9".to_string()
+    };
+    let _ = CACHED.set(version.clone());
+    version
 }
 
 /// Python executor using `uv` for fast environment setup
