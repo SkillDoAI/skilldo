@@ -914,4 +914,104 @@ print(response.json())
         dedup_findings(&mut findings);
         assert_eq!(findings.len(), 1);
     }
+
+    // --- scan_skill_with_context tests ---
+
+    /// Content with SD-202 trigger strings in prose (outside code blocks).
+    /// ".ssh/" and ".aws/" trigger SD_202_credential_file_access.
+    const SD202_PROSE_CONTENT: &str = "\
+---
+name: ssh-manager
+version: \"1.0\"
+---
+
+# SSH Manager
+
+Configure your .ssh/ directory and .aws/ credentials for remote access.
+";
+
+    #[test]
+    fn scan_skill_with_context_none_matches_scan_skill() {
+        let base = scan_skill(SD202_PROSE_CONTENT);
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, None);
+
+        assert_eq!(base.score, ctx.score);
+        assert_eq!(base.findings.len(), ctx.findings.len());
+        for (b, c) in base.findings.iter().zip(ctx.findings.iter()) {
+            assert_eq!(b.rule_id, c.rule_id);
+            assert_eq!(b.line, c.line);
+        }
+    }
+
+    #[test]
+    fn scan_skill_with_context_api_client_suppresses_sd202() {
+        // Confirm baseline has SD-202 findings
+        let base = scan_skill(SD202_PROSE_CONTENT);
+        let sd202_count = base
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "SD-202")
+            .count();
+        assert!(
+            sd202_count > 0,
+            "Test content must trigger SD-202 in baseline scan, got findings: {:?}",
+            base.findings
+                .iter()
+                .map(|f| f.rule_id.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        // With "api-client" context, SD-202 should be suppressed
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+        assert!(
+            !ctx.findings.iter().any(|f| f.rule_id == "SD-202"),
+            "SD-202 should be suppressed with api-client context, got: {:?}",
+            ctx.findings
+                .iter()
+                .map(|f| f.rule_id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            ctx.findings.len() < base.findings.len(),
+            "api-client context should have fewer findings"
+        );
+    }
+
+    #[test]
+    fn scan_skill_with_context_api_client_recalculates_score() {
+        let base = scan_skill(SD202_PROSE_CONTENT);
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+
+        // Score should be recalculated without the SD-202 deductions
+        let expected_deductions: i32 = ctx.findings.iter().map(|f| f.severity.deduction()).sum();
+        let expected_score = (100i32 - expected_deductions).clamp(0, 100) as u8;
+        assert_eq!(
+            ctx.score, expected_score,
+            "Score must be recalculated after suppressing SD-202"
+        );
+        // With SD-202 (High = 15pt deduction) removed, score should be higher
+        assert!(
+            ctx.score > base.score,
+            "Score with api-client context ({}) should be higher than baseline ({})",
+            ctx.score,
+            base.score
+        );
+    }
+
+    #[test]
+    fn scan_skill_with_context_unknown_context_matches_none() {
+        let none_report = scan_skill_with_context(SD202_PROSE_CONTENT, None);
+        let unknown_report = scan_skill_with_context(SD202_PROSE_CONTENT, Some("unknown-context"));
+
+        assert_eq!(none_report.score, unknown_report.score);
+        assert_eq!(none_report.findings.len(), unknown_report.findings.len());
+        // SD-202 should NOT be suppressed for unknown contexts
+        assert!(
+            unknown_report
+                .findings
+                .iter()
+                .any(|f| f.rule_id == "SD-202"),
+            "SD-202 should not be suppressed for unknown context"
+        );
+    }
 }

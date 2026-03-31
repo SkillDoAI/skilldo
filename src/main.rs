@@ -629,6 +629,15 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_config_sample() {
+        let cli = Cli::try_parse_from(["skilldo", "config", "sample"]).unwrap();
+        let Commands::Config { action } = cli.command else {
+            panic!("Expected Config command");
+        };
+        assert!(matches!(action, ConfigAction::Sample));
+    }
+
+    #[test]
     fn test_parse_quiet_flag() {
         let cli = Cli::try_parse_from(["skilldo", "-q", "generate"]).unwrap();
         assert!(cli.quiet);
