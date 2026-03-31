@@ -955,22 +955,14 @@ Configure your .ssh/ directory and .aws/ credentials for remote access.
             .count();
         assert!(
             sd202_count > 0,
-            "Test content must trigger SD-202 in baseline scan, got findings: {:?}",
-            base.findings
-                .iter()
-                .map(|f| f.rule_id.as_str())
-                .collect::<Vec<_>>()
+            "Test content must trigger SD-202 in baseline scan"
         );
 
         // With "api-client" context, SD-202 should be suppressed
         let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
         assert!(
             !ctx.findings.iter().any(|f| f.rule_id == "SD-202"),
-            "SD-202 should be suppressed with api-client context, got: {:?}",
-            ctx.findings
-                .iter()
-                .map(|f| f.rule_id.as_str())
-                .collect::<Vec<_>>()
+            "SD-202 should be suppressed with api-client context"
         );
         assert!(
             ctx.findings.len() < base.findings.len(),
@@ -1038,11 +1030,7 @@ Access the .ssh/ key store.
             .iter()
             .filter(|f| f.rule_id != "SD-202")
             .collect();
-        assert!(
-            non_sd202.is_empty(),
-            "Expected only SD-202 findings, but also got: {:?}",
-            non_sd202.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
-        );
+        assert!(non_sd202.is_empty(), "Expected only SD-202 findings");
         assert!(
             !base.findings.is_empty(),
             "Expected at least one SD-202 finding"
