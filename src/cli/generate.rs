@@ -111,7 +111,19 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     // Apply CLI overrides
     if let Some(ref provider) = provider_override {
         info!("CLI override: provider = {}", provider);
-        config.llm.provider = provider.parse::<Provider>()?;
+        let new_provider: Provider = provider.parse()?;
+        // When switching providers via CLI, reset api_key_env to the new provider's
+        // default if the current value is "none" or empty. Prevents a local config's
+        // api_key_env = "none" from blocking a CLI-specified provider that needs a key.
+        let current_env = config.llm.api_key_env.as_deref().unwrap_or("");
+        if current_env.is_empty() || current_env.eq_ignore_ascii_case("none") {
+            config.llm.api_key_env = Some(new_provider.default_api_key_env().to_string());
+            info!(
+                "CLI override: api_key_env reset to {} (provider changed)",
+                new_provider.default_api_key_env()
+            );
+        }
+        config.llm.provider = new_provider;
     }
     if let Some(ref model) = model_override {
         info!("CLI override: model = {}", model);

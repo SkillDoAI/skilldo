@@ -3,6 +3,12 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## Unreleased
+
+### Fixed
+- **`--provider` CLI override resets `api_key_env`** — switching providers via CLI now resets `api_key_env` to the new provider's default when the config has `api_key_env = "none"`, preventing silent auth failures
+- **E2E model switch** — Cerebras gpt-oss-120b → OpenRouter qwen/qwen3.5-122b-a10b. Fixes JS (missing sections) and Rust (hallucination/degeneration) e2e failures
+
 ## 0.5.11
 
 ### Added
