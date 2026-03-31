@@ -781,23 +781,17 @@ impl RustHandler {
 /// Returns a list of resolved directory paths. For literal paths, returns a single entry.
 fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::PathBuf> {
     if member.contains('*') {
-        // Simple glob: split at *, list directories under the prefix.
-        // NOTE: suffix after * is ignored (e.g., "crates/*-macros" matches all dirs
-        // under crates/). Full glob matching would need the glob crate.
+        // Simple glob: split at *, match prefix and suffix against directory names.
+        // e.g., "crates/*-macros" matches crates/foo-macros but not crates/foo-core.
         if let Some((prefix, suffix)) = member.split_once('*') {
-            if !suffix.is_empty() {
-                tracing::warn!(
-                    "Workspace glob '{}' — suffix '{}' ignored; all dirs under '{}' considered",
-                    member,
-                    suffix,
-                    prefix
-                );
-            }
             let search_dir = repo_root.join(prefix);
             if let Ok(entries) = fs::read_dir(&search_dir) {
                 let mut paths: Vec<_> = entries
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                    .filter(|e| {
+                        suffix.is_empty() || e.file_name().to_string_lossy().ends_with(suffix)
+                    })
                     .map(|e| e.path())
                     .collect();
                 paths.sort();
@@ -3780,6 +3774,28 @@ mod tests {
         // Empty directory — no subdirs
         let result = super::expand_workspace_member(dir.path(), "crates/*");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_with_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("crates/foo-macros")).unwrap();
+        fs::create_dir_all(dir.path().join("crates/foo-core")).unwrap();
+        fs::create_dir_all(dir.path().join("crates/bar-macros")).unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/*-macros");
+        assert_eq!(
+            result.len(),
+            2,
+            "should only match -macros dirs: {:?}",
+            result
+        );
+        let names: Vec<_> = result
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert!(names.contains(&"foo-macros".to_string()));
+        assert!(names.contains(&"bar-macros".to_string()));
+        assert!(!names.contains(&"foo-core".to_string()));
     }
 
     #[test]
