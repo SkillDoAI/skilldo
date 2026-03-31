@@ -3,11 +3,22 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
-## Unreleased
+## 0.5.12
+
+### Added
+- **`SecurityContext` enum** — replaces `Option<String>` with compile-time validated enum. Invalid values now fail at config parse time via serde
+- **Workspace version walk-up** — member crates with `version.workspace = true` resolve version from the workspace root (walks up to 3 parent directories)
+- **Responses API helpers** — `build_responses_request()` + `extract_responses_text()` shared between OpenAI and ChatGPT clients (-19 lines)
+
+### Changed
+- **`rescan_after_rewrite` → method on Generator** — eliminates 4-parameter function called 4 times with same args (-31 lines)
 
 ### Fixed
-- **`--provider` CLI override resets `api_key_env`** — switching providers via CLI now resets `api_key_env` to the new provider's default when the config has `api_key_env = "none"`, preventing silent auth failures
-- **E2E model switch** — Cerebras gpt-oss-120b → OpenRouter qwen/qwen3.5-122b-a10b. Fixes JS (missing sections) and Rust (hallucination/degeneration) e2e failures
+- **npm scoped package YAML quoting** — `@scope/pkg` frontmatter names now quoted to produce valid YAML
+- **Reasoning model response parsing** — handles `reasoning_details` array and `refusal` fields from OpenRouter/Nemotron/Qwen models
+- **`--provider` CLI override resets `api_key_env`** — prevents silent auth failures when local config has `api_key_env = "none"`
+- **E2E model switch** — Cerebras gpt-oss-120b → OpenRouter qwen/qwen3.5-122b-a10b. Fixes JS and Rust e2e failures
+- **Windows: container flag test** — `best_effort: true` for Docker-unavailable CI environments
 
 ## 0.5.11
 
