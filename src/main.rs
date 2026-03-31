@@ -388,23 +388,7 @@ async fn main() -> Result<()> {
                 cli::config_check::run(config, strict)?;
             }
             ConfigAction::Sample => {
-                println!("# Full documented sample config:");
-                println!("# https://github.com/SkillDoAI/skilldo/blob/main/docs/configuration.md");
-                println!("#");
-                println!("# Quick start — copy and customize:\n");
-                println!("[llm]");
-                println!("provider_type = \"anthropic\"");
-                println!("model = \"claude-sonnet-4-6\"");
-                println!("api_key_env = \"ANTHROPIC_API_KEY\"\n");
-                println!("[generation]");
-                println!("max_retries = 10");
-                println!("enable_test = true");
-                println!("enable_review = true");
-                println!("# security_context = \"api-client\"  # for API client SDKs");
-                println!("# redact_env_vars = [\"MY_API_KEY\"]  # mask secrets in CI logs");
-                println!("# custom_instructions = \"\"\"");
-                println!("# Repo-specific instructions here.");
-                println!("# \"\"\"");
+                println!("{}", cli::config_sample::sample_config_text());
             }
         },
         Commands::ShowPrompts { language, stage } => {
