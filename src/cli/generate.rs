@@ -1251,6 +1251,7 @@ install_source = "registry"
         let output = repo.path().join("SKILL.md");
         let result = run(GenerateOptions {
             container: true,
+            best_effort: true, // container test agent may fail when Docker images aren't pre-pulled (e.g. Windows CI)
             ..test_opts(&repo, &output)
         })
         .await;
