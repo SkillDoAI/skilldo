@@ -810,15 +810,19 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             // Pre-build static parts once (context/api_surface don't change between retries)
             let behavioral = extract_behavioral_semantics(&context);
             let fix_preamble = format!(
-                "Fix the issues listed below in this SKILL.md. Output ONLY the corrected \
-                 SKILL.md content — no preamble, no commentary, no summary of changes, \
-                 no \"here is the fixed version\", no changelog. Just the raw SKILL.md \
-                 from the opening --- to the last section. Darryl is reviewing your output \
-                 and will reject anything that isn't pure documentation.\n\n\
-                 For accuracy fixes: use the API surface below as ground truth for method \
-                 signatures, parameter names, and feature flags. Do not guess.\n\n\
-                 API Surface:\n{}",
-                api_surface
+                "REVIEW FAILED. Fix the issues listed below in this SKILL.md.\n\n\
+                 CRITICAL RULES FOR FIXES:\n\
+                 - If a method/type is NOT in the API Surface below, it DOES NOT EXIST. Remove it entirely.\n\
+                 - Do NOT rely on your training data for what methods exist. ONLY the API Surface is truth.\n\
+                 - If you are unsure whether something exists, REMOVE IT rather than guess.\n\
+                 - A hallucinated API is 3x worse than a missing one.\n\
+                 - Unused imports (listed in ## Imports but never used in code examples) must be removed.\n\n\
+                 Output ONLY the corrected SKILL.md content — no preamble, no commentary, \
+                 no summary of changes. Just the raw SKILL.md from the opening --- to the last section.\n\n\
+                 API Surface (ONLY these methods/types exist):\n{}\n\n\
+                 Usage patterns from tests (how the library is actually used):\n{}\n\n\
+                 Conventions and context from docs:\n{}",
+                api_surface, patterns, context
             );
             let mut last_review_attempt = 0;
             let mut last_review_tests_passed = false;
