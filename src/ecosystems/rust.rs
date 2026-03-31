@@ -781,7 +781,9 @@ impl RustHandler {
 /// Returns a list of resolved directory paths. For literal paths, returns a single entry.
 fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::PathBuf> {
     if member.contains('*') {
-        // Simple glob: split at the *, list directories matching the prefix
+        // Simple glob: split at *, list directories under the prefix.
+        // NOTE: suffix after * is ignored (e.g., "crates/*-macros" matches all dirs
+        // under crates/). Full glob matching would need the glob crate.
         if let Some((prefix, _suffix)) = member.split_once('*') {
             let search_dir = repo_root.join(prefix);
             if let Ok(entries) = fs::read_dir(&search_dir) {
