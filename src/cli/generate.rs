@@ -495,11 +495,18 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         );
     }
 
-    // Lint the generated file
-    info!("Running linter...");
-    let linter = crate::lint::SkillLinter::new();
-    let issues = linter.lint(&output_result.skill_md)?;
-    linter.print_issues(&issues);
+    // Lint the generated file (skip in dry-run — mock output produces false warnings)
+    let issues: Vec<crate::lint::LintIssue> = if dry_run {
+        info!("Dry run complete — skipping lint (mock LLM output is not real content)");
+        info!("Validated: file collection, config loading, language detection, provider setup");
+        Vec::new()
+    } else {
+        info!("Running linter...");
+        let linter = crate::lint::SkillLinter::new();
+        let issues = linter.lint(&output_result.skill_md)?;
+        linter.print_issues(&issues);
+        issues
+    };
 
     // Surface unresolved review warnings to the user
     if !output_result.unresolved_warnings.is_empty() {
