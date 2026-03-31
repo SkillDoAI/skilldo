@@ -224,16 +224,43 @@ impl RustHandler {
     // ── Metadata extraction ────────────────────────────────────────────
 
     /// Extract package name from Cargo.toml `[package]` section.
+    /// For workspace roots (no `[package]`), finds the first member crate's name.
     pub fn get_package_name(&self) -> Result<String> {
         let cargo_toml = self.repo_path.join("Cargo.toml");
         let content = fs::read_to_string(&cargo_toml)
             .map_err(|e| anyhow::anyhow!("Cannot read Cargo.toml: {e}"))?;
 
-        cargo_toml_field(&content, "name")
-            .ok_or_else(|| anyhow::anyhow!("No package name found in Cargo.toml"))
+        // Try direct [package].name first
+        if let Some(name) = cargo_toml_field(&content, "name") {
+            return Ok(name);
+        }
+
+        // Workspace root — find the first member with a [package] section
+        if let Ok(parsed) = content.parse::<toml::Table>() {
+            if let Some(workspace) = parsed.get("workspace").and_then(|v| v.as_table()) {
+                if let Some(members) = workspace.get("members").and_then(|v| v.as_array()) {
+                    for member in members {
+                        if let Some(member_path) = member.as_str() {
+                            let member_cargo = self.repo_path.join(member_path).join("Cargo.toml");
+                            if let Ok(member_content) = fs::read_to_string(&member_cargo) {
+                                if let Some(name) = cargo_toml_field(&member_content, "name") {
+                                    tracing::info!(
+                                        "Workspace root — using first member crate: {}",
+                                        name
+                                    );
+                                    return Ok(name);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!("No package name found in Cargo.toml (not a package or workspace)")
     }
 
-    /// Extract version from Cargo.toml, falling back to git tags, then "latest".
+    /// Extract version from Cargo.toml, falling back to workspace, git tags, then "latest".
     pub fn get_version(&self) -> Result<String> {
         // Strategy 1: Cargo.toml [package] version (most authoritative for Rust)
         let cargo_toml = self.repo_path.join("Cargo.toml");
@@ -242,6 +269,20 @@ impl RustHandler {
                 // Reject workspace-inherited versions like { workspace = true }
                 if !Self::is_workspace_placeholder(&version) && version.contains('.') {
                     return Ok(version);
+                }
+            }
+
+            // Strategy 1b: workspace.package.version
+            if let Ok(parsed) = content.parse::<toml::Table>() {
+                if let Some(ver) = parsed
+                    .get("workspace")
+                    .and_then(|w| w.get("package"))
+                    .and_then(|p| p.get("version"))
+                    .and_then(|v| v.as_str())
+                {
+                    if ver.contains('.') {
+                        return Ok(ver.to_string());
+                    }
                 }
             }
         }
@@ -1128,6 +1169,46 @@ mod tests {
         .unwrap();
         let handler = RustHandler::new(dir.path());
         assert!(handler.get_package_name().is_err());
+    }
+
+    #[test]
+    fn get_package_name_from_workspace_root() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace root with no [package]
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/mylib\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        // Member crate with [package]
+        let member_dir = dir.path().join("crates/mylib");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_package_name().unwrap(), "mylib");
+    }
+
+    #[test]
+    fn get_version_from_workspace_package() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\"]\n\n[workspace.package]\nversion = \"2.0.0\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/a");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"a\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "2.0.0");
     }
 
     #[test]
