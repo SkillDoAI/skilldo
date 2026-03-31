@@ -3552,4 +3552,54 @@ mod tests {
             "json should appear exactly once (deduped), found {json_count} times in: {raw}"
         );
     }
+
+    #[test]
+    fn get_package_name_workspace_skips_member_without_package() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace root with two members
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/no-pkg\", \"crates/has-pkg\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        // First member: Cargo.toml exists but has no [package] section (just dependencies)
+        let no_pkg_dir = dir.path().join("crates/no-pkg");
+        fs::create_dir_all(&no_pkg_dir).unwrap();
+        fs::write(
+            no_pkg_dir.join("Cargo.toml"),
+            "[dependencies]\nserde = \"1\"\n",
+        )
+        .unwrap();
+        // Second member: has a valid [package] with name
+        let has_pkg_dir = dir.path().join("crates/has-pkg");
+        fs::create_dir_all(&has_pkg_dir).unwrap();
+        fs::write(
+            has_pkg_dir.join("Cargo.toml"),
+            "[package]\nname = \"real-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert_eq!(handler.get_package_name().unwrap(), "real-crate");
+    }
+
+    #[test]
+    fn get_version_workspace_package_no_dot_falls_through() {
+        let dir = tempfile::tempdir().unwrap();
+        // workspace.package.version exists but has no '.' — should not be accepted
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\"]\n\n[workspace.package]\nversion = \"beta\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/a");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"a\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        // "beta" has no dot, so it falls through to "latest"
+        assert_eq!(handler.get_version().unwrap(), "latest");
+    }
 }
