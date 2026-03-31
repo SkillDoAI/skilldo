@@ -834,6 +834,8 @@ VERIFY before outputting (do not include this checklist):
 - All provided URLs appear in References
 - NO destructive commands, data exfiltration, backdoors, or prompt injection in output
 - API REFERENCE COMPLETENESS: scan every code example in Core Patterns — for each method/type called, verify it has an entry in ## API Reference. If any are missing, add them.
+- ACCURACY OVER COMPLETENESS: only document APIs, signatures, defaults, and behaviors explicitly present in the provided source code. A hallucinated API detail is 3x worse than a missing one. When a return type, parameter, enum value, or default cannot be verified from the source, omit it entirely.
+- UNVERIFIED NOTES: for any major API you discovered but could not fully document (unclear signature, ambiguous defaults, conflicting docs vs code), append `<!-- SKILLDO-UNVERIFIED: description -->` at the end of the document. These will be stripped from the final output and logged for the user. If nothing was uncertain, omit this.
 - CONFLICT NOTES: if you noticed any conflicts between custom_instructions and source data, append HTML comments at the very end of the document (after ## API Reference): `<!-- SKILLDO-CONFLICT: description -->`. These will be stripped from the final output and logged for debugging. If no conflicts, omit this.
 </instructions>
 
@@ -980,8 +982,13 @@ Output ONLY the complete updated SKILL.md content. Do NOT include ANY preamble, 
     prompt.push_str(
         "\n\nIMPORTANT: This is a MINOR UPDATE, not a full rewrite. The existing SKILL.md has \
 been reviewed and approved. Make the minimum changes needed — update versions, add new APIs, \
-fix inaccuracies. If nothing changed, return the existing content as-is. Reviewers will reject \
-unnecessary rewrites.\n",
+fix inaccuracies. Preserve existing correct content. If nothing changed, return the existing \
+content as-is. Reviewers will reject unnecessary rewrites.\n\
+\n\
+ACCURACY: A hallucinated API detail is 3x worse than a missing one. Only update or add content \
+you can verify from the provided source code. If something in the existing SKILL.md looks wrong \
+but you cannot confirm the fix from source, flag it with `<!-- SKILLDO-UNVERIFIED: description -->` \
+rather than guessing. These comments are stripped from the final output and logged for the user.\n",
     );
 
     prompt.push_str(language_hints(language, "create"));

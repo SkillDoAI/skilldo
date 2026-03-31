@@ -243,6 +243,8 @@ async fn test_pipeline_with_custom_config() {
             version_from: None,
             telemetry: false,
             container: skilldo::config::ContainerConfig::default(),
+            redact_env_vars: Vec::new(),
+            security_context: None,
         },
         prompts: PromptsConfig {
             override_prompts: false,

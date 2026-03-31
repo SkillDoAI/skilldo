@@ -14,6 +14,18 @@ use tracing::{debug, info, warn};
 use super::LanguageExecutor;
 use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 
+/// Global redact list set from config at pipeline start.
+static REDACT_VARS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// Set the list of env var names to redact from test output. Called once from pipeline setup.
+pub fn set_redact_vars(vars: Vec<String>) {
+    let _ = REDACT_VARS.set(vars);
+}
+
+fn get_redact_vars() -> &'static [String] {
+    REDACT_VARS.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
 /// Check if a CLI tool is available in PATH.
 pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
     Command::new(cmd)
@@ -26,8 +38,27 @@ pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Redact env var values from output strings.
+/// Takes an explicit list of env var names from config — no heuristic guessing.
+/// Values are replaced with `***REDACTED***` to prevent leaking in CI logs.
+fn redact_secrets(text: &str, redact_vars: &[String]) -> String {
+    if redact_vars.is_empty() {
+        return text.to_string();
+    }
+    let mut result = text.to_string();
+    for var_name in redact_vars {
+        if let Ok(value) = std::env::var(var_name) {
+            if !value.is_empty() {
+                result = result.replace(&value, "***REDACTED***");
+            }
+        }
+    }
+    result
+}
+
 /// Classify a command execution result into Pass/Fail/Timeout.
 /// `fail_output` extracts the error message from the output on failure.
+/// All output is redacted to prevent leaking secret env var values.
 fn classify_result(
     result: Result<Output>,
     timeout_secs: u64,
@@ -37,11 +68,12 @@ fn classify_result(
     match result {
         Ok(output) => {
             if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stdout =
+                    redact_secrets(&String::from_utf8_lossy(&output.stdout), get_redact_vars());
                 debug!("{} code execution passed", lang);
                 Ok(ExecutionResult::Pass(stdout))
             } else {
-                let msg = fail_output(&output);
+                let msg = redact_secrets(&fail_output(&output), get_redact_vars());
                 debug!("{} code execution failed:\n{}", lang, msg);
                 Ok(ExecutionResult::Fail(msg))
             }
@@ -154,6 +186,26 @@ pub(crate) fn filter_java_deps_by_artifact_id(
     }
 }
 
+/// Detect the installed Python minor version (e.g., "3.12") for requires-python.
+/// Falls back to "3.9" if detection fails.
+async fn detect_python_minor_version() -> String {
+    let output = tokio::process::Command::new("python3")
+        .args(["--version"])
+        .output()
+        .await;
+    if let Ok(out) = output {
+        let version_str = String::from_utf8_lossy(&out.stdout);
+        // "Python 3.12.4" → "3.12"
+        if let Some(ver) = version_str.strip_prefix("Python ") {
+            let parts: Vec<&str> = ver.trim().split('.').collect();
+            if parts.len() >= 2 {
+                return format!("{}.{}", parts[0], parts[1]);
+            }
+        }
+    }
+    "3.9".to_string()
+}
+
 /// Python executor using `uv` for fast environment setup
 pub struct PythonUvExecutor {
     timeout_secs: u64,
@@ -228,11 +280,16 @@ impl LanguageExecutor for PythonUvExecutor {
                 .join("\n")
         };
 
+        // Use the current Python version as the floor so uv only resolves
+        // for the installed version, not a range that includes versions the
+        // target SDK might not support (e.g., SDK needs >=3.9.2 but we had >=3.8).
+        let python_version = detect_python_minor_version().await;
+
         let pyproject_content = format!(
             r#"[project]
 name = "skilldo-test"
 version = "0.1.0"
-requires-python = ">=3.8"
+requires-python = ">={python_version}"
 dependencies = [
 {}
 ]
@@ -243,7 +300,10 @@ dependencies = [
         let pyproject_path = temp_dir.path().join("pyproject.toml");
         fs::write(&pyproject_path, pyproject_content).context("Failed to write pyproject.toml")?;
 
-        debug!("Created pyproject.toml with dependencies: {:?}", deps);
+        debug!(
+            "Created pyproject.toml with dependencies: {:?} (python >= {})",
+            deps, python_version
+        );
 
         // Isolate UV cache inside temp dir (matches Go/Node cache isolation)
         let uv_cache = temp_dir.path().join("uv-cache");

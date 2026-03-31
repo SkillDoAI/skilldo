@@ -534,6 +534,20 @@ pub struct GenerationConfig {
     #[serde(default = "default_true")]
     pub enable_security_scan: bool,
 
+    /// Env var names whose values should be redacted from test output/logs.
+    /// Values are replaced with ***REDACTED*** to prevent leaking in CI.
+    /// Example: ["UNSTRUCTURED_API_KEY", "MY_SECRET_TOKEN"]
+    #[serde(default)]
+    pub redact_env_vars: Vec<String>,
+
+    /// Security context hint for the library type. Adjusts security scan sensitivity.
+    /// - "default" (or omitted): standard security checks
+    /// - "api-client": relaxes rules about API key/credential discussion in prose,
+    ///   suppresses SD-202 (credential store access), and tells the review agent to
+    ///   expect auth/token patterns. Use for API client SDKs.
+    #[serde(default)]
+    pub security_context: Option<String>,
+
     /// Max retries for review -> create feedback loop (default: 10)
     #[serde(default = "default_review_max_retries")]
     pub review_max_retries: usize,
@@ -989,6 +1003,8 @@ impl Default for GenerationConfig {
             version_from: None,
             telemetry: false,
             container: ContainerConfig::default(),
+            redact_env_vars: Vec::new(),
+            security_context: None,
         }
     }
 }
@@ -1151,6 +1167,8 @@ mod tests {
             version_from: None,
             telemetry: false,
             container: ContainerConfig::default(),
+            redact_env_vars: Vec::new(),
+            security_context: None,
         };
         assert_eq!(
             gen.get_test_mode(),

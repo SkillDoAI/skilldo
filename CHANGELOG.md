@@ -3,6 +3,22 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.11
+
+### Added
+- **`security_context` config** — set to `"api-client"` to relax security scan rules for API client SDKs that inherently discuss API keys, auth tokens, and credentials. Suppresses SD-202 false positives
+- **`redact_env_vars` config** — list of env var names whose values are replaced with `***REDACTED***` in test output and logs, preventing secret leakage in CI
+- **Anti-hallucination prompt** — create and update prompts now instruct the model that a hallucinated API detail is 3x worse than a missing one. Model flags uncertainty via `<!-- SKILLDO-UNVERIFIED: -->` comments
+- **Generic `<!-- SKILLDO-* -->` comment stripping** — all model communication comments are stripped from final output and logged. Future tag types work without code changes
+- **OpenAI Responses API auto-detection** — `openai-compatible` provider detects `/responses` endpoint URLs and automatically uses the Responses API request/response format instead of Chat Completions
+- **`typescript`/`ts` language aliases** — `--language typescript` now works (maps to JavaScript ecosystem)
+
+### Fixed
+- **Linter `"nc "` false positive** — 2-character substring matched `sync `, `func `, etc. Removed from exfil commands; `netcat`/`ncat` still detected
+- **Linter `"api_key"` false positive** — legitimate API parameter name flagged as exfiltration target. Removed; real secrets covered by `.env`, `credentials`, `.ssh/`, etc.
+- **Python version floor** — test agent now detects installed Python version instead of hardcoding `>=3.8`, fixing dep resolution failures for SDKs requiring newer Python
+- **Windows `test_with_debug_stage_dir_creation_failure`** — used `/dev/null` path (Unix-only); now uses `NUL` on Windows
+
 ## 0.5.10
 
 ### Added

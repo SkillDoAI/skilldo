@@ -27,6 +27,7 @@ Each language has a dedicated executor that runs generated test code:
 - **Requirements**: `go` 1.21+ installed locally (bare-metal) or Docker/Podman (container)
 
 ### JavaScript/TypeScript
+- **Language aliases**: `javascript`, `js`, `typescript`, `ts`, `node`, `npm`
 - **Bare-metal**: Creates an isolated temp directory with `npm_config_cache` confined, runs `node`
 - **Container**: `node:24-alpine`
 - **Requirements**: `node` 18+ and `npm` installed locally (bare-metal) or Docker/Podman (container)

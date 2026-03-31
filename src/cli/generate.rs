@@ -460,10 +460,16 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         .with_review_max_retries(config.generation.review_max_retries)
         .with_container_config(config.generation.container.clone())
         .with_parallel_extraction(config.generation.parallel_extraction)
-        .with_debug_stage_dir(debug_stage_files);
+        .with_debug_stage_dir(debug_stage_files)
+        .with_security_context(config.generation.security_context.clone());
 
     if let Some(ref skill) = existing_skill {
         generator = generator.with_existing_skill(skill.clone());
+    }
+
+    // Set up secret redaction for test agent output
+    if !config.generation.redact_env_vars.is_empty() {
+        crate::test_agent::executor::set_redact_vars(config.generation.redact_env_vars.clone());
     }
 
     let output_result = generator.generate(&collected_data).await?;

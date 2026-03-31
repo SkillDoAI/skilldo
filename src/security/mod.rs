@@ -180,6 +180,29 @@ impl ScanReport {
 ///
 /// Runs all three detection layers and returns a consolidated report:
 /// YARA rules, unicode analysis, and injection analysis.
+/// Scan with optional security context. "api-client" suppresses rules that
+/// fire on legitimate API client SDK content (credential discussion, auth patterns).
+pub fn scan_skill_with_context(content: &str, security_context: Option<&str>) -> ScanReport {
+    let mut report = scan_skill(content);
+    if security_context == Some("api-client") {
+        // Suppress SD-202 (credential store access) — API client SDKs legitimately
+        // discuss API keys, auth tokens, and credential configuration.
+        let before = report.findings.len();
+        report.findings.retain(|f| f.rule_id != "SD-202");
+        let suppressed = before - report.findings.len();
+        if suppressed > 0 {
+            tracing::info!(
+                "Security context 'api-client': suppressed {} SD-202 finding(s)",
+                suppressed
+            );
+            // Recalculate score without suppressed findings
+            let deductions: i32 = report.findings.iter().map(|f| f.severity.deduction()).sum();
+            report.score = (100i32 - deductions).clamp(0, 100) as u8;
+        }
+    }
+    report
+}
+
 pub fn scan_skill(content: &str) -> ScanReport {
     let mut findings = Vec::new();
 

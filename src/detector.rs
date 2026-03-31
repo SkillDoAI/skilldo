@@ -63,7 +63,7 @@ impl FromStr for Language {
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "python" | "py" => Ok(Language::Python),
-            "javascript" | "js" | "node" | "npm" => Ok(Language::JavaScript),
+            "javascript" | "js" | "typescript" | "ts" | "node" | "npm" => Ok(Language::JavaScript),
             "rust" | "rs" => Ok(Language::Rust),
             "go" | "golang" => Ok(Language::Go),
             "java" | "jvm" | "maven" | "gradle" => Ok(Language::Java),

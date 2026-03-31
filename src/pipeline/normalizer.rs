@@ -657,7 +657,7 @@ pub fn normalize_skill_md(
     let had_trailing_newline = normalized.ends_with('\n');
     normalized = normalized
         .lines()
-        .filter(|l| !l.trim().starts_with("<!-- SKILLDO-CONFLICT:"))
+        .filter(|l| !l.trim().starts_with("<!-- SKILLDO-"))
         .collect::<Vec<_>>()
         .join("\n");
     if had_trailing_newline && !normalized.ends_with('\n') {
