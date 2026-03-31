@@ -82,6 +82,66 @@ impl RustHandler {
         t.starts_with('{') && t.contains("workspace") && t.contains("true")
     }
 
+    /// Check if a Cargo.toml `[package]` section contains a dotted workspace
+    /// key like `version.workspace = true` (as opposed to the inline-table
+    /// form `version = { workspace = true }`).
+    fn has_dotted_workspace_key(content: &str, field: &str) -> bool {
+        let dotted = format!("{field}.workspace");
+        let mut in_package = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') {
+                let header = trimmed
+                    .split_once('#')
+                    .map_or(trimmed, |(before, _)| before.trim());
+                in_package = header == "[package]";
+                continue;
+            }
+            if in_package {
+                if let Some(eq_pos) = trimmed.find('=') {
+                    let lhs = trimmed[..eq_pos].trim();
+                    let rhs = trimmed[eq_pos + 1..].trim();
+                    if lhs == dotted && rhs == "true" {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Walk up from `self.repo_path` (up to 3 parent levels) looking for a
+    /// workspace-root Cargo.toml that contains `[workspace.package].version`.
+    fn version_from_workspace_root(&self) -> Option<String> {
+        let mut dir = self.repo_path.clone();
+        for _ in 0..3 {
+            if !dir.pop() {
+                break;
+            }
+            let candidate = dir.join("Cargo.toml");
+            if let Ok(content) = fs::read_to_string(&candidate) {
+                if let Ok(parsed) = content.parse::<toml::Table>() {
+                    if let Some(ver) = parsed
+                        .get("workspace")
+                        .and_then(|w| w.get("package"))
+                        .and_then(|p| p.get("version"))
+                        .and_then(|v| v.as_str())
+                    {
+                        if ver.contains('.') {
+                            debug!(
+                                "resolved workspace version {} from {}",
+                                ver,
+                                candidate.display()
+                            );
+                            return Some(ver.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     // ── File discovery ──────────────────────────────────────────────────
 
     /// Find all Rust source files (excluding tests, target, benches, examples).
@@ -278,15 +338,19 @@ impl RustHandler {
     pub fn get_version(&self) -> Result<String> {
         // Strategy 1: Cargo.toml [package] version (most authoritative for Rust)
         let cargo_toml = self.repo_path.join("Cargo.toml");
+        let mut has_workspace_version = false;
         if let Ok(content) = fs::read_to_string(&cargo_toml) {
             if let Some(version) = cargo_toml_field(&content, "version") {
                 // Reject workspace-inherited versions like { workspace = true }
                 if !Self::is_workspace_placeholder(&version) && version.contains('.') {
                     return Ok(version);
                 }
+                if Self::is_workspace_placeholder(&version) {
+                    has_workspace_version = true;
+                }
             }
 
-            // Strategy 1b: workspace.package.version
+            // Strategy 1b: workspace.package.version (for workspace root Cargo.toml)
             if let Ok(parsed) = content.parse::<toml::Table>() {
                 if let Some(ver) = parsed
                     .get("workspace")
@@ -298,6 +362,18 @@ impl RustHandler {
                         return Ok(ver.to_string());
                     }
                 }
+            }
+
+            // Detect `version.workspace = true` (dotted-key form)
+            if !has_workspace_version && Self::has_dotted_workspace_key(&content, "version") {
+                has_workspace_version = true;
+            }
+        }
+
+        // Strategy 1c: walk up to workspace root for inherited version
+        if has_workspace_version {
+            if let Some(ver) = self.version_from_workspace_root() {
+                return Ok(ver);
             }
         }
 
@@ -1250,6 +1326,62 @@ mod tests {
         .unwrap();
         let handler = RustHandler::new(dir.path());
         assert_eq!(handler.get_version().unwrap(), "2.0.0");
+    }
+
+    #[test]
+    fn get_version_member_crate_resolves_workspace_root() {
+        // Handler points at the MEMBER crate, not the workspace root.
+        // version.workspace = true should walk up to find the root version.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\"]\n\n[workspace.package]\nversion = \"3.1.0\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/a");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"a\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        // Point handler at the member, not the root
+        let handler = RustHandler::new(&member_dir);
+        assert_eq!(handler.get_version().unwrap(), "3.1.0");
+    }
+
+    #[test]
+    fn get_version_member_crate_inline_table_resolves_workspace_root() {
+        // Same as above but using `version = { workspace = true }` form.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/b\"]\n\n[workspace.package]\nversion = \"4.2.0\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/b");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"b\"\nversion = { workspace = true }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(&member_dir);
+        assert_eq!(handler.get_version().unwrap(), "4.2.0");
+    }
+
+    #[test]
+    fn get_version_member_crate_no_workspace_root_falls_back() {
+        // Member crate with version.workspace = true but no workspace root above.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"orphan\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        // No workspace root to resolve — falls back to "latest"
+        assert_eq!(handler.get_version().unwrap(), "latest");
     }
 
     #[test]
