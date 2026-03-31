@@ -61,7 +61,7 @@ fn test_config_with_invalid_toml() {
     // Config loads default if repo config is invalid
     let config = Config::default();
     assert!(config.llm.provider == Provider::Anthropic);
-    assert!(config.generation.max_retries == 5);
+    assert!(config.generation.max_retries == 10);
 }
 
 #[tokio::test]
@@ -106,7 +106,7 @@ fn test_config_default_values() {
     let config = Config::default();
     assert_eq!(config.llm.provider, Provider::Anthropic);
     assert_eq!(config.llm.api_key_env, None);
-    assert_eq!(config.generation.max_retries, 5);
+    assert_eq!(config.generation.max_retries, 10);
     assert!(!config.prompts.override_prompts);
 }
 

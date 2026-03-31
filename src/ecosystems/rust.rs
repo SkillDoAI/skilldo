@@ -3773,4 +3773,13 @@ mod tests {
         let result = super::expand_workspace_member(dir.path(), "crates/*");
         assert!(result.is_empty());
     }
+
+    #[test]
+    fn expand_workspace_member_glob_nonexistent_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        // Don't create the "crates" directory — read_dir should fail,
+        // falling through to Vec::new()
+        let result = super::expand_workspace_member(dir.path(), "crates/*");
+        assert!(result.is_empty());
+    }
 }

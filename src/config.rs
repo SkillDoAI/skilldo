@@ -2582,6 +2582,56 @@ timeout = 120
         );
     }
 
+    #[test]
+    fn test_security_context_valid_api_client() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+
+[generation]
+security_context = "api-client"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.generation.security_context,
+            Some("api-client".to_string())
+        );
+    }
+
+    #[test]
+    fn test_security_context_invalid_value_rejected() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+
+[generation]
+security_context = "invalid-context"
+"#;
+        let result: std::result::Result<Config, _> = toml::from_str(toml_str);
+        assert!(
+            result.is_err(),
+            "invalid security_context should be rejected"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid security_context"),
+            "error should mention invalid security_context, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_security_context_omitted_is_none() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.generation.security_context, None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_try_load_from_path_permission_denied() {
