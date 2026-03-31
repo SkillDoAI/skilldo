@@ -242,7 +242,12 @@ impl RustHandler {
                     for member in members {
                         if let Some(member_path) = member.as_str() {
                             // Reject paths that escape the repo root
-                            if member_path.contains("..") || Path::new(member_path).is_absolute() {
+                            let member_rel = Path::new(member_path);
+                            if member_rel.is_absolute()
+                                || member_rel
+                                    .components()
+                                    .any(|c| c == std::path::Component::ParentDir)
+                            {
                                 continue;
                             }
                             // Expand glob patterns like "crates/*"
@@ -776,7 +781,6 @@ impl RustHandler {
 
 // ── Free functions ──────────────────────────────────────────────────────
 
-/// Parse a git tag into a version string. Strips `v` prefix and validates semver shape.
 /// Expand a workspace member path, handling simple glob patterns like "crates/*".
 /// Returns a list of resolved directory paths. For literal paths, returns a single entry.
 fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::PathBuf> {
@@ -804,6 +808,7 @@ fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::Pat
     }
 }
 
+/// Parse a git tag into a version string. Strips `v` prefix and validates semver shape.
 fn parse_version_tag(tag: &str) -> Option<String> {
     if tag.is_empty() {
         return None;
