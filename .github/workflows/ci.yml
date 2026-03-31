@@ -196,7 +196,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     env:
-      CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -208,8 +208,8 @@ jobs:
       - name: Check API access
         id: check-secret
         run: |
-          if [ -z "$CEREBRAS2_API_KEY" ]; then
-            echo "::warning::CEREBRAS2_API_KEY not configured — skipping E2E"
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::warning::OPENROUTER_API_KEY not configured — skipping E2E"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -233,7 +233,6 @@ jobs:
     needs: [changes, e2e-build]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
-    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -259,7 +258,7 @@ jobs:
             tag: gson-parent-2.12.1
             flag: "--language java"
     env:
-      CEREBRAS2_API_KEY: ${{ secrets.CEREBRAS2_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - uses: astral-sh/setup-uv@v7
         if: matrix.lang == 'python'
