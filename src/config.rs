@@ -656,6 +656,13 @@ pub struct ContainerConfig {
     /// Example: { UV_EXTRA_INDEX_URL = "https://pypi.corp.com/simple/", HTTP_PROXY = "http://proxy:8080" }
     #[serde(default)]
     pub extra_env: std::collections::HashMap<String, String>,
+
+    /// Shell commands to run inside the container before test execution.
+    /// Each command runs via `sh -c` in sequence. If any fails, a warning
+    /// is logged but execution continues.
+    /// Example: ["apt-get update && apt-get install -y cmake", "pip install numpy"]
+    #[serde(default)]
+    pub setup_commands: Vec<String>,
 }
 
 impl Default for ContainerConfig {
@@ -673,6 +680,7 @@ impl Default for ContainerConfig {
             install_source: InstallSource::default(),
             source_path: None,
             extra_env: std::collections::HashMap::new(),
+            setup_commands: Vec::new(),
         }
     }
 }

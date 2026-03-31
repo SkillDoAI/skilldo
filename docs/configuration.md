@@ -174,6 +174,13 @@ cleanup = true
 # [generation.container.extra_env]
 # MY_API_KEY = "test-key"
 
+# Shell commands to run inside the container before dependency installation
+# and test execution. Each runs via `sh -c` in sequence. If any fails, a
+# warning is logged and execution continues (the test will fail if deps are
+# truly needed). Useful for installing native dependencies without custom
+# Dockerfiles.
+# setup_commands = ["apt-get update && apt-get install -y cmake", "pip install numpy"]
+
 # Container images per language (defaults shown — override for specific versions)
 # python_image = "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
 # javascript_image = "node:24-alpine"

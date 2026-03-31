@@ -276,9 +276,50 @@ edition = "2021"
         ))
     }
 
+    /// Generate setup command lines that run before dep install/test execution.
+    /// Each command is wrapped so failures log a warning but don't abort the script.
+    fn generate_setup_lines(&self) -> String {
+        if self.config.setup_commands.is_empty() {
+            return String::new();
+        }
+        let mut lines = Vec::new();
+        for cmd in &self.config.setup_commands {
+            // Run each command via sh -c; if it fails, echo a warning to stderr
+            // but continue (set -e is temporarily disabled for each command).
+            lines.push(format!(
+                "sh -c '{}' || echo 'WARNING: setup command failed: {}' >&2",
+                cmd.replace('\'', "'\\''"),
+                cmd.replace('\'', "'\\''"),
+            ));
+        }
+        lines.join("\n")
+    }
+
+    /// Generate a setup command prefix for inline `sh -c` usage (Python path).
+    /// Returns an empty string if no setup commands, or each command terminated
+    /// with `; ` so it can be prepended to the main command chain.
+    fn generate_setup_prefix(&self) -> String {
+        if self.config.setup_commands.is_empty() {
+            return String::new();
+        }
+        let mut parts = Vec::new();
+        for cmd in &self.config.setup_commands {
+            // Each command is fault-tolerant: failure logs warning but continues
+            parts.push(format!(
+                "(sh -c '{}' || echo 'WARNING: setup command failed: {}' >&2)",
+                cmd.replace('\'', "'\\''"),
+                cmd.replace('\'', "'\\''"),
+            ));
+        }
+        // Terminate with " && " so the main command follows
+        format!("{} && ", parts.join(" && "))
+    }
+
     /// Generate run.sh for non-Python languages (JS, Rust, Go, Java)
     /// Python uses `uv run test.py` directly — no run.sh needed
     fn generate_container_script(&self, deps: &[String]) -> Result<String> {
+        let setup_lines = self.generate_setup_lines();
+
         let install_cmd = match self.language {
             Language::JavaScript => self.generate_node_install_script(deps)?,
             Language::Go => self.generate_go_install_script(deps)?,
@@ -303,14 +344,20 @@ edition = "2021"
             }
         };
 
+        // Build script: setup commands run first (fault-tolerant), then
+        // dependency install, then test execution.
+        let mut body_parts: Vec<&str> = Vec::new();
+        if !setup_lines.is_empty() {
+            body_parts.push(&setup_lines);
+        }
+        if !install_cmd.is_empty() {
+            body_parts.push(&install_cmd);
+        }
+        body_parts.push(run_line);
+
         Ok(format!(
-            r#"#!/bin/sh
-set -e
-cd /workspace
-{}
-{}
-"#,
-            install_cmd, run_line
+            "#!/bin/sh\nset -e\ncd /workspace\n{}\n",
+            body_parts.join("\n")
         ))
     }
 }
@@ -486,15 +533,22 @@ impl LanguageExecutor for ContainerExecutor {
         //   local-install: pip install /src first, then run
         // Other languages: `sh run.sh` — traditional install + run
         if is_python {
+            let setup_prefix = self.generate_setup_prefix();
             match self.config.install_source {
                 InstallSource::LocalInstall => {
-                    cmd.arg("sh")
-                        .arg("-c")
-                        .arg("cd /workspace && uv pip install --system /src && uv run test.py");
+                    cmd.arg("sh").arg("-c").arg(format!(
+                        "cd /workspace && {setup_prefix}uv pip install --system /src && uv run test.py"
+                    ));
                 }
                 _ => {
                     // registry and local-mount: uv handles deps via PEP 723
-                    cmd.arg("uv").arg("run").arg("test.py");
+                    if setup_prefix.is_empty() {
+                        cmd.arg("uv").arg("run").arg("test.py");
+                    } else {
+                        cmd.arg("sh")
+                            .arg("-c")
+                            .arg(format!("cd /workspace && {setup_prefix}uv run test.py"));
+                    }
                 }
             }
         } else {
@@ -646,6 +700,7 @@ mod tests {
             install_source: InstallSource::Registry,
             source_path: None,
             extra_env: std::collections::HashMap::new(),
+            setup_commands: Vec::new(),
         };
 
         let executor = ContainerExecutor::new(config, Language::JavaScript);
@@ -683,6 +738,7 @@ mod tests {
             install_source: InstallSource::Registry,
             source_path: None,
             extra_env: std::collections::HashMap::new(),
+            setup_commands: Vec::new(),
         }
     }
 
@@ -921,6 +977,7 @@ mod tests {
         assert_eq!(executor.config.install_source, InstallSource::Registry);
         assert!(executor.config.source_path.is_none());
         assert!(executor.config.extra_env.is_empty());
+        assert!(executor.config.setup_commands.is_empty());
         assert_eq!(executor.language, Language::Python);
     }
 
@@ -2059,6 +2116,138 @@ edition = "2021"
         assert!(
             script.contains("go mod edit -replace"),
             "local-install should also emit replace: {script}"
+        );
+    }
+
+    // --- setup_commands tests ---
+
+    #[test]
+    fn test_setup_commands_empty_by_default() {
+        let config = ContainerConfig::default();
+        assert!(
+            config.setup_commands.is_empty(),
+            "setup_commands should default to empty vec"
+        );
+    }
+
+    #[test]
+    fn test_setup_commands_parsed_from_toml() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+
+[generation.container]
+setup_commands = ["apt-get update && apt-get install -y cmake", "pip install numpy"]
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.generation.container.setup_commands.len(), 2);
+        assert_eq!(
+            config.generation.container.setup_commands[0],
+            "apt-get update && apt-get install -y cmake"
+        );
+        assert_eq!(
+            config.generation.container.setup_commands[1],
+            "pip install numpy"
+        );
+    }
+
+    #[test]
+    fn test_setup_commands_omitted_in_toml_defaults_to_empty() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+
+[generation.container]
+timeout = 120
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        assert!(
+            config.generation.container.setup_commands.is_empty(),
+            "setup_commands should default to empty when omitted"
+        );
+    }
+
+    #[test]
+    fn test_generate_setup_lines_empty_when_no_commands() {
+        let executor = ContainerExecutor::new(make_config(), Language::JavaScript);
+        assert!(executor.generate_setup_lines().is_empty());
+    }
+
+    #[test]
+    fn test_generate_setup_lines_with_commands() {
+        let mut config = make_config();
+        config.setup_commands = vec![
+            "apt-get update".to_string(),
+            "apt-get install -y cmake".to_string(),
+        ];
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
+        let lines = executor.generate_setup_lines();
+        assert!(
+            lines.contains("apt-get update"),
+            "should contain first command: {lines}"
+        );
+        assert!(
+            lines.contains("apt-get install -y cmake"),
+            "should contain second command: {lines}"
+        );
+        // Each line should be fault-tolerant
+        assert!(
+            lines.contains("|| echo 'WARNING: setup command failed"),
+            "should have warning fallback: {lines}"
+        );
+    }
+
+    #[test]
+    fn test_generate_setup_prefix_empty_when_no_commands() {
+        let executor = ContainerExecutor::new(make_config(), Language::Python);
+        assert!(executor.generate_setup_prefix().is_empty());
+    }
+
+    #[test]
+    fn test_generate_setup_prefix_with_commands() {
+        let mut config = make_config();
+        config.setup_commands = vec!["apt-get update".to_string()];
+        let executor = ContainerExecutor::new(config, Language::Python);
+        let prefix = executor.generate_setup_prefix();
+        assert!(
+            prefix.contains("apt-get update"),
+            "should contain command: {prefix}"
+        );
+        assert!(
+            prefix.ends_with(" && "),
+            "should end with ' && ' for chaining: {prefix}"
+        );
+    }
+
+    #[test]
+    fn test_container_script_includes_setup_commands_before_install() {
+        let mut config = make_config();
+        config.setup_commands = vec!["apk add --no-cache cmake".to_string()];
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
+        let deps = vec!["express".to_string()];
+        let script = executor.generate_container_script(&deps).unwrap();
+
+        // Setup commands should appear before npm install
+        let setup_pos = script.find("apk add --no-cache cmake").unwrap();
+        let install_pos = script.find("npm install").unwrap();
+        assert!(
+            setup_pos < install_pos,
+            "setup commands should run before dep install: {script}"
+        );
+    }
+
+    #[test]
+    fn test_setup_commands_with_single_quotes_escaped() {
+        let mut config = make_config();
+        config.setup_commands = vec!["echo 'hello world'".to_string()];
+        let executor = ContainerExecutor::new(config, Language::JavaScript);
+        let lines = executor.generate_setup_lines();
+        // Single quotes in the command should be escaped
+        assert!(
+            lines.contains("echo"),
+            "should contain the command: {lines}"
         );
     }
 }
