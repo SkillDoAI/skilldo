@@ -196,42 +196,6 @@ pub(crate) fn filter_java_deps_by_artifact_id(
     }
 }
 
-/// Parse `python3 --version` stdout into "major.minor", falling back to "3.9".
-fn parse_python_version(stdout: &str) -> String {
-    if let Some(ver) = stdout.strip_prefix("Python ") {
-        let parts: Vec<&str> = ver.trim().split('.').collect();
-        if parts.len() >= 2 {
-            format!("{}.{}", parts[0], parts[1])
-        } else {
-            "3.9".to_string()
-        }
-    } else {
-        "3.9".to_string()
-    }
-}
-
-/// Detect the installed Python minor version (e.g., "3.12") for requires-python.
-/// Cached after first call — Python version doesn't change during a pipeline run.
-/// Falls back to "3.9" (oldest widely-deployed version) if detection fails.
-async fn detect_python_minor_version() -> String {
-    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    if let Some(v) = CACHED.get() {
-        return v.clone();
-    }
-    let result = tokio::process::Command::new("python3")
-        .args(["--version"])
-        .output()
-        .await;
-    let version = if let Ok(out) = result {
-        let version_str = String::from_utf8_lossy(&out.stdout);
-        parse_python_version(&version_str)
-    } else {
-        "3.9".to_string()
-    };
-    let _ = CACHED.set(version.clone());
-    version
-}
-
 /// Python executor using `uv` for fast environment setup
 pub struct PythonUvExecutor {
     timeout_secs: u64,
@@ -306,16 +270,13 @@ impl LanguageExecutor for PythonUvExecutor {
                 .join("\n")
         };
 
-        // Use the current Python version as the floor so uv only resolves
-        // for the installed version, not a range that includes versions the
-        // target SDK might not support (e.g., SDK needs >=3.9.2 but we had >=3.8).
-        let python_version = detect_python_minor_version().await;
-
+        // Omit requires-python — let uv use whatever Python it discovers.
+        // This avoids version floor mismatches where we'd say >=3.8 but the
+        // SDK needs >=3.9.2. uv resolves for the actual installed version.
         let pyproject_content = format!(
             r#"[project]
 name = "skilldo-test"
 version = "0.1.0"
-requires-python = ">={python_version}"
 dependencies = [
 {}
 ]
@@ -326,10 +287,7 @@ dependencies = [
         let pyproject_path = temp_dir.path().join("pyproject.toml");
         fs::write(&pyproject_path, pyproject_content).context("Failed to write pyproject.toml")?;
 
-        debug!(
-            "Created pyproject.toml with dependencies: {:?} (python >= {})",
-            deps, python_version
-        );
+        debug!("Created pyproject.toml with dependencies: {:?}", deps);
 
         // Isolate UV cache inside temp dir (matches Go/Node cache isolation)
         let uv_cache = temp_dir.path().join("uv-cache");
@@ -3337,7 +3295,6 @@ edition = "2021"
             r#"[project]
 name = "skilldo-test"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = [
 {}
 ]
@@ -3357,7 +3314,6 @@ dependencies = [
             r#"[project]
 name = "skilldo-test"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = [
 {}
 ]
@@ -3409,7 +3365,6 @@ version = "0.1.0"
         let pyproject = r#"[project]
 name = "my-lib"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = ["requests"]
 "#;
         std::fs::write(tmp.path().join("pyproject.toml"), pyproject).unwrap();
@@ -3966,7 +3921,6 @@ edition = "2021"
         let pyproject = r#"[project]
 name = "my-cool-lib"
 version = "0.1.0"
-requires-python = ">=3.8"
 dependencies = []
 "#;
         std::fs::write(tmp.path().join("pyproject.toml"), pyproject).unwrap();
@@ -4283,68 +4237,5 @@ dependencies = []
 
         std::env::remove_var(var1);
         std::env::remove_var(var2);
-    }
-
-    // --- detect_python_minor_version cache path ---
-
-    #[tokio::test]
-    async fn test_detect_python_minor_version_returns_valid_format() {
-        // First call populates the function-local CACHED OnceLock.
-        let version = detect_python_minor_version().await;
-        // Should be either a real version like "3.12" or the fallback "3.9"
-        let parts: Vec<&str> = version.split('.').collect();
-        assert_eq!(
-            parts.len(),
-            2,
-            "version should be major.minor, got: {version}"
-        );
-        assert!(
-            parts[0].parse::<u32>().is_ok(),
-            "major should be numeric: {}",
-            parts[0]
-        );
-        assert!(
-            parts[1].parse::<u32>().is_ok(),
-            "minor should be numeric: {}",
-            parts[1]
-        );
-    }
-
-    #[tokio::test]
-    async fn test_detect_python_minor_version_is_cached() {
-        // Call twice — second call returns cached value (lines 200-201).
-        // Both calls should return the same result.
-        let v1 = detect_python_minor_version().await;
-        let v2 = detect_python_minor_version().await;
-        assert_eq!(v1, v2, "cached value should match first call");
-    }
-
-    // --- parse_python_version unit tests ---
-
-    #[test]
-    fn parse_python_version_normal() {
-        assert_eq!(parse_python_version("Python 3.12.1\n"), "3.12");
-    }
-
-    #[test]
-    fn parse_python_version_two_parts_only() {
-        assert_eq!(parse_python_version("Python 3.9\n"), "3.9");
-    }
-
-    #[test]
-    fn parse_python_version_single_part_falls_back() {
-        // Only one part (no dot) → fallback to "3.9"
-        assert_eq!(parse_python_version("Python 3\n"), "3.9");
-    }
-
-    #[test]
-    fn parse_python_version_no_prefix_falls_back() {
-        // Missing "Python " prefix → fallback to "3.9"
-        assert_eq!(parse_python_version("3.12.1"), "3.9");
-    }
-
-    #[test]
-    fn parse_python_version_empty_falls_back() {
-        assert_eq!(parse_python_version(""), "3.9");
     }
 }
