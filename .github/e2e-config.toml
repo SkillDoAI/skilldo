@@ -10,4 +10,3 @@ request_timeout_secs = 1800
 
 [generation]
 max_retries = 5
-enable_review = false
