@@ -119,6 +119,17 @@ pub enum Provider {
     Cli,
 }
 
+/// Security context hint for adjusting scan sensitivity.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecurityContext {
+    /// Standard security checks (default).
+    #[default]
+    Default,
+    /// Relaxes rules for API client SDKs that discuss credentials/auth.
+    ApiClient,
+}
+
 impl Provider {
     /// Canonical env var name for each provider's API key.
     pub fn default_api_key_env(self) -> &'static str {
@@ -546,8 +557,8 @@ pub struct GenerationConfig {
     ///   suppresses SD-202 (credential store access). Use for API client SDKs.
     ///
     /// Invalid values are rejected at config parse time.
-    #[serde(default, deserialize_with = "deserialize_security_context")]
-    pub security_context: Option<String>,
+    #[serde(default)]
+    pub security_context: SecurityContext,
 
     /// Max retries for review -> create feedback loop (default: 10)
     #[serde(default = "default_review_max_retries")]
@@ -712,22 +723,6 @@ fn default_timeout() -> u64 {
 
 fn default_true() -> bool {
     true
-}
-
-fn deserialize_security_context<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value: Option<String> = Option::deserialize(deserializer)?;
-    if let Some(ref ctx) = value {
-        if ctx != "api-client" {
-            return Err(serde::de::Error::custom(format!(
-                "invalid security_context '{}' — valid values: \"api-client\"",
-                ctx
-            )));
-        }
-    }
-    Ok(value)
 }
 
 fn default_test_mode() -> String {
@@ -1021,7 +1016,7 @@ impl Default for GenerationConfig {
             telemetry: false,
             container: ContainerConfig::default(),
             redact_env_vars: Vec::new(),
-            security_context: None,
+            security_context: SecurityContext::Default,
         }
     }
 }
@@ -1066,7 +1061,7 @@ mod tests {
         assert!(gen.test_llm.is_none());
         assert!(gen.version_from.is_none());
         assert!(gen.redact_env_vars.is_empty());
-        assert!(gen.security_context.is_none());
+        assert_eq!(gen.security_context, SecurityContext::Default);
     }
 
     #[test]
@@ -1187,7 +1182,7 @@ mod tests {
             telemetry: false,
             container: ContainerConfig::default(),
             redact_env_vars: Vec::new(),
-            security_context: None,
+            security_context: SecurityContext::Default,
         };
         assert_eq!(
             gen.get_test_mode(),
@@ -2598,7 +2593,7 @@ security_context = "api-client"
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(
             config.generation.security_context,
-            Some("api-client".to_string())
+            SecurityContext::ApiClient
         );
     }
 
@@ -2619,7 +2614,7 @@ security_context = "invalid-context"
         );
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("invalid security_context"),
+            err.contains("unknown variant"),
             "error should mention invalid security_context, got: {err}"
         );
     }
@@ -2632,7 +2627,7 @@ provider = "anthropic"
 model = "claude-sonnet"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.generation.security_context, None);
+        assert_eq!(config.generation.security_context, SecurityContext::Default);
     }
 
     #[cfg(unix)]

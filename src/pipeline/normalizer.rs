@@ -19,9 +19,10 @@ fn create_frontmatter(
         .map(|m| format!("\n  generated-by: skilldo/{}", m))
         .unwrap_or_default();
 
+    let escaped_name = package_name.replace('"', "\\\"");
     format!(
-        "---\nname: {}\ndescription: {ecosystem} library\n{}\nmetadata:\n  version: \"{}\"\n  ecosystem: {}{}\n---\n\n",
-        package_name, license_field, version, ecosystem, generated_field
+        "---\nname: \"{}\"\ndescription: {ecosystem} library\n{}\nmetadata:\n  version: \"{}\"\n  ecosystem: {}{}\n---\n\n",
+        escaped_name, license_field, version, ecosystem, generated_field
     )
 }
 
@@ -686,7 +687,7 @@ mod tests {
         let result = ensure_frontmatter(content, "torch", "2.0.0", "python", Some("BSD"), None);
 
         assert!(result.starts_with("---\n"));
-        assert!(result.contains("name: torch"));
+        assert!(result.contains("name: \"torch\""));
         assert!(result.contains("license: BSD"));
         assert!(result.contains("metadata:"));
         assert!(result.contains("  version: \"2.0.0\""));
@@ -771,7 +772,7 @@ mod tests {
 
         // Should have frontmatter
         assert!(result.starts_with("---\n"));
-        assert!(result.contains("name: torch"));
+        assert!(result.contains("name: \"torch\""));
 
         // Should NOT have extra header
         assert!(!result.contains("# SKILL.md"));
@@ -1080,7 +1081,7 @@ mod tests {
 
         // Frontmatter should be replaced (missing name/version/metadata in fm block)
         assert!(result.starts_with("---\n"));
-        assert!(result.contains("name: mylib"));
+        assert!(result.contains("name: \"mylib\""));
         assert!(result.contains("metadata:"));
         assert!(result.contains("  version: \"1.0.0\""));
         assert!(result.contains("  ecosystem: python"));
@@ -1612,7 +1613,7 @@ mod tests {
 
         // Should add proper frontmatter since the existing one lacks required fields
         assert!(
-            result.contains("name: testlib"),
+            result.contains("name: \"testlib\""),
             "Should contain correct name. Got:\n{}",
             result
         );

@@ -188,9 +188,12 @@ impl ScanReport {
 /// YARA rules, unicode analysis, and injection analysis.
 /// Scan with optional security context. "api-client" suppresses rules that
 /// fire on legitimate API client SDK content (credential discussion, auth patterns).
-pub fn scan_skill_with_context(content: &str, security_context: Option<&str>) -> ScanReport {
+pub fn scan_skill_with_context(
+    content: &str,
+    security_context: &crate::config::SecurityContext,
+) -> ScanReport {
     let mut report = scan_skill(content);
-    if security_context == Some("api-client") {
+    if *security_context == crate::config::SecurityContext::ApiClient {
         // Suppress SD-202 (credential store access) — API client SDKs legitimately
         // discuss API keys, auth tokens, and credential configuration.
         let before = report.findings.len();
@@ -241,6 +244,8 @@ pub fn scan_skill(content: &str) -> ScanReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::config::SecurityContext;
 
     #[test]
     fn clean_skill_scores_100() {
@@ -932,9 +937,9 @@ Configure your .ssh/ directory and .aws/ credentials for remote access.
 ";
 
     #[test]
-    fn scan_skill_with_context_none_matches_scan_skill() {
+    fn scan_skill_with_context_default_matches_scan_skill() {
         let base = scan_skill(SD202_PROSE_CONTENT);
-        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, None);
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, &SecurityContext::Default);
 
         assert_eq!(base.score, ctx.score);
         assert_eq!(base.findings.len(), ctx.findings.len());
@@ -958,8 +963,8 @@ Configure your .ssh/ directory and .aws/ credentials for remote access.
             "Test content must trigger SD-202 in baseline scan"
         );
 
-        // With "api-client" context, SD-202 should be suppressed
-        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+        // With ApiClient context, SD-202 should be suppressed
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, &SecurityContext::ApiClient);
         assert!(
             !ctx.findings.iter().any(|f| f.rule_id == "SD-202"),
             "SD-202 should be suppressed with api-client context"
@@ -973,7 +978,7 @@ Configure your .ssh/ directory and .aws/ credentials for remote access.
     #[test]
     fn scan_skill_with_context_api_client_recalculates_score() {
         let base = scan_skill(SD202_PROSE_CONTENT);
-        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, &SecurityContext::ApiClient);
 
         // Score should be recalculated without the SD-202 deductions
         let expected_deductions: i32 = ctx.findings.iter().map(|f| f.severity.deduction()).sum();
@@ -992,19 +997,20 @@ Configure your .ssh/ directory and .aws/ credentials for remote access.
     }
 
     #[test]
-    fn scan_skill_with_context_unknown_context_matches_none() {
-        let none_report = scan_skill_with_context(SD202_PROSE_CONTENT, None);
-        let unknown_report = scan_skill_with_context(SD202_PROSE_CONTENT, Some("unknown-context"));
+    fn scan_skill_with_context_default_does_not_suppress_sd202() {
+        let default_report =
+            scan_skill_with_context(SD202_PROSE_CONTENT, &SecurityContext::Default);
+        let base = scan_skill(SD202_PROSE_CONTENT);
 
-        assert_eq!(none_report.score, unknown_report.score);
-        assert_eq!(none_report.findings.len(), unknown_report.findings.len());
-        // SD-202 should NOT be suppressed for unknown contexts
+        assert_eq!(base.score, default_report.score);
+        assert_eq!(base.findings.len(), default_report.findings.len());
+        // SD-202 should NOT be suppressed for Default context
         assert!(
-            unknown_report
+            default_report
                 .findings
                 .iter()
                 .any(|f| f.rule_id == "SD-202"),
-            "SD-202 should not be suppressed for unknown context"
+            "SD-202 should not be suppressed for default context"
         );
     }
 
@@ -1041,7 +1047,7 @@ Access the .ssh/ key store.
         );
 
         // With api-client context, all findings suppressed → recalculate_score → 100
-        let ctx = scan_skill_with_context(content, Some("api-client"));
+        let ctx = scan_skill_with_context(content, &SecurityContext::ApiClient);
         assert!(ctx.findings.is_empty(), "All findings should be suppressed");
         assert_eq!(
             ctx.score, 100,
@@ -1104,7 +1110,7 @@ Access the .ssh/ key store.
             .sum();
         assert!(sd202_deductions > 0, "SD-202 must produce deductions");
 
-        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, Some("api-client"));
+        let ctx = scan_skill_with_context(SD202_PROSE_CONTENT, &SecurityContext::ApiClient);
         // Score delta should exactly match the removed SD-202 deductions,
         // proving recalculate_score ran and recomputed from remaining findings.
         let delta = ctx.score as i32 - base.score as i32;
