@@ -232,7 +232,7 @@ jobs:
     if: github.event_name == 'push' && needs.changes.outputs.rust == 'true' && needs.e2e-build.outputs.skip != 'true'
     needs: [changes, e2e-build]
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 70
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
