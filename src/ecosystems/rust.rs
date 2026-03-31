@@ -242,7 +242,7 @@ impl RustHandler {
                     for member in members {
                         if let Some(member_path) = member.as_str() {
                             // Reject paths that escape the repo root
-                            if member_path.contains("..") {
+                            if member_path.contains("..") || Path::new(member_path).is_absolute() {
                                 continue;
                             }
                             // Expand glob patterns like "crates/*"
