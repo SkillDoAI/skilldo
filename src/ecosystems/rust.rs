@@ -111,11 +111,12 @@ impl RustHandler {
         false
     }
 
-    /// Walk up from `self.repo_path` (up to 3 parent levels) looking for a
-    /// workspace-root Cargo.toml that contains `[workspace.package].version`.
+    /// Walk up from `self.repo_path` looking for a workspace-root Cargo.toml
+    /// that contains `[workspace.package].version`. Stops at repo root (.git)
+    /// or after 10 levels to handle deep nesting (e.g. services/backend/rust/crates/foo).
     fn version_from_workspace_root(&self) -> Option<String> {
         let mut dir = self.repo_path.clone();
-        for _ in 0..3 {
+        for _ in 0..10 {
             if !dir.pop() {
                 break;
             }
@@ -134,6 +135,10 @@ impl RustHandler {
                         }
                     }
                 }
+            }
+            // Stop at repo root — workspace Cargo.toml won't be above it
+            if dir.join(".git").exists() {
+                break;
             }
         }
         None
@@ -4001,6 +4006,46 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         let handler = RustHandler::new(&sub);
         assert!(handler.version_from_workspace_root().is_none());
+    }
+
+    #[test]
+    fn version_from_workspace_root_stops_at_git_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        // workspace root at top level
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"9.9.9\"\n",
+        )
+        .unwrap();
+        // .git at level 1 — should prevent walking above level 1
+        let level1 = dir.path().join("level1");
+        std::fs::create_dir_all(&level1).unwrap();
+        std::fs::create_dir(level1.join(".git")).unwrap();
+        // sub-crate at level 2
+        let sub = level1.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let handler = RustHandler::new(&sub);
+        // Should NOT find the workspace root above .git boundary
+        assert!(handler.version_from_workspace_root().is_none());
+    }
+
+    #[test]
+    fn version_from_workspace_root_deep_nesting() {
+        let dir = tempfile::tempdir().unwrap();
+        // workspace root at top level
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"5.6.7\"\n",
+        )
+        .unwrap();
+        // 5 levels deep — previously capped at 3
+        let deep = dir.path().join("a/b/c/d/e");
+        std::fs::create_dir_all(&deep).unwrap();
+        let handler = RustHandler::new(&deep);
+        assert_eq!(
+            handler.version_from_workspace_root(),
+            Some("5.6.7".to_string())
+        );
     }
 
     #[test]
