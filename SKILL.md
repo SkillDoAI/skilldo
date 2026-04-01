@@ -132,6 +132,7 @@ base_url = "https://us-central1-aiplatform.googleapis.com"
 runtime = "podman"              # docker or podman
 timeout = 120                   # seconds
 cleanup = true
+# setup_commands = ["apt-get update && apt-get install -y cmake"]  # run before deps/tests
 ```
 
 ## Commands
@@ -165,6 +166,7 @@ Key flags:
 - `--version-from <STRATEGY>` — how to detect version: `package` (Cargo.toml/pyproject.toml), `git-tag`, `branch`, `commit`
 - `-q, --quiet` — suppress informational output (only warnings/errors)
 - `-v, --verbose` — show detailed debug output (equivalent to RUST_LOG=debug)
+- `--request-timeout <SECS>` — override LLM request timeout in seconds (default: 120)
 - `--dry-run` — use mock LLM client for testing (no API calls)
 
 ### `skilldo lint <PATH>`
@@ -275,7 +277,7 @@ Data is local only — nothing is sent anywhere.
 
 ## Troubleshooting
 
-- **"No tests found"** — language detection may have failed. Use `--language` explicitly.
+- **"No test files found"** — a warning, not an error. The pipeline continues without test-derived patterns. Use `--language` to override if detection is wrong.
 - **Test failures looping** — try `--test-mode minimal` or `--no-test` for a first pass.
 - **Rate limited** — increase `retry_delay` in config, or switch to a local model.
 - **OAuth errors** — run `skilldo auth status --config <path>` to check token state.

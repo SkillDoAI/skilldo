@@ -143,7 +143,7 @@ enum Commands {
         #[arg(long = "review-provider")]
         review_provider: Option<String>,
 
-        /// Override LLM request timeout in seconds (default: 300)
+        /// Override LLM request timeout in seconds (default: 120)
         #[arg(long)]
         request_timeout: Option<u64>,
 

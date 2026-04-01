@@ -8,7 +8,8 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 ### Added
 - **`SecurityContext` enum** — replaces `Option<String>` with compile-time validated enum. Invalid values now fail at config parse time via serde
 - **Workspace version walk-up** — member crates with `version.workspace = true` resolve version from the workspace root (walks up to 3 parent directories)
-- **`--request-timeout` CLI flag** — override LLM request timeout in seconds from the command line
+- **`--request-timeout` CLI flag** — override LLM request timeout in seconds from the command line (overrides `request_timeout_secs` in config)
+- **`setup_commands` container config** — run shell commands inside the container before dependency installation and test execution. Each command runs via `sh -c`; failures log a warning but don't abort. Useful for native deps without custom Dockerfiles
 - **Responses API helpers** — `build_responses_request()` + `extract_responses_text()` shared between OpenAI and ChatGPT clients (-19 lines)
 
 ### Changed
