@@ -1982,6 +1982,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_anthropic_complete_api_error() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Anthropic)
+                    .with_error(429, "rate limited"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = AnthropicClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Anthropic API error") || err.contains("429"),
+            "Should report API error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openai_complete_api_error() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .with_error(500, "internal server error"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("OpenAI API error") || err.contains("500"),
+            "Should report API error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gemini_complete_api_error() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Gemini)
+                    .with_error(403, "forbidden"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = GeminiClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Gemini API error") || err.contains("403"),
+            "Should report API error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chatgpt_complete_api_error() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Responses)
+                    .with_error(503, "service unavailable"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = ChatGPTClient::new(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            4096,
+            30,
+            false,
+            Some(format!("{}/v1", server.url())),
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Responses API error") || err.contains("503"),
+            "Should report API error: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_gemini_complete_with_bearer_auth() {
         let server = llmposter::ServerBuilder::new()
             .fixture(
