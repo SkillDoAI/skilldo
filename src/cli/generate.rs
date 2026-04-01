@@ -40,6 +40,7 @@ pub struct GenerateOptions {
     pub install_source_override: Option<String>,
     pub source_path_override: Option<String>,
     pub container: bool,
+    pub request_timeout_override: Option<u64>,
     pub no_parallel: bool,
     pub best_effort: bool,
     pub telemetry: bool,
@@ -74,6 +75,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         install_source_override,
         source_path_override,
         container,
+        request_timeout_override,
         no_parallel,
         best_effort,
         telemetry,
@@ -136,6 +138,10 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     if let Some(retries) = max_retries_override {
         info!("CLI override: max_retries = {}", retries);
         config.generation.max_retries = retries;
+    }
+    if let Some(timeout) = request_timeout_override {
+        info!("CLI override: request_timeout = {}s", timeout);
+        config.llm.request_timeout_secs = timeout;
     }
     if no_test {
         warn!("CLI override: test agent disabled");
