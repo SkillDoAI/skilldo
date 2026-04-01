@@ -1815,4 +1815,199 @@ mod tests {
             "Expected response content, got: {text}"
         );
     }
+
+    #[tokio::test]
+    async fn test_anthropic_complete_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Anthropic)
+                    .respond_with_content("anthropic unit test response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = AnthropicClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test prompt").await;
+        assert!(
+            result.is_ok(),
+            "Anthropic complete failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "anthropic unit test response");
+    }
+
+    #[tokio::test]
+    async fn test_anthropic_complete_max_tokens_zero_errors() {
+        let client = AnthropicClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            "http://localhost:1".to_string(),
+            0,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("max_tokens"),
+            "Should mention max_tokens requirement"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gemini_complete_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Gemini)
+                    .respond_with_content("gemini unit test response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = GeminiClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test prompt").await;
+        assert!(result.is_ok(), "Gemini complete failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "gemini unit test response");
+    }
+
+    #[tokio::test]
+    async fn test_openai_chat_completions_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("openai chat unit test response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        // OpenAI client appends /chat/completions, so base_url must include /v1
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test prompt").await;
+        assert!(result.is_ok(), "OpenAI complete failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "openai chat unit test response");
+    }
+
+    #[tokio::test]
+    async fn test_chatgpt_complete_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Responses)
+                    .respond_with_content("chatgpt unit test response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        // ChatGPT client appends /responses, so base_url must include /v1
+        // for llmposter to route to /v1/responses
+        let client = ChatGPTClient::new(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            4096,
+            30,
+            false,
+            Some(format!("{}/v1", server.url())),
+        )
+        .unwrap();
+
+        let result = client.complete("test prompt").await;
+        assert!(
+            result.is_ok(),
+            "ChatGPT complete failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "chatgpt unit test response");
+    }
+
+    #[tokio::test]
+    async fn test_anthropic_complete_with_extra_headers() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Anthropic)
+                    .respond_with_content("headers test response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = AnthropicClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap()
+        .with_extra_headers(vec![
+            ("x-custom-header".to_string(), "custom-value".to_string()),
+            // Protected header should be skipped with a warning
+            ("authorization".to_string(), "should-be-skipped".to_string()),
+        ]);
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "Should succeed even with protected header");
+    }
+
+    #[tokio::test]
+    async fn test_gemini_complete_with_bearer_auth() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Gemini)
+                    .respond_with_content("bearer auth response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = GeminiClient::with_base_url(
+            "test-oauth-token".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap()
+        .with_bearer_auth(true);
+
+        let result = client.complete("test prompt").await;
+        assert!(
+            result.is_ok(),
+            "Gemini with bearer auth failed: {:?}",
+            result.err()
+        );
+    }
 }

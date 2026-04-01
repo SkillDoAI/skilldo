@@ -2632,4 +2632,70 @@ Nothing malicious here
             issues
         );
     }
+
+    #[test]
+    fn test_html_comment_single_line_clean_not_flagged() {
+        // A single-line HTML comment with harmless content should NOT trigger a security issue.
+        // This exercises the code path where the comment is found, parsed, but `has_security_threat` returns false.
+        let linter = SkillLinter::new();
+        let content = make_skill(
+            valid_frontmatter(),
+            "<!-- This is a normal author note about the API docs -->",
+        );
+        let issues = linter.lint(&content).unwrap();
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.message.to_lowercase().contains("html comment")),
+            "Clean single-line HTML comment should not be flagged, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_print_issues_with_info_only() {
+        // Exercise print_issues with only info-level issues (covers the info branch in print_issues)
+        let linter = SkillLinter::new();
+        let issues = vec![LintIssue {
+            severity: Severity::Info,
+            category: "content".to_string(),
+            message: "Test info issue".to_string(),
+            suggestion: Some("Consider improving this".to_string()),
+        }];
+        // Just call it — we're not asserting stdout, just covering the code path
+        linter.print_issues(&issues);
+    }
+
+    #[test]
+    fn test_print_issues_with_all_severities() {
+        // Exercise print_issues with errors, warnings, and infos (covers all branches)
+        let linter = SkillLinter::new();
+        let issues = vec![
+            LintIssue {
+                severity: Severity::Error,
+                category: "frontmatter".to_string(),
+                message: "Missing required field".to_string(),
+                suggestion: Some("Add the field".to_string()),
+            },
+            LintIssue {
+                severity: Severity::Warning,
+                category: "content".to_string(),
+                message: "Section too short".to_string(),
+                suggestion: None,
+            },
+            LintIssue {
+                severity: Severity::Info,
+                category: "style".to_string(),
+                message: "Consider adding examples".to_string(),
+                suggestion: Some("Add more examples".to_string()),
+            },
+        ];
+        linter.print_issues(&issues);
+    }
+
+    #[test]
+    fn test_print_issues_empty() {
+        let linter = SkillLinter::new();
+        linter.print_issues(&[]);
+    }
 }

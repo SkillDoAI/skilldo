@@ -3622,6 +3622,43 @@ End of analysis."#;
         assert!(!result.contains("SKILLDO-CONFLICT"));
     }
 
+    #[test]
+    fn test_strip_skilldo_notes_no_colon_in_note() {
+        // A note like `<!-- SKILLDO-NOCOL -->` has no colon after the tag.
+        // split_once(':') returns None, so the inner block is skipped entirely.
+        let input = "Content\n<!-- SKILLDO-NOCOL -->\nMore\n";
+        let result = strip_skilldo_notes(input);
+        assert!(result.contains("Content"));
+        assert!(result.contains("More"));
+        assert!(
+            !result.contains("SKILLDO-NOCOL"),
+            "Note without colon should still be stripped"
+        );
+    }
+
+    #[test]
+    fn test_strip_skilldo_notes_unverified_tag() {
+        // UNVERIFIED tag should be stripped (and logged at warn level if tracing is enabled)
+        let input = "## API\n<!-- SKILLDO-UNVERIFIED: some function was omitted -->\nContent\n";
+        let result = strip_skilldo_notes(input);
+        assert!(result.contains("## API"));
+        assert!(result.contains("Content"));
+        assert!(
+            !result.contains("SKILLDO-UNVERIFIED"),
+            "UNVERIFIED notes should be stripped"
+        );
+    }
+
+    #[test]
+    fn test_strip_skilldo_notes_generic_tag() {
+        // A generic tag (not CONFLICT or UNVERIFIED) should also be stripped
+        let input = "Content\n<!-- SKILLDO-NOTE: Model chose async over sync API -->\nMore\n";
+        let result = strip_skilldo_notes(input);
+        assert!(!result.contains("SKILLDO-NOTE"));
+        assert!(result.contains("Content"));
+        assert!(result.contains("More"));
+    }
+
     // ========================================================================
     // rescan_after_rewrite — error propagation at lint-fix call site (line 705)
     // ========================================================================
