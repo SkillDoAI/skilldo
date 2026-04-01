@@ -870,6 +870,36 @@ setup(name="testpkg", version="1.0.0")
     }
 
     #[tokio::test]
+    async fn test_run_with_request_timeout_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            request_timeout_override: Some(120),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_request_timeout_override_with_per_stage_config() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = write_per_stage_config(repo.path());
+        let result = run(GenerateOptions {
+            config_path: Some(config_path),
+            request_timeout_override: Some(90),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "request_timeout with per-stage config failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
     async fn test_run_with_install_source_override() {
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");

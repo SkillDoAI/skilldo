@@ -3943,10 +3943,63 @@ mod tests {
     }
 
     #[test]
+    fn has_dotted_workspace_key_returns_true_when_present() {
+        let content = "[package]\nname = \"test\"\nversion.workspace = true\n";
+        assert!(RustHandler::has_dotted_workspace_key(content, "version"));
+    }
+
+    #[test]
+    fn has_dotted_workspace_key_returns_true_with_trailing_comment() {
+        let content = "[package]\nversion.workspace = true # inherited\n";
+        assert!(RustHandler::has_dotted_workspace_key(content, "version"));
+    }
+
+    #[test]
+    fn has_dotted_workspace_key_skips_lines_without_equals() {
+        // A comment-only line inside [package] has no '=' and exercises the
+        // implicit else of `if let Some(eq_pos)`.
+        let content = "[package]\n# a comment\nversion.workspace = true\n";
+        assert!(RustHandler::has_dotted_workspace_key(content, "version"));
+    }
+
+    #[test]
     fn version_from_workspace_root_at_filesystem_root() {
         // When repo_path is "/" (filesystem root), dir.pop() returns false
         // immediately, exercising line 119.
         let handler = RustHandler::new(std::path::Path::new("/"));
+        assert!(handler.version_from_workspace_root().is_none());
+    }
+
+    #[test]
+    fn version_from_workspace_root_finds_version() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create workspace root Cargo.toml with [workspace.package].version
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"2.3.4\"\n",
+        )
+        .unwrap();
+        // Create a sub-crate directory
+        let sub = dir.path().join("crates").join("mycrate");
+        std::fs::create_dir_all(&sub).unwrap();
+        let handler = RustHandler::new(&sub);
+        let ver = handler.version_from_workspace_root();
+        assert_eq!(ver, Some("2.3.4".to_string()));
+    }
+
+    #[test]
+    fn version_from_workspace_root_rejects_version_without_dot() {
+        // A workspace version like "dev" (no '.') should be rejected,
+        // exercising the else branch of `if ver.contains('.')`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"dev\"\n",
+        )
+        .unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let handler = RustHandler::new(&sub);
         assert!(handler.version_from_workspace_root().is_none());
     }
 
