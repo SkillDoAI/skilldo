@@ -19,7 +19,7 @@ fn create_frontmatter(
         .map(|m| format!("\n  generated-by: skilldo/{}", m))
         .unwrap_or_default();
 
-    let escaped_name = package_name.replace('"', "\\\"");
+    let escaped_name = package_name.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
         "---\nname: \"{}\"\ndescription: {ecosystem} library\n{}\nmetadata:\n  version: \"{}\"\n  ecosystem: {}{}\n---\n\n",
         escaped_name, license_field, version, ecosystem, generated_field
@@ -1868,6 +1868,29 @@ mod tests {
         assert!(
             !result.contains("```markdown"),
             "Wrapper fence should be stripped"
+        );
+    }
+
+    #[test]
+    fn test_create_frontmatter_escapes_backslashes_and_quotes() {
+        let fm = create_frontmatter("back\\slash", "1.0", "rust", None, None);
+        assert!(
+            fm.contains(r#"name: "back\\slash""#),
+            "Backslashes should be escaped. Got:\n{}",
+            fm
+        );
+        let fm2 = create_frontmatter(r#"has"quote"#, "1.0", "rust", None, None);
+        assert!(
+            fm2.contains(r#"name: "has\"quote""#),
+            "Quotes should be escaped. Got:\n{}",
+            fm2
+        );
+        // Combined: backslash before quote
+        let fm3 = create_frontmatter(r#"a\"b"#, "1.0", "rust", None, None);
+        assert!(
+            fm3.contains(r#"name: "a\\\"b""#),
+            "Backslash+quote combo should be escaped. Got:\n{}",
+            fm3
         );
     }
 }

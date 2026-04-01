@@ -142,6 +142,19 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     if let Some(timeout) = request_timeout_override {
         info!("CLI override: request_timeout = {}s", timeout);
         config.llm.request_timeout_secs = timeout;
+        // Also apply to stage-specific LLM configs so create_client_from_llm_config picks it up
+        for stage_llm in [
+            &mut config.generation.extract_llm,
+            &mut config.generation.map_llm,
+            &mut config.generation.learn_llm,
+            &mut config.generation.create_llm,
+            &mut config.generation.review_llm,
+            &mut config.generation.test_llm,
+        ] {
+            if let Some(llm) = stage_llm.as_mut() {
+                llm.request_timeout_secs = timeout;
+            }
+        }
     }
     if no_test {
         warn!("CLI override: test agent disabled");
