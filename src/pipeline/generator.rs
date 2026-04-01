@@ -348,9 +348,10 @@ impl Generator {
     }
 
     /// Re-run full security scan after a model rewrite. Bails if high/critical findings.
-    fn rescan_after_rewrite(&self, skill_md: &str, context: &str) -> Result<()> {
+    /// Returns the scan score on success (0 if scanning is disabled).
+    fn rescan_after_rewrite(&self, skill_md: &str, context: &str) -> Result<u8> {
         if !self.enable_security_scan {
-            return Ok(());
+            return Ok(0);
         }
         let scan_report =
             crate::security::scan_skill_with_context(skill_md, &self.security_context);
@@ -367,7 +368,7 @@ impl Generator {
                 msgs.join("\n")
             );
         }
-        Ok(())
+        Ok(scan_report.score)
     }
 
     /// Dump each pipeline stage's raw output to the specified directory.
@@ -551,9 +552,9 @@ impl Generator {
         skill_md = crate::security::unicode::strip_invisible_unicode(&skill_md);
 
         // Security scan (YARA + unicode + injection) — bail immediately, no retries.
-        self.rescan_after_rewrite(&skill_md, "initial create")?;
+        let scan_score = self.rescan_after_rewrite(&skill_md, "initial create")?;
         if self.enable_security_scan {
-            info!("  ✓ Security scan passed");
+            info!("  ✓ Security scan passed (score {}/100)", scan_score);
         } else {
             info!("  ⊘ Security scan disabled");
         }
