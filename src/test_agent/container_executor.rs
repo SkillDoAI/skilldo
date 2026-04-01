@@ -2244,10 +2244,10 @@ timeout = 120
         config.setup_commands = vec!["echo 'hello world'".to_string()];
         let executor = ContainerExecutor::new(config, Language::JavaScript);
         let lines = executor.generate_setup_lines();
-        // Single quotes in the command should be escaped
+        // Single quotes escaped via '\'' shell pattern (close, escape, reopen)
         assert!(
-            lines.contains("echo"),
-            "should contain the command: {lines}"
+            lines.contains("echo '\\''hello world'\\''"),
+            "single quotes should be shell-escaped with '\\'' pattern: {lines}"
         );
     }
 }

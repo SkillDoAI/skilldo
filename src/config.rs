@@ -1326,6 +1326,39 @@ install_source = "local-mount"
     }
 
     #[test]
+    fn test_setup_commands_from_toml() {
+        let toml = r#"
+[llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+
+[generation.container]
+setup_commands = ["apt-get install -y libxml2-dev", "pip install numpy"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.generation.container.setup_commands.len(), 2);
+        assert_eq!(
+            config.generation.container.setup_commands[0],
+            "apt-get install -y libxml2-dev"
+        );
+        assert_eq!(
+            config.generation.container.setup_commands[1],
+            "pip install numpy"
+        );
+    }
+
+    #[test]
+    fn test_setup_commands_defaults_to_empty() {
+        let config = ContainerConfig::default();
+        assert!(config.setup_commands.is_empty());
+    }
+
+    #[test]
     fn test_per_agent_llm_defaults_to_none() {
         let config = Config::default();
         assert!(config.generation.extract_llm.is_none());

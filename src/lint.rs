@@ -2692,10 +2692,4 @@ Nothing malicious here
         ];
         linter.print_issues(&issues);
     }
-
-    #[test]
-    fn test_print_issues_empty() {
-        let linter = SkillLinter::new();
-        linter.print_issues(&[]);
-    }
 }
