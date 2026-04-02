@@ -793,6 +793,7 @@ fn test_collected_data_clone() {
         changelog_content: "changelog".to_string(),
         source_file_count: 1,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     };
 
     // Act
@@ -821,6 +822,7 @@ fn test_collected_data_debug() {
         changelog_content: String::new(),
         source_file_count: 0,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     };
 
     // Act

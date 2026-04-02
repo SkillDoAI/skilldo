@@ -360,6 +360,15 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         collected_data.package_name, collected_data.version
     );
 
+    // Warn about native dependencies if not running in container mode
+    if !collected_data.native_dep_indicators.is_empty() && !container {
+        let indicators = collected_data.native_dep_indicators.join(", ");
+        warn!(
+            "Native dependencies detected ({}). Consider using --container for reliable test execution.",
+            indicators
+        );
+    }
+
     // Create LLM client via factory
     let client = factory::create_client(&config, dry_run).await?;
     if dry_run {

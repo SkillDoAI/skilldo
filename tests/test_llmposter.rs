@@ -636,6 +636,7 @@ async fn test_deterministic_pipeline() {
         source_content: "pub struct ServerBuilder;\npub struct Fixture;\n".to_string(),
         changelog_content: String::new(),
         dependencies: vec![],
+        native_dep_indicators: vec![],
     };
 
     // Run the pipeline
@@ -712,6 +713,7 @@ async fn test_deterministic_pipeline_with_review() {
         source_content: "pub struct ServerBuilder;\npub struct Fixture;\n".to_string(),
         changelog_content: String::new(),
         dependencies: vec![],
+        native_dep_indicators: vec![],
     };
 
     let result = generator.generate(&data).await;

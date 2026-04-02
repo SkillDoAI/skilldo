@@ -657,6 +657,32 @@ impl PythonHandler {
 
         Ok(())
     }
+
+    /// Detect indicators of C/native extensions in Python packages.
+    pub fn detect_native_deps(&self) -> Vec<String> {
+        let mut indicators = Vec::new();
+        // Check setup.py for ext_modules or Extension
+        let setup_py = self.repo_path.join("setup.py");
+        if let Ok(content) = fs::read_to_string(&setup_py) {
+            if content.contains("ext_modules") || content.contains("Extension(") {
+                indicators.push("ext_modules in setup.py".to_string());
+            }
+            if content.contains("cffi_modules") {
+                indicators.push("cffi_modules in setup.py".to_string());
+            }
+        }
+        // Check pyproject.toml for maturin/pyo3
+        let pyproject = self.repo_path.join("pyproject.toml");
+        if let Ok(content) = fs::read_to_string(&pyproject) {
+            if content.contains("[tool.maturin]") {
+                indicators.push("maturin build system".to_string());
+            }
+            if content.contains("[tool.pyo3]") || content.contains("pyo3") {
+                indicators.push("pyo3 binding".to_string());
+            }
+        }
+        indicators
+    }
 }
 
 #[cfg(test)]

@@ -182,6 +182,7 @@ fn fastapi_collected_data() -> CollectedData {
         changelog_content: "## 0.115.0\n- Add support for Pydantic v2\n- Performance improvements\n".to_string(),
         source_file_count: 42,
         dependencies: Vec::new(),
+            native_dep_indicators: Vec::new(),
     }
 }
 

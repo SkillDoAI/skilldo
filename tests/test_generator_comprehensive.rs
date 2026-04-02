@@ -266,6 +266,7 @@ fn create_test_data() -> CollectedData {
         changelog_content: "# Changelog\n## 1.0.0\n- Initial release".to_string(),
         source_file_count: 1,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     }
 }
 
@@ -283,6 +284,7 @@ fn create_minimal_data() -> CollectedData {
         changelog_content: String::new(),
         source_file_count: 1,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     }
 }
 

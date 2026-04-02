@@ -393,6 +393,44 @@ impl JsHandler {
         // Priority 2: everything else
         2
     }
+
+    /// Detect indicators of native/C++ addons in Node.js packages.
+    pub fn detect_native_deps(&self) -> Vec<String> {
+        let mut indicators = Vec::new();
+        // Check for binding.gyp (node-gyp build file)
+        if self.repo_path.join("binding.gyp").exists() {
+            indicators.push("binding.gyp present".to_string());
+        }
+        // Check package.json for native addon indicators
+        let pkg_json = self.repo_path.join("package.json");
+        if let Ok(content) = fs::read_to_string(&pkg_json) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                for section in ["dependencies", "devDependencies"] {
+                    if let Some(deps) = parsed.get(section).and_then(|d| d.as_object()) {
+                        for key in deps.keys() {
+                            if key == "node-gyp"
+                                || key == "node-addon-api"
+                                || key.starts_with("@napi-rs/")
+                            {
+                                indicators.push(format!("{key} in {section}"));
+                            }
+                        }
+                    }
+                }
+                // Check scripts for node-gyp
+                if let Some(scripts) = parsed.get("scripts").and_then(|s| s.as_object()) {
+                    for (name, val) in scripts {
+                        if let Some(cmd) = val.as_str() {
+                            if cmd.contains("node-gyp") {
+                                indicators.push(format!("node-gyp in scripts.{name}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        indicators
+    }
 }
 
 // ── Free functions ──────────────────────────────────────────────────────

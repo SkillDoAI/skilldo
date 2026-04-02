@@ -1159,6 +1159,7 @@ mod tests {
             source_content: "class Foo: pass".to_string(),
             changelog_content: String::new(),
             dependencies: Vec::new(),
+            native_dep_indicators: Vec::new(),
         }
     }
 

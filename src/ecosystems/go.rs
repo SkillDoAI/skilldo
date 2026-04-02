@@ -461,6 +461,34 @@ impl GoHandler {
 
         None
     }
+
+    /// Detect CGo usage indicating native C dependencies.
+    pub fn detect_native_deps(&self) -> Vec<String> {
+        let mut indicators = Vec::new();
+        // Scan .go files for CGo imports
+        if let Ok(entries) = fs::read_dir(&self.repo_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("go") {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        if content.contains("import \"C\"") || content.contains("import  \"C\"") {
+                            indicators.push(format!(
+                                "CGo import in {}",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            ));
+                        }
+                        if content.contains("#cgo LDFLAGS") || content.contains("#cgo CFLAGS") {
+                            indicators.push(format!(
+                                "CGo build flags in {}",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        indicators
+    }
 }
 
 // ── Free functions ──────────────────────────────────────────────────────

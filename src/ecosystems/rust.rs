@@ -858,6 +858,40 @@ impl RustHandler {
 
         None
     }
+
+    /// Detect indicators that this crate has native/C dependencies.
+    /// Returns a list of human-readable reasons (empty = no native deps detected).
+    pub fn detect_native_deps(&self) -> Vec<String> {
+        let mut indicators = Vec::new();
+        let cargo_toml = self.repo_path.join("Cargo.toml");
+        if let Ok(content) = fs::read_to_string(&cargo_toml) {
+            // Check for -sys crates in dependencies
+            if let Ok(parsed) = content.parse::<toml::Table>() {
+                for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                    if let Some(deps) = parsed.get(section).and_then(|v| v.as_table()) {
+                        for key in deps.keys() {
+                            if key.ends_with("-sys") {
+                                indicators.push(format!("{key} crate ({section})"));
+                            }
+                        }
+                    }
+                }
+                // Check for links = "..." in [package] (declares native link dependency)
+                if let Some(links) = parsed
+                    .get("package")
+                    .and_then(|p| p.get("links"))
+                    .and_then(|l| l.as_str())
+                {
+                    indicators.push(format!("links = \"{links}\""));
+                }
+            }
+        }
+        // Check for build.rs (build script, often compiles C/C++)
+        if self.repo_path.join("build.rs").exists() {
+            indicators.push("build.rs present".to_string());
+        }
+        indicators
+    }
 }
 
 // ── Free functions ──────────────────────────────────────────────────────
@@ -3963,6 +3997,74 @@ mod tests {
         fs::create_dir_all(dir.path().join("services/web/crate-c")).unwrap();
         let result = super::expand_workspace_member(dir.path(), "services/*/crate-*");
         assert_eq!(result.len(), 3, "nested globs should match: {:?}", result);
+    }
+
+    #[test]
+    fn detect_native_deps_sys_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"1.0.0\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\nserde = \"1\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("openssl-sys")),
+            "should detect -sys crate: {:?}",
+            indicators
+        );
+        assert!(
+            !indicators.iter().any(|i| i.contains("serde")),
+            "should not flag normal crates"
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_build_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("build.rs"), "fn main() {}").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("build.rs")),
+            "should detect build.rs: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_links_field() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nlinks = \"z\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("links")),
+            "should detect links field: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"pure-rust\"\n\n[dependencies]\nserde = \"1\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.detect_native_deps().is_empty());
     }
 
     #[test]
