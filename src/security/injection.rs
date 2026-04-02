@@ -11,7 +11,8 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::{
-    dedup_findings, line_number, snippet_at, to_char_boundary, Category, Finding, Severity,
+    dedup_findings, line_number, snippet_at, to_char_boundary, Category, Finding, FindingRouting,
+    Severity,
 };
 
 /// Scan content for prompt injection patterns that require Rust analysis.
@@ -46,6 +47,7 @@ fn detect_markdown_injection(content: &str, findings: &mut Vec<Finding>) {
                 ),
                 line: line_number(content, offset),
                 snippet: snippet_at(content, offset),
+                routing: FindingRouting::default(),
             });
         }
     }
@@ -64,6 +66,7 @@ fn detect_markdown_injection(content: &str, findings: &mut Vec<Finding>) {
                 ),
                 line: line_number(content, offset),
                 snippet: snippet_at(content, offset),
+                routing: FindingRouting::default(),
             });
         }
     }
@@ -96,6 +99,7 @@ fn detect_encoded_instructions(content: &str, findings: &mut Vec<Finding>) {
                     ),
                     line: line_number(content, mat.start()),
                     snippet: snippet_at(content, mat.start()),
+                    routing: FindingRouting::default(),
                 });
             }
         }
@@ -126,6 +130,7 @@ fn detect_exfil_instructions(content: &str, findings: &mut Vec<Finding>) {
                 ),
                 line: line_number(content, mat.start()),
                 snippet: snippet_at(content, mat.start()),
+                routing: FindingRouting::default(),
             });
         }
     }

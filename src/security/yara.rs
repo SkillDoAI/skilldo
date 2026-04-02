@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use boreal::{Metadata, MetadataValue};
 
-use super::{dedup_findings, line_number, snippet_at, Category, Finding, Severity};
+use super::{dedup_findings, line_number, snippet_at, Category, Finding, FindingRouting, Severity};
 
 /// Cisco skill-scanner YARA rules (Apache 2.0) compiled into the binary.
 /// See rules/cisco/ATTRIBUTION.md for provenance.
@@ -260,6 +260,12 @@ impl YaraScanner {
                 message: description,
                 line: line_number(content, report_offset),
                 snippet: snippet_at(content, report_offset),
+                // Prose-only rules have high false-positive rates — route to LLM review
+                routing: if prose_only {
+                    FindingRouting::NeedsReview
+                } else {
+                    FindingRouting::Definitive
+                },
             });
         }
 
