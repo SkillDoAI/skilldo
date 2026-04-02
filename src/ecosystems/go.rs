@@ -471,7 +471,7 @@ impl GoHandler {
     }
 
     fn scan_cgo_recursive(&self, dir: &Path, indicators: &mut Vec<String>, depth: usize) {
-        if depth > 10 {
+        if depth > Self::MAX_DEPTH {
             return;
         }
         let entries = match fs::read_dir(dir) {
@@ -479,14 +479,18 @@ impl GoHandler {
             Err(_) => return,
         };
         for entry in entries.flatten() {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
             let path = entry.path();
-            if path.is_dir() {
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                // Skip hidden dirs, vendor, testdata
-                if !name.starts_with('.') && name != "vendor" && name != "testdata" {
+            if ft.is_dir() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !Self::should_skip_dir(&name) {
                     self.scan_cgo_recursive(&path, indicators, depth + 1);
                 }
-            } else if path.extension().and_then(|e| e.to_str()) == Some("go") {
+            } else if ft.is_file() && path.extension().and_then(|e| e.to_str()) == Some("go") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     let rel = path
                         .strip_prefix(&self.repo_path)
