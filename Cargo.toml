@@ -13,6 +13,7 @@ boreal = "1.1.0"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 dirs = "6"
+glob = "0.3"
 git2 = "0.20"
 libgit2-sys = { version = "0.18", features = ["vendored"] }
 once_cell = "1"

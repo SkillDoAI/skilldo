@@ -862,28 +862,26 @@ impl RustHandler {
 
 // ── Free functions ──────────────────────────────────────────────────────
 
-/// Expand a workspace member path, handling simple glob patterns like "crates/*".
+/// Expand a workspace member path, handling full glob patterns like "crates/*-macros".
 /// Returns a list of resolved directory paths. For literal paths, returns a single entry.
 fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::PathBuf> {
-    if member.contains('*') {
-        // Simple glob: split at *, match prefix and suffix against directory names.
-        // e.g., "crates/*-macros" matches crates/foo-macros but not crates/foo-core.
-        if let Some((prefix, suffix)) = member.split_once('*') {
-            let search_dir = repo_root.join(prefix);
-            if let Ok(entries) = fs::read_dir(&search_dir) {
+    if member.contains('*') || member.contains('?') || member.contains('[') {
+        let pattern = repo_root.join(member);
+        let pattern_str = pattern.to_string_lossy();
+        match glob::glob(&pattern_str) {
+            Ok(entries) => {
                 let mut paths: Vec<_> = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                    .filter(|e| {
-                        suffix.is_empty() || e.file_name().to_string_lossy().ends_with(suffix)
-                    })
-                    .map(|e| e.path())
+                    .filter_map(|r| r.ok())
+                    .filter(|p| p.is_dir())
                     .collect();
                 paths.sort();
-                return paths;
+                paths
+            }
+            Err(e) => {
+                tracing::warn!("Invalid glob pattern '{}': {}", member, e);
+                Vec::new()
             }
         }
-        Vec::new()
     } else {
         vec![repo_root.join(member)]
     }
@@ -3940,6 +3938,31 @@ mod tests {
         assert!(names.contains(&"foo-macros".to_string()));
         assert!(names.contains(&"bar-macros".to_string()));
         assert!(!names.contains(&"foo-core".to_string()));
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_question_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("pkg-a")).unwrap();
+        fs::create_dir_all(dir.path().join("pkg-b")).unwrap();
+        fs::create_dir_all(dir.path().join("pkg-cc")).unwrap(); // won't match ? (single char)
+        let result = super::expand_workspace_member(dir.path(), "pkg-?");
+        assert_eq!(
+            result.len(),
+            2,
+            "? should match single char only: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("services/api/crate-a")).unwrap();
+        fs::create_dir_all(dir.path().join("services/api/crate-b")).unwrap();
+        fs::create_dir_all(dir.path().join("services/web/crate-c")).unwrap();
+        let result = super::expand_workspace_member(dir.path(), "services/*/crate-*");
+        assert_eq!(result.len(), 3, "nested globs should match: {:?}", result);
     }
 
     #[test]
