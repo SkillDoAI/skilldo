@@ -40,6 +40,7 @@ pub struct GenerateOptions {
     pub install_source_override: Option<String>,
     pub source_path_override: Option<String>,
     pub container: bool,
+    pub request_timeout_override: Option<u64>,
     pub no_parallel: bool,
     pub best_effort: bool,
     pub telemetry: bool,
@@ -74,6 +75,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         install_source_override,
         source_path_override,
         container,
+        request_timeout_override,
         no_parallel,
         best_effort,
         telemetry,
@@ -136,6 +138,23 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     if let Some(retries) = max_retries_override {
         info!("CLI override: max_retries = {}", retries);
         config.generation.max_retries = retries;
+    }
+    if let Some(timeout) = request_timeout_override {
+        info!("CLI override: request_timeout = {}s", timeout);
+        config.llm.request_timeout_secs = timeout;
+        // Also apply to stage-specific LLM configs so create_client_from_llm_config picks it up
+        for stage_llm in [
+            &mut config.generation.extract_llm,
+            &mut config.generation.map_llm,
+            &mut config.generation.learn_llm,
+            &mut config.generation.create_llm,
+            &mut config.generation.review_llm,
+            &mut config.generation.test_llm,
+        ] {
+            if let Some(llm) = stage_llm.as_mut() {
+                llm.request_timeout_secs = timeout;
+            }
+        }
     }
     if no_test {
         warn!("CLI override: test agent disabled");
@@ -473,7 +492,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         .with_container_config(config.generation.container.clone())
         .with_parallel_extraction(config.generation.parallel_extraction)
         .with_debug_stage_dir(debug_stage_files)
-        .with_security_context(config.generation.security_context.clone());
+        .with_security_context(config.generation.security_context);
 
     if let Some(ref skill) = existing_skill {
         generator = generator.with_existing_skill(skill.clone());
@@ -848,6 +867,36 @@ setup(name="testpkg", version="1.0.0")
         })
         .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_request_timeout_override() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            request_timeout_override: Some(120),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_request_timeout_override_with_per_stage_config() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let config_path = write_per_stage_config(repo.path());
+        let result = run(GenerateOptions {
+            config_path: Some(config_path),
+            request_timeout_override: Some(90),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "request_timeout with per-stage config failed: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -1247,10 +1296,13 @@ install_source = "registry"
 
     #[tokio::test]
     async fn test_run_with_container_flag() {
+        // Verifies --container flag threads through pipeline options.
+        // Test agent disabled — we're testing flag wiring, not Docker.
         let repo = make_test_repo();
         let output = repo.path().join("SKILL.md");
         let result = run(GenerateOptions {
             container: true,
+            no_test: true,
             ..test_opts(&repo, &output)
         })
         .await;

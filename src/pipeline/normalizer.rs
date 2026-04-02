@@ -19,9 +19,10 @@ fn create_frontmatter(
         .map(|m| format!("\n  generated-by: skilldo/{}", m))
         .unwrap_or_default();
 
+    let escaped_name = package_name.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
-        "---\nname: {}\ndescription: {ecosystem} library\n{}\nmetadata:\n  version: \"{}\"\n  ecosystem: {}{}\n---\n\n",
-        package_name, license_field, version, ecosystem, generated_field
+        "---\nname: \"{}\"\ndescription: {ecosystem} library\n{}\nmetadata:\n  version: \"{}\"\n  ecosystem: {}{}\n---\n\n",
+        escaped_name, license_field, version, ecosystem, generated_field
     )
 }
 
@@ -686,7 +687,7 @@ mod tests {
         let result = ensure_frontmatter(content, "torch", "2.0.0", "python", Some("BSD"), None);
 
         assert!(result.starts_with("---\n"));
-        assert!(result.contains("name: torch"));
+        assert!(result.contains("name: \"torch\""));
         assert!(result.contains("license: BSD"));
         assert!(result.contains("metadata:"));
         assert!(result.contains("  version: \"2.0.0\""));
@@ -771,7 +772,7 @@ mod tests {
 
         // Should have frontmatter
         assert!(result.starts_with("---\n"));
-        assert!(result.contains("name: torch"));
+        assert!(result.contains("name: \"torch\""));
 
         // Should NOT have extra header
         assert!(!result.contains("# SKILL.md"));
@@ -1080,7 +1081,7 @@ mod tests {
 
         // Frontmatter should be replaced (missing name/version/metadata in fm block)
         assert!(result.starts_with("---\n"));
-        assert!(result.contains("name: mylib"));
+        assert!(result.contains("name: \"mylib\""));
         assert!(result.contains("metadata:"));
         assert!(result.contains("  version: \"1.0.0\""));
         assert!(result.contains("  ecosystem: python"));
@@ -1612,7 +1613,7 @@ mod tests {
 
         // Should add proper frontmatter since the existing one lacks required fields
         assert!(
-            result.contains("name: testlib"),
+            result.contains("name: \"testlib\""),
             "Should contain correct name. Got:\n{}",
             result
         );
@@ -1867,6 +1868,86 @@ mod tests {
         assert!(
             !result.contains("```markdown"),
             "Wrapper fence should be stripped"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_not_all_subordinate() {
+        // Meta pattern found but followed by non-subordinate content (real body text).
+        // The strip should NOT happen because the trailing content isn't all bullets/indented/fenced.
+        let content = "---\nname: test\n---\n\n## API Reference\n\n**method()** — stuff\n\nSummary of fixes:\nThis is a real sentence of body content with no special formatting.\nAnother real sentence that is not a bullet, indented, or fenced.\n";
+        let result = strip_trailing_meta_text(content);
+        assert!(
+            result.contains("Summary of fixes"),
+            "Meta text should NOT be stripped when trailing content is not subordinate. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_meta_preceded_by_code_fence_not_blank() {
+        // Meta text preceded by a closing ``` fence, but the line before that is real content
+        // (not a blank line). The fence is a code block closer, not a meta opener.
+        // This covers the `start` (not `start - 1`) branch at line 433.
+        let content = "---\nname: test\n---\n\n## API Reference\n\n```python\nprint('hello')\n```\nSummary of fixes:\n- fixed X\n";
+        let result = strip_trailing_meta_text(content);
+        // The meta text should still be stripped, but the ``` fence line should be preserved
+        // (it closes the real code block, not the meta section)
+        assert!(
+            !result.contains("Summary of fixes"),
+            "Meta text after code block should be stripped. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("print('hello')"),
+            "Code block content should be preserved. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_body_markdown_fence_nested_depth_decrements() {
+        // Test with TWO inner code blocks to exercise depth -= 1 (line 567).
+        // Wrapper: ```markdown, inner1: ```rust...```, inner2: ```python...```, wrapper close: ```
+        let input = "---\nname: test\n---\n\n```markdown\n## Imports\n\n```rust\nuse foo;\n```\n\n```python\nimport bar\n```\n\n## End\n```\n";
+        let result = strip_body_markdown_fence(input);
+        assert!(
+            result.contains("use foo"),
+            "First inner block should be preserved. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("import bar"),
+            "Second inner block should be preserved. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("```markdown"),
+            "Wrapper fence should be stripped. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_create_frontmatter_escapes_backslashes_and_quotes() {
+        let fm = create_frontmatter("back\\slash", "1.0", "rust", None, None);
+        assert!(
+            fm.contains(r#"name: "back\\slash""#),
+            "Backslashes should be escaped. Got:\n{}",
+            fm
+        );
+        let fm2 = create_frontmatter(r#"has"quote"#, "1.0", "rust", None, None);
+        assert!(
+            fm2.contains(r#"name: "has\"quote""#),
+            "Quotes should be escaped. Got:\n{}",
+            fm2
+        );
+        // Combined: backslash before quote
+        let fm3 = create_frontmatter(r#"a\"b"#, "1.0", "rust", None, None);
+        assert!(
+            fm3.contains(r#"name: "a\\\"b""#),
+            "Backslash+quote combo should be escaped. Got:\n{}",
+            fm3
         );
     }
 }

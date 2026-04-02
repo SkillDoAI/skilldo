@@ -119,6 +119,17 @@ pub enum Provider {
     Cli,
 }
 
+/// Security context hint for adjusting scan sensitivity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecurityContext {
+    /// Standard security checks (default).
+    #[default]
+    Default,
+    /// Relaxes rules for API client SDKs that discuss credentials/auth.
+    ApiClient,
+}
+
 impl Provider {
     /// Canonical env var name for each provider's API key.
     pub fn default_api_key_env(self) -> &'static str {
@@ -546,8 +557,8 @@ pub struct GenerationConfig {
     ///   suppresses SD-202 (credential store access). Use for API client SDKs.
     ///
     /// Invalid values are rejected at config parse time.
-    #[serde(default, deserialize_with = "deserialize_security_context")]
-    pub security_context: Option<String>,
+    #[serde(default)]
+    pub security_context: SecurityContext,
 
     /// Max retries for review -> create feedback loop (default: 10)
     #[serde(default = "default_review_max_retries")]
@@ -645,6 +656,13 @@ pub struct ContainerConfig {
     /// Example: { UV_EXTRA_INDEX_URL = "https://pypi.corp.com/simple/", HTTP_PROXY = "http://proxy:8080" }
     #[serde(default)]
     pub extra_env: std::collections::HashMap<String, String>,
+
+    /// Shell commands to run inside the container before test execution.
+    /// Each command runs via `sh -c` in sequence. If any fails, a warning
+    /// is logged but execution continues.
+    /// Example: ["apt-get update && apt-get install -y cmake", "pip install numpy"]
+    #[serde(default)]
+    pub setup_commands: Vec<String>,
 }
 
 impl Default for ContainerConfig {
@@ -662,6 +680,7 @@ impl Default for ContainerConfig {
             install_source: InstallSource::default(),
             source_path: None,
             extra_env: std::collections::HashMap::new(),
+            setup_commands: Vec::new(),
         }
     }
 }
@@ -712,22 +731,6 @@ fn default_timeout() -> u64 {
 
 fn default_true() -> bool {
     true
-}
-
-fn deserialize_security_context<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value: Option<String> = Option::deserialize(deserializer)?;
-    if let Some(ref ctx) = value {
-        if ctx != "api-client" {
-            return Err(serde::de::Error::custom(format!(
-                "invalid security_context '{}' — valid values: \"api-client\"",
-                ctx
-            )));
-        }
-    }
-    Ok(value)
 }
 
 fn default_test_mode() -> String {
@@ -1021,7 +1024,7 @@ impl Default for GenerationConfig {
             telemetry: false,
             container: ContainerConfig::default(),
             redact_env_vars: Vec::new(),
-            security_context: None,
+            security_context: SecurityContext::Default,
         }
     }
 }
@@ -1066,7 +1069,7 @@ mod tests {
         assert!(gen.test_llm.is_none());
         assert!(gen.version_from.is_none());
         assert!(gen.redact_env_vars.is_empty());
-        assert!(gen.security_context.is_none());
+        assert_eq!(gen.security_context, SecurityContext::Default);
     }
 
     #[test]
@@ -1187,7 +1190,7 @@ mod tests {
             telemetry: false,
             container: ContainerConfig::default(),
             redact_env_vars: Vec::new(),
-            security_context: None,
+            security_context: SecurityContext::Default,
         };
         assert_eq!(
             gen.get_test_mode(),
@@ -1320,6 +1323,39 @@ install_source = "local-mount"
             InstallSource::LocalMount
         );
         assert!(config.generation.container.source_path.is_none());
+    }
+
+    #[test]
+    fn test_setup_commands_from_toml() {
+        let toml = r#"
+[llm]
+provider = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+
+[generation.container]
+setup_commands = ["apt-get install -y libxml2-dev", "pip install numpy"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.generation.container.setup_commands.len(), 2);
+        assert_eq!(
+            config.generation.container.setup_commands[0],
+            "apt-get install -y libxml2-dev"
+        );
+        assert_eq!(
+            config.generation.container.setup_commands[1],
+            "pip install numpy"
+        );
+    }
+
+    #[test]
+    fn test_setup_commands_defaults_to_empty() {
+        let config = ContainerConfig::default();
+        assert!(config.setup_commands.is_empty());
     }
 
     #[test]
@@ -2598,7 +2634,7 @@ security_context = "api-client"
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(
             config.generation.security_context,
-            Some("api-client".to_string())
+            SecurityContext::ApiClient
         );
     }
 
@@ -2619,7 +2655,7 @@ security_context = "invalid-context"
         );
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("invalid security_context"),
+            err.contains("unknown variant"),
             "error should mention invalid security_context, got: {err}"
         );
     }
@@ -2632,7 +2668,7 @@ provider = "anthropic"
 model = "claude-sonnet"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.generation.security_context, None);
+        assert_eq!(config.generation.security_context, SecurityContext::Default);
     }
 
     #[cfg(unix)]

@@ -82,6 +82,71 @@ impl RustHandler {
         t.starts_with('{') && t.contains("workspace") && t.contains("true")
     }
 
+    /// Check if a Cargo.toml `[package]` section contains a dotted workspace
+    /// key like `version.workspace = true` (as opposed to the inline-table
+    /// form `version = { workspace = true }`).
+    fn has_dotted_workspace_key(content: &str, field: &str) -> bool {
+        let dotted = format!("{field}.workspace");
+        let mut in_package = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') {
+                let header = trimmed
+                    .split_once('#')
+                    .map_or(trimmed, |(before, _)| before.trim());
+                in_package = header == "[package]";
+                continue;
+            }
+            if in_package {
+                if let Some(eq_pos) = trimmed.find('=') {
+                    let lhs = trimmed[..eq_pos].trim();
+                    let rhs = trimmed[eq_pos + 1..].trim();
+                    let rhs_clean = rhs.split('#').next().unwrap_or("").trim();
+                    if lhs == dotted && rhs_clean == "true" {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Walk up from `self.repo_path` looking for the nearest workspace-root Cargo.toml.
+    /// Per Cargo semantics, `version.workspace = true` resolves from the NEAREST
+    /// ancestor with `[workspace]` — not higher. Stops at .git or 10 levels.
+    fn version_from_workspace_root(&self) -> Option<String> {
+        let mut dir = self.repo_path.clone();
+        for _ in 0..10 {
+            if !dir.pop() {
+                break;
+            }
+            let candidate = dir.join("Cargo.toml");
+            if let Ok(content) = fs::read_to_string(&candidate) {
+                if let Ok(parsed) = content.parse::<toml::Table>() {
+                    // Found a [workspace] section — this is THE workspace root per Cargo.
+                    // Extract version if present, but either way stop walking.
+                    if parsed.contains_key("workspace") {
+                        return parsed
+                            .get("workspace")
+                            .and_then(|w| w.get("package"))
+                            .and_then(|p| p.get("version"))
+                            .and_then(|v| v.as_str())
+                            .filter(|ver| ver.contains('.'))
+                            .map(|ver| {
+                                debug!("resolved workspace version {ver} from workspace root");
+                                ver.to_string()
+                            });
+                    }
+                }
+            }
+            // Stop at repo root — workspace Cargo.toml won't be above it
+            if dir.join(".git").exists() {
+                break;
+            }
+        }
+        None
+    }
+
     // ── File discovery ──────────────────────────────────────────────────
 
     /// Find all Rust source files (excluding tests, target, benches, examples).
@@ -278,15 +343,19 @@ impl RustHandler {
     pub fn get_version(&self) -> Result<String> {
         // Strategy 1: Cargo.toml [package] version (most authoritative for Rust)
         let cargo_toml = self.repo_path.join("Cargo.toml");
+        let mut has_workspace_version = false;
         if let Ok(content) = fs::read_to_string(&cargo_toml) {
             if let Some(version) = cargo_toml_field(&content, "version") {
                 // Reject workspace-inherited versions like { workspace = true }
                 if !Self::is_workspace_placeholder(&version) && version.contains('.') {
                     return Ok(version);
                 }
+                if Self::is_workspace_placeholder(&version) {
+                    has_workspace_version = true;
+                }
             }
 
-            // Strategy 1b: workspace.package.version
+            // Strategy 1b: workspace.package.version (for workspace root Cargo.toml)
             if let Ok(parsed) = content.parse::<toml::Table>() {
                 if let Some(ver) = parsed
                     .get("workspace")
@@ -298,6 +367,18 @@ impl RustHandler {
                         return Ok(ver.to_string());
                     }
                 }
+            }
+
+            // Detect `version.workspace = true` (dotted-key form)
+            if !has_workspace_version && Self::has_dotted_workspace_key(&content, "version") {
+                has_workspace_version = true;
+            }
+        }
+
+        // Strategy 1c: walk up to workspace root for inherited version
+        if has_workspace_version {
+            if let Some(ver) = self.version_from_workspace_root() {
+                return Ok(ver);
             }
         }
 
@@ -1250,6 +1331,64 @@ mod tests {
         .unwrap();
         let handler = RustHandler::new(dir.path());
         assert_eq!(handler.get_version().unwrap(), "2.0.0");
+    }
+
+    #[test]
+    fn get_version_member_crate_resolves_workspace_root() {
+        // Handler points at the MEMBER crate, not the workspace root.
+        // version.workspace = true should walk up to find the root version.
+        // Tracing subscriber ensures debug!() format args execute for coverage.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\"]\n\n[workspace.package]\nversion = \"3.1.0\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/a");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"a\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        // Point handler at the member, not the root
+        let handler = RustHandler::new(&member_dir);
+        assert_eq!(handler.get_version().unwrap(), "3.1.0");
+    }
+
+    #[test]
+    fn get_version_member_crate_inline_table_resolves_workspace_root() {
+        // Same as above but using `version = { workspace = true }` form.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/b\"]\n\n[workspace.package]\nversion = \"4.2.0\"\n",
+        )
+        .unwrap();
+        let member_dir = dir.path().join("crates/b");
+        fs::create_dir_all(&member_dir).unwrap();
+        fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"b\"\nversion = { workspace = true }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(&member_dir);
+        assert_eq!(handler.get_version().unwrap(), "4.2.0");
+    }
+
+    #[test]
+    fn get_version_member_crate_no_workspace_root_falls_back() {
+        // Member crate with version.workspace = true but no workspace root above.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"orphan\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        // No workspace root to resolve — falls back to "latest"
+        assert_eq!(handler.get_version().unwrap(), "latest");
     }
 
     #[test]
@@ -3801,6 +3940,144 @@ mod tests {
         assert!(names.contains(&"foo-macros".to_string()));
         assert!(names.contains(&"bar-macros".to_string()));
         assert!(!names.contains(&"foo-core".to_string()));
+    }
+
+    #[test]
+    fn has_dotted_workspace_key_falls_through_non_matching_lines() {
+        // Lines in [package] with '=' that don't match the dotted key
+        // should fall through (exercises line 107 closing brace).
+        let content = "[package]\nname = \"test\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\n";
+        assert!(!RustHandler::has_dotted_workspace_key(content, "version"));
+    }
+
+    #[test]
+    fn has_dotted_workspace_key_returns_true_when_present() {
+        let content = "[package]\nname = \"test\"\nversion.workspace = true\n";
+        assert!(RustHandler::has_dotted_workspace_key(content, "version"));
+    }
+
+    #[test]
+    fn has_dotted_workspace_key_returns_true_with_trailing_comment() {
+        let content = "[package]\nversion.workspace = true # inherited\n";
+        assert!(RustHandler::has_dotted_workspace_key(content, "version"));
+    }
+
+    #[test]
+    fn has_dotted_workspace_key_skips_lines_without_equals() {
+        // A comment-only line inside [package] has no '=' and exercises the
+        // implicit else of `if let Some(eq_pos)`.
+        let content = "[package]\n# a comment\nversion.workspace = true\n";
+        assert!(RustHandler::has_dotted_workspace_key(content, "version"));
+    }
+
+    #[test]
+    fn version_from_workspace_root_at_filesystem_root() {
+        // When repo_path is "/" (filesystem root), dir.pop() returns false
+        // immediately, exercising line 119.
+        let handler = RustHandler::new(std::path::Path::new("/"));
+        assert!(handler.version_from_workspace_root().is_none());
+    }
+
+    #[test]
+    fn version_from_workspace_root_finds_version() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create workspace root Cargo.toml with [workspace.package].version
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"2.3.4\"\n",
+        )
+        .unwrap();
+        // Create a sub-crate directory
+        let sub = dir.path().join("crates").join("mycrate");
+        std::fs::create_dir_all(&sub).unwrap();
+        let handler = RustHandler::new(&sub);
+        let ver = handler.version_from_workspace_root();
+        assert_eq!(ver, Some("2.3.4".to_string()));
+    }
+
+    #[test]
+    fn version_from_workspace_root_rejects_version_without_dot() {
+        // A workspace version like "dev" (no '.') should be rejected,
+        // exercising the else branch of `if ver.contains('.')`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"dev\"\n",
+        )
+        .unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let handler = RustHandler::new(&sub);
+        assert!(handler.version_from_workspace_root().is_none());
+    }
+
+    #[test]
+    fn version_from_workspace_root_stops_at_git_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        // workspace root at top level
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"9.9.9\"\n",
+        )
+        .unwrap();
+        // .git at level 1 — should prevent walking above level 1
+        let level1 = dir.path().join("level1");
+        std::fs::create_dir_all(&level1).unwrap();
+        std::fs::create_dir(level1.join(".git")).unwrap();
+        // sub-crate at level 2
+        let sub = level1.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let handler = RustHandler::new(&sub);
+        // Should NOT find the workspace root above .git boundary
+        assert!(handler.version_from_workspace_root().is_none());
+    }
+
+    #[test]
+    fn version_from_workspace_root_deep_nesting() {
+        let dir = tempfile::tempdir().unwrap();
+        // workspace root at top level
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"5.6.7\"\n",
+        )
+        .unwrap();
+        // 5 levels deep — previously capped at 3
+        let deep = dir.path().join("a/b/c/d/e");
+        std::fs::create_dir_all(&deep).unwrap();
+        let handler = RustHandler::new(&deep);
+        assert_eq!(
+            handler.version_from_workspace_root(),
+            Some("5.6.7".to_string())
+        );
+    }
+
+    #[test]
+    fn version_from_workspace_root_stops_at_workspace_without_version() {
+        // Per Cargo semantics: if nearest [workspace] has no [workspace.package].version,
+        // don't walk higher — return None.
+        let dir = tempfile::tempdir().unwrap();
+        // Higher ancestor has version
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.package]\nversion = \"9.9.9\"\n[workspace]\nmembers = [\"inner/*\"]\n",
+        )
+        .unwrap();
+        // Inner workspace has [workspace] but no version
+        let inner = dir.path().join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(
+            inner.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"sub\"]\n",
+        )
+        .unwrap();
+        let sub = inner.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let handler = RustHandler::new(&sub);
+        // Should return None — stops at inner [workspace], doesn't walk to outer
+        assert!(
+            handler.version_from_workspace_root().is_none(),
+            "should stop at nearest [workspace] even without version"
+        );
     }
 
     #[test]

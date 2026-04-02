@@ -3,11 +3,32 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
-## Unreleased
+## 0.5.12
+
+### Added
+- **`SecurityContext` enum** — replaces `Option<String>` with compile-time validated enum. Invalid values now fail at config parse time via serde
+- **Workspace version walk-up** — member crates with `version.workspace = true` resolve version from the workspace root (walks up to 3 parent directories)
+- **`--request-timeout` CLI flag** — override LLM request timeout in seconds from the command line (overrides `request_timeout_secs` in config)
+- **`setup_commands` container config** — run shell commands inside the container before dependency installation and test execution. Each command runs via `sh -c`; failures log a warning but don't abort. Useful for native deps without custom Dockerfiles
+- **Responses API helpers** — `build_responses_request()` + `extract_responses_text()` shared between OpenAI and ChatGPT clients (-19 lines)
+
+### Changed
+- **`rescan_after_rewrite` → method on Generator** — eliminates 4-parameter function called 4 times with same args (-31 lines)
 
 ### Fixed
-- **`--provider` CLI override resets `api_key_env`** — switching providers via CLI now resets `api_key_env` to the new provider's default when the config has `api_key_env = "none"`, preventing silent auth failures
-- **E2E model switch** — Cerebras gpt-oss-120b → OpenRouter qwen/qwen3.5-122b-a10b. Fixes JS (missing sections) and Rust (hallucination/degeneration) e2e failures
+- **npm scoped package YAML quoting** — `@scope/pkg` frontmatter names now quoted to produce valid YAML
+- **Reasoning model response parsing** — handles `reasoning_details` array and `refusal` fields from OpenRouter/Nemotron/Qwen models
+- **`--provider` CLI override resets `api_key_env`** — prevents silent auth failures when local config has `api_key_env = "none"`
+- **Review fix loop gets full source context** — fix prompt now includes patterns + conventions, not just API surface list. Models can cross-reference source instead of hallucinating from training data
+- **Training data warning in create prompt** — explicitly tells models their knowledge may be outdated, trust only provided source
+- **No-test libraries** — Python/Go/Java ecosystems warn instead of bailing when no tests found
+- **Windows: container flag test** — disables test agent (tests flag wiring, not Docker)
+- **Inline TOML comment stripping** — dotted workspace keys with comments (`version.workspace = true # inherited`) now parsed correctly
+
+### Changed (CI/E2E)
+- **E2E uses config file** — `.github/e2e-config.toml` with model/timeout settings instead of CLI flags
+- **E2E libraries swapped** — six (Python), fatih/color (Go), chalk (JS), thiserror (Rust), javapoet (Java) — avoids std-absorbed libraries that cause hallucinations
+- **E2E back on Cerebras** — gpt-oss-120b (free/paid), 180 min timeout
 
 ## 0.5.11
 
@@ -37,6 +58,9 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - **Temp file cleanup on all paths** — stale temp files from previous failed runs cleaned up before writing new output
 - **Windows `test_with_debug_stage_dir_creation_failure`** — used `/dev/null` path (Unix-only); now uses `NUL` on Windows
 - **CI: uv installed on Windows runner** — fixes 4 executor test failures
+- **E2E: switch to qwen3.5-122b on OpenRouter** — Cerebras gpt-oss-120b replaced; fixes JS and Rust e2e failures
+- **`--provider` CLI override resets `api_key_env`** — prevents silent auth failures when local config has `api_key_env = "none"`
+- **OpenAI response parser handles `reasoning_details` array** — fixes "error decoding response body" with reasoning models on OpenRouter
 
 ## 0.5.10
 

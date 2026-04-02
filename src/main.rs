@@ -143,6 +143,10 @@ enum Commands {
         #[arg(long = "review-provider")]
         review_provider: Option<String>,
 
+        /// Override LLM request timeout in seconds (default: 120)
+        #[arg(long)]
+        request_timeout: Option<u64>,
+
         /// Run agents 1-3 sequentially instead of in parallel
         #[arg(long)]
         no_parallel: bool,
@@ -327,6 +331,7 @@ async fn main() -> Result<()> {
             install_source,
             source_path,
             container,
+            request_timeout,
             no_parallel,
             best_effort,
             telemetry,
@@ -361,6 +366,7 @@ async fn main() -> Result<()> {
                 install_source_override: install_source,
                 source_path_override: source_path,
                 container,
+                request_timeout_override: request_timeout,
                 no_parallel,
                 best_effort,
                 telemetry,
