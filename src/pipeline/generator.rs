@@ -1183,6 +1183,39 @@ mod tests {
         }
     }
 
+    fn make_no_test_data() -> CollectedData {
+        CollectedData {
+            package_name: "notests".to_string(),
+            version: "1.0.0".to_string(),
+            license: Some("MIT".to_string()),
+            project_urls: vec![],
+            language: Language::Python,
+            source_file_count: 3,
+            examples_content: String::new(),
+            test_content: String::new(), // No tests
+            docs_content: "# README\n\nUsage: `import notests`\n".to_string(),
+            source_content: "class Foo:\n    \"\"\"A foo class.\"\"\"\n    pass\n".to_string(),
+            changelog_content: String::new(),
+            dependencies: Vec::new(),
+            native_dep_indicators: Vec::new(),
+            has_tests: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_no_test_fallback() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false);
+        let data = make_no_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        // Should produce valid output even without tests
+        assert!(
+            output.skill_md.contains("---"),
+            "should produce frontmatter even without tests"
+        );
+    }
+
     #[tokio::test]
     async fn test_generate_produces_skill_md() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 1).with_test(false);
