@@ -2335,4 +2335,217 @@ mod tests {
         let handler = PythonHandler::new(&repo);
         assert_eq!(handler.get_version().unwrap(), "3.0.0");
     }
+
+    // ── detect_native_deps ──────────────────────────────────────────
+
+    #[test]
+    fn detect_native_deps_ext_modules_in_setup_py() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("setup.py"),
+            "from setuptools import setup, Extension\next_modules=[Extension('foo', ['foo.c'])]\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("ext_modules")),
+            "should detect ext_modules, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_cffi_modules_in_setup_py() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("setup.py"),
+            "from setuptools import setup\nsetup(cffi_modules=['build_ffi.py:ffi'])\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("cffi_modules")),
+            "should detect cffi_modules, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_maturin_in_pyproject() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[build-system]\nrequires = [\"maturin\"]\n\n[tool.maturin]\nfeatures = [\"pyo3/extension-module\"]\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("maturin")),
+            "should detect maturin, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_pyo3_in_pyproject() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[build-system]\nrequires = [\"pyo3\"]\n\n[tool.pyo3]\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("pyo3")),
+            "should detect pyo3, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_clean_project() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname = \"pure-python\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        assert!(handler.detect_native_deps().is_empty());
+    }
+
+    // ── is_test_filename edge cases ─────────────────────────────────
+
+    #[test]
+    fn is_test_filename_suffix_pattern() {
+        assert!(is_test_filename("foo_test.py"));
+        assert!(is_test_filename("conftest.py"));
+        assert!(is_test_filename("tests_integration.py"));
+        assert!(!is_test_filename("foo.py"));
+        assert!(!is_test_filename("testutils.py"));
+    }
+
+    // ── extract_version_number ──────────────────────────────────────
+
+    #[test]
+    fn extract_version_number_basic() {
+        let handler = PythonHandler::new(std::path::Path::new("/tmp"));
+        assert_eq!(
+            handler.extract_version_number("## 3.0.0"),
+            Some("3.0.0".to_string())
+        );
+        assert_eq!(
+            handler.extract_version_number("version 2.1"),
+            Some("2.1".to_string())
+        );
+        assert_eq!(handler.extract_version_number("no version here"), None);
+        assert_eq!(handler.extract_version_number("abc"), None);
+    }
+
+    // ── get_version from release docs fallback (Strategy 4) ─────────
+
+    #[test]
+    fn test_get_version_from_release_doc_strategy4() {
+        let dir = TempDir::new().unwrap();
+        // No pyproject.toml, no __init__.py, no root changelog
+        let docs_dir = dir.path().join("docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+        fs::write(
+            docs_dir.join("release-notes.md"),
+            "# Release Notes\n\n## 4.2.0\n\n- New feature\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "4.2.0");
+    }
+
+    #[test]
+    fn test_get_version_fallback_to_latest_no_sources() {
+        // No version source at all => falls back to "latest"
+        let dir = TempDir::new().unwrap();
+        let handler = PythonHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "latest");
+    }
+
+    // ── get_license from setup.cfg ──────────────────────────────────
+
+    #[test]
+    fn get_license_from_setup_cfg() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("setup.cfg"),
+            "[metadata]\nname = mylib\nlicense = BSD-3-Clause\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        assert_eq!(handler.get_license(), Some("BSD-3-Clause".to_string()));
+    }
+
+    // ── collect_py_files excludes test dirs ─────────────────────────
+
+    #[test]
+    fn collect_py_files_excludes_tests_and_venv() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let pkg = root.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("api.py"), "# api").unwrap();
+        // These should be excluded
+        let tests_dir = root.join("tests");
+        fs::create_dir_all(&tests_dir).unwrap();
+        fs::write(tests_dir.join("test_api.py"), "# test").unwrap();
+        let venv = root.join("venv");
+        fs::create_dir_all(venv.join("lib")).unwrap();
+        fs::write(venv.join("lib").join("site.py"), "# venv").unwrap();
+
+        let handler = PythonHandler::new(root);
+        let mut files = Vec::new();
+        handler.collect_py_files(root, &mut files).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"api.py"));
+        assert!(!names.contains(&"test_api.py"));
+        assert!(!names.contains(&"site.py"));
+    }
+
+    // ── pyproject_project_field edge: empty value after '=' ─────────
+
+    #[test]
+    fn pyproject_project_field_empty_value_returns_none() {
+        let content = "[project]\nname = \nversion = \"1.0\"\n";
+        assert_eq!(pyproject_project_field(content, "name"), None);
+    }
+
+    // ── collect_docs_recursive into subdirectory ────────────────────
+
+    #[test]
+    fn collect_docs_recursive_enters_subdir() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let guides = root.join("docs").join("guides");
+        fs::create_dir_all(&guides).unwrap();
+        fs::write(guides.join("getting-started.md"), "# Guide").unwrap();
+        // _build should be skipped
+        let build = root.join("docs").join("_build");
+        fs::create_dir_all(&build).unwrap();
+        fs::write(build.join("output.md"), "# Build output").unwrap();
+
+        let handler = PythonHandler::new(root);
+        let mut docs = Vec::new();
+        handler
+            .collect_docs_recursive(&root.join("docs"), &mut docs, 0)
+            .unwrap();
+        let names: Vec<_> = docs
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"getting-started.md"));
+        assert!(!names.contains(&"output.md"));
+    }
 }

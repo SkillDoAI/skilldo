@@ -2387,4 +2387,116 @@ mod tests {
             "should fall through from dev version.go to VERSION file"
         );
     }
+
+    // ── detect_native_deps (CGo detection) ──────────────────────────
+
+    #[test]
+    fn detect_native_deps_cgo_import() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("cgo_wrapper.go"),
+            "package main\n\n/*\n#include <stdlib.h>\n*/\nimport \"C\"\n\nfunc main() {}\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("CGo import") && i.contains("cgo_wrapper.go")),
+            "should detect CGo import, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_cgo_build_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("native.go"),
+            "package main\n\n// #cgo LDFLAGS: -lm\n// #cgo CFLAGS: -I/usr/include\nimport \"C\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("CGo build flags")),
+            "should detect CGo build flags, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_clean_go_project() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("main.go"),
+            "package main\n\nfunc main() {}\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert!(
+            handler.detect_native_deps().is_empty(),
+            "pure Go project should have no native dep indicators"
+        );
+    }
+
+    // ── collect_example_test_files ──────────────────────────────────
+
+    #[test]
+    fn collect_example_test_files_finds_example_prefixed_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            root.join("example_hello_test.go"),
+            "package main\nfunc ExampleHello() {}\n",
+        )
+        .unwrap();
+        // Regular test should not be collected
+        fs::write(
+            root.join("hello_test.go"),
+            "package main\nfunc TestHello(t *testing.T) {}\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(root);
+        let mut files = Vec::new();
+        handler
+            .collect_example_test_files(root, &mut files, 0)
+            .unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"example_hello_test.go"));
+        assert!(!names.contains(&"hello_test.go"));
+    }
+
+    // ── collect_all_go_in_dir ───────────────────────────────────────
+
+    #[test]
+    fn collect_all_go_in_dir_includes_both_source_and_test() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("lib.go"), "package lib\n").unwrap();
+        fs::write(root.join("lib_test.go"), "package lib\n").unwrap();
+        // vendor/ should be skipped
+        let vendor = root.join("vendor");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::write(vendor.join("dep.go"), "package dep\n").unwrap();
+
+        let handler = GoHandler::new(root);
+        let mut files = Vec::new();
+        handler.collect_all_go_in_dir(root, &mut files, 0).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"lib.go"));
+        assert!(names.contains(&"lib_test.go"));
+        assert!(!names.contains(&"dep.go"));
+    }
 }

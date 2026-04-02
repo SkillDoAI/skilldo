@@ -4213,4 +4213,148 @@ mod tests {
         let result = super::expand_workspace_member(dir.path(), "crates/*");
         assert!(result.is_empty());
     }
+
+    #[test]
+    fn expand_workspace_member_glob_matches_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let crates = dir.path().join("crates");
+        std::fs::create_dir_all(crates.join("foo")).unwrap();
+        std::fs::create_dir_all(crates.join("bar")).unwrap();
+        // A file should not match (glob only returns dirs)
+        std::fs::write(crates.join("baz.txt"), "not a dir").unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/*");
+        assert_eq!(result.len(), 2, "should match 2 dirs, got: {:?}", result);
+        // Should be sorted
+        let names: Vec<_> = result
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert_eq!(names, vec!["bar", "foo"]);
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_with_suffix_filter() {
+        // Test "crates/*-macros" style glob
+        let dir = tempfile::tempdir().unwrap();
+        let crates = dir.path().join("crates");
+        std::fs::create_dir_all(crates.join("foo-macros")).unwrap();
+        std::fs::create_dir_all(crates.join("bar-macros")).unwrap();
+        std::fs::create_dir_all(crates.join("baz-core")).unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/*-macros");
+        assert_eq!(result.len(), 2, "should match only -macros dirs");
+    }
+
+    #[test]
+    fn expand_workspace_member_literal_no_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = super::expand_workspace_member(dir.path(), "subcrate");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], dir.path().join("subcrate"));
+    }
+
+    #[test]
+    fn expand_workspace_member_question_mark_glob() {
+        // '?' glob character
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("a1")).unwrap();
+        std::fs::create_dir_all(root.join("a2")).unwrap();
+        std::fs::create_dir_all(root.join("bb")).unwrap();
+        let result = super::expand_workspace_member(root, "a?");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn expand_workspace_member_bracket_glob() {
+        // '[' glob character
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("xa")).unwrap();
+        std::fs::create_dir_all(root.join("xb")).unwrap();
+        std::fs::create_dir_all(root.join("xc")).unwrap();
+        let result = super::expand_workspace_member(root, "x[ab]");
+        assert_eq!(result.len(), 2, "should match xa and xb");
+    }
+
+    // ── collect_rs_files / collect_all_rs_in_dir ────────────────────
+
+    #[test]
+    fn collect_rs_files_excludes_tests_and_build_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("lib.rs"), "pub fn hello() {}").unwrap();
+        std::fs::write(src.join("build.rs"), "fn main() {}").unwrap();
+        std::fs::write(src.join("foo_test.rs"), "#[test] fn t() {}").unwrap();
+        let handler = RustHandler::new(root);
+        let mut files = Vec::new();
+        handler.collect_rs_files(&src, &mut files, 0).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"lib.rs"));
+        assert!(!names.contains(&"build.rs"));
+        assert!(!names.contains(&"foo_test.rs"));
+    }
+
+    #[test]
+    fn collect_all_rs_in_dir_includes_all_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let tests = root.join("tests");
+        std::fs::create_dir_all(&tests).unwrap();
+        std::fs::write(tests.join("integration.rs"), "fn main() {}").unwrap();
+        std::fs::write(tests.join("not_rs.txt"), "nope").unwrap();
+        let handler = RustHandler::new(root);
+        let mut files = Vec::new();
+        handler
+            .collect_all_rs_in_dir(&tests, &mut files, 0)
+            .unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("integration.rs"));
+    }
+
+    #[test]
+    fn collect_test_rs_files_finds_test_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("lib.rs"), "pub fn x() {}").unwrap();
+        std::fs::write(src.join("foo_test.rs"), "#[test] fn t() {}").unwrap();
+        let handler = RustHandler::new(root);
+        let mut files = Vec::new();
+        handler.collect_test_rs_files(&src, &mut files, 0).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("foo_test.rs"));
+    }
+
+    // ── collect_docs_recursive ──────────────────────────────────────
+
+    #[test]
+    fn collect_docs_recursive_rust_enters_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs").join("api");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("reference.md"), "# Ref\n").unwrap();
+        // target/ should be skipped
+        let target = root.join("docs").join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("output.md"), "# Build").unwrap();
+
+        let handler = RustHandler::new(root);
+        let mut found = Vec::new();
+        handler
+            .collect_docs_recursive(&root.join("docs"), &mut found, 0)
+            .unwrap();
+        let names: Vec<_> = found
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"reference.md"));
+        assert!(!names.contains(&"output.md"));
+    }
 }
