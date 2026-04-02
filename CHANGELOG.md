@@ -3,6 +3,27 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.13
+
+### Added
+- **Native dependency auto-detection** — detects `-sys` crates, `build.rs`, CGo imports, `node-gyp`, `ext_modules`, maturin/pyo3 across all four ecosystems. Warns when native deps found and `--container` not set
+- **Full glob matching for workspace members** — `glob` crate replaces manual pattern matching. Supports `crates/*-macros`, `pkg-?`, `services/*/crate-*`, and character classes
+- **No-test library fallback** — when a library has no test files, the map stage extracts usage patterns from documentation and source code doc comments instead of sending an empty prompt
+- **YARA hybrid routing** — `FindingRouting` enum (`Definitive` | `NeedsReview`) on each finding. Prose-only rules (SD-201, SD-202, SD-204) tagged `NeedsReview` for LLM-based contextual review instead of auto-fail
+- **Python version extraction** — single-file modules (`six.py` in root) and root-level changelog files (`CHANGES`, `CHANGELOG`, `HISTORY`) now detected
+
+### Fixed
+- **Security: base64 injection bypass** — non-UTF-8 payloads that decoded to readable text were silently skipped. Now uses `from_utf8_lossy` fallback
+- **Security: heredoc delimiter collision** — `SKILLDO_EOF` in interpolated content (Maven POM, Cargo.toml) now sanitized to prevent shell injection
+- **Security: YARA partial-result errors** — scan errors now logged at warn level instead of silently discarded
+- **Security: OAuth callback buffer** — reads in loop until header end or 16KB cap instead of single 4KB read that could truncate long callbacks
+- **Test isolation** — `cli::generate` tests now use isolated config from temp dir, preventing CWD/user config pollution
+- **No-test assertions** — 5 integration tests updated for v0.5.12 warn-not-bail behavior
+
+### Changed
+- **`CollectedData.has_tests`** — new field signals whether test files were found during collection
+- **`CollectedData.native_dep_indicators`** — new field lists detected native dependency indicators
+
 ## 0.5.12
 
 ### Added
