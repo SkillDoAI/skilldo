@@ -311,7 +311,7 @@ impl PythonHandler {
             }
         }
 
-        // Strategy 2: Try package __init__.py (flat layout and src/ layout)
+        // Strategy 2: Try package __init__.py (flat layout, src/ layout, and single-file modules)
         if let Some(pkg_name) = self.repo_path.file_name().and_then(|n| n.to_str()) {
             let candidates = [
                 self.repo_path.join(pkg_name).join("__init__.py"),
@@ -319,6 +319,8 @@ impl PythonHandler {
                     .join("src")
                     .join(pkg_name)
                     .join("__init__.py"),
+                // Single-file modules (e.g. six.py in repo root)
+                self.repo_path.join(format!("{pkg_name}.py")),
             ];
             for init_path in &candidates {
                 if let Ok(content) = fs::read_to_string(init_path) {
@@ -338,7 +340,32 @@ impl PythonHandler {
             }
         }
 
-        // Strategy 3: Try release/blog docs (fallback for dynamic-version packages)
+        // Strategy 3: Try root-level changelog files (CHANGES, CHANGELOG, HISTORY, etc.)
+        if let Ok(entries) = fs::read_dir(&self.repo_path) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    let name_lower = name.to_lowercase();
+                    if (name_lower.starts_with("change")
+                        || name_lower.starts_with("history")
+                        || name_lower.starts_with("news"))
+                        && entry.file_type().is_ok_and(|t| t.is_file())
+                    {
+                        if let Ok(content) = fs::read_to_string(entry.path()) {
+                            let search_content = content.chars().take(1000).collect::<String>();
+                            for line in search_content.lines() {
+                                let line_lower = line.to_lowercase();
+                                if let Some(version) = self.extract_version_number(&line_lower) {
+                                    debug!("Found version {} in root {}", version, name);
+                                    return Ok(version);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Strategy 4: Try release/blog docs (fallback for dynamic-version packages)
         if let Ok(docs) = self.find_docs() {
             for doc_path in docs {
                 if let Some(filename) = doc_path.file_name().and_then(|n| n.to_str()) {
@@ -2232,5 +2259,54 @@ mod tests {
             !examples.iter().any(|p| p.ends_with("demo.py")),
             "should skip examples via symlink escaping repo"
         );
+    }
+
+    #[test]
+    fn test_get_version_from_single_file_module() {
+        // Libraries like `six` are a single .py file in the repo root
+        let dir = TempDir::new().unwrap();
+        // Repo dir name = package name
+        let repo = dir.path().join("six");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("six.py"), "__version__ = \"1.17.0\"\n").unwrap();
+        let handler = PythonHandler::new(&repo);
+        assert_eq!(handler.get_version().unwrap(), "1.17.0");
+    }
+
+    #[test]
+    fn test_get_version_from_root_changes_file() {
+        // Libraries like `six` have a CHANGES file in the repo root
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("CHANGES"),
+            "Changelog for six\n=================\n\n1.17.0\n------\n\n- Fixed stuff\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "1.17.0");
+    }
+
+    #[test]
+    fn test_get_version_from_root_changelog_md() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("CHANGELOG.md"),
+            "# Changelog\n\n## 2.5.1\n\n- Bug fix\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        assert_eq!(handler.get_version().unwrap(), "2.5.1");
+    }
+
+    #[test]
+    fn test_get_version_prefers_init_over_root_changelog() {
+        // __version__ in source should win over changelog
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().join("mypkg");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("mypkg.py"), "__version__ = \"3.0.0\"\n").unwrap();
+        fs::write(repo.join("CHANGES"), "2.9.0\n------\n").unwrap();
+        let handler = PythonHandler::new(&repo);
+        assert_eq!(handler.get_version().unwrap(), "3.0.0");
     }
 }
