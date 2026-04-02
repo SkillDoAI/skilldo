@@ -341,23 +341,33 @@ impl PythonHandler {
         }
 
         // Strategy 3: Try root-level changelog files (CHANGES, CHANGELOG, HISTORY, etc.)
+        // Sort entries for deterministic results when multiple changelog files exist.
         if let Ok(entries) = fs::read_dir(&self.repo_path) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    let name_lower = name.to_lowercase();
-                    if (name_lower.starts_with("change")
-                        || name_lower.starts_with("history")
-                        || name_lower.starts_with("news"))
-                        && entry.file_type().is_ok_and(|t| t.is_file())
-                    {
-                        if let Ok(content) = fs::read_to_string(entry.path()) {
-                            let search_content = content.chars().take(1000).collect::<String>();
-                            for line in search_content.lines() {
-                                let line_lower = line.to_lowercase();
-                                if let Some(version) = self.extract_version_number(&line_lower) {
-                                    debug!("Found version {} in root {}", version, name);
-                                    return Ok(version);
-                                }
+            let mut changelog_files: Vec<_> = entries
+                .flatten()
+                .filter(|e| {
+                    e.file_name()
+                        .to_str()
+                        .map(|n| {
+                            let nl = n.to_lowercase();
+                            (nl.starts_with("change")
+                                || nl.starts_with("history")
+                                || nl.starts_with("news"))
+                                && e.file_type().is_ok_and(|t| t.is_file())
+                        })
+                        .unwrap_or(false)
+                })
+                .collect();
+            changelog_files.sort_by_key(|e| e.file_name());
+            for entry in changelog_files {
+                if let Ok(content) = fs::read_to_string(entry.path()) {
+                    if let Some(name) = entry.file_name().to_str() {
+                        let search_content = content.chars().take(1000).collect::<String>();
+                        for line in search_content.lines() {
+                            let line_lower = line.to_lowercase();
+                            if let Some(version) = self.extract_version_number(&line_lower) {
+                                debug!("Found version {} in root {}", version, name);
+                                return Ok(version);
                             }
                         }
                     }

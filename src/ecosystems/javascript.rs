@@ -405,7 +405,12 @@ impl JsHandler {
         let pkg_json = self.repo_path.join("package.json");
         if let Ok(content) = fs::read_to_string(&pkg_json) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-                for section in ["dependencies", "devDependencies"] {
+                for section in [
+                    "dependencies",
+                    "devDependencies",
+                    "optionalDependencies",
+                    "peerDependencies",
+                ] {
                     if let Some(deps) = parsed.get(section).and_then(|d| d.as_object()) {
                         for key in deps.keys() {
                             if key == "node-gyp"

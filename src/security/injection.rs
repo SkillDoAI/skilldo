@@ -83,11 +83,12 @@ fn detect_encoded_instructions(content: &str, findings: &mut Vec<Finding>) {
             // that may still contain readable injection text (e.g. Latin-1 encoded)
             let text = String::from_utf8(decoded.clone())
                 .unwrap_or_else(|_| String::from_utf8_lossy(&decoded).into_owned());
+            let char_count = text.chars().count();
             let printable_ratio = text
                 .chars()
                 .filter(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
                 .count() as f64
-                / text.len().max(1) as f64;
+                / char_count.max(1) as f64;
             if printable_ratio > 0.7 && (looks_like_instruction(&text) || looks_like_code(&text)) {
                 findings.push(Finding {
                     rule_id: "SD-111".to_string(),
