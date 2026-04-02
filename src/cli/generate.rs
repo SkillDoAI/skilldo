@@ -647,7 +647,8 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
 
-    /// Create a minimal Python repo in a temp dir for dry-run tests
+    /// Create a minimal Python repo in a temp dir for dry-run tests.
+    /// Includes a minimal skilldo.toml so tests don't pick up CWD config.
     fn make_test_repo() -> TempDir {
         let dir = TempDir::new().unwrap();
         let setup_py = dir.path().join("setup.py");
@@ -656,6 +657,12 @@ mod tests {
             r#"from setuptools import setup
 setup(name="testpkg", version="1.0.0")
 "#,
+        )
+        .unwrap();
+        // Minimal config to isolate from CWD/user config
+        fs::write(
+            dir.path().join("skilldo.toml"),
+            "[llm]\nprovider = \"openai-compatible\"\nmodel = \"mock\"\napi_key_env = \"none\"\nbase_url = \"http://localhost:0/v1\"\n\n[generation]\nmax_retries = 1\nmax_source_tokens = 1000\n",
         )
         .unwrap();
         let pkg_dir = dir.path().join("testpkg");
@@ -675,12 +682,20 @@ setup(name="testpkg", version="1.0.0")
         dir
     }
 
-    /// Helper to build common test opts: path + output + dry_run + language=python
+    /// Helper to build common test opts: path + output + dry_run + language=python.
+    /// Uses the config from make_test_repo() to isolate from CWD/user config.
     fn test_opts(repo: &TempDir, output: &Path) -> GenerateOptions {
         GenerateOptions {
             path: repo.path().to_str().unwrap().to_string(),
             language: Some("python".to_string()),
             output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(
+                repo.path()
+                    .join("skilldo.toml")
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            ),
             dry_run: true,
             ..Default::default()
         }
