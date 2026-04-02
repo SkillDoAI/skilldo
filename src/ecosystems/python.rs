@@ -687,7 +687,7 @@ impl PythonHandler {
             if content.contains("[tool.maturin]") {
                 indicators.push("maturin build system".to_string());
             }
-            if content.contains("[tool.pyo3]") || content.contains("pyo3") {
+            if content.contains("[tool.pyo3]") || content.contains("requires = [\"pyo3") {
                 indicators.push("pyo3 binding".to_string());
             }
         }
