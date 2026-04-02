@@ -76,27 +76,27 @@ fn detect_encoded_instructions(content: &str, findings: &mut Vec<Finding>) {
 
     for mat in B64_BLOCK.find_iter(content) {
         if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(mat.as_str()) {
-            if let Ok(text) = String::from_utf8(decoded) {
-                let printable_ratio = text
-                    .chars()
-                    .filter(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
-                    .count() as f64
-                    / text.len().max(1) as f64;
-                if printable_ratio > 0.7
-                    && (looks_like_instruction(&text) || looks_like_code(&text))
-                {
-                    findings.push(Finding {
-                        rule_id: "SD-111".to_string(),
-                        severity: Severity::Critical,
-                        category: Category::PromptInjection,
-                        message: format!(
-                            "Base64 block decodes to suspicious content: \"{}\"",
-                            text.chars().take(80).collect::<String>()
-                        ),
-                        line: line_number(content, mat.start()),
-                        snippet: snippet_at(content, mat.start()),
-                    });
-                }
+            // Try strict UTF-8 first, fall back to lossy for non-UTF-8 payloads
+            // that may still contain readable injection text (e.g. Latin-1 encoded)
+            let text = String::from_utf8(decoded.clone())
+                .unwrap_or_else(|_| String::from_utf8_lossy(&decoded).into_owned());
+            let printable_ratio = text
+                .chars()
+                .filter(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+                .count() as f64
+                / text.len().max(1) as f64;
+            if printable_ratio > 0.7 && (looks_like_instruction(&text) || looks_like_code(&text)) {
+                findings.push(Finding {
+                    rule_id: "SD-111".to_string(),
+                    severity: Severity::Critical,
+                    category: Category::PromptInjection,
+                    message: format!(
+                        "Base64 block decodes to suspicious content: \"{}\"",
+                        text.chars().take(80).collect::<String>()
+                    ),
+                    line: line_number(content, mat.start()),
+                    snippet: snippet_at(content, mat.start()),
+                });
             }
         }
     }

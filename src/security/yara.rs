@@ -193,7 +193,14 @@ impl YaraScanner {
     pub fn scan(&self, content: &str) -> Vec<Finding> {
         let result = match self.scanner.scan_mem(content.as_bytes()) {
             Ok(r) => r,
-            Err((_, r)) => r, // partial results on error
+            Err((err, r)) => {
+                tracing::warn!(
+                    "YARA scan error (partial results: {} rules evaluated): {}",
+                    r.rules.len(),
+                    err
+                );
+                r
+            }
         };
 
         let code_ranges = code_block_byte_ranges(content);

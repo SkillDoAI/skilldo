@@ -146,16 +146,30 @@ async fn start_callback_server_on_port(expected_state: &str, port: u16) -> Resul
             Err(_) => bail!("OAuth callback timed out after {CALLBACK_TIMEOUT_SECS}s — did you complete login in the browser?"),
         };
 
-        // Read the HTTP request
-        let mut buf = vec![0u8; 4096];
-        let n = match stream.read(&mut buf).await {
-            Ok(n) => n,
-            Err(e) => {
-                debug!("Failed to read from connection, retrying: {e}");
-                continue;
+        // Read the HTTP request (loop until header end or 16KB cap)
+        let mut buf = Vec::with_capacity(4096);
+        let mut tmp = [0u8; 4096];
+        loop {
+            match stream.read(&mut tmp).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&tmp[..n]);
+                    // Stop once we have the full headers
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() >= 16384 {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to read from connection, retrying: {e}");
+                    break;
+                }
             }
-        };
-        let request = String::from_utf8_lossy(&buf[..n]);
+        }
+        if buf.is_empty() {
+            debug!("Empty request, retrying");
+            continue;
+        }
+        let request = String::from_utf8_lossy(&buf);
 
         // Parse the request line: GET /callback?code=...&state=... HTTP/1.1
         let path = request
