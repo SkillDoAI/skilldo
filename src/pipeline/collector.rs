@@ -127,7 +127,6 @@ impl Collector {
             package_name = "unknown".to_string();
         }
 
-        let has_tests = !test_content.is_empty();
         Ok(CollectedData {
             package_name,
             version,
@@ -142,7 +141,6 @@ impl Collector {
             changelog_content,
             dependencies: Vec::new(),
             native_dep_indicators: handler.detect_native_deps(),
-            has_tests,
         })
     }
 
@@ -196,7 +194,6 @@ impl Collector {
             package_name = "unknown".to_string();
         }
 
-        let has_tests = !test_content.is_empty();
         Ok(CollectedData {
             package_name,
             version,
@@ -211,7 +208,6 @@ impl Collector {
             changelog_content,
             dependencies: Vec::new(),
             native_dep_indicators: handler.detect_native_deps(),
-            has_tests,
         })
     }
 
@@ -265,7 +261,6 @@ impl Collector {
             package_name = "unknown".to_string();
         }
 
-        let has_tests = !test_content.is_empty();
         Ok(CollectedData {
             package_name,
             version,
@@ -280,7 +275,6 @@ impl Collector {
             changelog_content,
             dependencies: Vec::new(),
             native_dep_indicators: handler.detect_native_deps(),
-            has_tests,
         })
     }
 
@@ -337,7 +331,6 @@ impl Collector {
         let dependencies = handler.get_dependencies();
         let native_dep_indicators = handler.detect_native_deps();
 
-        let has_tests = !test_content.is_empty();
         Ok(CollectedData {
             package_name,
             version,
@@ -352,7 +345,6 @@ impl Collector {
             changelog_content,
             dependencies,
             native_dep_indicators,
-            has_tests,
         })
     }
 
@@ -407,7 +399,6 @@ impl Collector {
             package_name = "unknown".to_string();
         }
 
-        let has_tests = !test_content.is_empty();
         Ok(CollectedData {
             package_name,
             version,
@@ -422,7 +413,6 @@ impl Collector {
             changelog_content,
             dependencies: Vec::new(),
             native_dep_indicators: Vec::new(),
-            has_tests,
         })
     }
 
@@ -2739,8 +2729,4 @@ pub struct CollectedData {
     /// Indicators that the library has native/C dependencies (e.g. "-sys crate",
     /// "build.rs present", "CGo import"). Non-empty suggests container mode.
     pub native_dep_indicators: Vec<String>,
-    /// Whether any test files were found during collection.
-    /// Used by generator to decide whether to fall back to doc-based pattern extraction.
-    #[allow(dead_code)] // Read by generator's no-test fallback logic
-    pub has_tests: bool,
 }

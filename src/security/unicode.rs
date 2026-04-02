@@ -133,7 +133,7 @@ fn detect_homoglyphs(content: &str, findings: &mut Vec<Finding>) {
         ),
         line: line_number(content, first_offset),
         snippet: snippet_at(content, first_offset),
-                    routing: FindingRouting::default(),
+        routing: FindingRouting::default(),
     });
 }
 

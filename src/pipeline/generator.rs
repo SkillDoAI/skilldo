@@ -420,8 +420,6 @@ impl Generator {
         let docs_and_changelog = format!("{}\n\n{}", data.docs_content, annotated_changelog);
 
         // Combine examples and tests for map stage (examples first - they're cleaner)
-        let _has_tests_or_examples =
-            !data.examples_content.is_empty() || !data.test_content.is_empty();
         let examples_and_tests = if !data.examples_content.is_empty() {
             format!(
                 "# Example Files (Real Usage)\n{}\n\n# Test Files (API Usage)\n{}",
@@ -1179,7 +1177,6 @@ mod tests {
             changelog_content: String::new(),
             dependencies: Vec::new(),
             native_dep_indicators: Vec::new(),
-            has_tests: true,
         }
     }
 
@@ -1198,7 +1195,6 @@ mod tests {
             changelog_content: String::new(),
             dependencies: Vec::new(),
             native_dep_indicators: Vec::new(),
-            has_tests: false,
         }
     }
 

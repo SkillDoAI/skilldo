@@ -796,7 +796,6 @@ fn test_collected_data_clone() {
         source_file_count: 1,
         dependencies: Vec::new(),
         native_dep_indicators: Vec::new(),
-        has_tests: true,
     };
 
     // Act
@@ -826,7 +825,6 @@ fn test_collected_data_debug() {
         source_file_count: 0,
         dependencies: Vec::new(),
         native_dep_indicators: Vec::new(),
-        has_tests: true,
     };
 
     // Act

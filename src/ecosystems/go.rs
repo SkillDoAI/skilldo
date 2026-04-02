@@ -463,31 +463,45 @@ impl GoHandler {
     }
 
     /// Detect CGo usage indicating native C dependencies.
+    /// Recursively scans .go files including sub-packages.
     pub fn detect_native_deps(&self) -> Vec<String> {
         let mut indicators = Vec::new();
-        // Scan .go files for CGo imports
-        if let Ok(entries) = fs::read_dir(&self.repo_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("go") {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        if content.contains("import \"C\"") || content.contains("import  \"C\"") {
-                            indicators.push(format!(
-                                "CGo import in {}",
-                                path.file_name().unwrap_or_default().to_string_lossy()
-                            ));
-                        }
-                        if content.contains("#cgo LDFLAGS") || content.contains("#cgo CFLAGS") {
-                            indicators.push(format!(
-                                "CGo build flags in {}",
-                                path.file_name().unwrap_or_default().to_string_lossy()
-                            ));
-                        }
+        self.scan_cgo_recursive(&self.repo_path, &mut indicators, 0);
+        indicators
+    }
+
+    fn scan_cgo_recursive(&self, dir: &Path, indicators: &mut Vec<String>, depth: usize) {
+        if depth > 10 {
+            return;
+        }
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                // Skip hidden dirs, vendor, testdata
+                if !name.starts_with('.') && name != "vendor" && name != "testdata" {
+                    self.scan_cgo_recursive(&path, indicators, depth + 1);
+                }
+            } else if path.extension().and_then(|e| e.to_str()) == Some("go") {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    let rel = path
+                        .strip_prefix(&self.repo_path)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string();
+                    if content.contains("import \"C\"") || content.contains("import  \"C\"") {
+                        indicators.push(format!("CGo import in {rel}"));
+                    }
+                    if content.contains("#cgo LDFLAGS") || content.contains("#cgo CFLAGS") {
+                        indicators.push(format!("CGo build flags in {rel}"));
                     }
                 }
             }
         }
-        indicators
     }
 }
 
