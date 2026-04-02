@@ -294,9 +294,10 @@ async fn test_error_recovery_missing_tests() {
     let collector = Collector::new(&project, Language::Python);
     let result = collector.collect().await;
 
-    assert!(result.is_err());
-    let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("No tests found"));
+    // Since v0.5.12, no-test libraries warn instead of bailing
+    assert!(result.is_ok(), "no-test libraries should warn, not error");
+    let data = result.unwrap();
+    assert!(data.test_content.is_empty());
 }
 
 #[tokio::test]

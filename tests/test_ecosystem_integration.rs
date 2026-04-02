@@ -232,12 +232,13 @@ async fn test_python_no_tests_errors() {
     fs::write(pkg_dir.join("__init__.py"), "").unwrap();
     fs::write(pkg_dir.join("core.py"), "x = 1").unwrap();
 
-    // No tests directory
+    // No tests directory — since v0.5.12, warns instead of bailing
     let collector = Collector::new(tmp.path(), Language::Python);
     let result = collector.collect().await;
-
-    // Should fail because no test files found
-    assert!(result.is_err());
+    assert!(
+        result.is_ok(),
+        "no-test libraries should succeed with warning"
+    );
 }
 
 #[tokio::test]
