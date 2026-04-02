@@ -420,13 +420,32 @@ impl Generator {
         let docs_and_changelog = format!("{}\n\n{}", data.docs_content, annotated_changelog);
 
         // Combine examples and tests for map stage (examples first - they're cleaner)
+        let _has_tests_or_examples =
+            !data.examples_content.is_empty() || !data.test_content.is_empty();
         let examples_and_tests = if !data.examples_content.is_empty() {
             format!(
                 "# Example Files (Real Usage)\n{}\n\n# Test Files (API Usage)\n{}",
                 data.examples_content, data.test_content
             )
-        } else {
+        } else if !data.test_content.is_empty() {
             data.test_content.clone()
+        } else {
+            // No tests or examples — fall back to source + docs for pattern extraction.
+            // This gives the map stage something to work with for no-test libraries.
+            info!("map: No tests or examples found — using source code and docs as fallback");
+            let mut fallback = String::new();
+            if !data.docs_content.is_empty() {
+                fallback.push_str("# Documentation (README, guides)\n");
+                fallback.push_str(&data.docs_content);
+                fallback.push('\n');
+            }
+            if !data.source_content.is_empty() {
+                fallback.push_str("# Source Code (extract doc comments and usage patterns)\n");
+                // Limit source to avoid overwhelming the map prompt
+                let source_preview: String = data.source_content.chars().take(15000).collect();
+                fallback.push_str(&source_preview);
+            }
+            fallback
         };
 
         // Build source context for extract stage (source + examples or tests)
@@ -1160,6 +1179,7 @@ mod tests {
             changelog_content: String::new(),
             dependencies: Vec::new(),
             native_dep_indicators: Vec::new(),
+            has_tests: true,
         }
     }
 

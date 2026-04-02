@@ -637,6 +637,7 @@ async fn test_deterministic_pipeline() {
         changelog_content: String::new(),
         dependencies: vec![],
         native_dep_indicators: vec![],
+        has_tests: true,
     };
 
     // Run the pipeline
@@ -714,6 +715,7 @@ async fn test_deterministic_pipeline_with_review() {
         changelog_content: String::new(),
         dependencies: vec![],
         native_dep_indicators: vec![],
+        has_tests: true,
     };
 
     let result = generator.generate(&data).await;

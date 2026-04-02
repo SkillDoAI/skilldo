@@ -183,6 +183,7 @@ fn fastapi_collected_data() -> CollectedData {
         source_file_count: 42,
         dependencies: Vec::new(),
             native_dep_indicators: Vec::new(),
+            has_tests: true,
     }
 }
 

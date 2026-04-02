@@ -267,6 +267,7 @@ fn create_test_data() -> CollectedData {
         source_file_count: 1,
         dependencies: Vec::new(),
         native_dep_indicators: Vec::new(),
+        has_tests: true,
     }
 }
 
@@ -285,6 +286,7 @@ fn create_minimal_data() -> CollectedData {
         source_file_count: 1,
         dependencies: Vec::new(),
         native_dep_indicators: Vec::new(),
+        has_tests: true,
     }
 }
 
