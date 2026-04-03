@@ -1825,6 +1825,57 @@ base_url = "http://localhost:11434/v1"
         );
     }
 
+    /// Create a minimal Rust repo with a -sys dependency to trigger native dep warning
+    fn make_rust_test_repo_with_sys() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"testpkg\"\nversion = \"1.0.0\"\nedition = \"2021\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+        )
+        .unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir(&src_dir).unwrap();
+        fs::write(src_dir.join("lib.rs"), "pub fn hello() {}\n").unwrap();
+        let tests_dir = dir.path().join("tests");
+        fs::create_dir(&tests_dir).unwrap();
+        fs::write(tests_dir.join("test_lib.rs"), "fn test_it() {}\n").unwrap();
+        // Config for isolation
+        fs::write(
+            dir.path().join("skilldo.toml"),
+            "[llm]\nprovider = \"openai-compatible\"\nmodel = \"mock\"\napi_key_env = \"none\"\nbase_url = \"http://localhost:0/v1\"\n\n[generation]\nmax_retries = 1\nmax_source_tokens = 1000\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn test_run_rust_with_native_deps_warns() {
+        let repo = make_rust_test_repo_with_sys();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("rust".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(
+                repo.path()
+                    .join("skilldo.toml")
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            ),
+            dry_run: true,
+            best_effort: true,
+            ..Default::default()
+        })
+        .await;
+        // Should succeed (dry run) but exercise the native dep warning path
+        assert!(
+            result.is_ok(),
+            "Rust with -sys dep dry run failed: {:?}",
+            result.err()
+        );
+    }
+
     #[tokio::test]
     async fn test_run_with_no_test_and_test_provider_only2() {
         let repo = make_test_repo();
