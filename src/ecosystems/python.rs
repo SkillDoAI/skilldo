@@ -687,7 +687,9 @@ impl PythonHandler {
             if content.contains("[tool.maturin]") {
                 indicators.push("maturin build system".to_string());
             }
-            if content.contains("[tool.pyo3]") || content.contains("requires = [\"pyo3") {
+            if content.contains("[tool.pyo3]")
+                || (content.contains("[build-system]") && content.contains("\"pyo3\""))
+            {
                 indicators.push("pyo3 binding".to_string());
             }
         }
@@ -2413,6 +2415,40 @@ mod tests {
             indicators.iter().any(|i| i.contains("pyo3")),
             "should detect pyo3, got: {:?}",
             indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_pyo3_requires_only() {
+        // Test pyo3 detection from requires alone (no [tool.pyo3] section)
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[build-system]\nrequires = [\"setuptools\", \"pyo3\"]\nbuild-backend = \"setuptools.build_meta\"\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("pyo3")),
+            "should detect pyo3 from requires list, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_pyo3_no_false_positive() {
+        // A pyproject.toml mentioning pyo3 only in a comment should NOT trigger
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname = \"pure-python\"\n# Note: pyo3 is not used here\n",
+        )
+        .unwrap();
+        let handler = PythonHandler::new(dir.path());
+        assert!(
+            handler.detect_native_deps().is_empty(),
+            "comment mentioning pyo3 should not trigger detection"
         );
     }
 
