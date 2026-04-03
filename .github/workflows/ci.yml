@@ -81,7 +81,7 @@ jobs:
         with:
           shared-key: ci-windows
           cache-all-crates: true
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.11.2"
       - run: cargo check --all-targets
@@ -172,7 +172,7 @@ jobs:
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
         if: always()
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: SkillDoAI/skilldo
