@@ -491,13 +491,19 @@ impl GoHandler {
                     self.scan_cgo_recursive(&path, indicators, depth + 1);
                 }
             } else if ft.is_file() && path.extension().and_then(|e| e.to_str()) == Some("go") {
-                if let Ok(content) = fs::read_to_string(&path) {
+                // Read only first 4KB — CGo markers appear in file headers
+                if let Ok(file) = fs::File::open(&path) {
+                    use std::io::Read;
+                    let mut buf = [0u8; 4096];
+                    let n = (&file).read(&mut buf).unwrap_or(0);
+                    let content = String::from_utf8_lossy(&buf[..n]);
                     let rel = path
                         .strip_prefix(&self.repo_path)
                         .unwrap_or(&path)
                         .display()
                         .to_string();
-                    if content.contains("import \"C\"") || content.contains("import  \"C\"") {
+                    // Match both direct `import "C"` and grouped `import ( "C" )` forms
+                    if content.contains("\"C\"") && content.contains("import") {
                         indicators.push(format!("CGo import in {rel}"));
                     }
                     if content.contains("#cgo LDFLAGS") || content.contains("#cgo CFLAGS") {
@@ -2424,6 +2430,25 @@ mod tests {
                 .iter()
                 .any(|i| i.contains("CGo import") && i.contains("cgo_wrapper.go")),
             "should detect CGo import, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_cgo_grouped_import() {
+        // Go allows grouped imports: import ( "C" )
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("bridge.go"),
+            "package main\n\nimport (\n\t\"C\"\n\t\"fmt\"\n)\n\nfunc main() { fmt.Println(C.GoString(nil)) }\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("CGo import")),
+            "should detect grouped import form: {:?}",
             indicators
         );
     }

@@ -81,8 +81,10 @@ fn detect_encoded_instructions(content: &str, findings: &mut Vec<Finding>) {
         if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(mat.as_str()) {
             // Try strict UTF-8 first, fall back to lossy for non-UTF-8 payloads
             // that may still contain readable injection text (e.g. Latin-1 encoded)
-            let text = String::from_utf8(decoded.clone())
-                .unwrap_or_else(|_| String::from_utf8_lossy(&decoded).into_owned());
+            let text = match String::from_utf8(decoded) {
+                Ok(s) => s,
+                Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+            };
             let char_count = text.chars().count();
             let printable_ratio = text
                 .chars()
