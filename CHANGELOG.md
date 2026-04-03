@@ -13,15 +13,17 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 - **Python version extraction** — single-file modules (`six.py` in root) and root-level changelog files (`CHANGES`, `CHANGELOG`, `HISTORY`) now detected
 
 ### Fixed
-- **Security: base64 injection bypass** — non-UTF-8 payloads that decoded to readable text were silently skipped. Now uses `from_utf8_lossy` fallback
+- **Security: base64 injection bypass** — non-UTF-8 payloads that decoded to readable text were silently skipped. Now uses `from_utf8_lossy` fallback (avoids unnecessary clone)
 - **Security: heredoc delimiter collision** — `SKILLDO_EOF` in interpolated content (Maven POM, Cargo.toml) now sanitized to prevent shell injection
 - **Security: YARA partial-result errors** — scan errors now logged at warn level instead of silently discarded
 - **Security: OAuth callback buffer** — reads in loop until header end or 16KB cap instead of single 4KB read that could truncate long callbacks
+- **CGo grouped import detection** — now matches `import ( "C" )` form, not just `import "C"`. Only reads first 4KB of each `.go` file for efficiency
+- **pyo3 detection** — narrowed from bare substring to `[tool.pyo3]` or `"pyo3"` within `[build-system]` section, reducing false positives
+- **Python changelog sort** — root-level changelog files sorted for deterministic version extraction
 - **Test isolation** — `cli::generate` tests now use isolated config from temp dir, preventing CWD/user config pollution
 - **No-test assertions** — 5 integration tests updated for v0.5.12 warn-not-bail behavior
 
 ### Changed
-- **`CollectedData.has_tests`** — new field signals whether test files were found during collection
 - **`CollectedData.native_dep_indicators`** — new field lists detected native dependency indicators
 
 ## 0.5.12
