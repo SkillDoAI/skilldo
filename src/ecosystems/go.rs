@@ -2447,6 +2447,47 @@ mod tests {
     }
 
     #[test]
+    fn detect_native_deps_cgo_in_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        // CGo in a sub-package, not root
+        let sub = dir.path().join("internal").join("native");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(
+            sub.join("bridge.go"),
+            "package native\n\n// #cgo LDFLAGS: -lz\nimport \"C\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("CGo import")),
+            "should find CGo in subdirectory: {:?}",
+            indicators
+        );
+        assert!(
+            indicators.iter().any(|i| i.contains("CGo build flags")),
+            "should find #cgo flags in subdirectory: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_skips_vendor_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        // CGo file inside vendor/ — should be skipped
+        let vendor = dir.path().join("vendor").join("lib");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::write(vendor.join("cgo.go"), "package lib\nimport \"C\"\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert!(
+            handler.detect_native_deps().is_empty(),
+            "vendor/ CGo should be skipped"
+        );
+    }
+
+    #[test]
     fn detect_native_deps_clean_go_project() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();

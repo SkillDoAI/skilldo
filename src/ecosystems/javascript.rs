@@ -1420,6 +1420,44 @@ mod tests {
     }
 
     #[test]
+    fn detect_native_deps_optional_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name": "test", "optionalDependencies": {"node-gyp": "^10.0.0"}}"#,
+        )
+        .unwrap();
+        let handler = JsHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("node-gyp") && i.contains("optionalDependencies")),
+            "should detect node-gyp in optionalDependencies: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_peer_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name": "test", "peerDependencies": {"node-addon-api": "^7.0.0"}}"#,
+        )
+        .unwrap();
+        let handler = JsHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("node-addon-api") && i.contains("peerDependencies")),
+            "should detect node-addon-api in peerDependencies: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
     fn detect_native_deps_clean_js_project() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
