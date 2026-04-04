@@ -502,8 +502,15 @@ impl GoHandler {
                         .unwrap_or(&path)
                         .display()
                         .to_string();
-                    // Match both direct `import "C"` and grouped `import ( "C" )` forms
-                    if content.contains("\"C\"") && content.contains("import") {
+                    // Match direct `import "C"` and grouped `import ( ... "C" ... )` forms.
+                    // Check line-by-line to avoid false positives like `var x = "C"`.
+                    let has_cgo = content.lines().any(|line| {
+                        let trimmed = line.trim();
+                        trimmed == "import \"C\""
+                            || trimmed == "\"C\""
+                            || trimmed.starts_with("import \"C\"")
+                    });
+                    if has_cgo {
                         indicators.push(format!("CGo import in {rel}"));
                     }
                     if content.contains("#cgo LDFLAGS") || content.contains("#cgo CFLAGS") {
@@ -2494,6 +2501,23 @@ mod tests {
             indicators.iter().any(|i| i.contains("CGo build flags")),
             "should find #cgo flags in subdirectory: {:?}",
             indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_cgo_no_false_positive_string_c() {
+        // A Go file with `var lang = "C"` and `import "fmt"` should NOT trigger
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("main.go"),
+            "package main\n\nimport \"fmt\"\n\nvar lang = \"C\"\n\nfunc main() { fmt.Println(lang) }\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert!(
+            handler.detect_native_deps().is_empty(),
+            "string literal 'C' should not trigger CGo detection"
         );
     }
 

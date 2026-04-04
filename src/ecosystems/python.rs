@@ -684,11 +684,11 @@ impl PythonHandler {
         // Check pyproject.toml for maturin/pyo3
         let pyproject = self.repo_path.join("pyproject.toml");
         if let Ok(content) = fs::read_to_string(&pyproject) {
-            if content.contains("[tool.maturin]") {
+            if content.contains("[tool.maturin]") || content.contains("\"maturin\"") {
                 indicators.push("maturin build system".to_string());
             }
             if content.contains("[tool.pyo3]")
-                || (content.contains("[build-system]") && content.contains("\"pyo3\""))
+                || (content.contains("[build-system]") && content.contains("pyo3"))
             {
                 indicators.push("pyo3 binding".to_string());
             }
