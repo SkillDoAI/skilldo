@@ -587,13 +587,18 @@ impl LanguageExecutor for ContainerExecutor {
             )
             .await?;
 
+        // Redact secrets from container output (same as bare-metal executor)
+        let redact_vars = super::executor::get_redact_vars_snapshot();
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stdout = super::executor::redact_secrets(&stdout, &redact_vars);
             debug!("✓ Code execution passed");
             Ok(ExecutionResult::Pass(stdout))
         } else {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let stdout = super::executor::redact_secrets(&stdout, &redact_vars);
+            let stderr = super::executor::redact_secrets(&stderr, &redact_vars);
             debug!("✗ Code execution failed");
             debug!("  stdout: {}", stdout);
             debug!("  stderr: {}", stderr);

@@ -129,7 +129,8 @@ fn extract_frontmatter_meta(skill_md: &str) -> (Option<String>, Option<String>) 
             if !val.is_empty() {
                 name = Some(val.to_string());
             }
-        } else if let Some(rest) = line.strip_prefix("ecosystem:") {
+        } else if line.starts_with("ecosystem:") || line.starts_with("  ecosystem:") {
+            let rest = line.trim().strip_prefix("ecosystem:").unwrap_or("");
             let val = rest.trim().trim_matches('"').trim_matches('\'');
             if !val.is_empty() {
                 language = Some(val.to_string());

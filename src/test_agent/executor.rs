@@ -27,7 +27,7 @@ pub fn set_redact_vars(vars: Vec<String>) {
     }
 }
 
-fn get_redact_vars_snapshot() -> Vec<String> {
+pub(super) fn get_redact_vars_snapshot() -> Vec<String> {
     REDACT_VARS.read().map(|v| v.clone()).unwrap_or_default()
 }
 
@@ -46,7 +46,7 @@ pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
 /// Redact env var values from output strings.
 /// Takes an explicit list of env var names from config — no heuristic guessing.
 /// Values are replaced with `***REDACTED***` to prevent leaking in CI logs.
-fn redact_secrets(text: &str, redact_vars: &[String]) -> String {
+pub(super) fn redact_secrets(text: &str, redact_vars: &[String]) -> String {
     if redact_vars.is_empty() {
         return text.to_string();
     }
