@@ -2296,6 +2296,78 @@ func main() {
         );
     }
 
+    #[tokio::test]
+    async fn test_java_compilation_failure_missing_jars_note() {
+        // When pom.xml exists (Maven fetch was attempted) but deps/ has no jars,
+        // and stderr contains "does not exist", the error should include an
+        // informational note about missing jars.
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        // Simulate Maven-attempted state: pom.xml present, deps/ exists but empty
+        fs::write(
+            temp_dir.path().join("pom.xml"),
+            "<project><dependencies/></project>",
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("deps")).unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec!["com.google.code.gson:gson:2.10".to_string()],
+        };
+        // Code that imports a package not on classpath — javac emits "does not exist"
+        let code = r#"import com.google.gson.Gson;
+public class Main {
+    public static void main(String[] args) {
+        Gson g = new Gson();
+    }
+}
+"#;
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail(), "should fail to compile");
+        if let ExecutionResult::Fail(msg) = &result {
+            assert!(
+                msg.contains("NOTE: Dependencies were declared but no jars found"),
+                "should include missing-jars note, got: {msg}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_java_compilation_failure_without_missing_jars_note() {
+        // When there's no pom.xml, the note should NOT appear even if deps/ is empty
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        let code = r#"import com.nonexistent.Foo;
+public class Main {
+    public static void main(String[] args) {
+        Foo f = new Foo();
+    }
+}
+"#;
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
+        if let ExecutionResult::Fail(msg) = &result {
+            assert!(
+                !msg.contains("NOTE: Dependencies were declared"),
+                "should NOT include missing-jars note without pom.xml, got: {msg}"
+            );
+        }
+    }
+
     // =========================================================================
     // Local-install logic tests (pure logic — no external tool invocations)
     // =========================================================================

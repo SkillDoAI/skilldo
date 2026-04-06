@@ -647,6 +647,19 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_version_empty_string_defaults_to_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name": "foo", "version": ""}"#,
+        )
+        .unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        assert_eq!(handler.extract_version().unwrap(), "unknown");
+    }
+
+    #[test]
     fn test_is_excluded_dir_vendor_and_bower() {
         assert!(JsHandler::is_excluded_dir("vendor"));
         assert!(JsHandler::is_excluded_dir("bower_components"));

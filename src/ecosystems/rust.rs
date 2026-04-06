@@ -4142,6 +4142,61 @@ mod tests {
     }
 
     #[test]
+    fn detect_native_deps_workspace_rejects_path_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace with a ".." member and an absolute path member — both should be skipped
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"../escape\", \"/etc/evil\"]\n",
+        )
+        .unwrap();
+        // Create the escape dir so it would match if traversal weren't blocked
+        let escape_dir = dir.path().parent().unwrap().join("escape");
+        fs::create_dir_all(&escape_dir).ok();
+        fs::write(
+            escape_dir.join("Cargo.toml"),
+            "[package]\nname = \"evil\"\nversion = \"1.0.0\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+        )
+        .ok();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "path traversal members should be skipped: {:?}",
+            indicators
+        );
+        // Cleanup the escape dir we created outside the tempdir
+        fs::remove_dir_all(&escape_dir).ok();
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_member_build_rs_only() {
+        // Workspace member that has build.rs but no -sys deps or links
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/buildcrate\"]\n",
+        )
+        .unwrap();
+        let member = dir.path().join("crates").join("buildcrate");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"buildcrate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(member.join("build.rs"), "fn main() {}").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert_eq!(indicators.len(), 1);
+        assert!(
+            indicators[0].contains("build.rs in member buildcrate"),
+            "should detect build.rs in member: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
     fn detect_native_deps_clean() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(

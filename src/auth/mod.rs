@@ -620,6 +620,41 @@ mod tests {
     }
 
     #[test]
+    fn write_secure_file_atomic_no_temp_residue() {
+        // Verify that write_secure_file leaves no temp files behind
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("atomic-test.json");
+
+        write_secure_file(&path, "content1").unwrap();
+        write_secure_file(&path, "content2").unwrap();
+
+        // Only the target file should exist — no leftover .tmp files
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "should have exactly one file, found: {:?}",
+            entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "content2", "should contain latest write");
+    }
+
+    #[test]
+    fn write_secure_file_creates_new_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("brand-new.json");
+        assert!(!path.exists());
+
+        write_secure_file(&path, "hello").unwrap();
+        assert!(path.exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    }
+
+    #[test]
     fn token_set_debug_redacts_secrets() {
         let tokens = TokenSet {
             access_token: "super-secret-token".to_string(),

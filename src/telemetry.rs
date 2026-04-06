@@ -581,6 +581,34 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_escape_newline_with_comma() {
+        // Newlines replaced with spaces, then comma triggers quoting
+        let escaped = csv_escape("hello\nworld,foo");
+        assert_eq!(escaped, "\"hello world,foo\"");
+    }
+
+    #[test]
+    fn test_csv_escape_newline_with_quote() {
+        // Newlines replaced with spaces, then quote triggers quoting + doubling
+        let escaped = csv_escape("line1\nhas\"quote");
+        assert_eq!(escaped, "\"line1 has\"\"quote\"");
+    }
+
+    #[test]
+    fn test_csv_escape_cr_and_lf_combined() {
+        // \r\n should become just a space (CR stripped, LF→space)
+        let escaped = csv_escape("line1\r\nline2");
+        assert_eq!(escaped, "line1 line2");
+    }
+
+    #[test]
+    fn test_csv_escape_plain_text_no_newlines() {
+        // Plain text without special chars passes through unchanged
+        let escaped = csv_escape("simple text");
+        assert_eq!(escaped, "simple text");
+    }
+
+    #[test]
     fn test_append_run_home_dir_path_construction() {
         // Verify the None path constructs ~/.skilldo/runs.csv correctly
         // without actually writing to the real home directory.
