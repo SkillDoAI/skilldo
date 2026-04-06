@@ -209,7 +209,7 @@ mypkg.good()
 
     #[test]
     fn test_write_security_scan_with_high_and_low_findings() {
-        use crate::security::{Category, Finding, ScanReport, Severity};
+        use crate::security::{Category, Finding, FindingRouting, ScanReport, Severity};
 
         let report = ScanReport {
             findings: vec![
@@ -220,6 +220,7 @@ mypkg.good()
                     message: "system tag injection".into(),
                     line: 10,
                     snippet: String::new(),
+                    routing: FindingRouting::default(),
                 },
                 Finding {
                     rule_id: "SD-301".into(),
@@ -228,6 +229,7 @@ mypkg.good()
                     message: "minor obfuscation".into(),
                     line: 25,
                     snippet: String::new(),
+                    routing: FindingRouting::default(),
                 },
             ],
             score: 83,
@@ -289,7 +291,7 @@ mypkg.good()
 
     #[test]
     fn test_write_security_scan_critical_severity_shows_error() {
-        use crate::security::{Category, Finding, ScanReport, Severity};
+        use crate::security::{Category, Finding, FindingRouting, ScanReport, Severity};
 
         let report = ScanReport {
             findings: vec![Finding {
@@ -299,6 +301,7 @@ mypkg.good()
                 message: "critical threat".into(),
                 line: 1,
                 snippet: String::new(),
+                routing: FindingRouting::default(),
             }],
             score: 70,
         };
@@ -315,7 +318,7 @@ mypkg.good()
 
     #[test]
     fn test_write_security_scan_medium_severity_shows_warn() {
-        use crate::security::{Category, Finding, ScanReport, Severity};
+        use crate::security::{Category, Finding, FindingRouting, ScanReport, Severity};
 
         let report = ScanReport {
             findings: vec![Finding {
@@ -325,6 +328,7 @@ mypkg.good()
                 message: "medium concern".into(),
                 line: 15,
                 snippet: String::new(),
+                routing: FindingRouting::default(),
             }],
             score: 95,
         };
@@ -392,7 +396,7 @@ mypkg.good()
 
     #[test]
     fn test_write_security_scan_write_error_with_findings() {
-        use crate::security::{Category, Finding, ScanReport, Severity};
+        use crate::security::{Category, Finding, FindingRouting, ScanReport, Severity};
 
         let report = ScanReport {
             findings: vec![Finding {
@@ -402,6 +406,7 @@ mypkg.good()
                 message: "will fail to write".into(),
                 line: 1,
                 snippet: String::new(),
+                routing: FindingRouting::default(),
             }],
             score: 85,
         };
@@ -413,7 +418,7 @@ mypkg.good()
 
     #[test]
     fn test_write_security_scan_write_error_in_finding_loop() {
-        use crate::security::{Category, Finding, ScanReport, Severity};
+        use crate::security::{Category, Finding, FindingRouting, ScanReport, Severity};
 
         let report = ScanReport {
             findings: vec![Finding {
@@ -423,6 +428,7 @@ mypkg.good()
                 message: "will fail mid-write".into(),
                 line: 1,
                 snippet: String::new(),
+                routing: FindingRouting::default(),
             }],
             score: 85,
         };

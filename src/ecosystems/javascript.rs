@@ -393,6 +393,49 @@ impl JsHandler {
         // Priority 2: everything else
         2
     }
+
+    /// Detect indicators of native/C++ addons in Node.js packages.
+    pub fn detect_native_deps(&self) -> Vec<String> {
+        let mut indicators = Vec::new();
+        // Check for binding.gyp (node-gyp build file)
+        if self.repo_path.join("binding.gyp").exists() {
+            indicators.push("binding.gyp present".to_string());
+        }
+        // Check package.json for native addon indicators
+        let pkg_json = self.repo_path.join("package.json");
+        if let Ok(content) = fs::read_to_string(&pkg_json) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                for section in [
+                    "dependencies",
+                    "devDependencies",
+                    "optionalDependencies",
+                    "peerDependencies",
+                ] {
+                    if let Some(deps) = parsed.get(section).and_then(|d| d.as_object()) {
+                        for key in deps.keys() {
+                            if key == "node-gyp"
+                                || key == "node-addon-api"
+                                || key.starts_with("@napi-rs/")
+                            {
+                                indicators.push(format!("{key} in {section}"));
+                            }
+                        }
+                    }
+                }
+                // Check scripts for node-gyp
+                if let Some(scripts) = parsed.get("scripts").and_then(|s| s.as_object()) {
+                    for (name, val) in scripts {
+                        if let Some(cmd) = val.as_str() {
+                            if cmd.contains("node-gyp") {
+                                indicators.push(format!("node-gyp in scripts.{name}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        indicators
+    }
 }
 
 // ── Free functions ──────────────────────────────────────────────────────
@@ -1292,5 +1335,213 @@ mod tests {
         let root = dir.path();
         // A regular file in the root is not a test file
         assert!(!JsHandler::is_test_file(&root.join("app.js"), root));
+    }
+
+    // ── detect_native_deps ──────────────────────────────────────────
+
+    #[test]
+    fn detect_native_deps_binding_gyp() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name": "native-addon", "version": "1.0.0"}"#,
+        )
+        .unwrap();
+        fs::write(root.join("binding.gyp"), "{}").unwrap();
+        let handler = JsHandler::new(root);
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("binding.gyp")),
+            "should detect binding.gyp, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_node_gyp_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name": "native", "version": "1.0.0", "dependencies": {"node-gyp": "^10.0.0"}, "devDependencies": {"node-addon-api": "^7.0.0"}}"#,
+        )
+        .unwrap();
+        let handler = JsHandler::new(root);
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("node-gyp")),
+            "should detect node-gyp in dependencies, got: {:?}",
+            indicators
+        );
+        assert!(
+            indicators.iter().any(|i| i.contains("node-addon-api")),
+            "should detect node-addon-api in devDependencies, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_napi_rs_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name": "napi-mod", "version": "1.0.0", "dependencies": {"@napi-rs/cli": "^2.0.0"}}"#,
+        )
+        .unwrap();
+        let handler = JsHandler::new(root);
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("@napi-rs/")),
+            "should detect @napi-rs/ dependency, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_node_gyp_in_scripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name": "addon", "version": "1.0.0", "scripts": {"install": "node-gyp rebuild"}}"#,
+        )
+        .unwrap();
+        let handler = JsHandler::new(root);
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("node-gyp") && i.contains("scripts")),
+            "should detect node-gyp in scripts, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_optional_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name": "test", "optionalDependencies": {"node-gyp": "^10.0.0"}}"#,
+        )
+        .unwrap();
+        let handler = JsHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("node-gyp") && i.contains("optionalDependencies")),
+            "should detect node-gyp in optionalDependencies: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_peer_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name": "test", "peerDependencies": {"node-addon-api": "^7.0.0"}}"#,
+        )
+        .unwrap();
+        let handler = JsHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("node-addon-api") && i.contains("peerDependencies")),
+            "should detect node-addon-api in peerDependencies: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_clean_js_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name": "pure-js", "version": "1.0.0", "dependencies": {"express": "^4.0.0"}}"#,
+        )
+        .unwrap();
+        let handler = JsHandler::new(root);
+        assert!(
+            handler.detect_native_deps().is_empty(),
+            "pure JS project should have no native dep indicators"
+        );
+    }
+
+    // ── collect_all_js_in_dir ───────────────────────────────────────
+
+    #[test]
+    fn collect_all_js_in_dir_excludes_declaration_and_min() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"t","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let examples = root.join("examples");
+        fs::create_dir_all(&examples).unwrap();
+        fs::write(examples.join("demo.ts"), "console.log('hi');\n").unwrap();
+        fs::write(examples.join("types.d.ts"), "declare module 'x';\n").unwrap();
+        fs::write(examples.join("types.d.mts"), "declare module 'x';\n").unwrap();
+        fs::write(examples.join("types.d.cts"), "declare module 'x';\n").unwrap();
+        fs::write(examples.join("lib.min.js"), "var a=1;\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let mut files = Vec::new();
+        handler
+            .collect_all_js_in_dir(&examples, &mut files, 0)
+            .unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"demo.ts"));
+        assert!(!names.contains(&"types.d.ts"));
+        assert!(!names.contains(&"types.d.mts"));
+        assert!(!names.contains(&"types.d.cts"));
+        assert!(!names.contains(&"lib.min.js"));
+    }
+
+    // ── collect_docs_recursive ──────────────────────────────────────
+
+    #[test]
+    fn collect_docs_recursive_enters_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"t","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let docs = root.join("docs").join("guides");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(docs.join("intro.md"), "# Intro\n").unwrap();
+        // node_modules should be skipped
+        let nm = root.join("docs").join("node_modules");
+        fs::create_dir_all(&nm).unwrap();
+        fs::write(nm.join("README.md"), "# Dep\n").unwrap();
+
+        let handler = JsHandler::new(root);
+        let mut found = Vec::new();
+        handler
+            .collect_docs_recursive(&root.join("docs"), &mut found, 0)
+            .unwrap();
+        let names: Vec<_> = found
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"intro.md"));
+        assert!(
+            !found
+                .iter()
+                .any(|p| p.to_string_lossy().contains("node_modules")),
+            "should skip node_modules"
+        );
     }
 }

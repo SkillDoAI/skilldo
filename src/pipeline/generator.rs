@@ -425,8 +425,25 @@ impl Generator {
                 "# Example Files (Real Usage)\n{}\n\n# Test Files (API Usage)\n{}",
                 data.examples_content, data.test_content
             )
-        } else {
+        } else if !data.test_content.is_empty() {
             data.test_content.clone()
+        } else {
+            // No tests or examples — fall back to source + docs for pattern extraction.
+            // This gives the map stage something to work with for no-test libraries.
+            info!("map: No tests or examples found — using source code and docs as fallback");
+            let mut fallback = String::new();
+            if !data.docs_content.is_empty() {
+                fallback.push_str("# Documentation (README, guides)\n");
+                fallback.push_str(&data.docs_content);
+                fallback.push('\n');
+            }
+            if !data.source_content.is_empty() {
+                fallback.push_str("# Source Code (extract doc comments and usage patterns)\n");
+                // Limit source to avoid overwhelming the map prompt
+                let source_preview: String = data.source_content.chars().take(15000).collect();
+                fallback.push_str(&source_preview);
+            }
+            fallback
         };
 
         // Build source context for extract stage (source + examples or tests)
@@ -1159,7 +1176,40 @@ mod tests {
             source_content: "class Foo: pass".to_string(),
             changelog_content: String::new(),
             dependencies: Vec::new(),
+            native_dep_indicators: Vec::new(),
         }
+    }
+
+    fn make_no_test_data() -> CollectedData {
+        CollectedData {
+            package_name: "notests".to_string(),
+            version: "1.0.0".to_string(),
+            license: Some("MIT".to_string()),
+            project_urls: vec![],
+            language: Language::Python,
+            source_file_count: 3,
+            examples_content: String::new(),
+            test_content: String::new(), // No tests
+            docs_content: "# README\n\nUsage: `import notests`\n".to_string(),
+            source_content: "class Foo:\n    \"\"\"A foo class.\"\"\"\n    pass\n".to_string(),
+            changelog_content: String::new(),
+            dependencies: Vec::new(),
+            native_dep_indicators: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_no_test_fallback() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false);
+        let data = make_no_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        // Should produce valid output even without tests
+        assert!(
+            output.skill_md.contains("---"),
+            "should produce frontmatter even without tests"
+        );
     }
 
     #[tokio::test]

@@ -360,6 +360,15 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         collected_data.package_name, collected_data.version
     );
 
+    // Warn about native dependencies if not running in container mode
+    if !collected_data.native_dep_indicators.is_empty() && !container {
+        let indicators = collected_data.native_dep_indicators.join(", ");
+        warn!(
+            "Native dependencies detected ({}). Consider using --container for reliable test execution.",
+            indicators
+        );
+    }
+
     // Create LLM client via factory
     let client = factory::create_client(&config, dry_run).await?;
     if dry_run {
@@ -638,7 +647,8 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
 
-    /// Create a minimal Python repo in a temp dir for dry-run tests
+    /// Create a minimal Python repo in a temp dir for dry-run tests.
+    /// Includes a minimal skilldo.toml so tests don't pick up CWD config.
     fn make_test_repo() -> TempDir {
         let dir = TempDir::new().unwrap();
         let setup_py = dir.path().join("setup.py");
@@ -647,6 +657,12 @@ mod tests {
             r#"from setuptools import setup
 setup(name="testpkg", version="1.0.0")
 "#,
+        )
+        .unwrap();
+        // Minimal config to isolate from CWD/user config
+        fs::write(
+            dir.path().join("skilldo.toml"),
+            "[llm]\nprovider = \"openai-compatible\"\nmodel = \"mock\"\napi_key_env = \"none\"\nbase_url = \"http://localhost:0/v1\"\n\n[generation]\nmax_retries = 1\nmax_source_tokens = 1000\n",
         )
         .unwrap();
         let pkg_dir = dir.path().join("testpkg");
@@ -666,12 +682,20 @@ setup(name="testpkg", version="1.0.0")
         dir
     }
 
-    /// Helper to build common test opts: path + output + dry_run + language=python
+    /// Helper to build common test opts: path + output + dry_run + language=python.
+    /// Uses the config from make_test_repo() to isolate from CWD/user config.
     fn test_opts(repo: &TempDir, output: &Path) -> GenerateOptions {
         GenerateOptions {
             path: repo.path().to_str().unwrap().to_string(),
             language: Some("python".to_string()),
             output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(
+                repo.path()
+                    .join("skilldo.toml")
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            ),
             dry_run: true,
             ..Default::default()
         }
@@ -1797,6 +1821,57 @@ base_url = "http://localhost:11434/v1"
         assert!(
             result.is_ok(),
             "local-mount auto-container failed: {:?}",
+            result.err()
+        );
+    }
+
+    /// Create a minimal Rust repo with a -sys dependency to trigger native dep warning
+    fn make_rust_test_repo_with_sys() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"testpkg\"\nversion = \"1.0.0\"\nedition = \"2021\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+        )
+        .unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir(&src_dir).unwrap();
+        fs::write(src_dir.join("lib.rs"), "pub fn hello() {}\n").unwrap();
+        let tests_dir = dir.path().join("tests");
+        fs::create_dir(&tests_dir).unwrap();
+        fs::write(tests_dir.join("test_lib.rs"), "fn test_it() {}\n").unwrap();
+        // Config for isolation
+        fs::write(
+            dir.path().join("skilldo.toml"),
+            "[llm]\nprovider = \"openai-compatible\"\nmodel = \"mock\"\napi_key_env = \"none\"\nbase_url = \"http://localhost:0/v1\"\n\n[generation]\nmax_retries = 1\nmax_source_tokens = 1000\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn test_run_rust_with_native_deps_warns() {
+        let repo = make_rust_test_repo_with_sys();
+        let output = repo.path().join("SKILL.md");
+        let result = run(GenerateOptions {
+            path: repo.path().to_str().unwrap().to_string(),
+            language: Some("rust".to_string()),
+            output: Some(output.to_str().unwrap().to_string()),
+            config_path: Some(
+                repo.path()
+                    .join("skilldo.toml")
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            ),
+            dry_run: true,
+            best_effort: true,
+            ..Default::default()
+        })
+        .await;
+        // Should succeed (dry run) but exercise the native dep warning path
+        assert!(
+            result.is_ok(),
+            "Rust with -sys dep dry run failed: {:?}",
             result.err()
         );
     }

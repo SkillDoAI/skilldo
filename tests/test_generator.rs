@@ -25,6 +25,7 @@ async fn test_generator_with_mock_client() {
         changelog_content: "# Changelog".to_string(),
         source_file_count: 1,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     };
 
     let result = generator.generate(&data).await;
@@ -54,6 +55,7 @@ async fn test_generator_with_custom_instructions() {
         changelog_content: "# Changelog".to_string(),
         source_file_count: 1,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     };
 
     let result = generator.generate(&data).await;
@@ -108,6 +110,7 @@ async fn test_generator_per_stage_clients() {
         changelog_content: "# Changelog".to_string(),
         source_file_count: 1,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     };
 
     let result = generator.generate(&data).await;

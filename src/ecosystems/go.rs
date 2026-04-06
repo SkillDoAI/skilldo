@@ -461,6 +461,65 @@ impl GoHandler {
 
         None
     }
+
+    /// Detect CGo usage indicating native C dependencies.
+    /// Recursively scans .go files including sub-packages.
+    pub fn detect_native_deps(&self) -> Vec<String> {
+        let mut indicators = Vec::new();
+        self.scan_cgo_recursive(&self.repo_path, &mut indicators, 0);
+        indicators
+    }
+
+    fn scan_cgo_recursive(&self, dir: &Path, indicators: &mut Vec<String>, depth: usize) {
+        if depth > Self::MAX_DEPTH {
+            return;
+        }
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if ft.is_dir() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !Self::should_skip_dir(&name) {
+                    self.scan_cgo_recursive(&path, indicators, depth + 1);
+                }
+            } else if ft.is_file() && path.extension().and_then(|e| e.to_str()) == Some("go") {
+                // Read only first 4KB — CGo markers appear in file headers
+                if let Ok(file) = fs::File::open(&path) {
+                    use std::io::Read;
+                    let mut buf = [0u8; 4096];
+                    let n = (&file).read(&mut buf).unwrap_or(0);
+                    let content = String::from_utf8_lossy(&buf[..n]);
+                    let rel = path
+                        .strip_prefix(&self.repo_path)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string();
+                    // Match direct `import "C"` and grouped `import ( ... "C" ... )` forms.
+                    // Check line-by-line to avoid false positives like `var x = "C"`.
+                    let has_cgo = content.lines().any(|line| {
+                        let trimmed = line.trim();
+                        trimmed == "import \"C\""
+                            || trimmed == "\"C\""
+                            || trimmed.starts_with("import \"C\"")
+                    });
+                    if has_cgo {
+                        indicators.push(format!("CGo import in {rel}"));
+                    }
+                    if content.contains("#cgo LDFLAGS") || content.contains("#cgo CFLAGS") {
+                        indicators.push(format!("CGo build flags in {rel}"));
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ── Free functions ──────────────────────────────────────────────────────
@@ -2358,5 +2417,194 @@ mod tests {
             "4.5.6",
             "should fall through from dev version.go to VERSION file"
         );
+    }
+
+    // ── detect_native_deps (CGo detection) ──────────────────────────
+
+    #[test]
+    fn detect_native_deps_cgo_import() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("cgo_wrapper.go"),
+            "package main\n\n/*\n#include <stdlib.h>\n*/\nimport \"C\"\n\nfunc main() {}\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("CGo import") && i.contains("cgo_wrapper.go")),
+            "should detect CGo import, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_cgo_grouped_import() {
+        // Go allows grouped imports: import ( "C" )
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("bridge.go"),
+            "package main\n\nimport (\n\t\"C\"\n\t\"fmt\"\n)\n\nfunc main() { fmt.Println(C.GoString(nil)) }\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("CGo import")),
+            "should detect grouped import form: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_cgo_build_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("native.go"),
+            "package main\n\n// #cgo LDFLAGS: -lm\n// #cgo CFLAGS: -I/usr/include\nimport \"C\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("CGo build flags")),
+            "should detect CGo build flags, got: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_cgo_in_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        // CGo in a sub-package, not root
+        let sub = dir.path().join("internal").join("native");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(
+            sub.join("bridge.go"),
+            "package native\n\n// #cgo LDFLAGS: -lz\nimport \"C\"\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("CGo import")),
+            "should find CGo in subdirectory: {:?}",
+            indicators
+        );
+        assert!(
+            indicators.iter().any(|i| i.contains("CGo build flags")),
+            "should find #cgo flags in subdirectory: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_cgo_no_false_positive_string_c() {
+        // A Go file with `var lang = "C"` and `import "fmt"` should NOT trigger
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("main.go"),
+            "package main\n\nimport \"fmt\"\n\nvar lang = \"C\"\n\nfunc main() { fmt.Println(lang) }\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert!(
+            handler.detect_native_deps().is_empty(),
+            "string literal 'C' should not trigger CGo detection"
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_skips_vendor_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        // CGo file inside vendor/ — should be skipped
+        let vendor = dir.path().join("vendor").join("lib");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::write(vendor.join("cgo.go"), "package lib\nimport \"C\"\n").unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert!(
+            handler.detect_native_deps().is_empty(),
+            "vendor/ CGo should be skipped"
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_clean_go_project() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dir.path().join("main.go"),
+            "package main\n\nfunc main() {}\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(dir.path());
+        assert!(
+            handler.detect_native_deps().is_empty(),
+            "pure Go project should have no native dep indicators"
+        );
+    }
+
+    // ── collect_example_test_files ──────────────────────────────────
+
+    #[test]
+    fn collect_example_test_files_finds_example_prefixed_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
+        fs::write(
+            root.join("example_hello_test.go"),
+            "package main\nfunc ExampleHello() {}\n",
+        )
+        .unwrap();
+        // Regular test should not be collected
+        fs::write(
+            root.join("hello_test.go"),
+            "package main\nfunc TestHello(t *testing.T) {}\n",
+        )
+        .unwrap();
+        let handler = GoHandler::new(root);
+        let mut files = Vec::new();
+        handler
+            .collect_example_test_files(root, &mut files, 0)
+            .unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"example_hello_test.go"));
+        assert!(!names.contains(&"hello_test.go"));
+    }
+
+    // ── collect_all_go_in_dir ───────────────────────────────────────
+
+    #[test]
+    fn collect_all_go_in_dir_includes_both_source_and_test() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("lib.go"), "package lib\n").unwrap();
+        fs::write(root.join("lib_test.go"), "package lib\n").unwrap();
+        // vendor/ should be skipped
+        let vendor = root.join("vendor");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::write(vendor.join("dep.go"), "package dep\n").unwrap();
+
+        let handler = GoHandler::new(root);
+        let mut files = Vec::new();
+        handler.collect_all_go_in_dir(root, &mut files, 0).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"lib.go"));
+        assert!(names.contains(&"lib_test.go"));
+        assert!(!names.contains(&"dep.go"));
     }
 }

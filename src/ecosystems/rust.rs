@@ -858,32 +858,64 @@ impl RustHandler {
 
         None
     }
+
+    /// Detect indicators that this crate has native/C dependencies.
+    /// Returns a list of human-readable reasons (empty = no native deps detected).
+    pub fn detect_native_deps(&self) -> Vec<String> {
+        let mut indicators = Vec::new();
+        let cargo_toml = self.repo_path.join("Cargo.toml");
+        if let Ok(content) = fs::read_to_string(&cargo_toml) {
+            // Check for -sys crates in dependencies
+            if let Ok(parsed) = content.parse::<toml::Table>() {
+                for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                    if let Some(deps) = parsed.get(section).and_then(|v| v.as_table()) {
+                        for key in deps.keys() {
+                            if key.ends_with("-sys") {
+                                indicators.push(format!("{key} crate ({section})"));
+                            }
+                        }
+                    }
+                }
+                // Check for links = "..." in [package] (declares native link dependency)
+                if let Some(links) = parsed
+                    .get("package")
+                    .and_then(|p| p.get("links"))
+                    .and_then(|l| l.as_str())
+                {
+                    indicators.push(format!("links = \"{links}\""));
+                }
+            }
+        }
+        // Check for build.rs (build script, often compiles C/C++)
+        if self.repo_path.join("build.rs").exists() {
+            indicators.push("build.rs present".to_string());
+        }
+        indicators
+    }
 }
 
 // ── Free functions ──────────────────────────────────────────────────────
 
-/// Expand a workspace member path, handling simple glob patterns like "crates/*".
+/// Expand a workspace member path, handling full glob patterns like "crates/*-macros".
 /// Returns a list of resolved directory paths. For literal paths, returns a single entry.
 fn expand_workspace_member(repo_root: &Path, member: &str) -> Vec<std::path::PathBuf> {
-    if member.contains('*') {
-        // Simple glob: split at *, match prefix and suffix against directory names.
-        // e.g., "crates/*-macros" matches crates/foo-macros but not crates/foo-core.
-        if let Some((prefix, suffix)) = member.split_once('*') {
-            let search_dir = repo_root.join(prefix);
-            if let Ok(entries) = fs::read_dir(&search_dir) {
+    if member.contains('*') || member.contains('?') || member.contains('[') {
+        let pattern = repo_root.join(member);
+        let pattern_str = pattern.to_string_lossy();
+        match glob::glob(&pattern_str) {
+            Ok(entries) => {
                 let mut paths: Vec<_> = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                    .filter(|e| {
-                        suffix.is_empty() || e.file_name().to_string_lossy().ends_with(suffix)
-                    })
-                    .map(|e| e.path())
+                    .filter_map(|r| r.ok())
+                    .filter(|p| p.is_dir())
                     .collect();
                 paths.sort();
-                return paths;
+                paths
+            }
+            Err(e) => {
+                tracing::warn!("Invalid glob pattern '{}': {}", member, e);
+                Vec::new()
             }
         }
-        Vec::new()
     } else {
         vec![repo_root.join(member)]
     }
@@ -3943,6 +3975,99 @@ mod tests {
     }
 
     #[test]
+    fn expand_workspace_member_glob_question_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("pkg-a")).unwrap();
+        fs::create_dir_all(dir.path().join("pkg-b")).unwrap();
+        fs::create_dir_all(dir.path().join("pkg-cc")).unwrap(); // won't match ? (single char)
+        let result = super::expand_workspace_member(dir.path(), "pkg-?");
+        assert_eq!(
+            result.len(),
+            2,
+            "? should match single char only: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("services/api/crate-a")).unwrap();
+        fs::create_dir_all(dir.path().join("services/api/crate-b")).unwrap();
+        fs::create_dir_all(dir.path().join("services/web/crate-c")).unwrap();
+        let result = super::expand_workspace_member(dir.path(), "services/*/crate-*");
+        assert_eq!(result.len(), 3, "nested globs should match: {:?}", result);
+    }
+
+    #[test]
+    fn detect_native_deps_sys_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"1.0.0\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\nserde = \"1\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("openssl-sys")),
+            "should detect -sys crate: {:?}",
+            indicators
+        );
+        assert!(
+            !indicators.iter().any(|i| i.contains("serde")),
+            "should not flag normal crates"
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_build_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("build.rs"), "fn main() {}").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("build.rs")),
+            "should detect build.rs: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_links_field() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nlinks = \"z\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("links")),
+            "should detect links field: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"pure-rust\"\n\n[dependencies]\nserde = \"1\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        assert!(handler.detect_native_deps().is_empty());
+    }
+
+    #[test]
     fn has_dotted_workspace_key_falls_through_non_matching_lines() {
         // Lines in [package] with '=' that don't match the dotted key
         // should fall through (exercises line 107 closing brace).
@@ -4087,5 +4212,149 @@ mod tests {
         // falling through to Vec::new()
         let result = super::expand_workspace_member(dir.path(), "crates/*");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_matches_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let crates = dir.path().join("crates");
+        std::fs::create_dir_all(crates.join("foo")).unwrap();
+        std::fs::create_dir_all(crates.join("bar")).unwrap();
+        // A file should not match (glob only returns dirs)
+        std::fs::write(crates.join("baz.txt"), "not a dir").unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/*");
+        assert_eq!(result.len(), 2, "should match 2 dirs, got: {:?}", result);
+        // Should be sorted
+        let names: Vec<_> = result
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert_eq!(names, vec!["bar", "foo"]);
+    }
+
+    #[test]
+    fn expand_workspace_member_glob_with_suffix_filter() {
+        // Test "crates/*-macros" style glob
+        let dir = tempfile::tempdir().unwrap();
+        let crates = dir.path().join("crates");
+        std::fs::create_dir_all(crates.join("foo-macros")).unwrap();
+        std::fs::create_dir_all(crates.join("bar-macros")).unwrap();
+        std::fs::create_dir_all(crates.join("baz-core")).unwrap();
+        let result = super::expand_workspace_member(dir.path(), "crates/*-macros");
+        assert_eq!(result.len(), 2, "should match only -macros dirs");
+    }
+
+    #[test]
+    fn expand_workspace_member_literal_no_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = super::expand_workspace_member(dir.path(), "subcrate");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], dir.path().join("subcrate"));
+    }
+
+    #[test]
+    fn expand_workspace_member_question_mark_glob() {
+        // '?' glob character
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("a1")).unwrap();
+        std::fs::create_dir_all(root.join("a2")).unwrap();
+        std::fs::create_dir_all(root.join("bb")).unwrap();
+        let result = super::expand_workspace_member(root, "a?");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn expand_workspace_member_bracket_glob() {
+        // '[' glob character
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("xa")).unwrap();
+        std::fs::create_dir_all(root.join("xb")).unwrap();
+        std::fs::create_dir_all(root.join("xc")).unwrap();
+        let result = super::expand_workspace_member(root, "x[ab]");
+        assert_eq!(result.len(), 2, "should match xa and xb");
+    }
+
+    // ── collect_rs_files / collect_all_rs_in_dir ────────────────────
+
+    #[test]
+    fn collect_rs_files_excludes_tests_and_build_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("lib.rs"), "pub fn hello() {}").unwrap();
+        std::fs::write(src.join("build.rs"), "fn main() {}").unwrap();
+        std::fs::write(src.join("foo_test.rs"), "#[test] fn t() {}").unwrap();
+        let handler = RustHandler::new(root);
+        let mut files = Vec::new();
+        handler.collect_rs_files(&src, &mut files, 0).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"lib.rs"));
+        assert!(!names.contains(&"build.rs"));
+        assert!(!names.contains(&"foo_test.rs"));
+    }
+
+    #[test]
+    fn collect_all_rs_in_dir_includes_all_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let tests = root.join("tests");
+        std::fs::create_dir_all(&tests).unwrap();
+        std::fs::write(tests.join("integration.rs"), "fn main() {}").unwrap();
+        std::fs::write(tests.join("not_rs.txt"), "nope").unwrap();
+        let handler = RustHandler::new(root);
+        let mut files = Vec::new();
+        handler
+            .collect_all_rs_in_dir(&tests, &mut files, 0)
+            .unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("integration.rs"));
+    }
+
+    #[test]
+    fn collect_test_rs_files_finds_test_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("lib.rs"), "pub fn x() {}").unwrap();
+        std::fs::write(src.join("foo_test.rs"), "#[test] fn t() {}").unwrap();
+        let handler = RustHandler::new(root);
+        let mut files = Vec::new();
+        handler.collect_test_rs_files(&src, &mut files, 0).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("foo_test.rs"));
+    }
+
+    // ── collect_docs_recursive ──────────────────────────────────────
+
+    #[test]
+    fn collect_docs_recursive_rust_enters_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs").join("api");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("reference.md"), "# Ref\n").unwrap();
+        // target/ should be skipped
+        let target = root.join("docs").join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("output.md"), "# Build").unwrap();
+
+        let handler = RustHandler::new(root);
+        let mut found = Vec::new();
+        handler
+            .collect_docs_recursive(&root.join("docs"), &mut found, 0)
+            .unwrap();
+        let names: Vec<_> = found
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"reference.md"));
+        assert!(!names.contains(&"output.md"));
     }
 }

@@ -200,9 +200,17 @@ version = "0.1.0"
     let collector = Collector::new(temp_dir.path(), Language::Python);
     let result = collector.collect().await;
 
-    // Should error when no tests found
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("No tests found"));
+    // Since v0.5.12, no-test libraries warn instead of bailing
+    assert!(
+        result.is_ok(),
+        "no-test libraries should succeed: {:?}",
+        result.err()
+    );
+    let data = result.unwrap();
+    assert!(
+        data.test_content.is_empty(),
+        "test content should be empty when no tests exist"
+    );
 
     Ok(())
 }

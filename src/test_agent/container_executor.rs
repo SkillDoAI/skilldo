@@ -18,6 +18,16 @@ use super::executor::{
 use super::LanguageExecutor;
 use crate::config::{ContainerConfig, InstallSource};
 use crate::detector::Language;
+
+/// Heredoc delimiter used in generated shell scripts. Content interpolated
+/// into heredocs MUST be sanitized via `sanitize_heredoc_content()`.
+const HEREDOC_DELIM: &str = "SKILLDO_EOF";
+
+/// Strip the heredoc delimiter from content to prevent early termination
+/// and potential shell injection.
+fn sanitize_heredoc_content(content: &str) -> String {
+    content.replace(HEREDOC_DELIM, "SKILLDO_SANITIZED")
+}
 use crate::util::{run_cmd_with_timeout, sanitize_dep_name};
 
 pub struct ContainerExecutor {
@@ -192,8 +202,9 @@ fi"#
             }
         };
 
+        let safe_pom = sanitize_heredoc_content(&pom);
         lines.push(format!(
-            "mkdir -p deps {MAVEN_REPO_DIR}\ncat > pom.xml << 'SKILLDO_EOF'\n{pom}\nSKILLDO_EOF\nmvn dependency:copy-dependencies -DoutputDirectory=deps -Dmaven.repo.local={MAVEN_REPO_DIR} -q 2>maven-errors.log || echo 'WARNING: Maven dependency resolution failed — tests may fail due to missing jars' >&2\n[ -s maven-errors.log ] && cat maven-errors.log >&2\nrm -f maven-errors.log"
+            "mkdir -p deps {MAVEN_REPO_DIR}\ncat > pom.xml << '{HEREDOC_DELIM}'\n{safe_pom}\n{HEREDOC_DELIM}\nmvn dependency:copy-dependencies -DoutputDirectory=deps -Dmaven.repo.local={MAVEN_REPO_DIR} -q 2>maven-errors.log || echo 'WARNING: Maven dependency resolution failed — tests may fail due to missing jars' >&2\n[ -s maven-errors.log ] && cat maven-errors.log >&2\nrm -f maven-errors.log"
         ));
 
         Ok(lines.join("\n"))
@@ -229,18 +240,19 @@ fi"#
                     dep_lines.push_str(&format!("{crate_name} = \"*\"\n"));
                 }
             }
+            let safe_deps = sanitize_heredoc_content(&dep_lines);
             Ok(format!(
                 r#"export CARGO_HOME=/tmp/cargo-home
 mkdir -p "$CARGO_HOME" src
 cp main.rs src/main.rs
-cat > Cargo.toml << 'SKILLDO_EOF'
+cat > Cargo.toml << '{HEREDOC_DELIM}'
 [package]
 name = "skilldo-test"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-{dep_lines}SKILLDO_EOF"#
+{safe_deps}{HEREDOC_DELIM}"#
             ))
         } else {
             Ok(String::new())
@@ -261,18 +273,19 @@ edition = "2021"
                 .trim_end_matches('-');
             dep_lines.push_str(&format!("{crate_name} = \"*\"\n"));
         }
+        let safe_deps = sanitize_heredoc_content(&dep_lines);
         Ok(format!(
             r#"export CARGO_HOME=/tmp/cargo-home
 mkdir -p "$CARGO_HOME" src
 cp main.rs src/main.rs
-cat > Cargo.toml << 'SKILLDO_EOF'
+cat > Cargo.toml << '{HEREDOC_DELIM}'
 [package]
 name = "skilldo-test"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-{dep_lines}SKILLDO_EOF"#
+{safe_deps}{HEREDOC_DELIM}"#
         ))
     }
 
@@ -2249,5 +2262,26 @@ timeout = 120
             lines.contains("echo '\\''hello world'\\''"),
             "single quotes should be shell-escaped with '\\'' pattern: {lines}"
         );
+    }
+
+    #[test]
+    fn test_sanitize_heredoc_content_strips_delimiter() {
+        let malicious = "org.evil\nSKILLDO_EOF\nrm -rf /\n";
+        let safe = super::sanitize_heredoc_content(malicious);
+        assert!(
+            !safe.contains("SKILLDO_EOF"),
+            "delimiter should be stripped: {safe}"
+        );
+        assert!(
+            safe.contains("SKILLDO_SANITIZED"),
+            "should replace with safe token: {safe}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_heredoc_content_clean_passthrough() {
+        let clean = "org.example:lib:1.0.0\n";
+        let result = super::sanitize_heredoc_content(clean);
+        assert_eq!(result, clean, "clean content should pass through unchanged");
     }
 }

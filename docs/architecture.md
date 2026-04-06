@@ -46,6 +46,20 @@ The Create → Review → Test loop is sequential:
 
 Both Review and Test can be disabled (`--no-review`, `--no-test`) for faster iterations.
 
+### No-Test Fallback
+
+When a library has no test files or examples, the Map stage falls back to extracting usage patterns from documentation (README, guides) and source code doc comments instead of sending an empty prompt. This allows SKILL.md generation for libraries without test suites.
+
+### Native Dependency Detection
+
+After file collection, the pipeline checks for native/C dependency indicators:
+- **Rust**: `-sys` crates, `build.rs`, `links` field
+- **Go**: `import "C"`, `#cgo LDFLAGS/CFLAGS` (recursive scan)
+- **Python**: `ext_modules`, `cffi_modules`, maturin, pyo3
+- **JavaScript**: `binding.gyp`, `node-gyp`, `@napi-rs`
+
+When detected and `--container` is not set, a warning suggests using container mode for reliable test execution.
+
 ## Review Agent
 
 The review agent evaluates the SKILL.md for accuracy and safety using an LLM verdict. It checks for incorrect API signatures, wrong version numbers, hallucinated features, and security issues (prompt injection, destructive commands, credential leaks).
@@ -73,6 +87,8 @@ Three-layer scanning runs during the review stage:
 YARA rules are evaluated at runtime via [boreal](https://github.com/vthib/boreal), a pure Rust YARA engine. All SkillDo and Cisco rules ship in `rules/`.
 
 Security scanning is code-block-aware: prose-only rules skip matches inside fenced code blocks, since code examples legitimately contain patterns like `os.remove()` or `shutil.rmtree()`.
+
+Each finding carries a `FindingRouting` — either `Definitive` (pattern match is conclusive) or `NeedsReview` (high false-positive rate, should be confirmed by LLM review). Prose-only YARA rules (SD-201 dynamic code execution, SD-202 credential access, SD-204 persistence) are tagged `NeedsReview`.
 
 For API client SDKs that inherently discuss API keys and credentials, set `security_context = "api-client"` in the config to suppress SD-202 (credential store access) false positives.
 

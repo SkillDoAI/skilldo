@@ -407,13 +407,15 @@ async fn test_collect_fails_with_no_tests() {
     // Act
     let result = collector.collect().await;
 
-    // Assert
-    assert!(result.is_err(), "Should fail without tests");
-    let err = result.unwrap_err();
+    // Assert — since v0.5.12, no-test libraries warn instead of bailing
     assert!(
-        err.to_string().contains("No tests found"),
-        "Error should mention missing tests: {}",
-        err
+        result.is_ok(),
+        "no-test libraries should succeed with warning"
+    );
+    let data = result.unwrap();
+    assert!(
+        data.test_content.is_empty(),
+        "test content should be empty when no tests exist"
     );
 }
 
@@ -793,6 +795,7 @@ fn test_collected_data_clone() {
         changelog_content: "changelog".to_string(),
         source_file_count: 1,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     };
 
     // Act
@@ -821,6 +824,7 @@ fn test_collected_data_debug() {
         changelog_content: String::new(),
         source_file_count: 0,
         dependencies: Vec::new(),
+        native_dep_indicators: Vec::new(),
     };
 
     // Act

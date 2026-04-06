@@ -10,7 +10,7 @@
 // Based on the Trojan Source paper (Boucher & Anderson, 2021) and Unicode
 // Technical Report #36 (Unicode Security Considerations).
 
-use super::{line_number, snippet_at, Category, Finding, Severity};
+use super::{line_number, snippet_at, Category, Finding, FindingRouting, Severity};
 use tracing::warn;
 
 /// Invisible Unicode characters that models sometimes emit as tokenizer artifacts.
@@ -133,6 +133,7 @@ fn detect_homoglyphs(content: &str, findings: &mut Vec<Finding>) {
         ),
         line: line_number(content, first_offset),
         snippet: snippet_at(content, first_offset),
+        routing: FindingRouting::default(),
     });
 }
 
@@ -150,6 +151,7 @@ fn detect_rlo(content: &str, findings: &mut Vec<Finding>) {
                         .into(),
                 line: line_number(content, byte_offset),
                 snippet: snippet_at(content, byte_offset),
+                routing: FindingRouting::default(),
             });
             return; // One finding is enough
         }
@@ -182,6 +184,7 @@ fn detect_mixed_scripts(content: &str, findings: &mut Vec<Finding>) {
             ),
             line: 1,
             snippet: String::new(),
+            routing: FindingRouting::default(),
         });
     }
 
@@ -196,6 +199,7 @@ fn detect_mixed_scripts(content: &str, findings: &mut Vec<Finding>) {
             ),
             line: 1,
             snippet: String::new(),
+            routing: FindingRouting::default(),
         });
     }
 }

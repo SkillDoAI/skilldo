@@ -140,6 +140,7 @@ impl Collector {
             source_content,
             changelog_content,
             dependencies: Vec::new(),
+            native_dep_indicators: handler.detect_native_deps(),
         })
     }
 
@@ -206,6 +207,7 @@ impl Collector {
             source_content,
             changelog_content,
             dependencies: Vec::new(),
+            native_dep_indicators: handler.detect_native_deps(),
         })
     }
 
@@ -272,6 +274,7 @@ impl Collector {
             source_content,
             changelog_content,
             dependencies: Vec::new(),
+            native_dep_indicators: handler.detect_native_deps(),
         })
     }
 
@@ -326,6 +329,7 @@ impl Collector {
         }
 
         let dependencies = handler.get_dependencies();
+        let native_dep_indicators = handler.detect_native_deps();
 
         Ok(CollectedData {
             package_name,
@@ -340,6 +344,7 @@ impl Collector {
             source_content,
             changelog_content,
             dependencies,
+            native_dep_indicators,
         })
     }
 
@@ -407,6 +412,7 @@ impl Collector {
             source_content,
             changelog_content,
             dependencies: Vec::new(),
+            native_dep_indicators: Vec::new(),
         })
     }
 
@@ -2720,4 +2726,7 @@ pub struct CollectedData {
     /// Populated by Rust collector (v0.5.1); empty for other languages until v0.5.2+.
     #[allow(dead_code)] // Used in Phase 3+ of v0.5.1
     pub dependencies: Vec<StructuredDep>,
+    /// Indicators that the library has native/C dependencies (e.g. "-sys crate",
+    /// "build.rs present", "CGo import"). Non-empty suggests container mode.
+    pub native_dep_indicators: Vec<String>,
 }

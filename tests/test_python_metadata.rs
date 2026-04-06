@@ -258,12 +258,13 @@ fn test_find_test_files_nested() {
 }
 
 #[test]
-fn test_no_tests_returns_error() {
+fn test_no_tests_returns_empty() {
+    // Since v0.5.12, no-test libraries return empty vec instead of error
     let temp = TempDir::new().unwrap();
     let handler = PythonHandler::new(temp.path());
     let result = handler.find_test_files();
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("No tests found"));
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_empty());
 }
 
 #[test]
