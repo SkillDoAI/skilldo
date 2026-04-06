@@ -638,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_version_missing_defaults_to_zero() {
+    fn test_extract_version_missing_defaults_to_unknown() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("package.json"), r#"{"name": "foo"}"#).unwrap();
 

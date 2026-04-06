@@ -1266,9 +1266,11 @@ impl LanguageExecutor for JavaExecutor {
             Ok(output) if !output.status.success() => {
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 debug!("Java compilation failed");
-                // Check if deps were expected but missing — indicates infrastructure
+                // Check if Maven deps were expected but missing — indicates infrastructure
                 // failure (Maven timeout, bad coords) not a code/import error.
-                let has_deps = !env.dependencies.is_empty();
+                // Use pom.xml existence as the signal (only created for fetchable deps,
+                // excludes local-install-only artifacts).
+                let maven_fetch_attempted = env.temp_dir.path().join("pom.xml").exists();
                 let jars_present = deps_dir.is_dir()
                     && std::fs::read_dir(&deps_dir)
                         .map(|d| {
@@ -1277,7 +1279,10 @@ impl LanguageExecutor for JavaExecutor {
                             })
                         })
                         .unwrap_or(false);
-                let msg = if has_deps && !jars_present && stderr.contains("does not exist") {
+                let msg = if maven_fetch_attempted
+                    && !jars_present
+                    && stderr.contains("does not exist")
+                {
                     format!(
                         "NOTE: Dependencies were declared but no jars found in deps/. \
                          Maven may have failed to fetch them. The compilation errors \

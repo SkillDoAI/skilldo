@@ -92,6 +92,13 @@ jobs:
         run: |
           git clone --depth 1 --branch 1.17.0 https://github.com/benjaminp/six.git $env:TEMP\six
           cargo run -- generate $env:TEMP\six --language python --dry-run --best-effort -o $env:TEMP\test-SKILL.md
+      - name: Upload dry-run output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-e2e-dryrun
+          path: ${{ env.TEMP }}\test-SKILL.md
+          if-no-files-found: ignore
 
   fmt:
     name: cargo fmt

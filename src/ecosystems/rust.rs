@@ -4113,19 +4113,30 @@ mod tests {
             "[workspace]\nmembers = [\"crates/native\"]\n",
         )
         .unwrap();
-        // Member crate with -sys dep
+        // Member crate with -sys dep, links field, and build.rs
         let member = dir.path().join("crates").join("native");
         fs::create_dir_all(&member).unwrap();
         fs::write(
             member.join("Cargo.toml"),
-            "[package]\nname = \"native\"\nversion = \"1.0.0\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+            "[package]\nname = \"native\"\nversion = \"1.0.0\"\nlinks = \"z\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
         )
         .unwrap();
+        fs::write(member.join("build.rs"), "fn main() {}").unwrap();
         let handler = RustHandler::new(dir.path());
         let indicators = handler.detect_native_deps();
         assert!(
             indicators.iter().any(|i| i.contains("openssl-sys")),
             "should detect -sys crate in workspace member: {:?}",
+            indicators
+        );
+        assert!(
+            indicators.iter().any(|i| i.contains("build.rs in member")),
+            "should detect build.rs in workspace member: {:?}",
+            indicators
+        );
+        assert!(
+            indicators.iter().any(|i| i.contains("links")),
+            "should detect links field in workspace member: {:?}",
             indicators
         );
     }

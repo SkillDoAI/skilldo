@@ -207,7 +207,7 @@ fn write_secure_file(path: &Path, content: &str) -> Result<()> {
     {
         use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
-        (&tmp)
+        tmp.as_file()
             .write_all(content.as_bytes())
             .with_context(|| format!("Failed to write temp file: {}", tmp.path().display()))?;
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))
