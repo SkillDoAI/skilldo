@@ -2306,13 +2306,16 @@ func main() {
         }
         let executor = JavaExecutor::new();
         let temp_dir = TempDir::new().unwrap();
-        // Simulate Maven-attempted state: pom.xml present, deps/ exists but empty
+        // Simulate Maven-attempted state: pom.xml present, deps/ has non-jar files only
         fs::write(
             temp_dir.path().join("pom.xml"),
             "<project><dependencies/></project>",
         )
         .unwrap();
-        fs::create_dir_all(temp_dir.path().join("deps")).unwrap();
+        let deps_dir = temp_dir.path().join("deps");
+        fs::create_dir_all(&deps_dir).unwrap();
+        // Add a non-jar file so the iterator body (jar check) is exercised
+        fs::write(deps_dir.join("maven-metadata.xml"), "<metadata/>").unwrap();
         let env = ExecutionEnv {
             temp_dir,
             interpreter_path: None,
@@ -2333,6 +2336,47 @@ public class Main {
             assert!(
                 msg.contains("NOTE: Dependencies were declared but no jars found"),
                 "should include missing-jars note, got: {msg}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_java_compilation_failure_with_jars_present_no_note() {
+        // When pom.xml exists AND jars are present, the note should NOT appear
+        // (jars were fetched, so the compile error is a real code issue)
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(
+            temp_dir.path().join("pom.xml"),
+            "<project><dependencies/></project>",
+        )
+        .unwrap();
+        let deps_dir = temp_dir.path().join("deps");
+        fs::create_dir_all(&deps_dir).unwrap();
+        // Add a .jar file so jars_present = true
+        fs::write(deps_dir.join("fake-lib.jar"), "not-a-real-jar").unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec!["com.example:fake-lib:1.0".to_string()],
+        };
+        let code = r#"import com.nonexistent.Foo;
+public class Main {
+    public static void main(String[] args) {
+        Foo f = new Foo();
+    }
+}
+"#;
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
+        if let ExecutionResult::Fail(msg) = &result {
+            assert!(
+                !msg.contains("NOTE: Dependencies were declared"),
+                "should NOT include missing-jars note when jars exist, got: {msg}"
             );
         }
     }
