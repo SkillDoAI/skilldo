@@ -1268,7 +1268,6 @@ impl LanguageExecutor for JavaExecutor {
                 debug!("Java compilation failed");
                 // Check if deps were expected but missing — indicates infrastructure
                 // failure (Maven timeout, bad coords) not a code/import error.
-                let deps_dir = env.temp_dir.path().join("deps");
                 let has_deps = !env.dependencies.is_empty();
                 let jars_present = deps_dir.is_dir()
                     && std::fs::read_dir(&deps_dir)
@@ -1288,6 +1287,7 @@ impl LanguageExecutor for JavaExecutor {
                 } else {
                     stderr
                 };
+                let msg = redact_secrets(&msg, &get_redact_vars_snapshot());
                 return Ok(ExecutionResult::Fail(msg));
             }
             Err(e) => {
