@@ -115,10 +115,13 @@ fn is_leap(y: i32) -> bool {
 
 /// Escape a field for CSV: quote if it contains comma, quote, or newline.
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+    // Replace newlines with spaces — telemetry fields should be single-line to prevent
+    // CSV migration corruption (migrate_header_if_stale splits on physical lines).
+    let s = s.replace('\n', " ").replace('\r', "");
+    if s.contains(',') || s.contains('"') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
-        s.to_string()
+        s
     }
 }
 
@@ -365,8 +368,9 @@ mod tests {
 
     #[test]
     fn test_csv_escape_with_newline() {
+        // Newlines replaced with spaces to prevent CSV migration corruption
         let escaped = csv_escape("line1\nline2");
-        assert_eq!(escaped, "\"line1\nline2\"");
+        assert_eq!(escaped, "line1 line2");
     }
 
     #[test]
@@ -571,8 +575,9 @@ mod tests {
 
     #[test]
     fn test_csv_escape_carriage_return() {
+        // Carriage returns stripped to prevent CSV corruption
         let escaped = csv_escape("line1\rline2");
-        assert_eq!(escaped, "\"line1\rline2\"");
+        assert_eq!(escaped, "line1line2");
     }
 
     #[test]
