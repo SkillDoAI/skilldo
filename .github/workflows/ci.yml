@@ -90,7 +90,6 @@ jobs:
       # Dry-run e2e: exercises full pipeline (collection, detection, config) without LLM
       - name: e2e smoke test (dry-run)
         run: |
-          cargo build
           git clone --depth 1 --branch 1.17.0 https://github.com/benjaminp/six.git $env:TEMP\six
           cargo run -- generate $env:TEMP\six --language python --dry-run --best-effort -o $env:TEMP\test-SKILL.md
 

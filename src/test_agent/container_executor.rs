@@ -587,18 +587,29 @@ impl LanguageExecutor for ContainerExecutor {
             )
             .await?;
 
-        // Redact secrets from container output (same as bare-metal executor)
+        // Redact secrets from container output (same as bare-metal executor).
+        // Also redact extra_env values which may not be in the process environment.
         let redact_vars = super::executor::get_redact_vars_snapshot();
+        let redact_output = |text: &str| -> String {
+            let mut result = super::executor::redact_secrets(text, &redact_vars);
+            // extra_env values are passed to the container but may not be in std::env
+            for value in self.config.extra_env.values() {
+                if !value.is_empty() {
+                    result = result.replace(value.as_str(), "***REDACTED***");
+                }
+            }
+            result
+        };
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stdout = super::executor::redact_secrets(&stdout, &redact_vars);
+            let stdout = redact_output(&stdout);
             debug!("✓ Code execution passed");
             Ok(ExecutionResult::Pass(stdout))
         } else {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let stdout = super::executor::redact_secrets(&stdout, &redact_vars);
-            let stderr = super::executor::redact_secrets(&stderr, &redact_vars);
+            let stdout = redact_output(&stdout);
+            let stderr = redact_output(&stderr);
             debug!("✗ Code execution failed");
             debug!("  stdout: {}", stdout);
             debug!("  stderr: {}", stderr);
