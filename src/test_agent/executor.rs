@@ -1266,7 +1266,29 @@ impl LanguageExecutor for JavaExecutor {
             Ok(output) if !output.status.success() => {
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 debug!("Java compilation failed");
-                return Ok(ExecutionResult::Fail(stderr));
+                // Check if deps were expected but missing — indicates infrastructure
+                // failure (Maven timeout, bad coords) not a code/import error.
+                let deps_dir = env.temp_dir.path().join("deps");
+                let has_deps = !env.dependencies.is_empty();
+                let jars_present = deps_dir.is_dir()
+                    && std::fs::read_dir(&deps_dir)
+                        .map(|d| {
+                            d.flatten().any(|e| {
+                                e.path().extension().and_then(|x| x.to_str()) == Some("jar")
+                            })
+                        })
+                        .unwrap_or(false);
+                let msg = if has_deps && !jars_present && stderr.contains("does not exist") {
+                    format!(
+                        "NOTE: Dependencies were declared but no jars found in deps/. \
+                         Maven may have failed to fetch them. The compilation errors \
+                         below are likely caused by missing jars, not wrong imports.\n\n{}",
+                        stderr
+                    )
+                } else {
+                    stderr
+                };
+                return Ok(ExecutionResult::Fail(msg));
             }
             Err(e) => {
                 if crate::error::SkillDoError::is_timeout(&e) {
