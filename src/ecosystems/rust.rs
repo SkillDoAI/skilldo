@@ -861,36 +861,85 @@ impl RustHandler {
 
     /// Detect indicators that this crate has native/C dependencies.
     /// Returns a list of human-readable reasons (empty = no native deps detected).
+    /// For workspace roots, also scans member crates.
     pub fn detect_native_deps(&self) -> Vec<String> {
         let mut indicators = Vec::new();
         let cargo_toml = self.repo_path.join("Cargo.toml");
         if let Ok(content) = fs::read_to_string(&cargo_toml) {
-            // Check for -sys crates in dependencies
             if let Ok(parsed) = content.parse::<toml::Table>() {
-                for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
-                    if let Some(deps) = parsed.get(section).and_then(|v| v.as_table()) {
-                        for key in deps.keys() {
-                            if key.ends_with("-sys") {
-                                indicators.push(format!("{key} crate ({section})"));
+                // Check this crate's own deps
+                Self::check_native_deps_in_manifest(&parsed, &mut indicators);
+                // Workspace root — also check member crates
+                if parsed.contains_key("workspace") && !parsed.contains_key("package") {
+                    if let Some(members) = parsed
+                        .get("workspace")
+                        .and_then(|w| w.get("members"))
+                        .and_then(|m| m.as_array())
+                    {
+                        for member in members {
+                            if let Some(member_path) = member.as_str() {
+                                // Reject paths that escape the repo root
+                                let member_rel = Path::new(member_path);
+                                if member_rel.is_absolute()
+                                    || member_rel
+                                        .components()
+                                        .any(|c| c == std::path::Component::ParentDir)
+                                {
+                                    continue;
+                                }
+                                for resolved in
+                                    expand_workspace_member(&self.repo_path, member_path)
+                                {
+                                    if let Ok(member_content) =
+                                        fs::read_to_string(resolved.join("Cargo.toml"))
+                                    {
+                                        if let Ok(member_parsed) =
+                                            member_content.parse::<toml::Table>()
+                                        {
+                                            Self::check_native_deps_in_manifest(
+                                                &member_parsed,
+                                                &mut indicators,
+                                            );
+                                        }
+                                    }
+                                    if resolved.join("build.rs").exists() {
+                                        let name = resolved
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy();
+                                        indicators.push(format!("build.rs in member {name}"));
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                // Check for links = "..." in [package] (declares native link dependency)
-                if let Some(links) = parsed
-                    .get("package")
-                    .and_then(|p| p.get("links"))
-                    .and_then(|l| l.as_str())
-                {
-                    indicators.push(format!("links = \"{links}\""));
-                }
             }
         }
-        // Check for build.rs (build script, often compiles C/C++)
         if self.repo_path.join("build.rs").exists() {
             indicators.push("build.rs present".to_string());
         }
         indicators
+    }
+
+    /// Check a single Cargo.toml manifest for native dep indicators.
+    fn check_native_deps_in_manifest(parsed: &toml::Table, indicators: &mut Vec<String>) {
+        for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+            if let Some(deps) = parsed.get(section).and_then(|v| v.as_table()) {
+                for key in deps.keys() {
+                    if key.ends_with("-sys") {
+                        indicators.push(format!("{key} crate ({section})"));
+                    }
+                }
+            }
+        }
+        if let Some(links) = parsed
+            .get("package")
+            .and_then(|p| p.get("links"))
+            .and_then(|l| l.as_str())
+        {
+            indicators.push(format!("links = \"{links}\""));
+        }
     }
 }
 
@@ -4051,6 +4100,32 @@ mod tests {
         assert!(
             indicators.iter().any(|i| i.contains("links")),
             "should detect links field: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_member() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace root with no [package]
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/native\"]\n",
+        )
+        .unwrap();
+        // Member crate with -sys dep
+        let member = dir.path().join("crates").join("native");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"native\"\nversion = \"1.0.0\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("openssl-sys")),
+            "should detect -sys crate in workspace member: {:?}",
             indicators
         );
     }
