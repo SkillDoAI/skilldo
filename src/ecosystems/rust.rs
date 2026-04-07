@@ -4397,6 +4397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // Backslash is a valid path separator on Windows
     fn detect_native_deps_workspace_member_backslash_path_rejected() {
         // Windows-style backslash members should be rejected by the path guard
         let dir = tempfile::tempdir().unwrap();
