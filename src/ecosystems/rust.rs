@@ -867,8 +867,13 @@ impl RustHandler {
         let cargo_toml = self.repo_path.join("Cargo.toml");
         if let Ok(content) = fs::read_to_string(&cargo_toml) {
             if let Ok(parsed) = content.parse::<toml::Table>() {
+                // Extract workspace deps for resolving inherited renames
+                let workspace_deps = parsed
+                    .get("workspace")
+                    .and_then(|w| w.get("dependencies"))
+                    .and_then(|d| d.as_table());
                 // Check this crate's own deps
-                Self::check_native_deps_in_manifest(&parsed, &mut indicators);
+                Self::check_native_deps_in_manifest(&parsed, workspace_deps, &mut indicators);
                 // Workspace root — also check member crates
                 if parsed.contains_key("workspace") {
                     if let Some(members) = parsed
@@ -903,6 +908,7 @@ impl RustHandler {
                                         {
                                             Self::check_native_deps_in_manifest(
                                                 &member_parsed,
+                                                workspace_deps,
                                                 &mut indicators,
                                             );
                                         }
@@ -928,22 +934,60 @@ impl RustHandler {
     }
 
     /// Check a single Cargo.toml manifest for native dep indicators.
-    fn check_native_deps_in_manifest(parsed: &toml::Table, indicators: &mut Vec<String>) {
+    /// `workspace_deps` optionally provides `[workspace.dependencies]` from the root
+    /// manifest for resolving `dep = { workspace = true }` inherited renames.
+    fn check_native_deps_in_manifest(
+        parsed: &toml::Table,
+        workspace_deps: Option<&toml::Table>,
+        indicators: &mut Vec<String>,
+    ) {
         for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
             if let Some(deps) = parsed.get(section).and_then(|v| v.as_table()) {
                 for (key, value) in deps {
                     // Check the key name itself
                     if key.ends_with("-sys") {
                         indicators.push(format!("{key} crate ({section})"));
+                        continue;
                     }
-                    // Also check `package = "foo-sys"` for renamed deps
-                    else if let Some(pkg) = value
+                    // Check `package = "foo-sys"` for renamed deps
+                    if let Some(pkg) = value
                         .as_table()
                         .and_then(|t| t.get("package"))
                         .and_then(|p| p.as_str())
                     {
                         if pkg.ends_with("-sys") {
                             indicators.push(format!("{pkg} crate ({section}, renamed as {key})"));
+                            continue;
+                        }
+                    }
+                    // Resolve workspace-inherited deps: `key = { workspace = true }`
+                    // Look up the actual package in [workspace.dependencies]
+                    if let Some(ws_deps) = workspace_deps {
+                        let is_workspace = value
+                            .as_table()
+                            .and_then(|t| t.get("workspace"))
+                            .and_then(|w| w.as_bool())
+                            .unwrap_or(false);
+                        if is_workspace {
+                            if let Some(ws_entry) = ws_deps.get(key) {
+                                // The workspace entry might rename via `package =`
+                                if let Some(pkg) = ws_entry
+                                    .as_table()
+                                    .and_then(|t| t.get("package"))
+                                    .and_then(|p| p.as_str())
+                                {
+                                    if pkg.ends_with("-sys") {
+                                        indicators.push(format!(
+                                            "{pkg} crate ({section}, workspace-inherited as {key})"
+                                        ));
+                                    }
+                                }
+                                // Or the workspace key itself might be -sys
+                                else if key.ends_with("-sys") {
+                                    // Already caught above, but handles edge case
+                                    indicators.push(format!("{key} crate ({section}, workspace)"));
+                                }
+                            }
                         }
                     }
                 }
@@ -4227,6 +4271,31 @@ mod tests {
         assert!(
             indicators.iter().any(|i| i.contains("openssl-sys")),
             "should detect renamed -sys crate: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_inherited_renamed_sys() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace root with [workspace.dependencies] renaming
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/app\"]\n\n[workspace.dependencies]\nssl = { package = \"openssl-sys\", version = \"0.9\" }\n",
+        )
+        .unwrap();
+        let member = dir.path().join("crates").join("app");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"1.0.0\"\n\n[dependencies]\nssl = { workspace = true }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("openssl-sys")),
+            "should detect workspace-inherited renamed -sys crate: {:?}",
             indicators
         );
     }
