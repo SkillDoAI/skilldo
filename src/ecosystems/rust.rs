@@ -4143,30 +4143,32 @@ mod tests {
 
     #[test]
     fn detect_native_deps_workspace_rejects_path_traversal() {
-        let dir = tempfile::tempdir().unwrap();
+        // Use a shared parent so "../escape" resolves but is still RAII-cleaned
+        let parent = tempfile::tempdir().unwrap();
+        let workspace = parent.path().join("repo");
+        fs::create_dir_all(&workspace).unwrap();
         // Workspace with a ".." member and an absolute path member — both should be skipped
         fs::write(
-            dir.path().join("Cargo.toml"),
+            workspace.join("Cargo.toml"),
             "[workspace]\nmembers = [\"../escape\", \"/etc/evil\"]\n",
         )
         .unwrap();
         // Create the escape dir so it would match if traversal weren't blocked
-        let escape_dir = dir.path().parent().unwrap().join("escape");
-        fs::create_dir_all(&escape_dir).ok();
+        let escape_dir = parent.path().join("escape");
+        fs::create_dir_all(&escape_dir).unwrap();
         fs::write(
             escape_dir.join("Cargo.toml"),
             "[package]\nname = \"evil\"\nversion = \"1.0.0\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
         )
-        .ok();
-        let handler = RustHandler::new(dir.path());
+        .unwrap();
+        let handler = RustHandler::new(&workspace);
         let indicators = handler.detect_native_deps();
         assert!(
             indicators.is_empty(),
             "path traversal members should be skipped: {:?}",
             indicators
         );
-        // Cleanup the escape dir we created outside the tempdir
-        fs::remove_dir_all(&escape_dir).ok();
+        // parent TempDir cleans up both workspace/ and escape/ via RAII
     }
 
     #[test]
