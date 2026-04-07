@@ -881,9 +881,14 @@ impl RustHandler {
                                 // Reject paths that escape the repo root
                                 let member_rel = Path::new(member_path);
                                 if member_rel.is_absolute()
-                                    || member_rel
-                                        .components()
-                                        .any(|c| c == std::path::Component::ParentDir)
+                                    || member_path.starts_with('\\')
+                                    || member_rel.components().any(|c| {
+                                        matches!(
+                                            c,
+                                            std::path::Component::ParentDir
+                                                | std::path::Component::RootDir
+                                        )
+                                    })
                                 {
                                     continue;
                                 }
@@ -926,9 +931,20 @@ impl RustHandler {
     fn check_native_deps_in_manifest(parsed: &toml::Table, indicators: &mut Vec<String>) {
         for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
             if let Some(deps) = parsed.get(section).and_then(|v| v.as_table()) {
-                for key in deps.keys() {
+                for (key, value) in deps {
+                    // Check the key name itself
                     if key.ends_with("-sys") {
                         indicators.push(format!("{key} crate ({section})"));
+                    }
+                    // Also check `package = "foo-sys"` for renamed deps
+                    else if let Some(pkg) = value
+                        .as_table()
+                        .and_then(|t| t.get("package"))
+                        .and_then(|p| p.as_str())
+                    {
+                        if pkg.ends_with("-sys") {
+                            indicators.push(format!("{pkg} crate ({section}, renamed as {key})"));
+                        }
                     }
                 }
             }
@@ -4194,6 +4210,23 @@ mod tests {
         assert!(
             indicators[0].contains("build.rs in member buildcrate"),
             "should detect build.rs in member: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_renamed_sys_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\n\n[dependencies]\nssl = { package = \"openssl-sys\", version = \"0.9\" }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("openssl-sys")),
+            "should detect renamed -sys crate: {:?}",
             indicators
         );
     }
