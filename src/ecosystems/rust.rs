@@ -2395,6 +2395,90 @@ mod tests {
     }
 
     #[test]
+    fn collect_docs_ignores_non_doc_files() {
+        // Non-.md and non-.rst files in docs/ should be ignored.
+        // Also files without extensions should not be collected.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(docs.join("guide.md"), "# Guide\n").unwrap();
+        fs::write(docs.join("config.toml"), "key = \"val\"\n").unwrap();
+        fs::write(docs.join("Makefile"), "all:\n").unwrap();
+        fs::write(docs.join("notes.txt"), "plain text\n").unwrap();
+        fs::write(docs.join("image.png"), "fake png data").unwrap();
+
+        let handler = RustHandler::new(root);
+        let found = handler.find_docs().unwrap();
+        let names: Vec<_> = found
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"guide.md"), "should include .md files");
+        assert!(!names.contains(&"config.toml"), "should skip .toml files");
+        assert!(
+            !names.contains(&"Makefile"),
+            "should skip files without known doc extensions"
+        );
+        assert!(!names.contains(&"notes.txt"), "should skip .txt files");
+        assert!(!names.contains(&"image.png"), "should skip .png files");
+    }
+
+    #[test]
+    fn find_test_files_with_mixed_file_types_in_tests_dir() {
+        // tests/ directory may contain non-.rs files (fixtures, data)
+        // Only .rs files should be collected
+        let dir = tempfile::tempdir().unwrap();
+        let tests = dir.path().join("tests");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(tests.join("integration.rs"), "#[test] fn t() {}\n").unwrap();
+        fs::write(tests.join("fixture.json"), "{}\n").unwrap();
+        fs::write(tests.join("data.txt"), "test data\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_test_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("integration.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("fixture.json")));
+        assert!(!files.iter().any(|p| p.ends_with("data.txt")));
+    }
+
+    #[test]
+    fn find_examples_mixed_file_types() {
+        // examples/ may contain non-.rs files — only .rs should be collected
+        let dir = tempfile::tempdir().unwrap();
+        let examples = dir.path().join("examples");
+        fs::create_dir_all(&examples).unwrap();
+        fs::write(examples.join("basic.rs"), "fn main() {}\n").unwrap();
+        fs::write(examples.join("README.md"), "# Examples\n").unwrap();
+        fs::write(examples.join("config.yaml"), "key: val\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_examples().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("basic.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("README.md")));
+        assert!(!files.iter().any(|p| p.ends_with("config.yaml")));
+    }
+
+    #[test]
+    fn find_source_files_with_nested_non_rs_files() {
+        // src/ tree with a mix of .rs and non-.rs files and nested directories
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let nested = src.join("utils");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(src.join("lib.rs"), "pub mod utils;\n").unwrap();
+        fs::write(nested.join("helpers.rs"), "pub fn h() {}\n").unwrap();
+        fs::write(nested.join("data.json"), "{}\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(files.iter().any(|p| p.ends_with("helpers.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("data.json")));
+    }
+
+    #[test]
     fn collect_rs_files_excludes_test_files() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -4310,6 +4394,139 @@ mod tests {
         .unwrap();
         let handler = RustHandler::new(dir.path());
         assert!(handler.detect_native_deps().is_empty());
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_member_backslash_path_rejected() {
+        // Windows-style backslash members should be rejected by the path guard
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates\\\\evil\"]\n",
+        )
+        .unwrap();
+        let member = dir.path().join("crates").join("evil");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"evil\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "backslash member path should be rejected: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_non_string_member_skipped() {
+        // Non-string entries in workspace.members should be silently skipped
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [42]\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        // Should not panic — just skip non-string member
+        let indicators = handler.detect_native_deps();
+        assert!(indicators.is_empty());
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_member_invalid_toml() {
+        // Member with unparseable Cargo.toml should be silently skipped
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"bad\"]\n",
+        )
+        .unwrap();
+        let member = dir.path().join("bad");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(member.join("Cargo.toml"), "this is not valid toml!!!").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "invalid member Cargo.toml should be silently skipped"
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_inherited_non_sys_not_flagged() {
+        // When a workspace member inherits a dep via { workspace = true }
+        // but the workspace dep does NOT have -sys suffix, it should not be flagged
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n",
+        )
+        .unwrap();
+        let member = dir.path().join("app");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"1.0.0\"\n\n[dependencies]\nserde = { workspace = true }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "non-sys workspace dep should not be flagged: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_member_no_cargo_toml() {
+        // Member directory exists but has no Cargo.toml — should be silently skipped
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"missing-manifest\"]\n",
+        )
+        .unwrap();
+        let member = dir.path().join("missing-manifest");
+        fs::create_dir_all(&member).unwrap();
+        // No Cargo.toml in member
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "member without Cargo.toml should be skipped"
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_dev_and_build_deps() {
+        // -sys crates in dev-dependencies and build-dependencies should be detected
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\n\n[dev-dependencies]\nfoo-sys = \"1\"\n\n[build-dependencies]\nbar-sys = \"2\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("foo-sys") && i.contains("dev-dependencies")),
+            "should detect -sys in dev-dependencies: {:?}",
+            indicators
+        );
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("bar-sys") && i.contains("build-dependencies")),
+            "should detect -sys in build-dependencies: {:?}",
+            indicators
+        );
     }
 
     #[test]

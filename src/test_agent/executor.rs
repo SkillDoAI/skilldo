@@ -2535,6 +2535,39 @@ edition = "2021"
     }
 
     #[test]
+    fn test_cargo_structured_dep_local_path_version_only_no_features() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // When the raw_spec is a table with only "version" (no features/default-features),
+        // the extras extraction should return None and emit the simpler path format.
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let dep = StructuredDep {
+            name: "my-crate".to_string(),
+            raw_spec: Some("{ version = \"2.0\" }".to_string()),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, Some(&tmp.path().to_string_lossy()));
+        assert!(
+            line.contains("path = "),
+            "local dep should use path: {line}"
+        );
+        assert!(
+            !line.contains("features"),
+            "should not contain features key: {line}"
+        );
+        assert!(
+            !line.contains("default-features"),
+            "should not contain default-features key: {line}"
+        );
+    }
+
+    #[test]
     fn test_cargo_structured_dep_local_path_preserves_features() {
         use crate::pipeline::collector::{DepSource, StructuredDep};
 
@@ -4262,6 +4295,60 @@ dependencies = []
         assert_eq!(install_args[0], source);
         assert_eq!(install_args[1], "express");
         assert_eq!(install_args[2], "lodash");
+    }
+
+    // --- extract_cargo_package_name edge cases ---
+
+    #[test]
+    fn test_extract_cargo_package_name_missing_dir() {
+        // Non-existent source directory should return None
+        assert!(extract_cargo_package_name("/nonexistent/path/to/crate").is_none());
+    }
+
+    #[test]
+    fn test_extract_cargo_package_name_no_package_section() {
+        // Cargo.toml without [package] (e.g., workspace root)
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n",
+        )
+        .unwrap();
+        assert!(extract_cargo_package_name(&tmp.path().to_string_lossy()).is_none());
+    }
+
+    #[test]
+    fn test_extract_cargo_package_name_valid() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-lib\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_cargo_package_name(&tmp.path().to_string_lossy()),
+            Some("my-lib".to_string())
+        );
+    }
+
+    // --- strip_optional_from_dep_spec additional paths ---
+
+    #[test]
+    fn test_strip_optional_no_optional_passthrough() {
+        // Spec without "optional" should be returned as-is
+        let spec = "{ version = \"1.0\", features = [\"derive\"] }";
+        let result = strip_optional_from_dep_spec(spec);
+        assert_eq!(result, spec);
+    }
+
+    #[test]
+    fn test_strip_optional_leaves_multi_key_table() {
+        // When stripping optional leaves multiple keys, should return stripped spec
+        let spec = "{ version = \"1.0\", features = [\"derive\"], optional = true }";
+        let result = strip_optional_from_dep_spec(spec);
+        assert!(!result.contains("optional"));
+        assert!(result.contains("version"));
+        assert!(result.contains("features"));
     }
 
     // --- set_redact_vars poisoned RwLock path ---
