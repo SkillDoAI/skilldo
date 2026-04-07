@@ -870,7 +870,7 @@ impl RustHandler {
                 // Check this crate's own deps
                 Self::check_native_deps_in_manifest(&parsed, &mut indicators);
                 // Workspace root — also check member crates
-                if parsed.contains_key("workspace") && !parsed.contains_key("package") {
+                if parsed.contains_key("workspace") {
                     if let Some(members) = parsed
                         .get("workspace")
                         .and_then(|w| w.get("members"))
