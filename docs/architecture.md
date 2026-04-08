@@ -53,12 +53,16 @@ When a library has no test files or examples, the Map stage falls back to extrac
 ### Native Dependency Detection
 
 After file collection, the pipeline checks for native/C dependency indicators:
-- **Rust**: `-sys` crates, `build.rs`, `links` field
-- **Go**: `import "C"`, `#cgo LDFLAGS/CFLAGS` (recursive scan)
+- **Rust**: `-sys` crates (including renamed via `package =`), `build.rs`, `links` field. For workspace roots, scans all member crates.
+- **Go**: `import "C"`, `#cgo LDFLAGS/CFLAGS` (recursive scan, line-based to avoid false positives)
 - **Python**: `ext_modules`, `cffi_modules`, maturin, pyo3
-- **JavaScript**: `binding.gyp`, `node-gyp`, `@napi-rs`
+- **JavaScript**: `binding.gyp`, `node-gyp`, `@napi-rs` (in all dep sections including optional/peer)
 
 When detected and `--container` is not set, a warning suggests using container mode for reliable test execution.
+
+### Secret Redaction
+
+The test agent redacts configured environment variable values from all output (stdout, stderr, logs) to prevent secret leakage. Both bare-metal and container executors apply redaction. Container execution also redacts `extra_env` values passed via config, which may not be in the host process environment.
 
 ## Review Agent
 

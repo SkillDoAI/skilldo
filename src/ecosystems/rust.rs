@@ -861,36 +861,145 @@ impl RustHandler {
 
     /// Detect indicators that this crate has native/C dependencies.
     /// Returns a list of human-readable reasons (empty = no native deps detected).
+    /// For workspace roots, also scans member crates.
     pub fn detect_native_deps(&self) -> Vec<String> {
         let mut indicators = Vec::new();
         let cargo_toml = self.repo_path.join("Cargo.toml");
         if let Ok(content) = fs::read_to_string(&cargo_toml) {
-            // Check for -sys crates in dependencies
             if let Ok(parsed) = content.parse::<toml::Table>() {
-                for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
-                    if let Some(deps) = parsed.get(section).and_then(|v| v.as_table()) {
-                        for key in deps.keys() {
-                            if key.ends_with("-sys") {
-                                indicators.push(format!("{key} crate ({section})"));
+                // Extract workspace deps for resolving inherited renames
+                let workspace_deps = parsed
+                    .get("workspace")
+                    .and_then(|w| w.get("dependencies"))
+                    .and_then(|d| d.as_table());
+                // Check this crate's own deps
+                Self::check_native_deps_in_manifest(&parsed, workspace_deps, &mut indicators);
+                // Workspace root — also check member crates
+                if parsed.contains_key("workspace") {
+                    if let Some(members) = parsed
+                        .get("workspace")
+                        .and_then(|w| w.get("members"))
+                        .and_then(|m| m.as_array())
+                    {
+                        for member in members {
+                            if let Some(member_path) = member.as_str() {
+                                // Reject paths that escape the repo root
+                                let member_rel = Path::new(member_path);
+                                if member_rel.is_absolute()
+                                    || member_path.starts_with('\\')
+                                    || member_rel.components().any(|c| {
+                                        matches!(
+                                            c,
+                                            std::path::Component::ParentDir
+                                                | std::path::Component::RootDir
+                                        )
+                                    })
+                                {
+                                    continue;
+                                }
+                                for resolved in
+                                    expand_workspace_member(&self.repo_path, member_path)
+                                {
+                                    if let Ok(member_content) =
+                                        fs::read_to_string(resolved.join("Cargo.toml"))
+                                    {
+                                        if let Ok(member_parsed) =
+                                            member_content.parse::<toml::Table>()
+                                        {
+                                            Self::check_native_deps_in_manifest(
+                                                &member_parsed,
+                                                workspace_deps,
+                                                &mut indicators,
+                                            );
+                                        }
+                                    }
+                                    if resolved.join("build.rs").exists() {
+                                        let name = resolved
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy();
+                                        indicators.push(format!("build.rs in member {name}"));
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                // Check for links = "..." in [package] (declares native link dependency)
-                if let Some(links) = parsed
-                    .get("package")
-                    .and_then(|p| p.get("links"))
-                    .and_then(|l| l.as_str())
-                {
-                    indicators.push(format!("links = \"{links}\""));
-                }
             }
         }
-        // Check for build.rs (build script, often compiles C/C++)
         if self.repo_path.join("build.rs").exists() {
             indicators.push("build.rs present".to_string());
         }
         indicators
+    }
+
+    /// Check a single Cargo.toml manifest for native dep indicators.
+    /// `workspace_deps` optionally provides `[workspace.dependencies]` from the root
+    /// manifest for resolving `dep = { workspace = true }` inherited renames.
+    fn check_native_deps_in_manifest(
+        parsed: &toml::Table,
+        workspace_deps: Option<&toml::Table>,
+        indicators: &mut Vec<String>,
+    ) {
+        for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+            if let Some(deps) = parsed.get(section).and_then(|v| v.as_table()) {
+                for (key, value) in deps {
+                    // Check the key name itself
+                    if key.ends_with("-sys") {
+                        indicators.push(format!("{key} crate ({section})"));
+                        continue;
+                    }
+                    // Check `package = "foo-sys"` for renamed deps
+                    if let Some(pkg) = value
+                        .as_table()
+                        .and_then(|t| t.get("package"))
+                        .and_then(|p| p.as_str())
+                    {
+                        if pkg.ends_with("-sys") {
+                            indicators.push(format!("{pkg} crate ({section}, renamed as {key})"));
+                            continue;
+                        }
+                    }
+                    // Resolve workspace-inherited deps: `key = { workspace = true }`
+                    // Look up the actual package in [workspace.dependencies]
+                    if let Some(ws_deps) = workspace_deps {
+                        let is_workspace = value
+                            .as_table()
+                            .and_then(|t| t.get("workspace"))
+                            .and_then(|w| w.as_bool())
+                            .unwrap_or(false);
+                        if is_workspace {
+                            if let Some(ws_entry) = ws_deps.get(key) {
+                                // The workspace entry might rename via `package =`
+                                if let Some(pkg) = ws_entry
+                                    .as_table()
+                                    .and_then(|t| t.get("package"))
+                                    .and_then(|p| p.as_str())
+                                {
+                                    if pkg.ends_with("-sys") {
+                                        indicators.push(format!(
+                                            "{pkg} crate ({section}, workspace-inherited as {key})"
+                                        ));
+                                    }
+                                }
+                                // Or the workspace key itself might be -sys
+                                else if key.ends_with("-sys") {
+                                    // Already caught above, but handles edge case
+                                    indicators.push(format!("{key} crate ({section}, workspace)"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(links) = parsed
+            .get("package")
+            .and_then(|p| p.get("links"))
+            .and_then(|l| l.as_str())
+        {
+            indicators.push(format!("links = \"{links}\""));
+        }
     }
 }
 
@@ -2283,6 +2392,90 @@ mod tests {
         let handler = RustHandler::new(root);
         let found = handler.find_docs().unwrap();
         assert!(found.iter().any(|p| p.ends_with("index.rst")));
+    }
+
+    #[test]
+    fn collect_docs_ignores_non_doc_files() {
+        // Non-.md and non-.rst files in docs/ should be ignored.
+        // Also files without extensions should not be collected.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(docs.join("guide.md"), "# Guide\n").unwrap();
+        fs::write(docs.join("config.toml"), "key = \"val\"\n").unwrap();
+        fs::write(docs.join("Makefile"), "all:\n").unwrap();
+        fs::write(docs.join("notes.txt"), "plain text\n").unwrap();
+        fs::write(docs.join("image.png"), "fake png data").unwrap();
+
+        let handler = RustHandler::new(root);
+        let found = handler.find_docs().unwrap();
+        let names: Vec<_> = found
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"guide.md"), "should include .md files");
+        assert!(!names.contains(&"config.toml"), "should skip .toml files");
+        assert!(
+            !names.contains(&"Makefile"),
+            "should skip files without known doc extensions"
+        );
+        assert!(!names.contains(&"notes.txt"), "should skip .txt files");
+        assert!(!names.contains(&"image.png"), "should skip .png files");
+    }
+
+    #[test]
+    fn find_test_files_with_mixed_file_types_in_tests_dir() {
+        // tests/ directory may contain non-.rs files (fixtures, data)
+        // Only .rs files should be collected
+        let dir = tempfile::tempdir().unwrap();
+        let tests = dir.path().join("tests");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(tests.join("integration.rs"), "#[test] fn t() {}\n").unwrap();
+        fs::write(tests.join("fixture.json"), "{}\n").unwrap();
+        fs::write(tests.join("data.txt"), "test data\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_test_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("integration.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("fixture.json")));
+        assert!(!files.iter().any(|p| p.ends_with("data.txt")));
+    }
+
+    #[test]
+    fn find_examples_mixed_file_types() {
+        // examples/ may contain non-.rs files — only .rs should be collected
+        let dir = tempfile::tempdir().unwrap();
+        let examples = dir.path().join("examples");
+        fs::create_dir_all(&examples).unwrap();
+        fs::write(examples.join("basic.rs"), "fn main() {}\n").unwrap();
+        fs::write(examples.join("README.md"), "# Examples\n").unwrap();
+        fs::write(examples.join("config.yaml"), "key: val\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_examples().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("basic.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("README.md")));
+        assert!(!files.iter().any(|p| p.ends_with("config.yaml")));
+    }
+
+    #[test]
+    fn find_source_files_with_nested_non_rs_files() {
+        // src/ tree with a mix of .rs and non-.rs files and nested directories
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let nested = src.join("utils");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(src.join("lib.rs"), "pub mod utils;\n").unwrap();
+        fs::write(nested.join("helpers.rs"), "pub fn h() {}\n").unwrap();
+        fs::write(nested.join("data.json"), "{}\n").unwrap();
+
+        let handler = RustHandler::new(dir.path());
+        let files = handler.find_source_files().unwrap();
+        assert!(files.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(files.iter().any(|p| p.ends_with("helpers.rs")));
+        assert!(!files.iter().any(|p| p.ends_with("data.json")));
     }
 
     #[test]
@@ -4056,6 +4249,142 @@ mod tests {
     }
 
     #[test]
+    fn detect_native_deps_workspace_member() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace root with no [package]
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/native\"]\n",
+        )
+        .unwrap();
+        // Member crate with -sys dep, links field, and build.rs
+        let member = dir.path().join("crates").join("native");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"native\"\nversion = \"1.0.0\"\nlinks = \"z\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+        )
+        .unwrap();
+        fs::write(member.join("build.rs"), "fn main() {}").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("openssl-sys")),
+            "should detect -sys crate in workspace member: {:?}",
+            indicators
+        );
+        assert!(
+            indicators.iter().any(|i| i.contains("build.rs in member")),
+            "should detect build.rs in workspace member: {:?}",
+            indicators
+        );
+        assert!(
+            indicators.iter().any(|i| i.contains("links")),
+            "should detect links field in workspace member: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_rejects_path_traversal() {
+        // Use a shared parent so "../escape" resolves but is still RAII-cleaned
+        let parent = tempfile::tempdir().unwrap();
+        let workspace = parent.path().join("repo");
+        fs::create_dir_all(&workspace).unwrap();
+        // Workspace with a ".." member and an absolute path member — both should be skipped
+        fs::write(
+            workspace.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"../escape\", \"/etc/evil\"]\n",
+        )
+        .unwrap();
+        // Create the escape dir so it would match if traversal weren't blocked
+        let escape_dir = parent.path().join("escape");
+        fs::create_dir_all(&escape_dir).unwrap();
+        fs::write(
+            escape_dir.join("Cargo.toml"),
+            "[package]\nname = \"evil\"\nversion = \"1.0.0\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(&workspace);
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "path traversal members should be skipped: {:?}",
+            indicators
+        );
+        // parent TempDir cleans up both workspace/ and escape/ via RAII
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_member_build_rs_only() {
+        // Workspace member that has build.rs but no -sys deps or links
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/buildcrate\"]\n",
+        )
+        .unwrap();
+        let member = dir.path().join("crates").join("buildcrate");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"buildcrate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(member.join("build.rs"), "fn main() {}").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert_eq!(indicators.len(), 1);
+        assert!(
+            indicators[0].contains("build.rs in member buildcrate"),
+            "should detect build.rs in member: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_renamed_sys_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\n\n[dependencies]\nssl = { package = \"openssl-sys\", version = \"0.9\" }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("openssl-sys")),
+            "should detect renamed -sys crate: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_inherited_renamed_sys() {
+        let dir = tempfile::tempdir().unwrap();
+        // Workspace root with [workspace.dependencies] renaming
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/app\"]\n\n[workspace.dependencies]\nssl = { package = \"openssl-sys\", version = \"0.9\" }\n",
+        )
+        .unwrap();
+        let member = dir.path().join("crates").join("app");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"1.0.0\"\n\n[dependencies]\nssl = { workspace = true }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.iter().any(|i| i.contains("openssl-sys")),
+            "should detect workspace-inherited renamed -sys crate: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
     fn detect_native_deps_clean() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -4065,6 +4394,140 @@ mod tests {
         .unwrap();
         let handler = RustHandler::new(dir.path());
         assert!(handler.detect_native_deps().is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)] // Backslash is a valid path separator on Windows
+    fn detect_native_deps_workspace_member_backslash_path_rejected() {
+        // Windows-style backslash members should be rejected by the path guard
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates\\\\evil\"]\n",
+        )
+        .unwrap();
+        let member = dir.path().join("crates").join("evil");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"evil\"\n\n[dependencies]\nopenssl-sys = \"0.9\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "backslash member path should be rejected: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_non_string_member_skipped() {
+        // Non-string entries in workspace.members should be silently skipped
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [42]\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        // Should not panic — just skip non-string member
+        let indicators = handler.detect_native_deps();
+        assert!(indicators.is_empty());
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_member_invalid_toml() {
+        // Member with unparseable Cargo.toml should be silently skipped
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"bad\"]\n",
+        )
+        .unwrap();
+        let member = dir.path().join("bad");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(member.join("Cargo.toml"), "this is not valid toml!!!").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "invalid member Cargo.toml should be silently skipped"
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_inherited_non_sys_not_flagged() {
+        // When a workspace member inherits a dep via { workspace = true }
+        // but the workspace dep does NOT have -sys suffix, it should not be flagged
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n",
+        )
+        .unwrap();
+        let member = dir.path().join("app");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"1.0.0\"\n\n[dependencies]\nserde = { workspace = true }\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "non-sys workspace dep should not be flagged: {:?}",
+            indicators
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_workspace_member_no_cargo_toml() {
+        // Member directory exists but has no Cargo.toml — should be silently skipped
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"missing-manifest\"]\n",
+        )
+        .unwrap();
+        let member = dir.path().join("missing-manifest");
+        fs::create_dir_all(&member).unwrap();
+        // No Cargo.toml in member
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators.is_empty(),
+            "member without Cargo.toml should be skipped"
+        );
+    }
+
+    #[test]
+    fn detect_native_deps_dev_and_build_deps() {
+        // -sys crates in dev-dependencies and build-dependencies should be detected
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\n\n[dev-dependencies]\nfoo-sys = \"1\"\n\n[build-dependencies]\nbar-sys = \"2\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let indicators = handler.detect_native_deps();
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("foo-sys") && i.contains("dev-dependencies")),
+            "should detect -sys in dev-dependencies: {:?}",
+            indicators
+        );
+        assert!(
+            indicators
+                .iter()
+                .any(|i| i.contains("bar-sys") && i.contains("build-dependencies")),
+            "should detect -sys in build-dependencies: {:?}",
+            indicators
+        );
     }
 
     #[test]

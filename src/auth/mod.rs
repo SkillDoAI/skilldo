@@ -197,30 +197,32 @@ fn ensure_secure_dir(path: &Path) -> Result<()> {
 /// Uses `OpenOptions::mode()` to set permissions at creation time, and
 /// `set_permissions()` to re-harden existing files on update.
 fn write_secure_file(path: &Path, content: &str) -> Result<()> {
+    // Write to a temp file first, then rename for atomicity.
+    // Prevents truncated token files from interrupted writes.
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let tmp = tempfile::NamedTempFile::new_in(dir)
+        .with_context(|| format!("Failed to create temp file in {}", dir.display()))?;
+
     #[cfg(unix)]
     {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         use std::os::unix::fs::PermissionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("Failed to write file: {}", path.display()))?;
-        file.write_all(content.as_bytes())
-            .with_context(|| format!("Failed to write file: {}", path.display()))?;
-        // Re-harden permissions on pre-existing files (mode() only applies at creation)
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("Failed to set file permissions: {}", path.display()))?;
+        tmp.as_file()
+            .write_all(content.as_bytes())
+            .with_context(|| format!("Failed to write temp file: {}", tmp.path().display()))?;
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("Failed to set permissions: {}", tmp.path().display()))?;
     }
 
     #[cfg(not(unix))]
     {
-        std::fs::write(path, content)
-            .with_context(|| format!("Failed to write file: {}", path.display()))?;
+        std::fs::write(tmp.path(), content)
+            .with_context(|| format!("Failed to write temp file: {}", tmp.path().display()))?;
     }
+
+    // Atomic rename — either succeeds completely or leaves old file intact
+    tmp.persist(path)
+        .with_context(|| format!("Failed to persist file: {}", path.display()))?;
 
     Ok(())
 }
@@ -615,6 +617,41 @@ mod tests {
         assert_eq!(meta.permissions().mode() & 0o777, 0o600);
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, "updated content");
+    }
+
+    #[test]
+    fn write_secure_file_atomic_no_temp_residue() {
+        // Verify that write_secure_file leaves no temp files behind
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("atomic-test.json");
+
+        write_secure_file(&path, "content1").unwrap();
+        write_secure_file(&path, "content2").unwrap();
+
+        // Only the target file should exist — no leftover .tmp files
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "should have exactly one file, found: {:?}",
+            entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "content2", "should contain latest write");
+    }
+
+    #[test]
+    fn write_secure_file_creates_new_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("brand-new.json");
+        assert!(!path.exists());
+
+        write_secure_file(&path, "hello").unwrap();
+        assert!(path.exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
     }
 
     #[test]

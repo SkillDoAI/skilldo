@@ -3,6 +3,23 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.14
+
+### Added
+- **Windows e2e dry-run smoke test** — CI now clones `six` and runs the full pipeline with mock LLM on Windows, catching path handling and collection regressions
+- **Workspace member native dep scanning** — `detect_native_deps()` now scans workspace member crates when invoked from a workspace root, with path traversal guard
+- **`rust-version = "1.87"` in Cargo.toml** — declares minimum supported Rust version
+
+### Fixed
+- **Container secret redaction** — container executor now calls `redact_secrets()` on stdout/stderr, preventing secret leaks via setup commands, package installers, or generated test output
+- **`skilldo review` nested frontmatter** — reads `ecosystem:` under indented `metadata:` block, fixing "Cannot determine ecosystem" error on canonical SKILL.md output
+- **Java dep failure misattribution** — compilation errors now note when dependencies failed to fetch (Maven timeout/failure), preventing the retry loop from rewriting correct SKILL.md
+- **Java compilation redaction** — early return path now calls `redact_secrets()`, consistent with all other execution paths
+- **JS version fallback** — changed from `"0.0.0"` to `"unknown"` so missing versions aren't misinterpreted as real
+- **Telemetry CSV newlines** — field values now have newlines replaced with spaces, preventing multiline corruption during header migration
+- **OAuth atomic writes** — token files written via temp file + rename, preventing truncated files from interrupted writes
+- **Windows tests gate CI** — removed `continue-on-error` since all 2800 tests pass
+
 ## 0.5.13
 
 ### Added

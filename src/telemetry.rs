@@ -115,10 +115,13 @@ fn is_leap(y: i32) -> bool {
 
 /// Escape a field for CSV: quote if it contains comma, quote, or newline.
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+    // Replace newlines with spaces — telemetry fields should be single-line to prevent
+    // CSV migration corruption (migrate_header_if_stale splits on physical lines).
+    let s = s.replace('\n', " ").replace('\r', "");
+    if s.contains(',') || s.contains('"') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
-        s.to_string()
+        s
     }
 }
 
@@ -365,8 +368,9 @@ mod tests {
 
     #[test]
     fn test_csv_escape_with_newline() {
+        // Newlines replaced with spaces to prevent CSV migration corruption
         let escaped = csv_escape("line1\nline2");
-        assert_eq!(escaped, "\"line1\nline2\"");
+        assert_eq!(escaped, "line1 line2");
     }
 
     #[test]
@@ -571,8 +575,82 @@ mod tests {
 
     #[test]
     fn test_csv_escape_carriage_return() {
+        // Carriage returns stripped to prevent CSV corruption
         let escaped = csv_escape("line1\rline2");
-        assert_eq!(escaped, "\"line1\rline2\"");
+        assert_eq!(escaped, "line1line2");
+    }
+
+    #[test]
+    fn test_csv_escape_newline_with_comma() {
+        // Newlines replaced with spaces, then comma triggers quoting
+        let escaped = csv_escape("hello\nworld,foo");
+        assert_eq!(escaped, "\"hello world,foo\"");
+    }
+
+    #[test]
+    fn test_csv_escape_newline_with_quote() {
+        // Newlines replaced with spaces, then quote triggers quoting + doubling
+        let escaped = csv_escape("line1\nhas\"quote");
+        assert_eq!(escaped, "\"line1 has\"\"quote\"");
+    }
+
+    #[test]
+    fn test_csv_escape_cr_and_lf_combined() {
+        // \r\n should become just a space (CR stripped, LF→space)
+        let escaped = csv_escape("line1\r\nline2");
+        assert_eq!(escaped, "line1 line2");
+    }
+
+    #[test]
+    fn test_csv_escape_plain_text_no_newlines() {
+        // Plain text without special chars passes through unchanged
+        let escaped = csv_escape("simple text");
+        assert_eq!(escaped, "simple text");
+    }
+
+    #[test]
+    fn test_migrate_header_stale_with_data_rows_directly() {
+        // Directly test migrate_header_if_stale with a stale header and data rows.
+        // This exercises the `rest.is_empty()` false branch (line 230).
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+        let old_header = "language,library,library_version,provider,model,test_provider,test_model,review_provider,review_model,max_retries,retries_used,review_retries_used,passed,failed_stage,failure_reason,duration_secs,timestamp,skilldo_version,review_degraded";
+        let row1 =
+            "rust,serde,1.0,anthropic,claude,,,,,3,0,0,true,,,1.0,2024-01-01T00:00:00Z,0.1.8,false";
+        let row2 = "go,chi,5.0,openai,gpt-4,,,,,3,1,0,true,,,2.0,2024-01-02T00:00:00Z,0.1.8,true";
+        fs::write(&csv_path, format!("{old_header}\n{row1}\n{row2}\n")).unwrap();
+
+        migrate_header_if_stale(&csv_path).unwrap();
+
+        let content = fs::read_to_string(&csv_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3, "header + 2 data rows");
+        assert_eq!(lines[0], RunRecord::csv_header());
+        // Data rows should be trimmed to new column count (no review_degraded)
+        let header_cols = lines[0].matches(',').count() + 1;
+        for (i, line) in lines.iter().enumerate().skip(1) {
+            let cols = line.matches(',').count() + 1;
+            assert_eq!(
+                cols, header_cols,
+                "row {i} should match header column count"
+            );
+        }
+    }
+
+    #[test]
+    fn test_migrate_header_current_is_noop() {
+        // When the header is already current, no migration needed
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("runs.csv");
+        let header = RunRecord::csv_header();
+        let row = "rust,serde,1.0,anthropic,claude,,,,,3,0,0,true,,,1.0,2024-01-01T00:00:00Z,0.1.9";
+        let original = format!("{header}\n{row}\n");
+        fs::write(&csv_path, &original).unwrap();
+
+        migrate_header_if_stale(&csv_path).unwrap();
+
+        let after = fs::read_to_string(&csv_path).unwrap();
+        assert_eq!(after, original, "current header should not trigger rewrite");
     }
 
     #[test]

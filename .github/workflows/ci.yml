@@ -73,7 +73,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -85,10 +85,20 @@ jobs:
         with:
           version: "0.11.2"
       - run: cargo check --all-targets
-      # Run lib tests on Windows to surface platform-specific failures early
-      - name: run tests (informational)
+      - name: run tests
         run: cargo test --lib
-        continue-on-error: true  # Windows tests not yet fully ported — tracking failures without blocking
+      # Dry-run e2e: exercises full pipeline (collection, detection, config) without LLM
+      - name: e2e smoke test (dry-run)
+        run: |
+          git clone --depth 1 --branch 1.17.0 https://github.com/benjaminp/six.git $env:TEMP\six
+          cargo run -- generate $env:TEMP\six --language python --dry-run --best-effort -o $env:TEMP\test-SKILL.md
+      - name: Upload dry-run output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-e2e-dryrun
+          path: ${{ env.TEMP }}\test-SKILL.md
+          if-no-files-found: ignore
 
   fmt:
     name: cargo fmt

@@ -127,13 +127,14 @@ impl JsHandler {
     }
 
     /// Extract version from package.json `version` field.
-    /// Returns `"0.0.0"` if the field is missing (common in private/workspace packages).
+    /// Returns `"unknown"` if the field is missing (common in private/workspace packages).
     pub fn extract_version(&self) -> Result<String> {
         let pkg = self.read_package_json()?;
         Ok(pkg["version"]
             .as_str()
+            .filter(|v| !v.is_empty())
             .map(String::from)
-            .unwrap_or_else(|| "0.0.0".to_string()))
+            .unwrap_or_else(|| "unknown".to_string()))
     }
 
     /// Detect license from package.json `license` field, with fallback to LICENSE file.
@@ -637,12 +638,25 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_version_missing_defaults_to_zero() {
+    fn test_extract_version_missing_defaults_to_unknown() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("package.json"), r#"{"name": "foo"}"#).unwrap();
 
         let handler = JsHandler::new(dir.path());
-        assert_eq!(handler.extract_version().unwrap(), "0.0.0");
+        assert_eq!(handler.extract_version().unwrap(), "unknown");
+    }
+
+    #[test]
+    fn test_extract_version_empty_string_defaults_to_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name": "foo", "version": ""}"#,
+        )
+        .unwrap();
+
+        let handler = JsHandler::new(dir.path());
+        assert_eq!(handler.extract_version().unwrap(), "unknown");
     }
 
     #[test]

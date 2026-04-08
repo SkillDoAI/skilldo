@@ -27,7 +27,7 @@ pub fn set_redact_vars(vars: Vec<String>) {
     }
 }
 
-fn get_redact_vars_snapshot() -> Vec<String> {
+pub(super) fn get_redact_vars_snapshot() -> Vec<String> {
     REDACT_VARS.read().map(|v| v.clone()).unwrap_or_default()
 }
 
@@ -46,7 +46,7 @@ pub(super) async fn is_tool_available(cmd: &str, arg: &str) -> bool {
 /// Redact env var values from output strings.
 /// Takes an explicit list of env var names from config — no heuristic guessing.
 /// Values are replaced with `***REDACTED***` to prevent leaking in CI logs.
-fn redact_secrets(text: &str, redact_vars: &[String]) -> String {
+pub(super) fn redact_secrets(text: &str, redact_vars: &[String]) -> String {
     if redact_vars.is_empty() {
         return text.to_string();
     }
@@ -1266,7 +1266,34 @@ impl LanguageExecutor for JavaExecutor {
             Ok(output) if !output.status.success() => {
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 debug!("Java compilation failed");
-                return Ok(ExecutionResult::Fail(stderr));
+                // Check if Maven deps were expected but missing — indicates infrastructure
+                // failure (Maven timeout, bad coords) not a code/import error.
+                // Use pom.xml existence as the signal (only created for fetchable deps,
+                // excludes local-install-only artifacts).
+                let maven_fetch_attempted = env.temp_dir.path().join("pom.xml").exists();
+                let jars_present = deps_dir.is_dir()
+                    && std::fs::read_dir(&deps_dir)
+                        .map(|d| {
+                            d.flatten().any(|e| {
+                                e.path().extension().and_then(|x| x.to_str()) == Some("jar")
+                            })
+                        })
+                        .unwrap_or(false);
+                let msg = if maven_fetch_attempted
+                    && !jars_present
+                    && stderr.contains("does not exist")
+                {
+                    format!(
+                        "NOTE: Dependencies were declared but no jars found in deps/. \
+                         Maven may have failed to fetch them. The compilation errors \
+                         below are likely caused by missing jars, not wrong imports.\n\n{}",
+                        stderr
+                    )
+                } else {
+                    stderr
+                };
+                let msg = redact_secrets(&msg, &get_redact_vars_snapshot());
+                return Ok(ExecutionResult::Fail(msg));
             }
             Err(e) => {
                 if crate::error::SkillDoError::is_timeout(&e) {
@@ -2269,6 +2296,122 @@ func main() {
         );
     }
 
+    #[tokio::test]
+    async fn test_java_compilation_failure_missing_jars_note() {
+        // When pom.xml exists (Maven fetch was attempted) but deps/ has no jars,
+        // and stderr contains "does not exist", the error should include an
+        // informational note about missing jars.
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        // Simulate Maven-attempted state: pom.xml present, deps/ has non-jar files only
+        fs::write(
+            temp_dir.path().join("pom.xml"),
+            "<project><dependencies/></project>",
+        )
+        .unwrap();
+        let deps_dir = temp_dir.path().join("deps");
+        fs::create_dir_all(&deps_dir).unwrap();
+        // Add a non-jar file so the iterator body (jar check) is exercised
+        fs::write(deps_dir.join("maven-metadata.xml"), "<metadata/>").unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec!["com.google.code.gson:gson:2.10".to_string()],
+        };
+        // Code that imports a package not on classpath — javac emits "does not exist"
+        let code = r#"import com.google.gson.Gson;
+public class Main {
+    public static void main(String[] args) {
+        Gson g = new Gson();
+    }
+}
+"#;
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail(), "should fail to compile");
+        if let ExecutionResult::Fail(msg) = &result {
+            assert!(
+                msg.contains("NOTE: Dependencies were declared but no jars found"),
+                "should include missing-jars note, got: {msg}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_java_compilation_failure_with_jars_present_no_note() {
+        // When pom.xml exists AND jars are present, the note should NOT appear
+        // (jars were fetched, so the compile error is a real code issue)
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(
+            temp_dir.path().join("pom.xml"),
+            "<project><dependencies/></project>",
+        )
+        .unwrap();
+        let deps_dir = temp_dir.path().join("deps");
+        fs::create_dir_all(&deps_dir).unwrap();
+        // Add a .jar file so jars_present = true
+        fs::write(deps_dir.join("fake-lib.jar"), "not-a-real-jar").unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec!["com.example:fake-lib:1.0".to_string()],
+        };
+        let code = r#"import com.nonexistent.Foo;
+public class Main {
+    public static void main(String[] args) {
+        Foo f = new Foo();
+    }
+}
+"#;
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
+        if let ExecutionResult::Fail(msg) = &result {
+            assert!(
+                !msg.contains("NOTE: Dependencies were declared"),
+                "should NOT include missing-jars note when jars exist, got: {msg}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_java_compilation_failure_without_missing_jars_note() {
+        // When there's no pom.xml, the note should NOT appear even if deps/ is empty
+        if !is_tool_available("javac", "-version").await {
+            return;
+        }
+        let executor = JavaExecutor::new();
+        let temp_dir = TempDir::new().unwrap();
+        let env = ExecutionEnv {
+            temp_dir,
+            interpreter_path: None,
+            container_name: None,
+            dependencies: vec![],
+        };
+        let code = r#"import com.nonexistent.Foo;
+public class Main {
+    public static void main(String[] args) {
+        Foo f = new Foo();
+    }
+}
+"#;
+        let result = executor.run_code(&env, code).await.unwrap();
+        assert!(result.is_fail());
+        if let ExecutionResult::Fail(msg) = &result {
+            assert!(
+                !msg.contains("NOTE: Dependencies were declared"),
+                "should NOT include missing-jars note without pom.xml, got: {msg}"
+            );
+        }
+    }
+
     // =========================================================================
     // Local-install logic tests (pure logic — no external tool invocations)
     // =========================================================================
@@ -2388,6 +2531,39 @@ edition = "2021"
         assert!(
             line.starts_with("my-crate = "),
             "should start with dep name: {line}"
+        );
+    }
+
+    #[test]
+    fn test_cargo_structured_dep_local_path_version_only_no_features() {
+        use crate::pipeline::collector::{DepSource, StructuredDep};
+
+        // When the raw_spec is a table with only "version" (no features/default-features),
+        // the extras extraction should return None and emit the simpler path format.
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let dep = StructuredDep {
+            name: "my-crate".to_string(),
+            raw_spec: Some("{ version = \"2.0\" }".to_string()),
+            source: DepSource::Manifest,
+        };
+        let line = format_cargo_dep_line(&dep, Some(&tmp.path().to_string_lossy()));
+        assert!(
+            line.contains("path = "),
+            "local dep should use path: {line}"
+        );
+        assert!(
+            !line.contains("features"),
+            "should not contain features key: {line}"
+        );
+        assert!(
+            !line.contains("default-features"),
+            "should not contain default-features key: {line}"
         );
     }
 
@@ -4119,6 +4295,60 @@ dependencies = []
         assert_eq!(install_args[0], source);
         assert_eq!(install_args[1], "express");
         assert_eq!(install_args[2], "lodash");
+    }
+
+    // --- extract_cargo_package_name edge cases ---
+
+    #[test]
+    fn test_extract_cargo_package_name_missing_dir() {
+        // Non-existent source directory should return None
+        assert!(extract_cargo_package_name("/nonexistent/path/to/crate").is_none());
+    }
+
+    #[test]
+    fn test_extract_cargo_package_name_no_package_section() {
+        // Cargo.toml without [package] (e.g., workspace root)
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n",
+        )
+        .unwrap();
+        assert!(extract_cargo_package_name(&tmp.path().to_string_lossy()).is_none());
+    }
+
+    #[test]
+    fn test_extract_cargo_package_name_valid() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-lib\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_cargo_package_name(&tmp.path().to_string_lossy()),
+            Some("my-lib".to_string())
+        );
+    }
+
+    // --- strip_optional_from_dep_spec additional paths ---
+
+    #[test]
+    fn test_strip_optional_no_optional_passthrough() {
+        // Spec without "optional" should be returned as-is
+        let spec = "{ version = \"1.0\", features = [\"derive\"] }";
+        let result = strip_optional_from_dep_spec(spec);
+        assert_eq!(result, spec);
+    }
+
+    #[test]
+    fn test_strip_optional_leaves_multi_key_table() {
+        // When stripping optional leaves multiple keys, should return stripped spec
+        let spec = "{ version = \"1.0\", features = [\"derive\"], optional = true }";
+        let result = strip_optional_from_dep_spec(spec);
+        assert!(!result.contains("optional"));
+        assert!(result.contains("version"));
+        assert!(result.contains("features"));
     }
 
     // --- set_redact_vars poisoned RwLock path ---
