@@ -47,6 +47,11 @@ pub struct GenerateOptions {
     pub no_telemetry: bool,
     pub dry_run: bool,
     pub debug_stage_files: Option<String>,
+    /// Directory containing cached `1-extract.md`, `2-map.md`, `3-learn.md`
+    /// from a prior run. When set, those stages are skipped and their cached
+    /// content is used instead — lets you iterate on the create prompt
+    /// without repaying for the upstream LLM calls.
+    pub replay_from: Option<String>,
 }
 
 pub async fn run(opts: GenerateOptions) -> Result<()> {
@@ -82,8 +87,43 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         no_telemetry,
         dry_run,
         debug_stage_files,
+        replay_from,
     } = opts;
     let repo_path = Path::new(&path);
+
+    // If --replay-from is set, load the cached extract/map/learn outputs now
+    // so we can fail fast if any are missing.
+    let replay_stages: Option<(String, String, String)> = if let Some(dir) = replay_from.as_deref()
+    {
+        let dir = Path::new(dir);
+        if !dir.is_dir() {
+            anyhow::bail!("--replay-from: directory does not exist: {}", dir.display());
+        }
+        let load = |name: &str| -> Result<String> {
+            let path = dir.join(name);
+            fs::read_to_string(&path).map_err(|e| {
+                anyhow::anyhow!(
+                    "--replay-from: failed to read {} — run `skilldo generate` with \
+                     `--debug-stage-files {}` first to populate it: {e}",
+                    path.display(),
+                    dir.display()
+                )
+            })
+        };
+        let api_surface = load("1-extract.md")?;
+        let patterns = load("2-map.md")?;
+        let context = load("3-learn.md")?;
+        info!(
+            "Replay mode: loaded {} + {} + {} chars from {}",
+            api_surface.len(),
+            patterns.len(),
+            context.len(),
+            dir.display()
+        );
+        Some((api_surface, patterns, context))
+    } else {
+        None
+    };
 
     // Load config (explicit path, CWD, target repo, git root, or user config dir)
     let mut config = Config::load_with_path_and_repo(config_path, Some(repo_path))?;
@@ -505,6 +545,10 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
 
     if let Some(ref skill) = existing_skill {
         generator = generator.with_existing_skill(skill.clone());
+    }
+
+    if let Some((api_surface, patterns, context)) = replay_stages {
+        generator = generator.with_replay_stages(api_surface, patterns, context);
     }
 
     // Set up secret redaction for test agent output.

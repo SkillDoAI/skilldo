@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, info};
 
 use super::client::LlmClient;
 use crate::util::SecretString;
@@ -470,6 +470,27 @@ impl LlmClient for OpenAIClient {
                 .choices
                 .first()
                 .context("No choices in OpenAI response")?;
+
+            // Log reasoning/thinking tokens when present (useful for prompt debugging).
+            // Full reasoning at debug level, summary at info.
+            // Also dump to debug stage dir if set.
+            if let Some(ref reasoning) = choice.message.reasoning {
+                if !reasoning.is_empty() {
+                    info!("Thinking: {} chars of reasoning received", reasoning.len());
+                    debug!("Full reasoning:\n{}", reasoning);
+                    // Write reasoning to debug stage dir if available.
+                    // SKILLDO_DEBUG_STAGE names the current stage (e.g. "1-extract").
+                    if let Ok(dir) = std::env::var("SKILLDO_DEBUG_DIR") {
+                        let dir = std::path::Path::new(&dir);
+                        if dir.is_dir() {
+                            let stage = std::env::var("SKILLDO_DEBUG_STAGE")
+                                .unwrap_or_else(|_| "unknown".to_string());
+                            let path = dir.join(format!("{stage}-reasoning.md"));
+                            let _ = std::fs::write(&path, reasoning);
+                        }
+                    }
+                }
+            }
 
             match &choice.message.content {
                 Some(content) if !content.is_empty() => Ok(content.clone()),

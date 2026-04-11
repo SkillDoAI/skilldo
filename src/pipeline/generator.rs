@@ -216,6 +216,11 @@ pub struct Generator {
     existing_skill: Option<String>, // Existing SKILL.md for update mode
     model_name: Option<String>,     // For metadata.generated-by frontmatter field
     debug_stage_dir: Option<std::path::PathBuf>, // Dump stage outputs here
+    /// Pre-computed (api_surface, patterns, context) from a previous run's
+    /// debug stage dir. When set, the pipeline skips extract/map/learn and
+    /// uses these values directly — lets you iterate on the create stage
+    /// without repaying for the upstream LLM calls.
+    replay_stages: Option<(String, String, String)>,
     security_context: crate::config::SecurityContext,
 }
 
@@ -241,8 +246,22 @@ impl Generator {
             existing_skill: None,
             model_name: None,
             debug_stage_dir: None,
+            replay_stages: None,
             security_context: crate::config::SecurityContext::Default,
         }
+    }
+
+    /// Preload extract/map/learn outputs from a previous run so the next
+    /// generation skips those three LLM calls entirely and jumps straight
+    /// to the create stage. Used for prompt-tuning iteration loops.
+    pub fn with_replay_stages(
+        mut self,
+        api_surface: String,
+        patterns: String,
+        context: String,
+    ) -> Self {
+        self.replay_stages = Some((api_surface, patterns, context));
+        self
     }
 
     pub fn with_security_context(mut self, ctx: crate::config::SecurityContext) -> Self {
@@ -381,6 +400,8 @@ impl Generator {
                     self.debug_stage_dir = None;
                 } else {
                     info!("Debug stage files: {}", dir.display());
+                    // Set env var so LLM clients can dump reasoning tokens here
+                    std::env::set_var("SKILLDO_DEBUG_DIR", &dir);
                     self.debug_stage_dir = Some(dir);
                 }
             }
@@ -461,58 +482,73 @@ impl Generator {
             data.source_content.clone()
         };
 
-        // extract/map/learn are independent — run them in parallel
-        info!("extract: Extracting API surface...");
-        info!("map: Extracting usage patterns...");
-        info!("learn: Extracting conventions and pitfalls...");
+        // extract/map/learn — either replay from a cached prior run or call the LLMs.
+        let (api_surface, patterns, context) =
+            if let Some((ref api, ref pat, ref ctx)) = self.replay_stages {
+                info!(
+                    "extract/map/learn: REPLAY MODE — loaded {} + {} + {} chars from cache, \
+                 skipping LLM calls",
+                    api.len(),
+                    pat.len(),
+                    ctx.len()
+                );
+                (api.clone(), pat.clone(), ctx.clone())
+            } else {
+                info!("extract: Extracting API surface...");
+                info!("map: Extracting usage patterns...");
+                info!("learn: Extracting conventions and pitfalls...");
 
-        let extract_prompt = prompts_v2::extract_prompt(
-            &data.package_name,
-            &data.version,
-            &source_with_context,
-            data.source_file_count,
-            self.prompts_config.extract_custom.as_deref(),
-            self.prompts_config.is_overwrite("extract"),
-            &data.language,
-        );
-        let map_prompt = prompts_v2::map_prompt(
-            &data.package_name,
-            &data.version,
-            &examples_and_tests,
-            self.prompts_config.map_custom.as_deref(),
-            self.prompts_config.is_overwrite("map"),
-            &data.language,
-        );
-        let learn_prompt = prompts_v2::learn_prompt(
-            &data.package_name,
-            &data.version,
-            &docs_and_changelog,
-            self.prompts_config.learn_custom.as_deref(),
-            self.prompts_config.is_overwrite("learn"),
-            &data.language,
-        );
+                let extract_prompt = prompts_v2::extract_prompt(
+                    &data.package_name,
+                    &data.version,
+                    &source_with_context,
+                    data.source_file_count,
+                    self.prompts_config.extract_custom.as_deref(),
+                    self.prompts_config.is_overwrite("extract"),
+                    &data.language,
+                );
+                let map_prompt = prompts_v2::map_prompt(
+                    &data.package_name,
+                    &data.version,
+                    &examples_and_tests,
+                    self.prompts_config.map_custom.as_deref(),
+                    self.prompts_config.is_overwrite("map"),
+                    &data.language,
+                );
+                let learn_prompt = prompts_v2::learn_prompt(
+                    &data.package_name,
+                    &data.version,
+                    &docs_and_changelog,
+                    self.prompts_config.learn_custom.as_deref(),
+                    self.prompts_config.is_overwrite("learn"),
+                    &data.language,
+                );
 
-        let extract_client = self.get_client("extract");
-        let map_client = self.get_client("map");
-        let learn_client = self.get_client("learn");
+                let extract_client = self.get_client("extract");
+                let map_client = self.get_client("map");
+                let learn_client = self.get_client("learn");
 
-        let (api_surface, patterns, context) = if self.parallel_extraction {
-            info!("Running extract/map/learn in parallel...");
-            tokio::try_join!(
-                extract_client.complete(&extract_prompt),
-                map_client.complete(&map_prompt),
-                learn_client.complete(&learn_prompt),
-            )?
-        } else {
-            info!("Running extract/map/learn sequentially...");
-            let api_surface = extract_client.complete(&extract_prompt).await?;
-            info!("extract: complete");
-            let patterns = map_client.complete(&map_prompt).await?;
-            info!("map: complete");
-            let context = learn_client.complete(&learn_prompt).await?;
-            info!("learn: complete");
-            (api_surface, patterns, context)
-        };
+                if self.parallel_extraction {
+                    info!("Running extract/map/learn in parallel...");
+                    tokio::try_join!(
+                        extract_client.complete(&extract_prompt),
+                        map_client.complete(&map_prompt),
+                        learn_client.complete(&learn_prompt),
+                    )?
+                } else {
+                    info!("Running extract/map/learn sequentially...");
+                    std::env::set_var("SKILLDO_DEBUG_STAGE", "1-extract");
+                    let api_surface = extract_client.complete(&extract_prompt).await?;
+                    info!("extract: complete");
+                    std::env::set_var("SKILLDO_DEBUG_STAGE", "2-map");
+                    let patterns = map_client.complete(&map_prompt).await?;
+                    info!("map: complete");
+                    std::env::set_var("SKILLDO_DEBUG_STAGE", "3-learn");
+                    let context = learn_client.complete(&learn_prompt).await?;
+                    info!("learn: complete");
+                    (api_surface, patterns, context)
+                }
+            };
 
         info!("extract/map/learn: All extractions complete");
 
@@ -538,6 +574,7 @@ impl Generator {
             self.get_client("create").complete(&update_prompt).await?
         } else {
             // Normal mode: synthesize from scratch
+            std::env::set_var("SKILLDO_DEBUG_STAGE", "4-create");
             info!("create: Synthesizing SKILL.md...");
             let synthesis_prompt = prompts_v2::create_prompt(
                 &data.package_name,
@@ -816,6 +853,10 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {
                 last_review_attempt = review_attempt;
+                std::env::set_var(
+                    "SKILLDO_DEBUG_STAGE",
+                    format!("5-review-attempt{}", review_attempt + 1),
+                );
                 info!(
                     "review: Checking accuracy and safety (attempt {}/{})",
                     review_attempt + 1,
