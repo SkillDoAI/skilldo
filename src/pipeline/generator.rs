@@ -556,11 +556,14 @@ impl Generator {
         self.dump_stage("2-map.md", &patterns);
         self.dump_stage("3-learn.md", &context);
 
-        // create: Synthesize SKILL.md
+        // create: Synthesize SKILL.md using system prompt split.
+        // System = rules, custom instructions, language hints (high-priority directive channel).
+        // User = data from stages 1-3 (evidence to process).
+        std::env::set_var("SKILLDO_DEBUG_STAGE", "4-create");
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
             // Update mode: patch existing SKILL.md
             info!("create: Updating existing SKILL.md...");
-            let update_prompt = prompts_v2::create_update_prompt(
+            let parts = prompts_v2::create_update_prompt_parts(
                 &data.package_name,
                 &data.version,
                 existing,
@@ -571,12 +574,14 @@ impl Generator {
                 &data.dependencies,
                 self.prompts_config.create_custom.as_deref(),
             );
-            self.get_client("create").complete(&update_prompt).await?
+            self.dump_stage("4-create-system.md", &parts.system);
+            self.get_client("create")
+                .complete_with_system(&parts.system, &parts.user)
+                .await?
         } else {
             // Normal mode: synthesize from scratch
-            std::env::set_var("SKILLDO_DEBUG_STAGE", "4-create");
             info!("create: Synthesizing SKILL.md...");
-            let synthesis_prompt = prompts_v2::create_prompt(
+            let parts = prompts_v2::create_prompt_parts(
                 &data.package_name,
                 &data.version,
                 data.license.as_deref(),
@@ -589,8 +594,9 @@ impl Generator {
                 self.prompts_config.is_overwrite("create"),
                 &data.dependencies,
             );
+            self.dump_stage("4-create-system.md", &parts.system);
             self.get_client("create")
-                .complete(&synthesis_prompt)
+                .complete_with_system(&parts.system, &parts.user)
                 .await?
         };
 

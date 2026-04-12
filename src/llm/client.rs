@@ -12,6 +12,24 @@ use tracing::warn;
 pub trait LlmClient: Send + Sync {
     /// Send a prompt to the LLM and return the generated text.
     async fn complete(&self, prompt: &str) -> Result<String>;
+
+    /// Send a prompt with a separate system-level instruction.
+    ///
+    /// System prompts get higher attention priority from models than user
+    /// content — use this for rules, constraints, and directives that must
+    /// not be drowned out by large data payloads in the user message.
+    ///
+    /// Default implementation concatenates system + user for providers that
+    /// haven't implemented native system prompt support yet. Override in
+    /// each provider to use the native mechanism (Anthropic `system` field,
+    /// OpenAI `role: "system"`, Gemini `systemInstruction`, etc.).
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        if system.is_empty() {
+            self.complete(user).await
+        } else {
+            self.complete(&format!("{}\n\n{}", system, user)).await
+        }
+    }
 }
 
 /// Wraps any LlmClient with retry logic for transient network errors.
@@ -34,10 +52,26 @@ impl RetryClient {
 #[async_trait]
 impl LlmClient for RetryClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        self.retry_call(|client| client.complete(prompt)).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.retry_call(|client| client.complete_with_system(system, user))
+            .await
+    }
+}
+
+impl RetryClient {
+    /// Generic retry loop used by both `complete` and `complete_with_system`.
+    async fn retry_call<'a, F, Fut>(&'a self, make_call: F) -> Result<String>
+    where
+        F: Fn(&'a dyn LlmClient) -> Fut,
+        Fut: std::future::Future<Output = Result<String>>,
+    {
         let mut last_error = None;
 
         for attempt in 0..=self.max_retries {
-            match self.inner.complete(prompt).await {
+            match make_call(self.inner.as_ref()).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
                     // Typed check: catches SkillDoError::Timeout from run_cmd_with_timeout.

@@ -90,6 +90,8 @@ struct AnthropicRequest {
     model: String,
     max_tokens: u32,
     messages: Vec<AnthropicMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -143,9 +145,9 @@ impl AnthropicClient {
     }
 }
 
-#[async_trait]
-impl LlmClient for AnthropicClient {
-    async fn complete(&self, prompt: &str) -> Result<String> {
+impl AnthropicClient {
+    /// Shared implementation for both complete() and complete_with_system().
+    async fn send_request(&self, prompt: &str, system: Option<&str>) -> Result<String> {
         if self.max_tokens == 0 {
             anyhow::bail!(
                 "Anthropic requires max_tokens >= 1. Set a positive value in config (default: 8192)."
@@ -158,9 +160,18 @@ impl LlmClient for AnthropicClient {
                 role: "user".to_string(),
                 content: prompt.to_string(),
             }],
+            system: system.filter(|s| !s.is_empty()).map(|s| s.to_string()),
         };
 
-        debug!("Calling Anthropic API with model: {}", self.model);
+        if system.is_some() {
+            debug!(
+                "Calling Anthropic API with model: {} (system prompt: {} chars)",
+                self.model,
+                system.unwrap_or("").len()
+            );
+        } else {
+            debug!("Calling Anthropic API with model: {}", self.model);
+        }
 
         let mut req = self
             .client
@@ -205,6 +216,17 @@ impl LlmClient for AnthropicClient {
             .first()
             .map(|c| c.text.clone())
             .context("No content in Anthropic response")
+    }
+}
+
+#[async_trait]
+impl LlmClient for AnthropicClient {
+    async fn complete(&self, prompt: &str) -> Result<String> {
+        self.send_request(prompt, None).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.send_request(user, Some(system)).await
     }
 }
 
@@ -255,6 +277,16 @@ struct OpenAIMessage {
 }
 
 impl OpenAIMessage {
+    fn system(text: &str) -> Self {
+        Self {
+            role: "system".to_string(),
+            content: Some(text.to_string()),
+            reasoning: None,
+            reasoning_details: None,
+            refusal: None,
+        }
+    }
+
     fn user(prompt: &str) -> Self {
         Self {
             role: "user".to_string(),
@@ -329,6 +361,17 @@ impl OpenAIClient {
 #[async_trait]
 impl LlmClient for OpenAIClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        self.send_openai_request(prompt, None).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.send_openai_request(user, Some(system)).await
+    }
+}
+
+impl OpenAIClient {
+    /// Shared implementation for both `complete()` and `complete_with_system()`.
+    async fn send_openai_request(&self, prompt: &str, system: Option<&str>) -> Result<String> {
         // GPT-5+ models use max_completion_tokens instead of max_tokens.
         // max_tokens = 0 means "omit from request, let provider decide".
         // Normalize model name: strip provider prefix (e.g., "openai/gpt-5.1" → "gpt-5.1")
@@ -341,18 +384,34 @@ impl LlmClient for OpenAIClient {
             (Some(self.max_tokens), None)
         };
 
+        // Build messages — prepend system message if provided.
+        let mut messages = Vec::new();
+        if let Some(sys) = system.filter(|s| !s.is_empty()) {
+            messages.push(OpenAIMessage::system(sys));
+        }
+        messages.push(OpenAIMessage::user(prompt));
+
         let request = OpenAIRequest {
             model: self.model.clone(),
-            messages: vec![OpenAIMessage::user(prompt)],
+            messages,
             temperature: 0.7,
             max_tokens,
             max_completion_tokens,
         };
 
-        debug!(
-            "Calling OpenAI-compatible API at {} with model: {}",
-            self.base_url, self.model
-        );
+        if system.is_some() {
+            debug!(
+                "Calling OpenAI-compatible API at {} with model: {} (system prompt: {} chars)",
+                self.base_url,
+                self.model,
+                system.unwrap_or("").len()
+            );
+        } else {
+            debug!(
+                "Calling OpenAI-compatible API at {} with model: {}",
+                self.base_url, self.model
+            );
+        }
 
         // Resolve endpoint URL and detect Responses API format.
         let base = self.base_url.trim_end_matches('/');
@@ -367,10 +426,14 @@ impl LlmClient for OpenAIClient {
         };
 
         // Build request body — Responses API uses a different format than Chat Completions.
+        // For Responses API, system prompt goes in the `instructions` field.
         let body = if is_responses_api {
+            let instructions = system
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Follow the user's instructions precisely.");
             let responses_req = ResponsesRequest {
                 model: self.model.clone(),
-                instructions: "Follow the user's instructions precisely.".to_string(),
+                instructions: instructions.to_string(),
                 input: vec![ResponsesInputMessage {
                     msg_type: "message".to_string(),
                     role: "user".to_string(),
@@ -530,6 +593,8 @@ struct GeminiRequest {
     contents: Vec<GeminiContent>,
     #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
     generation_config: Option<GeminiGenerationConfig>,
+    #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<GeminiContent>,
 }
 
 #[derive(Debug, Serialize)]
@@ -624,6 +689,16 @@ impl GeminiClient {
 #[async_trait]
 impl LlmClient for GeminiClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        self.send_gemini_request(prompt, None).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.send_gemini_request(user, Some(system)).await
+    }
+}
+
+impl GeminiClient {
+    async fn send_gemini_request(&self, prompt: &str, system: Option<&str>) -> Result<String> {
         let request = GeminiRequest {
             contents: vec![GeminiContent {
                 parts: vec![GeminiPart {
@@ -637,6 +712,11 @@ impl LlmClient for GeminiClient {
                     max_output_tokens: self.max_tokens,
                 })
             },
+            system_instruction: system.filter(|s| !s.is_empty()).map(|s| GeminiContent {
+                parts: vec![GeminiPart {
+                    text: s.to_string(),
+                }],
+            }),
         };
 
         debug!("Calling Gemini API with model: {}", self.model);
@@ -788,9 +868,22 @@ impl ChatGPTClient {
 #[async_trait]
 impl LlmClient for ChatGPTClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        self.send_responses_request(prompt, None).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.send_responses_request(user, Some(system)).await
+    }
+}
+
+impl ChatGPTClient {
+    async fn send_responses_request(&self, prompt: &str, system: Option<&str>) -> Result<String> {
+        let instructions = system
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Follow the user's instructions precisely.");
         let request = ResponsesRequest {
             model: self.model.clone(),
-            instructions: "Follow the user's instructions precisely.".to_string(),
+            instructions: instructions.to_string(),
             input: vec![ResponsesInputMessage {
                 msg_type: "message".to_string(),
                 role: "user".to_string(),
@@ -936,6 +1029,7 @@ mod tests {
                 role: "user".to_string(),
                 content: "test".to_string(),
             }],
+            system: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -943,6 +1037,8 @@ mod tests {
         assert_eq!(json["max_tokens"], 4096);
         assert_eq!(json["messages"][0]["role"], "user");
         assert_eq!(json["messages"][0]["content"], "test");
+        // system field should be omitted when None
+        assert!(json.get("system").is_none());
     }
 
     #[tokio::test]
@@ -1078,6 +1174,7 @@ mod tests {
                 }],
             }],
             generation_config: None,
+            system_instruction: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1211,6 +1308,7 @@ mod tests {
             generation_config: Some(GeminiGenerationConfig {
                 max_output_tokens: 16384,
             }),
+            system_instruction: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1643,6 +1741,7 @@ mod tests {
                     max_output_tokens: max_tokens,
                 })
             },
+            system_instruction: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1782,6 +1881,7 @@ mod tests {
                     max_output_tokens: max_tokens,
                 })
             },
+            system_instruction: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["generationConfig"]["maxOutputTokens"], 8192);
