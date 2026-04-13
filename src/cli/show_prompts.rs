@@ -85,7 +85,7 @@ pub fn run(language_str: &str, stage_filter: Option<&str>) -> anyhow::Result<()>
                 println!("{prompt}");
             }
             "create" => {
-                let prompt = prompts_v2::create_prompt(
+                let parts = prompts_v2::create_prompt_parts(
                     "<PACKAGE_NAME>",
                     "<VERSION>",
                     Some("MIT"),
@@ -98,7 +98,10 @@ pub fn run(language_str: &str, stage_filter: Option<&str>) -> anyhow::Result<()>
                     false,
                     &[],
                 );
-                println!("{prompt}");
+                println!(
+                    "=== SYSTEM PROMPT ===\n{}\n\n=== USER MESSAGE ===\n{}",
+                    parts.system, parts.user
+                );
             }
             "review" => {
                 let prompt = prompts_v2::review_verdict_prompt(

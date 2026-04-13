@@ -408,6 +408,10 @@ impl Generator {
                 }
             }
             None => {
+                // Clean up stale env vars so LLM clients don't dump reasoning
+                // tokens into a directory from a previous run.
+                std::env::remove_var("SKILLDO_DEBUG_DIR");
+                std::env::remove_var("SKILLDO_DEBUG_STAGE");
                 self.debug_stage_dir = None;
             }
         }
@@ -561,9 +565,13 @@ impl Generator {
         self.dump_stage("3-learn.md", &context);
 
         // Fact ledger: compact truth table with negative assertions from stages 1-3.
-        // In replay mode, use the cached ledger if the replay source included one.
-        // Otherwise, generate via LLM.
-        let fact_ledger = if let Some((_, _, _, Some(ref cached))) = self.replay_stages {
+        // Skip entirely in overwrite mode — the user's custom prompt replaces
+        // everything and the ledger would be discarded anyway.
+        let is_overwrite_create =
+            self.prompts_config.is_overwrite("create") && self.existing_skill.is_none();
+        let fact_ledger = if is_overwrite_create {
+            String::new()
+        } else if let Some((_, _, _, Some(ref cached))) = self.replay_stages {
             info!(
                 "facts: REPLAY MODE — loaded {} chars from cache",
                 cached.len()
@@ -3745,6 +3753,22 @@ End of analysis."#;
             gen.debug_stage_dir.is_none(),
             "debug_stage_dir should be None when None is passed"
         );
+        // The remove_var calls are exercised by the code path.
+        // We don't assert on env var state because tests run in parallel.
+    }
+
+    #[test]
+    fn test_with_debug_stage_dir_empty_string() {
+        // Empty/whitespace string should be treated as None (via the filter)
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_debug_stage_dir(Some("  ".to_string()));
+
+        assert!(
+            gen.debug_stage_dir.is_none(),
+            "empty string should result in None"
+        );
+        // The remove_var calls are exercised by the code path.
+        // We don't assert on env var state because tests run in parallel.
     }
 
     #[test]

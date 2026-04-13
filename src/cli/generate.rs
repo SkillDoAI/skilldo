@@ -2371,4 +2371,34 @@ redact_env_vars = ["FAKE_API_KEY", "ANOTHER_SECRET"]
             "error should mention missing file: {err_msg}"
         );
     }
+
+    #[tokio::test]
+    async fn test_run_replay_from_invalid_utf8_fact_ledger_fails() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+
+        // Create replay cache with valid stage files but invalid UTF-8 in facts.md
+        let replay_dir = repo.path().join("replay-cache-bad-facts");
+        fs::create_dir(&replay_dir).unwrap();
+        fs::write(replay_dir.join("1-extract.md"), "extract content").unwrap();
+        fs::write(replay_dir.join("2-map.md"), "map content").unwrap();
+        fs::write(replay_dir.join("3-learn.md"), "learn content").unwrap();
+        // Write invalid UTF-8 bytes
+        std::fs::write(replay_dir.join("facts.md"), [0xFF, 0xFE, 0x80, 0x81]).unwrap();
+
+        let result = run(GenerateOptions {
+            replay_from: Some(replay_dir.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_err(),
+            "replay-from with invalid UTF-8 facts.md should fail"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("--replay-from") && err_msg.contains("facts.md"),
+            "error should mention --replay-from and facts.md: {err_msg}"
+        );
+    }
 }

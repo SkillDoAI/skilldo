@@ -2446,4 +2446,310 @@ mod tests {
             result.err()
         );
     }
+
+    // --- Coverage: OpenAI max_tokens=0 path exercised via real request (lines 375-378) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_max_tokens_zero_end_to_end() {
+        // max_tokens=0 means "omit from request, let provider decide"
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("zero-max response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            0, // max_tokens = 0
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(
+            result.is_ok(),
+            "max_tokens=0 call failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "zero-max response");
+    }
+
+    #[tokio::test]
+    async fn test_openai_complete_gpt5_max_completion_tokens_end_to_end() {
+        // GPT-5 models use max_completion_tokens instead of max_tokens
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("gpt5 response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            format!("{}/v1", server.url()),
+            16384,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "gpt-5 call failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "gpt5 response");
+    }
+
+    // --- Coverage: OpenAI extra_body merge via real request (lines 452-458) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_with_extra_body_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("extra body response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let mut extra = std::collections::HashMap::new();
+        extra.insert(
+            "reasoning".to_string(),
+            serde_json::json!({"effort": "high"}),
+        );
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap()
+        .with_extra_body(extra);
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "extra_body call failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "extra body response");
+    }
+
+    // --- Coverage: OpenAI extra_headers with protected header skip (lines 472-476) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_with_extra_headers_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("headers response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap()
+        .with_extra_headers(vec![
+            ("x-custom-header".to_string(), "custom-value".to_string()),
+            // Protected header should be skipped with a warning
+            ("authorization".to_string(), "should-be-skipped".to_string()),
+        ]);
+
+        let result = client.complete("test").await;
+        assert!(
+            result.is_ok(),
+            "extra_headers call failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "headers response");
+    }
+
+    // --- Coverage: OpenAI with prefix-stripped model name (gpt-5 with provider prefix) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_gpt5_with_provider_prefix() {
+        // Model name "openai/gpt-5.1" should strip prefix for starts_with check
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("prefixed gpt5 response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "openai/gpt-5.1".to_string(),
+            format!("{}/v1", server.url()),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(
+            result.is_ok(),
+            "prefixed gpt-5 call failed: {:?}",
+            result.err()
+        );
+    }
+
+    // --- Coverage: OpenAI reasoning token logging (lines 529-544) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_with_reasoning_tokens() {
+        // Returns a response with a `reasoning` field so the reasoning logging
+        // path (lines 529-544) is exercised.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "final answer",
+                            "reasoning": "Let me think step by step about this..."
+                        }
+                    }],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 50, "total_tokens": 60}
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        // Set up a temp debug dir so the reasoning dump path is exercised
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("SKILLDO_DEBUG_DIR", tmp.path().to_str().unwrap());
+        std::env::set_var("SKILLDO_DEBUG_STAGE", "test-reasoning");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        mock.assert_async().await;
+        assert!(result.is_ok(), "Should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "final answer");
+
+        // Verify reasoning was dumped to debug dir
+        let reasoning_file = tmp.path().join("test-reasoning-reasoning.md");
+        assert!(
+            reasoning_file.exists(),
+            "reasoning file should have been written"
+        );
+        let contents = std::fs::read_to_string(&reasoning_file).unwrap();
+        assert!(contents.contains("step by step"));
+
+        // Cleanup env vars
+        std::env::remove_var("SKILLDO_DEBUG_DIR");
+        std::env::remove_var("SKILLDO_DEBUG_STAGE");
+    }
+
+    // --- Coverage: OpenAI empty content with reasoning (line 550-554) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_empty_content_with_reasoning_errors() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "reasoning": "I ran out of tokens thinking..."
+                        }
+                    }]
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        mock.assert_async().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("reasoning exhausted"),
+            "Should mention reasoning: {err}"
+        );
+    }
+
+    // --- Coverage: OpenAI empty content without reasoning (line 556) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_empty_content_no_reasoning_errors() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": ""
+                        }
+                    }]
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        mock.assert_async().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no content"),
+            "Should mention no content: {err}"
+        );
+    }
 }
