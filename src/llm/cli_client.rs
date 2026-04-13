@@ -3,7 +3,9 @@
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use std::io::Write;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::debug;
@@ -16,10 +18,13 @@ use super::client::LlmClient;
 pub struct CliClient {
     command: String,
     args: Vec<String>,
-    /// CLI flag(s) for passing a system prompt (e.g., ["--system-prompt"] for
-    /// claude, ["-s"] for codex). When non-empty, complete_with_system() appends
-    /// these flags + the system text to the command. When empty, falls back to
+    /// CLI flag(s) for passing a system prompt via temp file (e.g.,
+    /// ["--system-prompt-file"] for claude). When non-empty,
+    /// complete_with_system() writes the system text to a temp file, appends
+    /// these flags + the file path to the command. When empty, falls back to
     /// concatenating system + user into stdin.
+    /// Security: system prompts are never passed as inline CLI arguments,
+    /// which would be visible to other processes via `ps aux`.
     system_args: Vec<String>,
     json_path: Option<String>,
     timeout_secs: u64,
@@ -57,14 +62,23 @@ impl LlmClient for CliClient {
             }
             return self.run_cli(&format!("{}\n\n{}", system, user), &[]).await;
         }
-        // Inject configured system args + the system text as extra CLI args
+        // Write system prompt to a temp file instead of passing as a CLI arg.
+        // CLI args are visible to all users via `ps aux`; temp files are not.
+        let mut tmpfile =
+            NamedTempFile::new().context("Failed to create temp file for system prompt")?;
+        tmpfile
+            .write_all(system.as_bytes())
+            .context("Failed to write system prompt to temp file")?;
+        tmpfile.flush()?;
+        let path = tmpfile.path().to_string_lossy().to_string();
         debug!(
-            "CLI client: injecting system prompt via {:?} ({} chars)",
+            "CLI client: injecting system prompt via {:?} + temp file ({} chars)",
             self.system_args,
             system.len()
         );
         let mut extra: Vec<String> = self.system_args.clone();
-        extra.push(system.to_string());
+        extra.push(path);
+        // tmpfile is held alive until run_cli completes, then auto-deleted on drop
         self.run_cli(user, &extra).await
     }
 }
@@ -483,14 +497,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cli_complete_with_system_args_injects_flag() {
-        // Use `sh -c 'cat'` which ignores extra args (--sys and system text)
-        // and just reads stdin (user data). This exercises the code path where
-        // system_args is non-empty → extra args are appended to the command.
+    async fn test_cli_complete_with_system_args_writes_tempfile() {
+        // When system_args is non-empty, the system prompt is written to a temp
+        // file and the file path is passed as the last arg. We use a shell script
+        // that reads the file path from the last argument and cats its content,
+        // proving the system prompt was written to disk (not passed inline).
         let client = CliClient::new(
             "sh".to_string(),
-            vec!["-c".to_string(), "cat".to_string()],
-            vec!["--sys".to_string()],
+            vec![
+                "-c".to_string(),
+                // $0 = --sys-file, $1 = /path/to/tmpfile; cat the file, then stdin
+                "cat \"$1\" && cat".to_string(),
+            ],
+            vec!["--sys-file".to_string()],
             None,
             TEST_TIMEOUT,
         );
@@ -498,7 +517,14 @@ mod tests {
             .complete_with_system("system rules", "user data")
             .await
             .unwrap();
-        // sh -c 'cat' reads stdin only; --sys and system text are args to sh, ignored
-        assert_eq!(result.trim(), "user data");
+        // Output should contain both the system prompt (from temp file) and user data (from stdin)
+        assert!(
+            result.contains("system rules"),
+            "should contain system prompt from temp file: {result}"
+        );
+        assert!(
+            result.contains("user data"),
+            "should contain user data from stdin: {result}"
+        );
     }
 }

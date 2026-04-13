@@ -3975,6 +3975,84 @@ testpkg.run()
     // rescan_after_rewrite — error propagation at post-normalization (line 1044)
     // ========================================================================
 
+    // ========================================================================
+    // with_replay_stages: extract/map/learn + cached fact ledger
+    // ========================================================================
+
+    #[test]
+    fn test_with_replay_stages_sets_tuple() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_replay_stages(
+            "api surface".to_string(),
+            "patterns".to_string(),
+            "context".to_string(),
+            None,
+        );
+        assert!(gen.replay_stages.is_some());
+        let (api, pat, ctx, ledger) = gen.replay_stages.unwrap();
+        assert_eq!(api, "api surface");
+        assert_eq!(pat, "patterns");
+        assert_eq!(ctx, "context");
+        assert!(ledger.is_none());
+    }
+
+    #[test]
+    fn test_with_replay_stages_with_cached_fact_ledger() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_replay_stages(
+            "api surface".to_string(),
+            "patterns".to_string(),
+            "context".to_string(),
+            Some("- fact 1\n- fact 2".to_string()),
+        );
+        assert!(gen.replay_stages.is_some());
+        let (_, _, _, ledger) = gen.replay_stages.unwrap();
+        assert_eq!(ledger.as_deref(), Some("- fact 1\n- fact 2"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_replay_stages_skips_extraction() {
+        // Replay stages provide cached extract/map/learn outputs — the generator
+        // should skip the extraction LLM calls and jump to fact ledger + create.
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false)
+            .with_replay_stages(
+                "# API Surface\nclass Foo: pass".to_string(),
+                "# Patterns\nFoo().bar()".to_string(),
+                "# Context\nUse Foo for everything".to_string(),
+                None,
+            );
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert!(
+            output.skill_md.contains("---"),
+            "replay mode should produce valid output"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_replay_stages_and_cached_fact_ledger() {
+        // When replay_stages includes a cached fact ledger (4th element = Some),
+        // the generator should use it directly instead of calling the LLM for
+        // the fact ledger stage (lines 566-573).
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false)
+            .with_replay_stages(
+                "# API Surface\nclass Foo: pass".to_string(),
+                "# Patterns\nFoo().bar()".to_string(),
+                "# Context\nUse Foo for everything".to_string(),
+                Some("- Package name is testpkg\n- Version is 1.0.0".to_string()),
+            );
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert!(
+            output.skill_md.contains("---"),
+            "replay mode with cached fact ledger should produce valid output"
+        );
+    }
+
     #[tokio::test]
     async fn test_post_normalization_rescan_fails_propagates_security_error() {
         // The normalizer injects `generated-by: skilldo/{model_name}` into

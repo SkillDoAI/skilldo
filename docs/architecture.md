@@ -52,7 +52,7 @@ Both Review and Test can be disabled (`--no-review`, `--no-test`) for faster ite
 
 The Create and Review stages use a split prompt architecture: instructions (formatting rules, structural requirements, persona) are sent through the native system prompt channel, while data (extracted API surface, patterns, learn context, fact ledger) is sent in the user message. This separation leverages the model's built-in distinction between system-level directives and user-level content, improving instruction adherence and reducing prompt anchoring effects.
 
-For CLI providers, the `cli_system_args` config field controls how the system prompt is passed to the CLI (e.g., `--system-prompt` for Claude CLI, `-s` for Codex). See [Configuration](configuration.md#cli-provider-mode).
+For CLI providers, the `cli_system_args` config field controls how the system prompt is passed to the CLI (e.g., `--system-prompt-file` for Claude CLI). The system prompt is written to a temp file and the file path is passed as the argument, avoiding exposure of prompt content via `ps aux`. See [Configuration](configuration.md#cli-provider-mode).
 
 ### No-Test Fallback
 

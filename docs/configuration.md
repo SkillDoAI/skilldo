@@ -224,17 +224,16 @@ cli_json_path = "result"
 
 The prompt is piped to the CLI via stdin. If `cli_json_path` is set, stdout is parsed as JSON and that path is extracted as the response text. Dot-notation is supported for nested fields.
 
-Use `cli_system_args` to declare how the CLI passes system prompts through the native system prompt channel:
+Use `cli_system_args` to declare how the CLI passes system prompts through the native system prompt channel. The system prompt is written to a temp file and the file path is passed as the argument (never inline, for security — inline args are visible via `ps aux`):
 
 ```toml
-# Claude CLI — uses --system-prompt flag
-cli_system_args = ["--system-prompt"]
-
-# Codex CLI — uses -s flag
-cli_system_args = ["-s"]
+# Claude CLI — uses --system-prompt-file flag (reads prompt from file)
+cli_system_args = ["--system-prompt-file"]
 ```
 
-When `cli_system_args` is set, the system prompt is passed as a separate argument (e.g., `claude --system-prompt "..."`). When empty or omitted, the system and user prompts are concatenated into a single stdin payload. Only used with `provider_type = "cli"`.
+When `cli_system_args` is set, the system prompt is written to a temp file and the file path is appended after the configured flags (e.g., `claude --system-prompt-file /tmp/abc123`). The temp file is auto-deleted after the CLI exits. When empty or omitted, the system and user prompts are concatenated into a single stdin payload. Only used with `provider_type = "cli"`.
+
+> **Breaking change (v0.5.15):** `cli_system_args` now always passes a file path, not inline text. If you previously used `["--system-prompt"]`, switch to `["--system-prompt-file"]` or the equivalent file-based flag for your CLI.
 
 Parallel extraction is automatically disabled for CLI providers (vendor CLIs typically share a single auth session).
 

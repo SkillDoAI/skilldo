@@ -1064,6 +1064,50 @@ mod tests {
     }
 
     #[test]
+    fn test_select_patterns_thorough_exercises_info_log() {
+        // Activate tracing so the info!() format args are evaluated by llvm-cov.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let validator = make_validator(
+            Box::new(MockParser::new(vec![])),
+            Box::new(MockCodeGenerator::succeeding("")),
+            Box::new(MockExecutor::passing("")),
+            ValidationMode::Thorough,
+            InstallSource::Registry,
+        );
+        let patterns = vec![basic_pattern(), config_pattern(), error_pattern()];
+        let selected = validator.select_patterns(&patterns);
+        assert_eq!(selected.len(), 3);
+    }
+
+    #[test]
+    fn test_select_patterns_quick_exercises_selection_logic() {
+        // Activate tracing so all code paths within Quick mode are evaluated.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let validator = make_validator(
+            Box::new(MockParser::new(vec![])),
+            Box::new(MockCodeGenerator::succeeding("")),
+            Box::new(MockExecutor::passing("")),
+            ValidationMode::Quick,
+            InstallSource::Registry,
+        );
+        let patterns = vec![
+            basic_pattern(),
+            config_pattern(),
+            error_pattern(),
+            async_pattern(),
+        ];
+        let selected = validator.select_patterns(&patterns);
+        assert_eq!(selected.len(), 3);
+        // Should prioritize BasicUsage, Configuration, ErrorHandling
+        let names: Vec<&str> = selected.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"Basic Usage"));
+        assert!(names.contains(&"Configuration"));
+        assert!(names.contains(&"Error Handling"));
+    }
+
+    #[test]
     fn test_select_patterns_thorough_returns_all() {
         let validator = make_validator(
             Box::new(MockParser::new(vec![])),

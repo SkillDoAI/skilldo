@@ -2013,6 +2013,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_anthropic_complete_with_system_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Anthropic)
+                    .respond_with_content("system-aware response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = AnthropicClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client
+            .complete_with_system("You are a helpful assistant.", "Hello")
+            .await;
+        assert!(
+            result.is_ok(),
+            "Anthropic complete_with_system failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "system-aware response");
+    }
+
+    #[tokio::test]
+    async fn test_anthropic_complete_with_empty_system_omits_field() {
+        // When system is empty, the system field should be omitted (None)
+        let request = AnthropicRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 4096,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: "test".to_string(),
+            }],
+            system: Some("").filter(|s| !s.is_empty()).map(|s| s.to_string()),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(
+            json.get("system").is_none(),
+            "empty system string should result in None (omitted from JSON)"
+        );
+    }
+
+    #[tokio::test]
     async fn test_anthropic_complete_max_tokens_zero_errors() {
         let client = AnthropicClient::with_base_url(
             "test-key".to_string(),
@@ -2266,6 +2317,70 @@ mod tests {
             err.contains("Responses API error") || err.contains("503"),
             "Should report API error: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_openai_complete_with_system_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("openai system response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client
+            .complete_with_system("You are a coding assistant.", "Write hello world")
+            .await;
+        assert!(
+            result.is_ok(),
+            "OpenAI complete_with_system failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "openai system response");
+    }
+
+    #[tokio::test]
+    async fn test_gemini_complete_with_system_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Gemini)
+                    .respond_with_content("gemini system response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = GeminiClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client
+            .complete_with_system("You are a helpful AI.", "Test prompt")
+            .await;
+        assert!(
+            result.is_ok(),
+            "Gemini complete_with_system failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "gemini system response");
     }
 
     #[tokio::test]

@@ -8,7 +8,7 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 ### Added
 - **`--replay-from` flag** for fast prompt-tuning iteration. Loads cached extract/map/learn outputs from a prior run's `--debug-stage-files` directory, skipping those LLM calls entirely. Reduces iteration time from ~15 min to ~5 min per variant
 - **System prompt split** — instructions, rules, and custom_instructions now go through the LLM provider's native system prompt channel (Anthropic `system` field, OpenAI `role: "system"`, Gemini `systemInstruction`, Responses API `instructions`). Data from pipeline stages goes in the user message. Gives directives higher attention priority than data
-- **`cli_system_args` config field** — declares how a CLI provider passes system prompts (e.g., `["--system-prompt"]` for claude, `["-s"]` for codex). When empty, falls back to concatenating system + user
+- **`cli_system_args` config field** — declares how a CLI provider passes system prompts via temp file (e.g., `["--system-prompt-file"]` for claude). System prompts are never passed as inline CLI args (visible via `ps aux`). When empty, falls back to concatenating system + user
 - **Fact ledger stage** — new pipeline stage between learn and create. Extracts a compact truth table with negative assertions ("NOT /v1/generateContent", "NOT messages") from stages 1-3. Fed into create as the highest-salience constraint. Cached in replay mode
 - **`test_mode = "quick"`** — new test mode that tests 2-3 patterns from priority categories. Fast iteration mode for prompt tuning
 
