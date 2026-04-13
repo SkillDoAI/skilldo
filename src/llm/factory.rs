@@ -31,6 +31,7 @@ pub async fn create_client_from_llm_config(
         let client = super::cli_client::CliClient::new(
             command,
             llm_config.cli_args.clone(),
+            llm_config.cli_system_args.clone(),
             llm_config.cli_json_path.clone(),
             llm_config.request_timeout_secs,
         );
@@ -308,6 +309,7 @@ mod tests {
             extra_headers: Vec::new(),
             cli_command: None,
             cli_args: vec![],
+            cli_system_args: vec![],
             cli_json_path: None,
         }
     }

@@ -220,6 +220,7 @@ async fn test_pipeline_with_custom_config() {
             extra_headers: Vec::new(),
             cli_command: None,
             cli_args: Vec::new(),
+            cli_system_args: Vec::new(),
             cli_json_path: None,
         },
         generation: GenerationConfig {

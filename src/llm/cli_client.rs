@@ -16,6 +16,11 @@ use super::client::LlmClient;
 pub struct CliClient {
     command: String,
     args: Vec<String>,
+    /// CLI flag(s) for passing a system prompt (e.g., ["--system-prompt"] for
+    /// claude, ["-s"] for codex). When non-empty, complete_with_system() appends
+    /// these flags + the system text to the command. When empty, falls back to
+    /// concatenating system + user into stdin.
+    system_args: Vec<String>,
     json_path: Option<String>,
     timeout_secs: u64,
 }
@@ -24,12 +29,14 @@ impl CliClient {
     pub fn new(
         command: String,
         args: Vec<String>,
+        system_args: Vec<String>,
         json_path: Option<String>,
         timeout_secs: u64,
     ) -> Self {
         Self {
             command,
             args,
+            system_args,
             json_path,
             timeout_secs,
         }
@@ -39,10 +46,43 @@ impl CliClient {
 #[async_trait]
 impl LlmClient for CliClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
-        debug!("CLI client: {} ({} arg(s))", self.command, self.args.len());
+        self.run_cli(prompt, &[]).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        if system.is_empty() || self.system_args.is_empty() {
+            // No system args configured or empty system → default concat
+            if system.is_empty() {
+                return self.run_cli(user, &[]).await;
+            }
+            return self.run_cli(&format!("{}\n\n{}", system, user), &[]).await;
+        }
+        // Inject configured system args + the system text as extra CLI args
+        debug!(
+            "CLI client: injecting system prompt via {:?} ({} chars)",
+            self.system_args,
+            system.len()
+        );
+        let mut extra: Vec<String> = self.system_args.clone();
+        extra.push(system.to_string());
+        self.run_cli(user, &extra).await
+    }
+}
+
+impl CliClient {
+    /// Shared implementation — spawns the CLI with configured args + optional
+    /// extra args (used by complete_with_system to inject system prompt flags).
+    async fn run_cli(&self, prompt: &str, extra_args: &[String]) -> Result<String> {
+        debug!(
+            "CLI client: {} ({} + {} arg(s))",
+            self.command,
+            self.args.len(),
+            extra_args.len()
+        );
 
         let mut child = Command::new(&self.command)
             .args(&self.args)
+            .args(extra_args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -177,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn test_cli_client_echo_raw() {
         // `cat` echoes stdin back — simplest possible "CLI"
-        let client = CliClient::new("cat".to_string(), vec![], None, TEST_TIMEOUT);
+        let client = CliClient::new("cat".to_string(), vec![], vec![], None, TEST_TIMEOUT);
         let result = client.complete("hello world").await.unwrap();
         assert_eq!(result.trim(), "hello world");
     }
@@ -190,6 +230,7 @@ mod tests {
                 "-c".to_string(),
                 r#"echo '{"result": "extracted text"}'"#.to_string(),
             ],
+            vec![],
             Some("result".to_string()),
             TEST_TIMEOUT,
         );
@@ -205,6 +246,7 @@ mod tests {
                 "-c".to_string(),
                 r#"echo '{"data": {"response": "nested value"}}'"#.to_string(),
             ],
+            vec![],
             Some("data.response".to_string()),
             TEST_TIMEOUT,
         );
@@ -220,6 +262,7 @@ mod tests {
                 "-c".to_string(),
                 r#"echo '{"data": {"other": "value"}}'"#.to_string(),
             ],
+            vec![],
             Some("data.response".to_string()),
             TEST_TIMEOUT,
         );
@@ -246,6 +289,7 @@ mod tests {
         let client = CliClient::new(
             "nonexistent_binary_xyz_12345".to_string(),
             vec![],
+            vec![],
             None,
             TEST_TIMEOUT,
         );
@@ -258,6 +302,7 @@ mod tests {
         let client = CliClient::new(
             "sh".to_string(),
             vec!["-c".to_string(), "exit 1".to_string()],
+            vec![],
             None,
             TEST_TIMEOUT,
         );
@@ -271,6 +316,7 @@ mod tests {
         let client = CliClient::new(
             "sh".to_string(),
             vec!["-c".to_string(), r#"echo '{"other": "value"}'"#.to_string()],
+            vec![],
             Some("result".to_string()),
             TEST_TIMEOUT,
         );
@@ -282,7 +328,13 @@ mod tests {
     #[tokio::test]
     async fn test_cli_client_stdin_receives_prompt() {
         // `wc -c` counts bytes from stdin — verifies prompt was piped
-        let client = CliClient::new("wc".to_string(), vec!["-c".to_string()], None, TEST_TIMEOUT);
+        let client = CliClient::new(
+            "wc".to_string(),
+            vec!["-c".to_string()],
+            vec![],
+            None,
+            TEST_TIMEOUT,
+        );
         let result = client.complete("12345").await.unwrap();
         let byte_count: usize = result.trim().parse().unwrap();
         assert_eq!(byte_count, 5);
@@ -294,6 +346,7 @@ mod tests {
         let client = CliClient::new(
             "sh".to_string(),
             vec!["-c".to_string(), r#"echo '{"count": 42}'"#.to_string()],
+            vec![],
             Some("count".to_string()),
             TEST_TIMEOUT,
         );
@@ -310,6 +363,7 @@ mod tests {
                 "-c".to_string(),
                 r#"echo '{"data": "just a string"}'  "#.to_string(),
             ],
+            vec![],
             Some("data.nested".to_string()),
             TEST_TIMEOUT,
         );
@@ -328,6 +382,7 @@ mod tests {
         let client = CliClient::new(
             "sh".to_string(),
             vec!["-c".to_string(), "echo 'not json'".to_string()],
+            vec![],
             Some("result".to_string()),
             TEST_TIMEOUT,
         );
@@ -341,7 +396,7 @@ mod tests {
     async fn test_cli_client_broken_pipe() {
         // `true` exits immediately without reading stdin — triggers BrokenPipe
         // on large prompts. Send enough data to make the pipe buffer overflow.
-        let client = CliClient::new("true".to_string(), vec![], None, TEST_TIMEOUT);
+        let client = CliClient::new("true".to_string(), vec![], vec![], None, TEST_TIMEOUT);
         let large_prompt = "x".repeat(1_000_000);
         // Should succeed (BrokenPipe is silently handled, exit code 0)
         let result = client.complete(&large_prompt).await;
@@ -355,6 +410,7 @@ mod tests {
         let client = CliClient::new(
             "cmd".to_string(),
             vec!["/c".to_string(), "exit".to_string(), "0".to_string()],
+            vec![],
             None,
             TEST_TIMEOUT,
         );
@@ -370,6 +426,7 @@ mod tests {
         let client = CliClient::new(
             "sleep".to_string(),
             vec!["10".to_string()],
+            vec![],
             None,
             1, // 1-second timeout
         );
@@ -391,6 +448,7 @@ mod tests {
         let client = CliClient::new(
             "ping".to_string(),
             vec!["-n".to_string(), "11".to_string(), "127.0.0.1".to_string()],
+            vec![],
             None,
             1,
         );

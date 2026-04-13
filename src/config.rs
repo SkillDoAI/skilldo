@@ -282,6 +282,14 @@ pub struct LlmConfig {
     #[serde(default)]
     pub cli_args: Vec<String>,
 
+    /// CLI flag(s) for passing a system prompt. The system prompt text is
+    /// appended as the final argument after these flags.
+    /// E.g., ["--system-prompt"] for claude, ["-s"] for codex.
+    /// When empty, system prompt is concatenated into the user message instead.
+    /// Only used when provider_type = "cli".
+    #[serde(default)]
+    pub cli_system_args: Vec<String>,
+
     /// JSON field path to extract the response text from CLI output.
     /// E.g., "response" extracts obj["response"]. If unset, uses raw stdout.
     /// Only used when provider_type = "cli".
@@ -992,6 +1000,7 @@ impl Default for Config {
                 extra_headers: Vec::new(),
                 cli_command: None,
                 cli_args: Vec::new(),
+                cli_system_args: Vec::new(),
                 cli_json_path: None,
             },
             generation: GenerationConfig::default(),
@@ -1148,6 +1157,7 @@ mod tests {
             extra_headers: Vec::new(),
             cli_command: None,
             cli_args: Vec::new(),
+            cli_system_args: Vec::new(),
             cli_json_path: None,
         };
         assert_eq!(llm.get_max_tokens(), 8192);
