@@ -3,6 +3,32 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## 0.5.15 — 2026-04-13
+
+### Added
+- **`--replay-from` flag** for fast prompt-tuning iteration. Loads cached extract/map/learn outputs from a prior run's `--debug-stage-files` directory, skipping those LLM calls entirely. Reduces iteration time from ~15 min to ~5 min per variant
+- **System prompt split** — instructions, rules, and custom_instructions now go through the LLM provider's native system prompt channel (Anthropic `system` field, OpenAI `role: "system"`, Gemini `systemInstruction`, Responses API `instructions`). Data from pipeline stages goes in the user message. Gives directives higher attention priority than data
+- **`cli_system_args` config field** — declares how a CLI provider passes system prompts (e.g., `["--system-prompt"]` for claude, `["-s"]` for codex). When empty, falls back to concatenating system + user
+- **Fact ledger stage** — new pipeline stage between learn and create. Extracts a compact truth table with negative assertions ("NOT /v1/generateContent", "NOT messages") from stages 1-3. Fed into create as the highest-salience constraint. Cached in replay mode
+- **`test_mode = "quick"`** — new test mode that tests 2-3 patterns from priority categories. Fast iteration mode for prompt tuning
+
+### Changed
+- **Thorough test mode now tests ALL patterns** (was: 3 sampled). This is the mechanical guarantee that no broken code examples ship. Existing configs with `test_mode = "thorough"` get strictly better coverage
+- **Update-mode prompt language reworked** — removed "preserve existing correct content" and "reviewed and approved" language that caused anchoring on input SKILL.md errors. New language treats input as "untrusted prior draft" and tells the model to regenerate factual claims from the API surface
+- **Review prompt** no longer says "evaluate based on your knowledge of the library" — now says "evaluate only against provided reference data" to prevent training-data bias in review stage
+- **Instructions placed before data** in create prompt (was: data first, instructions after)
+
+### Fixed
+- `show_prompts` command had learn/map placeholder args swapped
+- Debug logging for system prompt size was using unreachable `unwrap_or("")` after `is_some()` guard across Anthropic/OpenAI providers
+- Gemini provider was missing system prompt size in debug logging (inconsistent with other providers)
+- `PromptParts` unnecessarily derived `Clone` on a struct holding potentially megabyte-scale strings
+
+### Stage-aware reasoning logging
+- `--debug-stage-files` now also exports `SKILLDO_DEBUG_DIR` env var for LLM clients to write reasoning tokens
+- Sequential extract/map/learn sets `SKILLDO_DEBUG_STAGE` before each call, naming reasoning files `{stage}-reasoning.md`
+- Create and review attempts also tagged
+
 ## 0.5.14
 
 ### Added

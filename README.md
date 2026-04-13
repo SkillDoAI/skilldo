@@ -101,11 +101,14 @@ aiohttp, arrow, beautifulsoup4, boto3, celery, click, cryptography, django, fast
 
 ## Tips
 
+- **Iterate fast with `--replay-from`** — after a `--debug-stage-files` run, use `--replay-from <DIR>` to skip extract/map/learn and re-run only create/review/test (~5 min vs ~15 min). Great for prompt tuning.
 - **Start with `--dry-run`** to verify file collection and language detection before burning API credits
 - **Use a config file** for repeated runs — it supports per-stage model overrides, OAuth, custom headers, and prompt customization that CLI flags can't express
 - **Best overall model**: GPT-5.2 produces the cleanest output with fewest retries
 - **Best value**: Hybrid setup — local model for extract/map/learn, cloud model for review+test
 - **Local-only**: Qwen3-Coder (30B) via Ollama works well for small-to-medium libraries. Increase `max_retries` to 10+.
+- **Test modes**: `test_mode = "thorough"` (default) tests ALL patterns for maximum accuracy. Use `test_mode = "quick"` (2-3 patterns) for faster iteration. See [configuration docs](docs/configuration.md).
+- **CLI providers**: Set `cli_system_args = ["--system-prompt"]` in your config to pass system prompts correctly for CLI-mode providers (Claude CLI, Codex CLI, etc.). See [configuration docs](docs/configuration.md).
 - **Review the output.** Generation is a starting point, not a finished product.
 
 ## Building from Source

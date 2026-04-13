@@ -1336,20 +1336,23 @@ fn test_create_update_contains_security_rule() {
     );
     // Security section exists in update prompt too
     assert!(
-        prompt.contains("Security (CRITICAL)"),
+        prompt.contains("SECURITY (CRITICAL)") || prompt.contains("Security (CRITICAL)"),
         "create agent update prompt must contain Security section"
     );
     assert!(
-        prompt.contains("weaponized"),
-        "Missing weaponization warning in update prompt"
+        prompt.contains("weaponized")
+            || prompt.contains("destroy data")
+            || prompt.contains("exfiltrate"),
+        "Missing security warning in update prompt"
     );
     assert!(
-        prompt.contains("bypass authentication"),
-        "Missing auth bypass in update prompt"
+        prompt.contains("bypass authentication") || prompt.contains("persist access"),
+        "Missing auth bypass warning in update prompt"
     );
     assert!(
-        prompt.contains("Do not preserve harmful content"),
-        "Update prompt must explicitly say not to preserve harmful content from previous versions"
+        prompt.contains("Do not preserve harmful content")
+            || prompt.contains("Remove harmful content"),
+        "Update prompt must address harmful content from previous versions"
     );
 }
 

@@ -592,12 +592,20 @@ async fn test_deterministic_pipeline() {
     let extract_response = r#"{"api_surface": [{"name": "ServerBuilder", "type": "struct", "publicity_score": "high"}], "documented_apis": []}"#;
     let create_output = "---\nname: llmposter\ndescription: Mock LLM server\nmetadata:\n  version: \"0.4.1\"\n  ecosystem: rust\n---\n\n## Imports\n\n```rust\nuse llmposter::{Fixture, ServerBuilder};\n```\n\n```toml\n[dependencies]\nllmposter = \"0.4.1\"\n```\n\n## Core Patterns\n\n### Basic Mock Server\n\n```rust\nuse llmposter::{Fixture, ServerBuilder};\n\n#[tokio::test]\nasync fn test_basic() {\n    let server = ServerBuilder::new()\n        .fixture(Fixture::new().respond_with_content(\"hello\"))\n        .build().await.unwrap();\n    let _ = server.url();\n}\n```\n\n## Pitfalls\n\n### Wrong\n\n```rust\nFixture::new().match_user_message(\"\")\n```\n\n### Right\n\n```rust\nFixture::new().match_user_message(\"specific\")\n```\n\n## References\n\n- [Repository](https://github.com/SkillDoAI/llmposter)\n\n## API Reference\n\n**ServerBuilder::new()** — Creates a new mock server builder.\n";
 
+    let fact_ledger_response = "## Verified Facts\n\n- ServerBuilder is the primary public API\n- Fixtures match by substring on user message";
+
     // Build llmposter server — fixture order matters (first match wins)
     // Create prompt contains "agent rules file" — match it specifically
+    // Fact ledger prompt contains "fact extractor"
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
-                .match_user_message("agent rules file")
+                .match_user_message("Extract the verified facts checklist")
+                .respond_with_content(fact_ledger_response),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("Now generate the SKILL.md")
                 .respond_with_content(create_output),
         )
         // Extract/map/learn catch-all — returns simple JSON for all three
@@ -678,7 +686,7 @@ async fn test_deterministic_pipeline_with_review() {
         )
         .fixture(
             Fixture::new()
-                .match_user_message("agent rules file")
+                .match_user_message("Now generate the SKILL.md")
                 .respond_with_content(create_output),
         )
         .fixture(Fixture::new().respond_with_content(extract_response))

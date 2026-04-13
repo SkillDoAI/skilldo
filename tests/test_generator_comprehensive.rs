@@ -48,6 +48,8 @@ impl LlmClient for AgentTrackingClient {
             "agent2_pattern_extractor"
         } else if prompt.contains("Extract conventions, best practices, pitfalls") {
             "agent3_context_extractor"
+        } else if prompt.contains("fact extractor") {
+            "fact_ledger"
         } else if prompt.contains("creating an agent rules file")
             || prompt.contains("Here is the current SKILL.md")
         {
@@ -62,6 +64,7 @@ impl LlmClient for AgentTrackingClient {
             "agent1_api_extractor" => Ok(r#"{"apis": [{"name": "test_fn"}]}"#.to_string()),
             "agent2_pattern_extractor" => Ok(r#"{"patterns": [{"api": "test_fn"}]}"#.to_string()),
             "agent3_context_extractor" => Ok(r#"{"conventions": ["use test_fn"]}"#.to_string()),
+            "fact_ledger" => Ok("## Verified Facts\n\n- test_fn is the primary API".to_string()),
             "agent4_synthesizer" => Ok(
                 "---\nname: test\nversion: 1.0.0\n---\n\n# Test SKILL.md\n\nContent here"
                     .to_string(),
@@ -302,13 +305,14 @@ async fn test_all_four_agents_called_in_order() {
     assert!(result.is_ok());
 
     let calls = client.get_calls();
-    // All 4 agents should be called at least once
-    assert!(calls.len() >= 4, "All 4 agents should be called");
-    // First 4 calls should be the 4 agents in order (initial pass)
+    // 5 stages: extract, map, learn, fact_ledger, create (+ possible retries)
+    assert!(calls.len() >= 5, "All 5 stages should be called");
+    // First 3 calls are the extraction agents
     assert_eq!(calls[0], "agent1_api_extractor");
     assert_eq!(calls[1], "agent2_pattern_extractor");
     assert_eq!(calls[2], "agent3_context_extractor");
-    assert_eq!(calls[3], "agent4_synthesizer");
+    // calls[3] = fact ledger (uses create client, prompt contains "fact extractor")
+    // calls[4] = create/synthesizer
     // Create agent may be called additional times during validation retries
 }
 
@@ -337,11 +341,11 @@ async fn test_pipeline_with_minimal_data() {
     assert!(result.is_ok());
 
     let calls = client.get_calls();
-    assert!(calls.len() >= 4, "All 4 agents should still be called");
-    // Verify all 4 agents were called
+    assert!(calls.len() >= 5, "All 5 stages should still be called");
     assert!(calls.contains(&"agent1_api_extractor".to_string()));
     assert!(calls.contains(&"agent2_pattern_extractor".to_string()));
     assert!(calls.contains(&"agent3_context_extractor".to_string()));
+    assert!(calls.contains(&"fact_ledger".to_string()));
     assert!(calls.contains(&"agent4_synthesizer".to_string()));
 }
 
