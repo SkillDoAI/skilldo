@@ -112,7 +112,7 @@ Supported CLI tools: `claude`, `codex`, `gemini`. The prompt is piped via stdin;
 Optional: declare how the CLI accepts system prompts natively:
 
 ```toml
-cli_system_args = ["--system-prompt"]  # for claude
+cli_system_args = ["--system-prompt-file"]  # for claude (reads from temp file)
 # cli_system_args = ["-s"]            # for codex
 ```
 

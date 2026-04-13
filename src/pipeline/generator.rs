@@ -568,6 +568,8 @@ impl Generator {
                 "facts: REPLAY MODE — loaded {} chars from cache",
                 cached.len()
             );
+            // Still dump to the variant's debug dir so it's self-contained
+            self.dump_stage("facts.md", cached);
             cached.clone()
         } else {
             std::env::set_var("SKILLDO_DEBUG_STAGE", "facts");
