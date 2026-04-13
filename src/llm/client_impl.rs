@@ -163,15 +163,11 @@ impl AnthropicClient {
             system: system.filter(|s| !s.is_empty()).map(|s| s.to_string()),
         };
 
-        if system.is_some() {
-            debug!(
-                "Calling Anthropic API with model: {} (system prompt: {} chars)",
-                self.model,
-                system.unwrap_or("").len()
-            );
-        } else {
-            debug!("Calling Anthropic API with model: {}", self.model);
-        }
+        debug!(
+            "Calling Anthropic API with model: {} (system: {} chars)",
+            self.model,
+            system.map(|s| s.len()).unwrap_or(0)
+        );
 
         let mut req = self
             .client
@@ -399,19 +395,12 @@ impl OpenAIClient {
             max_completion_tokens,
         };
 
-        if system.is_some() {
-            debug!(
-                "Calling OpenAI-compatible API at {} with model: {} (system prompt: {} chars)",
-                self.base_url,
-                self.model,
-                system.unwrap_or("").len()
-            );
-        } else {
-            debug!(
-                "Calling OpenAI-compatible API at {} with model: {}",
-                self.base_url, self.model
-            );
-        }
+        debug!(
+            "Calling OpenAI-compatible API at {} with model: {} (system: {} chars)",
+            self.base_url,
+            self.model,
+            system.map(|s| s.len()).unwrap_or(0)
+        );
 
         // Resolve endpoint URL and detect Responses API format.
         let base = self.base_url.trim_end_matches('/');
@@ -719,7 +708,11 @@ impl GeminiClient {
             }),
         };
 
-        debug!("Calling Gemini API with model: {}", self.model);
+        debug!(
+            "Calling Gemini API with model: {} (system: {} chars)",
+            self.model,
+            system.map(|s| s.len()).unwrap_or(0)
+        );
 
         let url = format!(
             "{}/v1beta/models/{}:generateContent",

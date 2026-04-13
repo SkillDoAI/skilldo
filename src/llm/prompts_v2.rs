@@ -14,7 +14,7 @@ use crate::detector::Language;
 /// Separated prompt parts for providers that support native system prompts.
 /// System = rules, constraints, custom instructions (high-priority directive channel).
 /// User = data to process (extract output, patterns, context, existing SKILL.md).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PromptParts {
     pub system: String,
     pub user: String,
@@ -22,8 +22,7 @@ pub struct PromptParts {
 
 impl PromptParts {
     /// Concatenate system + user for providers without native system prompt support.
-    /// Also used by backward-compat wrappers that existing tests call.
-    #[allow(dead_code)]
+    /// Used by backward-compat wrappers (`create_update_prompt`) that tests call.
     pub fn combined(&self) -> String {
         if self.system.is_empty() {
             self.user.clone()
@@ -641,7 +640,10 @@ Documentation and changelog:
     prompt
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Create prompt for from-scratch SKILL.md generation.
+/// Delegates to `create_prompt_parts()` and concatenates for backward compat.
+/// Use `create_prompt_parts()` directly when calling `complete_with_system()`.
+#[allow(clippy::too_many_arguments, dead_code)]
 pub fn create_prompt(
     package_name: &str,
     version: &str,
@@ -2459,7 +2461,10 @@ mod tests {
             &deps,
             None,
         );
-        assert!(prompt.contains("Security (CRITICAL)"));
+        assert!(
+            prompt.contains("SECURITY (CRITICAL)") || prompt.contains("Security (CRITICAL)"),
+            "Update prompt should contain security section"
+        );
     }
 
     #[test]

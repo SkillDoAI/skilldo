@@ -492,6 +492,8 @@ impl Generator {
                     pat.len(),
                     ctx.len()
                 );
+                // Clone is intentional: generate() takes &self, and the strings
+                // (~100KB total) are negligible vs the LLM calls that follow.
                 (api.clone(), pat.clone(), ctx.clone())
             } else {
                 info!("extract: Extracting API surface...");
