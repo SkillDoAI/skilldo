@@ -461,4 +461,44 @@ mod tests {
             err_msg
         );
     }
+
+    #[tokio::test]
+    async fn test_cli_complete_with_system_no_args_concat() {
+        // When system_args is empty, complete_with_system concatenates
+        let client = CliClient::new("cat".to_string(), vec![], vec![], None, TEST_TIMEOUT);
+        let result = client
+            .complete_with_system("system rules", "user data")
+            .await
+            .unwrap();
+        assert!(result.contains("system rules"));
+        assert!(result.contains("user data"));
+    }
+
+    #[tokio::test]
+    async fn test_cli_complete_with_system_empty_system() {
+        // Empty system string → just sends user data
+        let client = CliClient::new("cat".to_string(), vec![], vec![], None, TEST_TIMEOUT);
+        let result = client.complete_with_system("", "user only").await.unwrap();
+        assert_eq!(result.trim(), "user only");
+    }
+
+    #[tokio::test]
+    async fn test_cli_complete_with_system_args_injects_flag() {
+        // Use `sh -c 'cat'` which ignores extra args (--sys and system text)
+        // and just reads stdin (user data). This exercises the code path where
+        // system_args is non-empty → extra args are appended to the command.
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec!["-c".to_string(), "cat".to_string()],
+            vec!["--sys".to_string()],
+            None,
+            TEST_TIMEOUT,
+        );
+        let result = client
+            .complete_with_system("system rules", "user data")
+            .await
+            .unwrap();
+        // sh -c 'cat' reads stdin only; --sys and system text are args to sh, ignored
+        assert_eq!(result.trim(), "user data");
+    }
 }

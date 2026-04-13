@@ -2647,4 +2647,202 @@ mod tests {
         // 1900-01-01 = -25567 days since epoch
         assert_eq!(days_to_ymd(-25567), (1900, 1, 1));
     }
+
+    // --- Fact ledger prompt tests ---
+
+    #[test]
+    fn test_fact_ledger_prompt_contains_package_name() {
+        let parts = fact_ledger_prompt("llmposter", "apis", "patterns", "context", &Language::Rust);
+        assert!(parts.system.contains("llmposter"));
+        assert!(parts.system.contains("fact extractor"));
+    }
+
+    #[test]
+    fn test_fact_ledger_prompt_system_has_categories() {
+        let parts = fact_ledger_prompt(
+            "testlib",
+            "api surface",
+            "test patterns",
+            "docs",
+            &Language::Rust,
+        );
+        assert!(parts.system.contains("Endpoint routes"));
+        assert!(parts.system.contains("Request field names"));
+        assert!(parts.system.contains("NEGATIVE assertion"));
+    }
+
+    #[test]
+    fn test_fact_ledger_prompt_user_has_data() {
+        let parts = fact_ledger_prompt(
+            "testlib",
+            "my api surface",
+            "my patterns",
+            "my context",
+            &Language::Python,
+        );
+        assert!(parts.user.contains("my api surface"));
+        assert!(parts.user.contains("my patterns"));
+        assert!(parts.user.contains("my context"));
+    }
+
+    // --- PromptParts tests ---
+
+    #[test]
+    fn test_prompt_parts_combined_empty_system() {
+        let parts = PromptParts {
+            system: String::new(),
+            user: "just user content".to_string(),
+        };
+        assert_eq!(parts.combined(), "just user content");
+    }
+
+    #[test]
+    fn test_prompt_parts_combined_both() {
+        let parts = PromptParts {
+            system: "system rules".to_string(),
+            user: "user data".to_string(),
+        };
+        let combined = parts.combined();
+        assert!(combined.starts_with("system rules"));
+        assert!(combined.contains("user data"));
+        assert!(combined.contains("\n\n"));
+    }
+
+    // --- create_prompt_parts tests ---
+
+    #[test]
+    fn test_create_prompt_parts_system_has_rules() {
+        let parts = create_prompt_parts(
+            "mylib",
+            "1.0",
+            Some("MIT"),
+            &[],
+            &Language::Rust,
+            "api",
+            "patterns",
+            "context",
+            None,
+            false,
+            &[],
+        );
+        assert!(parts.system.contains("SOURCE OF TRUTH"));
+        assert!(parts.system.contains("SECURITY"));
+        assert!(parts.system.contains("mylib"));
+    }
+
+    #[test]
+    fn test_create_prompt_parts_user_has_data() {
+        let parts = create_prompt_parts(
+            "mylib",
+            "2.0",
+            Some("Apache-2.0"),
+            &[],
+            &Language::Python,
+            "the api surface",
+            "the patterns",
+            "the context",
+            None,
+            false,
+            &[],
+        );
+        assert!(parts.user.contains("the api surface"));
+        assert!(parts.user.contains("the patterns"));
+        assert!(parts.user.contains("the context"));
+    }
+
+    #[test]
+    fn test_create_prompt_parts_custom_instructions_in_system() {
+        let parts = create_prompt_parts(
+            "mylib",
+            "1.0",
+            Some("MIT"),
+            &[],
+            &Language::Rust,
+            "api",
+            "pat",
+            "ctx",
+            Some("USE INPUT NOT MESSAGES"),
+            false,
+            &[],
+        );
+        assert!(
+            parts.system.contains("USE INPUT NOT MESSAGES"),
+            "Custom instructions should be in system prompt"
+        );
+        assert!(
+            !parts.user.contains("USE INPUT NOT MESSAGES"),
+            "Custom instructions should NOT be in user message"
+        );
+    }
+
+    #[test]
+    fn test_create_prompt_parts_overwrite_returns_empty_system() {
+        let parts = create_prompt_parts(
+            "mylib",
+            "1.0",
+            None,
+            &[],
+            &Language::Rust,
+            "api",
+            "pat",
+            "ctx",
+            Some("custom overwrite"),
+            true,
+            &[],
+        );
+        assert!(parts.system.is_empty());
+        assert_eq!(parts.user, "custom overwrite");
+    }
+
+    // --- create_update_prompt_parts tests ---
+
+    #[test]
+    fn test_create_update_prompt_parts_system_marks_untrusted() {
+        let parts = create_update_prompt_parts(
+            "mylib",
+            "2.0",
+            "old skill content",
+            "api",
+            "pat",
+            "ctx",
+            &Language::Rust,
+            &[],
+            None,
+        );
+        assert!(parts.system.contains("UNTRUSTED"));
+        assert!(parts.system.contains("Regenerate ALL"));
+    }
+
+    #[test]
+    fn test_create_update_prompt_parts_user_has_existing_skill() {
+        let parts = create_update_prompt_parts(
+            "mylib",
+            "2.0",
+            "existing skill markdown",
+            "api surface",
+            "patterns",
+            "context",
+            &Language::Python,
+            &[],
+            None,
+        );
+        assert!(parts.user.contains("existing skill markdown"));
+        assert!(parts.user.contains("api surface"));
+    }
+
+    #[test]
+    fn test_create_update_prompt_parts_custom_in_system() {
+        let parts = create_update_prompt_parts(
+            "mylib",
+            "1.0",
+            "old",
+            "api",
+            "pat",
+            "ctx",
+            &Language::Rust,
+            &[],
+            Some("ALWAYS use ServerBuilder"),
+        );
+        assert!(parts.system.contains("ALWAYS use ServerBuilder"));
+    }
 }

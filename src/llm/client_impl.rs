@@ -1032,6 +1032,58 @@ mod tests {
         assert_eq!(json["messages"][0]["content"], "test");
         // system field should be omitted when None
         assert!(json.get("system").is_none());
+
+        // With system set, it should be included
+        let request_with_system = AnthropicRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 4096,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: "test".to_string(),
+            }],
+            system: Some("be helpful".to_string()),
+        };
+        let json = serde_json::to_value(&request_with_system).unwrap();
+        assert_eq!(json["system"], "be helpful");
+    }
+
+    #[tokio::test]
+    async fn test_openai_system_message_prepended() {
+        // Verify OpenAIMessage::system() creates a system role message
+        let sys = OpenAIMessage::system("system rules");
+        assert_eq!(sys.role, "system");
+        assert_eq!(sys.content.as_deref(), Some("system rules"));
+    }
+
+    #[tokio::test]
+    async fn test_gemini_system_instruction_serialization() {
+        let request = GeminiRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart {
+                    text: "user prompt".to_string(),
+                }],
+            }],
+            generation_config: None,
+            system_instruction: Some(GeminiContent {
+                parts: vec![GeminiPart {
+                    text: "system rules".to_string(),
+                }],
+            }),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json["systemInstruction"]["parts"][0]["text"],
+            "system rules"
+        );
+
+        // Without system instruction, field should be omitted
+        let request_no_sys = GeminiRequest {
+            contents: vec![],
+            generation_config: None,
+            system_instruction: None,
+        };
+        let json = serde_json::to_value(&request_no_sys).unwrap();
+        assert!(json.get("systemInstruction").is_none());
     }
 
     #[tokio::test]
