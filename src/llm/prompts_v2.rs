@@ -32,6 +32,80 @@ impl PromptParts {
     }
 }
 
+/// Build a fact-ledger prompt that extracts a compact truth table from the
+/// extract/map/learn outputs. The ledger includes negative assertions to
+/// counter training-data bias (e.g., "NOT /v1/generateContent").
+///
+/// The ledger is fed into the create and review stages as a high-salience
+/// checklist that the model must not contradict.
+pub fn fact_ledger_prompt(
+    package_name: &str,
+    api_surface: &str,
+    patterns: &str,
+    context: &str,
+    language: &Language,
+) -> PromptParts {
+    let ecosystem = language.as_str();
+
+    let system = format!(
+        r#"You are a fact extractor for {ecosystem} library "{package_name}".
+
+Your task: extract a compact set of factual claims from the provided evidence
+that are MOST LIKELY to be gotten wrong by a documentation generator. Focus on
+facts where training-data knowledge of well-known APIs might override what this
+specific library actually implements.
+
+Output a Markdown checklist. For EACH fact, include:
+- The fact itself (precise, with exact values)
+- A NEGATIVE assertion: what the fact is NOT (the common wrong answer)
+- Evidence: which part of the input proves this
+
+Categories to extract (skip any that don't apply):
+
+1. **Endpoint routes** — exact URL paths, especially if they differ from the
+   "standard" API they mock/wrap (e.g., /v1beta/ instead of /v1/)
+2. **Request field names** — field names in request bodies, especially if
+   different from training-data expectations (e.g., "input" vs "messages")
+3. **Response body shapes** — error response formats per provider/variant,
+   especially if provider-specific rather than generic
+4. **Auth behavior** — what enables auth, what happens without it
+5. **Matching semantics** — exact vs substring vs regex for match operations
+6. **Re-exported types** — what's available at the crate root vs submodules
+7. **Version-sensitive behavior** — features that changed between versions
+
+Rules:
+- Output ONLY facts that could cause compilation errors or runtime failures
+  if gotten wrong in a code example
+- Include NEGATIVE assertions for every fact ("NOT X" where X is the common
+  wrong answer from training data)
+- Keep it under 50 items — quality over quantity
+- If evidence is ambiguous, say "UNCERTAIN" rather than guessing
+- Do NOT include obvious/uncontroversial facts that any model would get right
+"#,
+        package_name = package_name,
+        ecosystem = ecosystem,
+    );
+
+    let user = format!(
+        r#"## API Surface (from source code)
+{api_surface}
+
+## Usage Patterns (from tests)
+{patterns}
+
+## Conventions & Documentation
+{context}
+
+Extract the verified facts checklist now.
+"#,
+        api_surface = api_surface,
+        patterns = patterns,
+        context = context,
+    );
+
+    PromptParts { system, user }
+}
+
 pub fn extract_prompt(
     package_name: &str,
     version: &str,

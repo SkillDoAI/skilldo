@@ -93,37 +93,49 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
 
     // If --replay-from is set, load the cached extract/map/learn outputs now
     // so we can fail fast if any are missing.
-    let replay_stages: Option<(String, String, String)> = if let Some(dir) = replay_from.as_deref()
-    {
-        let dir = Path::new(dir);
-        if !dir.is_dir() {
-            anyhow::bail!("--replay-from: directory does not exist: {}", dir.display());
-        }
-        let load = |name: &str| -> Result<String> {
-            let path = dir.join(name);
-            fs::read_to_string(&path).map_err(|e| {
-                anyhow::anyhow!(
-                    "--replay-from: failed to read {} — run `skilldo generate` with \
+    let replay_stages: Option<(String, String, String, Option<String>)> =
+        if let Some(dir) = replay_from.as_deref() {
+            let dir = Path::new(dir);
+            if !dir.is_dir() {
+                anyhow::bail!("--replay-from: directory does not exist: {}", dir.display());
+            }
+            let load = |name: &str| -> Result<String> {
+                let path = dir.join(name);
+                fs::read_to_string(&path).map_err(|e| {
+                    anyhow::anyhow!(
+                        "--replay-from: failed to read {} — run `skilldo generate` with \
                      `--debug-stage-files {}` first to populate it: {e}",
-                    path.display(),
-                    dir.display()
-                )
-            })
+                        path.display(),
+                        dir.display()
+                    )
+                })
+            };
+            let api_surface = load("1-extract.md")?;
+            let patterns = load("2-map.md")?;
+            let context = load("3-learn.md")?;
+            // Fact ledger is optional — may not exist if the cache was created
+            // before the ledger feature was added.
+            let cached_ledger = dir.join("facts.md");
+            let fact_ledger = if cached_ledger.exists() {
+                let l = fs::read_to_string(&cached_ledger).unwrap_or_default();
+                if !l.is_empty() {
+                    info!("Replay mode: loaded fact ledger ({} chars)", l.len());
+                }
+                Some(l).filter(|s| !s.is_empty())
+            } else {
+                None
+            };
+            info!(
+                "Replay mode: loaded {} + {} + {} chars from {}",
+                api_surface.len(),
+                patterns.len(),
+                context.len(),
+                dir.display()
+            );
+            Some((api_surface, patterns, context, fact_ledger))
+        } else {
+            None
         };
-        let api_surface = load("1-extract.md")?;
-        let patterns = load("2-map.md")?;
-        let context = load("3-learn.md")?;
-        info!(
-            "Replay mode: loaded {} + {} + {} chars from {}",
-            api_surface.len(),
-            patterns.len(),
-            context.len(),
-            dir.display()
-        );
-        Some((api_surface, patterns, context))
-    } else {
-        None
-    };
 
     // Load config (explicit path, CWD, target repo, git root, or user config dir)
     let mut config = Config::load_with_path_and_repo(config_path, Some(repo_path))?;
@@ -547,8 +559,8 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         generator = generator.with_existing_skill(skill.clone());
     }
 
-    if let Some((api_surface, patterns, context)) = replay_stages {
-        generator = generator.with_replay_stages(api_surface, patterns, context);
+    if let Some((api_surface, patterns, context, cached_ledger)) = replay_stages {
+        generator = generator.with_replay_stages(api_surface, patterns, context, cached_ledger);
     }
 
     // Set up secret redaction for test agent output.

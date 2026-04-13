@@ -220,7 +220,8 @@ pub struct Generator {
     /// debug stage dir. When set, the pipeline skips extract/map/learn and
     /// uses these values directly — lets you iterate on the create stage
     /// without repaying for the upstream LLM calls.
-    replay_stages: Option<(String, String, String)>,
+    /// (api_surface, patterns, context, optional_fact_ledger)
+    replay_stages: Option<(String, String, String, Option<String>)>,
     security_context: crate::config::SecurityContext,
 }
 
@@ -259,8 +260,9 @@ impl Generator {
         api_surface: String,
         patterns: String,
         context: String,
+        cached_fact_ledger: Option<String>,
     ) -> Self {
-        self.replay_stages = Some((api_surface, patterns, context));
+        self.replay_stages = Some((api_surface, patterns, context, cached_fact_ledger));
         self
     }
 
@@ -484,7 +486,7 @@ impl Generator {
 
         // extract/map/learn — either replay from a cached prior run or call the LLMs.
         let (api_surface, patterns, context) =
-            if let Some((ref api, ref pat, ref ctx)) = self.replay_stages {
+            if let Some((ref api, ref pat, ref ctx, _)) = self.replay_stages {
                 info!(
                     "extract/map/learn: REPLAY MODE — loaded {} + {} + {} chars from cache, \
                  skipping LLM calls",
@@ -558,9 +560,49 @@ impl Generator {
         self.dump_stage("2-map.md", &patterns);
         self.dump_stage("3-learn.md", &context);
 
+        // Fact ledger: compact truth table with negative assertions from stages 1-3.
+        // In replay mode, use the cached ledger if the replay source included one.
+        // Otherwise, generate via LLM.
+        let fact_ledger = if let Some((_, _, _, Some(ref cached))) = self.replay_stages {
+            info!(
+                "facts: REPLAY MODE — loaded {} chars from cache",
+                cached.len()
+            );
+            cached.clone()
+        } else {
+            std::env::set_var("SKILLDO_DEBUG_STAGE", "facts");
+            info!("facts: Extracting verified fact ledger...");
+            let parts = prompts_v2::fact_ledger_prompt(
+                &data.package_name,
+                &api_surface,
+                &patterns,
+                &context,
+                &data.language,
+            );
+            let ledger = self
+                .get_client("create")
+                .complete_with_system(&parts.system, &parts.user)
+                .await?;
+            info!("facts: complete ({} chars)", ledger.len());
+            self.dump_stage("facts.md", &ledger);
+            ledger
+        };
+
+        // Prepend fact ledger to user message for create stage. The ledger is
+        // the highest-salience checklist — placed before all other data so the
+        // model sees it first and treats it as non-negotiable constraints.
+        let ledger_prefix = if fact_ledger.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "## Verified Facts (DO NOT contradict — highest priority)\n\n{}\n\n---\n\n",
+                fact_ledger
+            )
+        };
+
         // create: Synthesize SKILL.md using system prompt split.
         // System = rules, custom instructions, language hints (high-priority directive channel).
-        // User = data from stages 1-3 (evidence to process).
+        // User = fact ledger + data from stages 1-3 (evidence to process).
         std::env::set_var("SKILLDO_DEBUG_STAGE", "4-create");
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
             // Update mode: patch existing SKILL.md
@@ -576,9 +618,10 @@ impl Generator {
                 &data.dependencies,
                 self.prompts_config.create_custom.as_deref(),
             );
+            let user_with_ledger = format!("{}{}", ledger_prefix, parts.user);
             self.dump_stage("4-create-system.md", &parts.system);
             self.get_client("create")
-                .complete_with_system(&parts.system, &parts.user)
+                .complete_with_system(&parts.system, &user_with_ledger)
                 .await?
         } else {
             // Normal mode: synthesize from scratch
@@ -596,9 +639,10 @@ impl Generator {
                 self.prompts_config.is_overwrite("create"),
                 &data.dependencies,
             );
+            let user_with_ledger = format!("{}{}", ledger_prefix, parts.user);
             self.dump_stage("4-create-system.md", &parts.system);
             self.get_client("create")
-                .complete_with_system(&parts.system, &parts.user)
+                .complete_with_system(&parts.system, &user_with_ledger)
                 .await?
         };
 
