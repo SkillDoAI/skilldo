@@ -557,4 +557,42 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn test_retry_complete_with_system_succeeds() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let mock = FailThenSucceed::new(count.clone(), 0, "unused");
+        let client = RetryClient::new(Box::new(mock), 3, 0);
+
+        let result = client
+            .complete_with_system("system rules", "user data")
+            .await
+            .unwrap();
+
+        // Default trait impl concatenates system + user
+        assert_eq!(result, "success");
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_complete_with_system_retries_on_transient() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let mock = FailThenSucceed::new(count.clone(), 1, "connection closed");
+        let client = RetryClient::new(Box::new(mock), 3, 0);
+
+        let result = client.complete_with_system("system", "user").await.unwrap();
+
+        assert_eq!(result, "success");
+        assert_eq!(count.load(Ordering::SeqCst), 2); // 1 fail + 1 success
+    }
+
+    #[tokio::test]
+    async fn test_complete_with_system_empty_system() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let mock = FailThenSucceed::new(count.clone(), 0, "unused");
+        let client = RetryClient::new(Box::new(mock), 1, 0);
+
+        let result = client.complete_with_system("", "user only").await.unwrap();
+        assert_eq!(result, "success");
+    }
 }

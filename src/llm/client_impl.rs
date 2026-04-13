@@ -2169,6 +2169,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_chatgpt_complete_with_system_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Responses)
+                    .respond_with_content("chatgpt system response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = ChatGPTClient::new(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            4096,
+            30,
+            false,
+            Some(format!("{}/v1", server.url())),
+        )
+        .unwrap();
+
+        // complete_with_system uses the instructions field for system prompt
+        let result = client
+            .complete_with_system("system rules", "user prompt")
+            .await;
+        assert!(
+            result.is_ok(),
+            "ChatGPT complete_with_system failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "chatgpt system response");
+    }
+
+    #[tokio::test]
     async fn test_anthropic_complete_with_extra_headers() {
         let server = llmposter::ServerBuilder::new()
             .fixture(
