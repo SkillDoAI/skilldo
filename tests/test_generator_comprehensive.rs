@@ -311,9 +311,9 @@ async fn test_all_four_agents_called_in_order() {
     assert_eq!(calls[0], "agent1_api_extractor");
     assert_eq!(calls[1], "agent2_pattern_extractor");
     assert_eq!(calls[2], "agent3_context_extractor");
-    // calls[3] = fact ledger (uses create client, prompt contains "fact extractor")
-    // calls[4] = create/synthesizer
-    // Create agent may be called additional times during validation retries
+    // Fact ledger must run before create (creates the ledger_prefix for create's user msg)
+    assert_eq!(calls[3], "fact_ledger");
+    assert_eq!(calls[4], "agent4_synthesizer");
 }
 
 #[tokio::test]

@@ -715,8 +715,9 @@ Documentation and changelog:
 }
 
 /// Create prompt for from-scratch SKILL.md generation.
-/// Delegates to `create_prompt_parts()` and concatenates for backward compat.
-/// Use `create_prompt_parts()` directly when calling `complete_with_system()`.
+/// Standalone compat wrapper for tests and `show-prompts`. Production code
+/// uses `create_prompt_parts()` directly with `complete_with_system()`.
+/// NOTE: this function's rules must be kept in sync with `create_prompt_parts()`.
 #[allow(clippy::too_many_arguments, dead_code)]
 pub fn create_prompt(
     package_name: &str,

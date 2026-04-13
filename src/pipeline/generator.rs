@@ -626,6 +626,7 @@ impl Generator {
         } else {
             // Normal mode: synthesize from scratch
             info!("create: Synthesizing SKILL.md...");
+            let is_overwrite = self.prompts_config.is_overwrite("create");
             let parts = prompts_v2::create_prompt_parts(
                 &data.package_name,
                 &data.version,
@@ -636,10 +637,16 @@ impl Generator {
                 &patterns,
                 &context,
                 self.prompts_config.create_custom.as_deref(),
-                self.prompts_config.is_overwrite("create"),
+                is_overwrite,
                 &data.dependencies,
             );
-            let user_with_ledger = format!("{}{}", ledger_prefix, parts.user);
+            // Don't inject ledger into overwrite mode — the user's custom prompt
+            // replaces everything, and the ledger prefix would corrupt it.
+            let user_with_ledger = if is_overwrite {
+                parts.user.clone()
+            } else {
+                format!("{}{}", ledger_prefix, parts.user)
+            };
             self.dump_stage("4-create-system.md", &parts.system);
             self.get_client("create")
                 .complete_with_system(&parts.system, &user_with_ledger)
