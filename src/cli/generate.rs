@@ -117,11 +117,18 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             // before the ledger feature was added.
             let cached_ledger = dir.join("facts.md");
             let fact_ledger = if cached_ledger.exists() {
-                let l = fs::read_to_string(&cached_ledger).unwrap_or_default();
-                if !l.is_empty() {
+                let l = fs::read_to_string(&cached_ledger).map_err(|e| {
+                    anyhow::anyhow!(
+                        "--replay-from: failed to read {}: {e}",
+                        cached_ledger.display()
+                    )
+                })?;
+                if !l.trim().is_empty() {
                     info!("Replay mode: loaded fact ledger ({} chars)", l.len());
+                    Some(l)
+                } else {
+                    None
                 }
-                Some(l).filter(|s| !s.is_empty())
             } else {
                 None
             };

@@ -101,7 +101,7 @@ enum Commands {
         #[arg(long = "no-test")]
         no_test: bool,
 
-        /// Test validation mode: thorough (all patterns), quick (2-3), minimal (1), adaptive (future: diff-based)
+        /// Test validation mode: thorough (all patterns), quick (2-3), minimal (1), adaptive (starts minimal, expands on success)
         #[arg(long = "test-mode")]
         test_mode: Option<String>,
 

@@ -404,7 +404,7 @@ impl<'a> TestCodeValidator<'a> {
                 selected
             }
             ValidationMode::Minimal => {
-                // Just test the first basic usage pattern
+                // Test the first pattern (regardless of category)
                 vec![&patterns[0]]
             }
             ValidationMode::Adaptive => {
