@@ -101,14 +101,21 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             }
             let load = |name: &str| -> Result<String> {
                 let path = dir.join(name);
-                fs::read_to_string(&path).map_err(|e| {
+                let content = fs::read_to_string(&path).map_err(|e| {
                     anyhow::anyhow!(
                         "--replay-from: failed to read {} — run `skilldo generate` with \
                      `--debug-stage-files {}` first to populate it: {e}",
                         path.display(),
                         dir.display()
                     )
-                })
+                })?;
+                if content.trim().is_empty() {
+                    anyhow::bail!(
+                        "--replay-from: {} is empty — was the prior run interrupted?",
+                        path.display()
+                    );
+                }
+                Ok(content)
             };
             let api_surface = load("1-extract.md")?;
             let patterns = load("2-map.md")?;

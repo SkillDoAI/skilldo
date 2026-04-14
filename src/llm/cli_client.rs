@@ -64,15 +64,19 @@ impl LlmClient for CliClient {
         }
         // Write system prompt to a temp file instead of passing as a CLI arg.
         // CLI args are visible to all users via `ps aux`; temp files are not.
-        let mut tmpfile =
-            NamedTempFile::new().context("Failed to create temp file for system prompt")?;
-        tmpfile
-            .write_all(system.as_bytes())
-            .context("Failed to write system prompt to temp file")?;
-        tmpfile
-            .flush()
-            .context("Failed to flush system prompt temp file")?;
-        let path = tmpfile.path().to_string_lossy().to_string();
+        // Use into_temp_path() to close the write handle before spawning —
+        // on Windows, NamedTempFile holds exclusive access and the subprocess
+        // can't read the file while the handle is open.
+        let tmp_path = {
+            let mut f =
+                NamedTempFile::new().context("Failed to create temp file for system prompt")?;
+            f.write_all(system.as_bytes())
+                .context("Failed to write system prompt to temp file")?;
+            f.flush()
+                .context("Failed to flush system prompt temp file")?;
+            f.into_temp_path()
+        };
+        let path = tmp_path.to_string_lossy().to_string();
         debug!(
             "CLI client: injecting system prompt via {:?} + temp file ({} chars)",
             self.system_args,
@@ -80,8 +84,10 @@ impl LlmClient for CliClient {
         );
         let mut extra: Vec<String> = self.system_args.clone();
         extra.push(path);
-        // tmpfile is held alive until run_cli completes, then auto-deleted on drop
-        self.run_cli(user, &extra).await
+        // tmp_path kept alive until run_cli completes, then auto-deleted on drop
+        let result = self.run_cli(user, &extra).await;
+        drop(tmp_path);
+        result
     }
 }
 
