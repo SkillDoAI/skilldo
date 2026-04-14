@@ -117,11 +117,24 @@ impl<'a> ReviewAgent<'a> {
             patterns,
             behavioral_semantics,
         );
-        let verdict_response = self
-            .client
-            .complete(&verdict_prompt)
-            .await
-            .context("review verdict LLM call failed")?;
+        // Split the prompt at the SKILL.MD UNDER REVIEW boundary:
+        // everything before it is review criteria (system), everything
+        // from it onward is the data to review (user).
+        let verdict_response =
+            if let Some(split_pos) = verdict_prompt.find("SKILL.MD UNDER REVIEW:") {
+                let system = &verdict_prompt[..split_pos];
+                let user = &verdict_prompt[split_pos..];
+                self.client
+                    .complete_with_system(system, user)
+                    .await
+                    .context("review verdict LLM call failed")?
+            } else {
+                // Fallback: if marker not found, send as single prompt
+                self.client
+                    .complete(&verdict_prompt)
+                    .await
+                    .context("review verdict LLM call failed")?
+            };
 
         let mut result = parse_review_response(&verdict_response, self.strict)?;
         result.raw_verdict = verdict_response;

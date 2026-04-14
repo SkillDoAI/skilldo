@@ -583,6 +583,9 @@ impl Generator {
             self.dump_stage("facts.md", cached);
             cached.clone()
         } else {
+            if self.replay_stages.is_some() {
+                info!("facts: cache miss — no facts.md in replay dir, running LLM call");
+            }
             std::env::set_var("SKILLDO_DEBUG_STAGE", "facts");
             info!("facts: Extracting verified fact ledger...");
             let parts = prompts_v2::fact_ledger_prompt(
