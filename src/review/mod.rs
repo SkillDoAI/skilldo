@@ -129,7 +129,10 @@ impl<'a> ReviewAgent<'a> {
                     .await
                     .context("review verdict LLM call failed")?
             } else {
-                // Fallback: if marker not found, send as single prompt
+                tracing::warn!(
+                    "review: 'SKILL.MD UNDER REVIEW:' marker not found in verdict prompt; \
+                     falling back to single-message call (system-prompt split disabled)"
+                );
                 self.client
                     .complete(&verdict_prompt)
                     .await
