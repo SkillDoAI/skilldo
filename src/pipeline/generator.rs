@@ -400,6 +400,9 @@ impl Generator {
                 if let Err(e) = std::fs::create_dir_all(&dir) {
                     warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
                     self.debug_stage_dir = None;
+                    // Clean stale env vars so a previous run's path isn't reused
+                    std::env::remove_var("SKILLDO_DEBUG_DIR");
+                    std::env::remove_var("SKILLDO_DEBUG_STAGE");
                 } else {
                     info!("Debug stage files: {}", dir.display());
                     // Set env var so LLM clients can dump reasoning tokens here

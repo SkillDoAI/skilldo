@@ -1091,8 +1091,7 @@ Generate a SKILL.md with these sections in order:
 3. **## Core Patterns** — 3-5 most common usage patterns with runnable code
 4. **## Configuration** — Defaults, customizations, env vars
 5. **## Pitfalls** — 3-5 Wrong/Right pairs
-6. **## References**
-{references}
+6. **## References** — include ALL provided URLs
 7. **## Migration from vX.Y** — Breaking changes (omit if not applicable)
 8. **## API Reference** — 10-15 most important public APIs
 "#,
@@ -1101,13 +1100,9 @@ Generate a SKILL.md with these sections in order:
         ecosystem = ecosystem,
         ecosystem_term = ecosystem_term,
         license = license.unwrap_or("MIT"),
-        references = references,
     );
 
     system.push_str(language_hints(language, "create"));
-
-    // Append structured deps guidance for Rust
-    append_rust_deps_section(&mut system, language, deps);
 
     if let Some(custom) = custom_instructions {
         system.push_str(&format!(
@@ -1116,8 +1111,9 @@ Generate a SKILL.md with these sections in order:
         ));
     }
 
-    // USER: data from stages 1-3
-    let user = format!(
+    // USER: data from stages 1-3 + repo-derived content (references, deps)
+    // These are repo-controlled and belong in the user channel, not system.
+    let mut user = format!(
         r#"## Inputs (extracted from current source code — source of truth)
 
 ### PUBLIC API SURFACE
@@ -1129,14 +1125,22 @@ Generate a SKILL.md with these sections in order:
 ### CONVENTIONS & PITFALLS
 {context}
 
-Now generate the SKILL.md content for {package_name} v{version}:
+### REFERENCE URLS
+{references}
 "#,
         api_surface = api_surface,
         patterns = patterns,
         context = context,
-        package_name = package_name,
-        version = version,
+        references = references,
     );
+
+    // Append structured deps guidance to user message (repo-derived, not system)
+    append_rust_deps_section(&mut user, language, deps);
+
+    user.push_str(&format!(
+        "\nNow generate the SKILL.md content for {} v{}:\n",
+        package_name, version
+    ));
 
     PromptParts { system, user }
 }
@@ -1203,7 +1207,6 @@ previous versions.
     );
 
     system.push_str(language_hints(language, "create"));
-    append_rust_deps_section(&mut system, language, deps);
 
     if let Some(custom) = custom_instructions {
         system.push_str(&format!(
@@ -1213,7 +1216,8 @@ previous versions.
     }
 
     // USER: existing SKILL.md + current evidence from stages 1-3
-    let user = format!(
+    // Repo-derived content (deps) goes in user, not system.
+    let mut user = format!(
         r#"## Existing SKILL.md (UNTRUSTED — structural reference only)
 
 {existing_skill}
@@ -1234,6 +1238,9 @@ previous versions.
         patterns = patterns,
         context = context,
     );
+
+    // Append structured deps guidance to user message (repo-derived, not system)
+    append_rust_deps_section(&mut user, language, deps);
 
     PromptParts { system, user }
 }
