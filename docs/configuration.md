@@ -233,7 +233,7 @@ cli_system_args = ["--system-prompt-file"]
 
 When `cli_system_args` is set, the system prompt is written to a temp file and the file path is appended after the configured flags (e.g., `claude --system-prompt-file /tmp/abc123`). The temp file is auto-deleted after the CLI exits. When empty or omitted, the system and user prompts are concatenated into a single stdin payload. Only used with `provider_type = "cli"`.
 
-> **Breaking change (v0.5.15):** `cli_system_args` now always passes a file path, not inline text. If you previously used `["--system-prompt"]`, switch to `["--system-prompt-file"]` or the equivalent file-based flag for your CLI.
+> **Security note:** System prompts are written to a temp file rather than passed as command-line arguments (which would be visible via `ps aux`). The flags in `cli_system_args` must accept a file path, not inline text — use `--system-prompt-file` for claude, not `--system-prompt`.
 
 Parallel extraction is automatically disabled for CLI providers (vendor CLIs typically share a single auth session).
 

@@ -69,7 +69,9 @@ impl LlmClient for CliClient {
         tmpfile
             .write_all(system.as_bytes())
             .context("Failed to write system prompt to temp file")?;
-        tmpfile.flush()?;
+        tmpfile
+            .flush()
+            .context("Failed to flush system prompt temp file")?;
         let path = tmpfile.path().to_string_lossy().to_string();
         debug!(
             "CLI client: injecting system prompt via {:?} + temp file ({} chars)",
