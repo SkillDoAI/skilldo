@@ -1070,7 +1070,10 @@ pub fn review_verdict_prompt_parts(
             user: combined[pos..].to_string(),
         }
     } else {
-        // Defensive: if marker missing, put everything in user
+        tracing::warn!(
+            "review_verdict_prompt_parts: REVIEW_SPLIT_MARKER not found — \
+             system prompt split disabled for this review call"
+        );
         PromptParts {
             system: String::new(),
             user: combined,
