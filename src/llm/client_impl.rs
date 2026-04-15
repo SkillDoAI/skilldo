@@ -2753,4 +2753,193 @@ mod tests {
             "Should mention no content: {err}"
         );
     }
+
+    // --- Coverage: Gemini extra_headers with protected header skip (lines 733-737) ---
+
+    #[tokio::test]
+    async fn test_gemini_complete_with_extra_headers() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Gemini)
+                    .respond_with_content("gemini headers response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = GeminiClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap()
+        .with_extra_headers(vec![
+            ("x-custom-header".to_string(), "custom-value".to_string()),
+            // Protected header should be skipped with a warning
+            ("authorization".to_string(), "should-be-skipped".to_string()),
+        ]);
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "Should succeed even with protected header");
+    }
+
+    // --- Coverage: ChatGPT extra_headers with protected header skip (lines 919-923) ---
+
+    #[tokio::test]
+    async fn test_chatgpt_complete_with_extra_headers() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Responses)
+                    .respond_with_content("chatgpt headers response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = ChatGPTClient::new(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            4096,
+            30,
+            false,
+            Some(format!("{}/v1", server.url())),
+        )
+        .unwrap()
+        .with_extra_headers(vec![
+            ("x-custom-header".to_string(), "custom-value".to_string()),
+            ("content-type".to_string(), "should-be-skipped".to_string()),
+        ]);
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "Should succeed even with protected header");
+    }
+
+    // --- Coverage: Gemini max_tokens=0 omits generation_config via real request (line 698) ---
+
+    #[tokio::test]
+    async fn test_gemini_complete_max_tokens_zero_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Gemini)
+                    .respond_with_content("gemini zero-max response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = GeminiClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            0, // max_tokens = 0
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "max_tokens=0 Gemini call should succeed");
+        assert_eq!(result.unwrap(), "gemini zero-max response");
+    }
+
+    // --- Coverage: ChatGPT max_tokens=0 omits max_output_tokens via real request (line 889) ---
+
+    #[tokio::test]
+    async fn test_chatgpt_complete_max_tokens_zero_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Responses)
+                    .respond_with_content("chatgpt zero-max response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = ChatGPTClient::new(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            0, // max_tokens = 0
+            30,
+            false,
+            Some(format!("{}/v1", server.url())),
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "max_tokens=0 ChatGPT call should succeed");
+        assert_eq!(result.unwrap(), "chatgpt zero-max response");
+    }
+
+    // --- Coverage: ChatGPT URL already ending in /responses (line 898) ---
+
+    #[tokio::test]
+    async fn test_chatgpt_complete_url_already_has_responses() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Responses)
+                    .respond_with_content("direct responses response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = ChatGPTClient::new(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            4096,
+            30,
+            false,
+            Some(format!("{}/v1/responses", server.url())),
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(
+            result.is_ok(),
+            "URL ending in /responses should work directly"
+        );
+    }
+
+    // --- Coverage: OpenAI URL with /v1/ interior path segment (line 412) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_url_with_v1_interior_path() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/custom/endpoint")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "custom endpoint response"
+                        }
+                    }]
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1/custom/endpoint", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        mock.assert_async().await;
+        assert!(result.is_ok(), "Custom v1 path should work");
+        assert_eq!(result.unwrap(), "custom endpoint response");
+    }
 }
