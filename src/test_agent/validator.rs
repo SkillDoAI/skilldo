@@ -27,12 +27,20 @@ use crate::llm::client::LlmClient;
 /// Validation mode for test agent
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ValidationMode {
-    /// Test 2-3 patterns thoroughly
+    /// Test ALL patterns — the real "thorough" mode. Every code block in
+    /// Core Patterns gets compiled and run against the library. This is the
+    /// only mode that mechanically guarantees no broken examples ship.
     #[default]
     Thorough,
-    /// Test 1 pattern initially, expand if it passes easily (future)
+    /// Test up to 3 patterns from different categories (BasicUsage, Configuration,
+    /// ErrorHandling). Fast iteration mode — good for replay-based prompt tuning.
+    Quick,
+    /// Test 1 pattern initially, expand if it passes easily (future: diff-based)
     Adaptive,
-    /// Test just 1 pattern for quick validation
+    /// Test just 1 pattern — always takes the first pattern regardless of
+    /// category. Quick mode also guarantees at least one pattern (it fills
+    /// from remaining if priority categories don't match), but selects by
+    /// category priority first. Minimal always picks index 0.
     Minimal,
 }
 
@@ -359,15 +367,18 @@ impl<'a> TestCodeValidator<'a> {
         }
 
         match self.mode {
-            ValidationMode::Minimal => {
-                // Just test the first basic usage pattern
-                vec![&patterns[0]]
-            }
             ValidationMode::Thorough => {
-                // Test up to 3 patterns: prioritize Basic, Config, Error handling
+                // Test ALL patterns — every code block in Core Patterns gets
+                // compiled and run. This is the mechanical guarantee that no
+                // broken examples ship.
+                info!("Thorough mode: testing all {} patterns", patterns.len());
+                patterns.iter().collect()
+            }
+            ValidationMode::Quick => {
+                // Test up to 3 patterns: prioritize Basic, Config, Error handling.
+                // Good for fast iteration during prompt tuning.
                 let mut selected = Vec::new();
 
-                // Try to get one from each category
                 for category in [
                     super::parser::PatternCategory::BasicUsage,
                     super::parser::PatternCategory::Configuration,
@@ -395,9 +406,13 @@ impl<'a> TestCodeValidator<'a> {
 
                 selected
             }
+            ValidationMode::Minimal => {
+                // Test the first pattern (regardless of category)
+                vec![&patterns[0]]
+            }
             ValidationMode::Adaptive => {
-                // For now, same as Minimal - future enhancement
-                // TODO: Start with 1, expand to 2-3 if first passes quickly
+                // For now, same as Minimal — future: diff-based, only test
+                // changed patterns between old and new SKILL.md
                 vec![&patterns[0]]
             }
         }
@@ -676,7 +691,8 @@ mod tests {
         let mode = ValidationMode::Minimal;
         let selected_count = match mode {
             ValidationMode::Minimal => 1,
-            ValidationMode::Thorough => 3.min(patterns.len()),
+            ValidationMode::Quick => 3.min(patterns.len()),
+            ValidationMode::Thorough => patterns.len(),
             ValidationMode::Adaptive => 1,
         };
 
@@ -755,7 +771,8 @@ mod tests {
         let mode = ValidationMode::Adaptive;
         let selected_count = match mode {
             ValidationMode::Minimal => 1,
-            ValidationMode::Thorough => 3.min(patterns.len()),
+            ValidationMode::Quick => 3.min(patterns.len()),
+            ValidationMode::Thorough => patterns.len(),
             ValidationMode::Adaptive => 1,
         };
 
@@ -1050,70 +1067,10 @@ mod tests {
     }
 
     #[test]
-    fn test_select_patterns_thorough_prioritizes_categories() {
-        let validator = make_validator(
-            Box::new(MockParser::new(vec![])),
-            Box::new(MockCodeGenerator::succeeding("")),
-            Box::new(MockExecutor::passing("")),
-            ValidationMode::Thorough,
-            InstallSource::Registry,
-        );
-        let patterns = vec![
-            async_pattern(),
-            error_pattern(),
-            config_pattern(),
-            basic_pattern(),
-            other_pattern("Extra"),
-        ];
-        let selected = validator.select_patterns(&patterns);
-        assert_eq!(selected.len(), 3);
-        // Should pick BasicUsage, Configuration, ErrorHandling (by category priority)
-        let names: Vec<&str> = selected.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"Basic Usage"));
-        assert!(names.contains(&"Configuration"));
-        assert!(names.contains(&"Error Handling"));
-    }
+    fn test_select_patterns_thorough_exercises_info_log() {
+        // Activate tracing so the info!() format args are evaluated by llvm-cov.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
-    #[test]
-    fn test_select_patterns_thorough_fills_remaining() {
-        let validator = make_validator(
-            Box::new(MockParser::new(vec![])),
-            Box::new(MockCodeGenerator::succeeding("")),
-            Box::new(MockExecutor::passing("")),
-            ValidationMode::Thorough,
-            InstallSource::Registry,
-        );
-        // Only BasicUsage category present, rest are Other
-        let patterns = vec![
-            basic_pattern(),
-            other_pattern("Extra1"),
-            other_pattern("Extra2"),
-            other_pattern("Extra3"),
-        ];
-        let selected = validator.select_patterns(&patterns);
-        assert_eq!(selected.len(), 3);
-        assert_eq!(selected[0].name, "Basic Usage");
-        assert_eq!(selected[1].name, "Extra1");
-        assert_eq!(selected[2].name, "Extra2");
-    }
-
-    #[test]
-    fn test_select_patterns_thorough_with_fewer_than_3() {
-        let validator = make_validator(
-            Box::new(MockParser::new(vec![])),
-            Box::new(MockCodeGenerator::succeeding("")),
-            Box::new(MockExecutor::passing("")),
-            ValidationMode::Thorough,
-            InstallSource::Registry,
-        );
-        let patterns = vec![basic_pattern()];
-        let selected = validator.select_patterns(&patterns);
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].name, "Basic Usage");
-    }
-
-    #[test]
-    fn test_select_patterns_thorough_exactly_3_categories() {
         let validator = make_validator(
             Box::new(MockParser::new(vec![])),
             Box::new(MockCodeGenerator::succeeding("")),
@@ -1127,7 +1084,34 @@ mod tests {
     }
 
     #[test]
-    fn test_select_patterns_thorough_more_than_3_all_categories() {
+    fn test_select_patterns_quick_exercises_selection_logic() {
+        // Activate tracing so all code paths within Quick mode are evaluated.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let validator = make_validator(
+            Box::new(MockParser::new(vec![])),
+            Box::new(MockCodeGenerator::succeeding("")),
+            Box::new(MockExecutor::passing("")),
+            ValidationMode::Quick,
+            InstallSource::Registry,
+        );
+        let patterns = vec![
+            basic_pattern(),
+            config_pattern(),
+            error_pattern(),
+            async_pattern(),
+        ];
+        let selected = validator.select_patterns(&patterns);
+        assert_eq!(selected.len(), 3);
+        // Should prioritize BasicUsage, Configuration, ErrorHandling
+        let names: Vec<&str> = selected.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"Basic Usage"));
+        assert!(names.contains(&"Configuration"));
+        assert!(names.contains(&"Error Handling"));
+    }
+
+    #[test]
+    fn test_select_patterns_thorough_returns_all() {
         let validator = make_validator(
             Box::new(MockParser::new(vec![])),
             Box::new(MockCodeGenerator::succeeding("")),
@@ -1135,7 +1119,85 @@ mod tests {
             ValidationMode::Thorough,
             InstallSource::Registry,
         );
-        // 5 patterns, 3 matching priority categories
+        let patterns = vec![
+            async_pattern(),
+            error_pattern(),
+            config_pattern(),
+            basic_pattern(),
+            other_pattern("Extra"),
+        ];
+        let selected = validator.select_patterns(&patterns);
+        // Thorough mode tests ALL patterns
+        assert_eq!(selected.len(), 5);
+    }
+
+    #[test]
+    fn test_select_patterns_thorough_single_pattern() {
+        let validator = make_validator(
+            Box::new(MockParser::new(vec![])),
+            Box::new(MockCodeGenerator::succeeding("")),
+            Box::new(MockExecutor::passing("")),
+            ValidationMode::Thorough,
+            InstallSource::Registry,
+        );
+        let patterns = vec![basic_pattern()];
+        let selected = validator.select_patterns(&patterns);
+        assert_eq!(selected.len(), 1);
+    }
+
+    #[test]
+    fn test_select_patterns_quick_prioritizes_categories() {
+        let validator = make_validator(
+            Box::new(MockParser::new(vec![])),
+            Box::new(MockCodeGenerator::succeeding("")),
+            Box::new(MockExecutor::passing("")),
+            ValidationMode::Quick,
+            InstallSource::Registry,
+        );
+        let patterns = vec![
+            async_pattern(),
+            error_pattern(),
+            config_pattern(),
+            basic_pattern(),
+            other_pattern("Extra"),
+        ];
+        let selected = validator.select_patterns(&patterns);
+        assert_eq!(selected.len(), 3);
+        let names: Vec<&str> = selected.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"Basic Usage"));
+        assert!(names.contains(&"Configuration"));
+        assert!(names.contains(&"Error Handling"));
+    }
+
+    #[test]
+    fn test_select_patterns_quick_fills_remaining() {
+        let validator = make_validator(
+            Box::new(MockParser::new(vec![])),
+            Box::new(MockCodeGenerator::succeeding("")),
+            Box::new(MockExecutor::passing("")),
+            ValidationMode::Quick,
+            InstallSource::Registry,
+        );
+        let patterns = vec![
+            basic_pattern(),
+            other_pattern("Extra1"),
+            other_pattern("Extra2"),
+            other_pattern("Extra3"),
+        ];
+        let selected = validator.select_patterns(&patterns);
+        assert_eq!(selected.len(), 3);
+        assert_eq!(selected[0].name, "Basic Usage");
+    }
+
+    #[test]
+    fn test_select_patterns_quick_caps_at_3() {
+        let validator = make_validator(
+            Box::new(MockParser::new(vec![])),
+            Box::new(MockCodeGenerator::succeeding("")),
+            Box::new(MockExecutor::passing("")),
+            ValidationMode::Quick,
+            InstallSource::Registry,
+        );
         let patterns = vec![
             basic_pattern(),
             config_pattern(),
@@ -1144,20 +1206,18 @@ mod tests {
             other_pattern("Extra"),
         ];
         let selected = validator.select_patterns(&patterns);
-        // Should stop at 3 from priority categories
         assert_eq!(selected.len(), 3);
     }
 
     #[test]
-    fn test_select_patterns_thorough_no_priority_categories() {
+    fn test_select_patterns_quick_no_priority_categories() {
         let validator = make_validator(
             Box::new(MockParser::new(vec![])),
             Box::new(MockCodeGenerator::succeeding("")),
             Box::new(MockExecutor::passing("")),
-            ValidationMode::Thorough,
+            ValidationMode::Quick,
             InstallSource::Registry,
         );
-        // All Other/Async categories -- none match BasicUsage/Configuration/ErrorHandling
         let patterns = vec![
             async_pattern(),
             other_pattern("A"),
@@ -1166,7 +1226,6 @@ mod tests {
         ];
         let selected = validator.select_patterns(&patterns);
         assert_eq!(selected.len(), 3);
-        // Fills from remaining
         assert_eq!(selected[0].name, "Async Usage");
         assert_eq!(selected[1].name, "A");
         assert_eq!(selected[2].name, "B");

@@ -3,7 +3,9 @@
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use std::io::Write;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::debug;
@@ -16,6 +18,14 @@ use super::client::LlmClient;
 pub struct CliClient {
     command: String,
     args: Vec<String>,
+    /// CLI flag(s) for passing a system prompt via temp file (e.g.,
+    /// ["--system-prompt-file"] for claude). When non-empty,
+    /// complete_with_system() writes the system text to a temp file, appends
+    /// these flags + the file path to the command. When empty, falls back to
+    /// concatenating system + user into stdin.
+    /// Security: system prompts are never passed as inline CLI arguments,
+    /// which would be visible to other processes via `ps aux`.
+    system_args: Vec<String>,
     json_path: Option<String>,
     timeout_secs: u64,
 }
@@ -24,12 +34,14 @@ impl CliClient {
     pub fn new(
         command: String,
         args: Vec<String>,
+        system_args: Vec<String>,
         json_path: Option<String>,
         timeout_secs: u64,
     ) -> Self {
         Self {
             command,
             args,
+            system_args,
             json_path,
             timeout_secs,
         }
@@ -39,10 +51,60 @@ impl CliClient {
 #[async_trait]
 impl LlmClient for CliClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
-        debug!("CLI client: {} ({} arg(s))", self.command, self.args.len());
+        self.run_cli(prompt, &[]).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        if system.is_empty() || self.system_args.is_empty() {
+            // No system args configured or empty system → default concat
+            if system.is_empty() {
+                return self.run_cli(user, &[]).await;
+            }
+            return self.run_cli(&format!("{}\n\n{}", system, user), &[]).await;
+        }
+        // Write system prompt to a temp file instead of passing as a CLI arg.
+        // CLI args are visible to all users via `ps aux`; temp files are not.
+        // Use into_temp_path() to close the write handle before spawning —
+        // on Windows, NamedTempFile holds exclusive access and the subprocess
+        // can't read the file while the handle is open.
+        let tmp_path = {
+            let mut f =
+                NamedTempFile::new().context("Failed to create temp file for system prompt")?;
+            f.write_all(system.as_bytes())
+                .context("Failed to write system prompt to temp file")?;
+            f.flush()
+                .context("Failed to flush system prompt temp file")?;
+            f.into_temp_path()
+        };
+        let path = tmp_path.to_string_lossy().to_string();
+        debug!(
+            "CLI client: injecting system prompt via {:?} + temp file ({} chars)",
+            self.system_args,
+            system.len()
+        );
+        let mut extra: Vec<String> = self.system_args.clone();
+        extra.push(path);
+        // tmp_path kept alive until run_cli completes, then auto-deleted on drop
+        let result = self.run_cli(user, &extra).await;
+        drop(tmp_path);
+        result
+    }
+}
+
+impl CliClient {
+    /// Shared implementation — spawns the CLI with configured args + optional
+    /// extra args (used by complete_with_system to inject system prompt flags).
+    async fn run_cli(&self, prompt: &str, extra_args: &[String]) -> Result<String> {
+        debug!(
+            "CLI client: {} ({} + {} arg(s))",
+            self.command,
+            self.args.len(),
+            extra_args.len()
+        );
 
         let mut child = Command::new(&self.command)
             .args(&self.args)
+            .args(extra_args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -177,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn test_cli_client_echo_raw() {
         // `cat` echoes stdin back — simplest possible "CLI"
-        let client = CliClient::new("cat".to_string(), vec![], None, TEST_TIMEOUT);
+        let client = CliClient::new("cat".to_string(), vec![], vec![], None, TEST_TIMEOUT);
         let result = client.complete("hello world").await.unwrap();
         assert_eq!(result.trim(), "hello world");
     }
@@ -190,6 +252,7 @@ mod tests {
                 "-c".to_string(),
                 r#"echo '{"result": "extracted text"}'"#.to_string(),
             ],
+            vec![],
             Some("result".to_string()),
             TEST_TIMEOUT,
         );
@@ -205,6 +268,7 @@ mod tests {
                 "-c".to_string(),
                 r#"echo '{"data": {"response": "nested value"}}'"#.to_string(),
             ],
+            vec![],
             Some("data.response".to_string()),
             TEST_TIMEOUT,
         );
@@ -220,6 +284,7 @@ mod tests {
                 "-c".to_string(),
                 r#"echo '{"data": {"other": "value"}}'"#.to_string(),
             ],
+            vec![],
             Some("data.response".to_string()),
             TEST_TIMEOUT,
         );
@@ -246,6 +311,7 @@ mod tests {
         let client = CliClient::new(
             "nonexistent_binary_xyz_12345".to_string(),
             vec![],
+            vec![],
             None,
             TEST_TIMEOUT,
         );
@@ -258,6 +324,7 @@ mod tests {
         let client = CliClient::new(
             "sh".to_string(),
             vec!["-c".to_string(), "exit 1".to_string()],
+            vec![],
             None,
             TEST_TIMEOUT,
         );
@@ -271,6 +338,7 @@ mod tests {
         let client = CliClient::new(
             "sh".to_string(),
             vec!["-c".to_string(), r#"echo '{"other": "value"}'"#.to_string()],
+            vec![],
             Some("result".to_string()),
             TEST_TIMEOUT,
         );
@@ -282,7 +350,13 @@ mod tests {
     #[tokio::test]
     async fn test_cli_client_stdin_receives_prompt() {
         // `wc -c` counts bytes from stdin — verifies prompt was piped
-        let client = CliClient::new("wc".to_string(), vec!["-c".to_string()], None, TEST_TIMEOUT);
+        let client = CliClient::new(
+            "wc".to_string(),
+            vec!["-c".to_string()],
+            vec![],
+            None,
+            TEST_TIMEOUT,
+        );
         let result = client.complete("12345").await.unwrap();
         let byte_count: usize = result.trim().parse().unwrap();
         assert_eq!(byte_count, 5);
@@ -294,6 +368,7 @@ mod tests {
         let client = CliClient::new(
             "sh".to_string(),
             vec!["-c".to_string(), r#"echo '{"count": 42}'"#.to_string()],
+            vec![],
             Some("count".to_string()),
             TEST_TIMEOUT,
         );
@@ -310,6 +385,7 @@ mod tests {
                 "-c".to_string(),
                 r#"echo '{"data": "just a string"}'  "#.to_string(),
             ],
+            vec![],
             Some("data.nested".to_string()),
             TEST_TIMEOUT,
         );
@@ -328,6 +404,7 @@ mod tests {
         let client = CliClient::new(
             "sh".to_string(),
             vec!["-c".to_string(), "echo 'not json'".to_string()],
+            vec![],
             Some("result".to_string()),
             TEST_TIMEOUT,
         );
@@ -341,7 +418,7 @@ mod tests {
     async fn test_cli_client_broken_pipe() {
         // `true` exits immediately without reading stdin — triggers BrokenPipe
         // on large prompts. Send enough data to make the pipe buffer overflow.
-        let client = CliClient::new("true".to_string(), vec![], None, TEST_TIMEOUT);
+        let client = CliClient::new("true".to_string(), vec![], vec![], None, TEST_TIMEOUT);
         let large_prompt = "x".repeat(1_000_000);
         // Should succeed (BrokenPipe is silently handled, exit code 0)
         let result = client.complete(&large_prompt).await;
@@ -355,6 +432,7 @@ mod tests {
         let client = CliClient::new(
             "cmd".to_string(),
             vec!["/c".to_string(), "exit".to_string(), "0".to_string()],
+            vec![],
             None,
             TEST_TIMEOUT,
         );
@@ -370,6 +448,7 @@ mod tests {
         let client = CliClient::new(
             "sleep".to_string(),
             vec!["10".to_string()],
+            vec![],
             None,
             1, // 1-second timeout
         );
@@ -391,6 +470,7 @@ mod tests {
         let client = CliClient::new(
             "ping".to_string(),
             vec!["-n".to_string(), "11".to_string(), "127.0.0.1".to_string()],
+            vec![],
             None,
             1,
         );
@@ -401,6 +481,58 @@ mod tests {
             err_msg.contains("timed out"),
             "Expected timeout message, got: {}",
             err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cli_complete_with_system_no_args_concat() {
+        // When system_args is empty, complete_with_system concatenates
+        let client = CliClient::new("cat".to_string(), vec![], vec![], None, TEST_TIMEOUT);
+        let result = client
+            .complete_with_system("system rules", "user data")
+            .await
+            .unwrap();
+        assert!(result.contains("system rules"));
+        assert!(result.contains("user data"));
+    }
+
+    #[tokio::test]
+    async fn test_cli_complete_with_system_empty_system() {
+        // Empty system string → just sends user data
+        let client = CliClient::new("cat".to_string(), vec![], vec![], None, TEST_TIMEOUT);
+        let result = client.complete_with_system("", "user only").await.unwrap();
+        assert_eq!(result.trim(), "user only");
+    }
+
+    #[tokio::test]
+    async fn test_cli_complete_with_system_args_writes_tempfile() {
+        // When system_args is non-empty, the system prompt is written to a temp
+        // file and the file path is passed as the last arg. We use a shell script
+        // that reads the file path from the last argument and cats its content,
+        // proving the system prompt was written to disk (not passed inline).
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                // $0 = --sys-file, $1 = /path/to/tmpfile; cat the file, then stdin
+                "cat \"$1\" && cat".to_string(),
+            ],
+            vec!["--sys-file".to_string()],
+            None,
+            TEST_TIMEOUT,
+        );
+        let result = client
+            .complete_with_system("system rules", "user data")
+            .await
+            .unwrap();
+        // Output should contain both the system prompt (from temp file) and user data (from stdin)
+        assert!(
+            result.contains("system rules"),
+            "should contain system prompt from temp file: {result}"
+        );
+        assert!(
+            result.contains("user data"),
+            "should contain user data from stdin: {result}"
         );
     }
 }

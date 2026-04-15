@@ -5,7 +5,7 @@ license: AGPL-3.0
 compatibility: Requires an LLM API key (Anthropic, OpenAI, Gemini, or OpenAI-compatible). Optional container runtime (docker/podman) for test validation.
 metadata:
   author: SkillDoAI
-  version: "0.5.14"
+  version: "0.5.15"
 ---
 
 # Skilldo CLI
@@ -73,7 +73,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 [generation]
 enable_test = true
 enable_review = true
-test_mode = "thorough"          # thorough, adaptive, minimal
+test_mode = "thorough"          # thorough, quick, adaptive, minimal
 
 [generation.review_llm]
 provider_type = "openai"
@@ -108,6 +108,15 @@ request_timeout_secs = 900
 ```
 
 Supported CLI tools: `claude`, `codex`, `gemini`. The prompt is piped via stdin; response captured from stdout.
+
+Optional: declare how the CLI accepts system prompts natively:
+
+```toml
+cli_system_args = ["--system-prompt-file"]  # for claude (reads from temp file)
+# cli_system_args = ["-s"]            # for codex
+```
+
+When `cli_system_args` is set, instructions go through the native system channel instead of being concatenated into stdin.
 
 ### Custom base URL (Bedrock, Vertex AI, proxies)
 
@@ -149,6 +158,7 @@ Key flags:
 - `-i, --input <PATH>` — existing SKILL.md to use as reference for updates
 - `-o <PATH>` — output file (default: SKILL.md)
 - `--debug-stage-files <DIR>` — dump each pipeline stage's raw output for debugging
+- `--replay-from <DIR>` — load cached extract/map/learn outputs from a prior `--debug-stage-files` run, skipping those LLM calls. Reduces iteration time from ~15 min to ~5 min
 - `--no-test` — skip test validation
 - `--no-review` — skip review validation
 - `--no-security-scan` — skip YARA/unicode/injection scanning
@@ -158,7 +168,7 @@ Key flags:
 - `--container` — run test agent in container (default: bare-metal with uv/cargo)
 - `--install-source <MODE>` — how the test agent installs the library for code validation: `registry` (from crates.io/PyPI/npm, default), `local-install` (mounts local repo and builds via package manager), `local-mount` (mounts repo and sets module path directly, no build step)
 - `--source-path <PATH>` — local source path for local-install/local-mount modes
-- `--test-mode <MODE>` — `thorough` tests 3 patterns (default), `minimal` tests 1, `adaptive` starts with 1 and expands
+- `--test-mode <MODE>` — `thorough` tests ALL patterns (default), `quick` tests up to 3 for fast iteration, `minimal` tests 1, `adaptive` starts with 1 and expands
 - `--review-model <MODEL>` / `--review-provider <PROVIDER>` — override model/provider for the review stage only
 - `--test-model <MODEL>` / `--test-provider <PROVIDER>` — override model/provider for the test code generation stage only
 - `--max-retries <N>` — max create→validate retries before giving up (default: from config)
@@ -206,7 +216,7 @@ Key `[generation]` fields:
 | `custom_instructions` | `"""..."""` | Repo-specific instructions for the create stage (overrides style/content rules) |
 | `enable_test` | `true`/`false` | Toggle test validation (default: true) |
 | `enable_review` | `true`/`false` | Toggle review validation (default: true) |
-| `test_mode` | `thorough`/`minimal`/`adaptive` | Test 3/1/1+ patterns |
+| `test_mode` | `thorough`/`quick`/`minimal`/`adaptive` | Test all/up to 3/1/1+ patterns |
 | `max_retries` | integer | Max create→validate retries (default: 10) |
 
 ### Model Communication
@@ -255,10 +265,20 @@ export MY_API_KEY="..."  # needed for test validation
 skilldo generate . --config skilldo.toml
 ```
 
+### Fast prompt iteration with replay
+```bash
+# Capture cache once
+skilldo generate /path/to/lib --debug-stage-files /tmp/cache -o /tmp/baseline.md
+
+# Iterate on prompts (only create stage runs, ~5 min vs ~15 min)
+skilldo generate /path/to/lib --replay-from /tmp/cache -o /tmp/variant.md
+```
+
 ### Debug pipeline stages
 ```bash
 skilldo generate . --debug-stage-files ./debug-output/
-# Writes: 1-extract.md, 2-map.md, 3-learn.md, 4-create-raw.md, 5-review-*.txt, 6-normalized.md
+# Writes: 1-extract.md, 2-map.md, 3-learn.md, 4-create-raw.md, 4-create-system.md, facts.md,
+#         5-review-*.txt, 6-normalized.md
 ```
 
 ### Review an existing SKILL.md

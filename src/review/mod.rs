@@ -109,7 +109,9 @@ impl<'a> ReviewAgent<'a> {
         behavioral_semantics: Option<&str>,
     ) -> Result<ReviewResult> {
         // LLM verdict (accuracy + safety + consistency)
-        let verdict_prompt = prompts_v2::review_verdict_prompt(
+        // Uses PromptParts so review criteria go through the system channel
+        // and SKILL.md data goes through the user channel.
+        let parts = prompts_v2::review_verdict_prompt_parts(
             skill_md,
             self.custom_prompt.as_deref(),
             language,
@@ -119,7 +121,7 @@ impl<'a> ReviewAgent<'a> {
         );
         let verdict_response = self
             .client
-            .complete(&verdict_prompt)
+            .complete_with_system(&parts.system, &parts.user)
             .await
             .context("review verdict LLM call failed")?;
 
@@ -748,5 +750,78 @@ mod tests {
             },
         ];
         print_review_issues(&issues);
+    }
+
+    // ========================================================================
+    // review() uses complete_with_system via PromptParts
+    // ========================================================================
+
+    use std::sync::{Arc, Mutex};
+
+    /// Mock that records which LlmClient method was invoked and always
+    /// returns a valid `passed: true` JSON verdict.
+    struct RecordingClient {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RecordingClient {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn call_log(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for RecordingClient {
+        async fn complete(&self, _prompt: &str) -> anyhow::Result<String> {
+            self.calls.lock().unwrap().push("complete");
+            Ok(r#"{"passed": true, "issues": []}"#.to_string())
+        }
+
+        async fn complete_with_system(&self, _system: &str, _user: &str) -> anyhow::Result<String> {
+            self.calls.lock().unwrap().push("complete_with_system");
+            Ok(r#"{"passed": true, "issues": []}"#.to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_review_uses_complete_with_system() {
+        let client = RecordingClient::new();
+        let agent = ReviewAgent::new(&client, None);
+
+        let result = agent
+            .review("# Skill content", &Language::Python, None, None, None)
+            .await
+            .unwrap();
+
+        assert!(result.passed);
+        // review() now uses review_verdict_prompt_parts() + complete_with_system()
+        assert_eq!(client.call_log(), vec!["complete_with_system"]);
+    }
+
+    #[test]
+    fn test_review_verdict_prompt_parts_splits_correctly() {
+        let parts = prompts_v2::review_verdict_prompt_parts(
+            "# My Skill",
+            None,
+            &Language::Rust,
+            None,
+            None,
+            None,
+        );
+        // System should contain the review criteria
+        assert!(parts.system.contains("Darryl"));
+        assert!(parts.system.contains("ACCURACY"));
+        assert!(parts.system.contains("SAFETY"));
+        // User should contain the SKILL.md data
+        assert!(parts.user.contains("SKILL.MD UNDER REVIEW"));
+        assert!(parts.user.contains("# My Skill"));
+        // Criteria should NOT be in user
+        assert!(!parts.user.contains("ACCURACY"));
     }
 }

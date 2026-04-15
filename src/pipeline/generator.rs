@@ -216,6 +216,12 @@ pub struct Generator {
     existing_skill: Option<String>, // Existing SKILL.md for update mode
     model_name: Option<String>,     // For metadata.generated-by frontmatter field
     debug_stage_dir: Option<std::path::PathBuf>, // Dump stage outputs here
+    /// Pre-computed (api_surface, patterns, context) from a previous run's
+    /// debug stage dir. When set, the pipeline skips extract/map/learn and
+    /// uses these values directly — lets you iterate on the create stage
+    /// without repaying for the upstream LLM calls.
+    /// (api_surface, patterns, context, optional_fact_ledger)
+    replay_stages: Option<(String, String, String, Option<String>)>,
     security_context: crate::config::SecurityContext,
 }
 
@@ -241,8 +247,23 @@ impl Generator {
             existing_skill: None,
             model_name: None,
             debug_stage_dir: None,
+            replay_stages: None,
             security_context: crate::config::SecurityContext::Default,
         }
+    }
+
+    /// Preload extract/map/learn outputs from a previous run so the next
+    /// generation skips those three LLM calls entirely and jumps straight
+    /// to the create stage. Used for prompt-tuning iteration loops.
+    pub fn with_replay_stages(
+        mut self,
+        api_surface: String,
+        patterns: String,
+        context: String,
+        cached_fact_ledger: Option<String>,
+    ) -> Self {
+        self.replay_stages = Some((api_surface, patterns, context, cached_fact_ledger));
+        self
     }
 
     pub fn with_security_context(mut self, ctx: crate::config::SecurityContext) -> Self {
@@ -379,12 +400,21 @@ impl Generator {
                 if let Err(e) = std::fs::create_dir_all(&dir) {
                     warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
                     self.debug_stage_dir = None;
+                    // Clean stale env vars so a previous run's path isn't reused
+                    std::env::remove_var("SKILLDO_DEBUG_DIR");
+                    std::env::remove_var("SKILLDO_DEBUG_STAGE");
                 } else {
                     info!("Debug stage files: {}", dir.display());
+                    // Set env var so LLM clients can dump reasoning tokens here
+                    std::env::set_var("SKILLDO_DEBUG_DIR", &dir);
                     self.debug_stage_dir = Some(dir);
                 }
             }
             None => {
+                // Clean up stale env vars so LLM clients don't dump reasoning
+                // tokens into a directory from a previous run.
+                std::env::remove_var("SKILLDO_DEBUG_DIR");
+                std::env::remove_var("SKILLDO_DEBUG_STAGE");
                 self.debug_stage_dir = None;
             }
         }
@@ -461,58 +491,75 @@ impl Generator {
             data.source_content.clone()
         };
 
-        // extract/map/learn are independent — run them in parallel
-        info!("extract: Extracting API surface...");
-        info!("map: Extracting usage patterns...");
-        info!("learn: Extracting conventions and pitfalls...");
+        // extract/map/learn — either replay from a cached prior run or call the LLMs.
+        let (api_surface, patterns, context) =
+            if let Some((ref api, ref pat, ref ctx, _)) = self.replay_stages {
+                info!(
+                    "extract/map/learn: REPLAY MODE — loaded {} + {} + {} chars from cache, \
+                 skipping LLM calls",
+                    api.len(),
+                    pat.len(),
+                    ctx.len()
+                );
+                // Clone is intentional: generate() takes &self, and the strings
+                // (~100KB total) are negligible vs the LLM calls that follow.
+                (api.clone(), pat.clone(), ctx.clone())
+            } else {
+                info!("extract: Extracting API surface...");
+                info!("map: Extracting usage patterns...");
+                info!("learn: Extracting conventions and pitfalls...");
 
-        let extract_prompt = prompts_v2::extract_prompt(
-            &data.package_name,
-            &data.version,
-            &source_with_context,
-            data.source_file_count,
-            self.prompts_config.extract_custom.as_deref(),
-            self.prompts_config.is_overwrite("extract"),
-            &data.language,
-        );
-        let map_prompt = prompts_v2::map_prompt(
-            &data.package_name,
-            &data.version,
-            &examples_and_tests,
-            self.prompts_config.map_custom.as_deref(),
-            self.prompts_config.is_overwrite("map"),
-            &data.language,
-        );
-        let learn_prompt = prompts_v2::learn_prompt(
-            &data.package_name,
-            &data.version,
-            &docs_and_changelog,
-            self.prompts_config.learn_custom.as_deref(),
-            self.prompts_config.is_overwrite("learn"),
-            &data.language,
-        );
+                let extract_prompt = prompts_v2::extract_prompt(
+                    &data.package_name,
+                    &data.version,
+                    &source_with_context,
+                    data.source_file_count,
+                    self.prompts_config.extract_custom.as_deref(),
+                    self.prompts_config.is_overwrite("extract"),
+                    &data.language,
+                );
+                let map_prompt = prompts_v2::map_prompt(
+                    &data.package_name,
+                    &data.version,
+                    &examples_and_tests,
+                    self.prompts_config.map_custom.as_deref(),
+                    self.prompts_config.is_overwrite("map"),
+                    &data.language,
+                );
+                let learn_prompt = prompts_v2::learn_prompt(
+                    &data.package_name,
+                    &data.version,
+                    &docs_and_changelog,
+                    self.prompts_config.learn_custom.as_deref(),
+                    self.prompts_config.is_overwrite("learn"),
+                    &data.language,
+                );
 
-        let extract_client = self.get_client("extract");
-        let map_client = self.get_client("map");
-        let learn_client = self.get_client("learn");
+                let extract_client = self.get_client("extract");
+                let map_client = self.get_client("map");
+                let learn_client = self.get_client("learn");
 
-        let (api_surface, patterns, context) = if self.parallel_extraction {
-            info!("Running extract/map/learn in parallel...");
-            tokio::try_join!(
-                extract_client.complete(&extract_prompt),
-                map_client.complete(&map_prompt),
-                learn_client.complete(&learn_prompt),
-            )?
-        } else {
-            info!("Running extract/map/learn sequentially...");
-            let api_surface = extract_client.complete(&extract_prompt).await?;
-            info!("extract: complete");
-            let patterns = map_client.complete(&map_prompt).await?;
-            info!("map: complete");
-            let context = learn_client.complete(&learn_prompt).await?;
-            info!("learn: complete");
-            (api_surface, patterns, context)
-        };
+                if self.parallel_extraction {
+                    info!("Running extract/map/learn in parallel...");
+                    tokio::try_join!(
+                        extract_client.complete(&extract_prompt),
+                        map_client.complete(&map_prompt),
+                        learn_client.complete(&learn_prompt),
+                    )?
+                } else {
+                    info!("Running extract/map/learn sequentially...");
+                    std::env::set_var("SKILLDO_DEBUG_STAGE", "1-extract");
+                    let api_surface = extract_client.complete(&extract_prompt).await?;
+                    info!("extract: complete");
+                    std::env::set_var("SKILLDO_DEBUG_STAGE", "2-map");
+                    let patterns = map_client.complete(&map_prompt).await?;
+                    info!("map: complete");
+                    std::env::set_var("SKILLDO_DEBUG_STAGE", "3-learn");
+                    let context = learn_client.complete(&learn_prompt).await?;
+                    info!("learn: complete");
+                    (api_surface, patterns, context)
+                }
+            };
 
         info!("extract/map/learn: All extractions complete");
 
@@ -520,11 +567,63 @@ impl Generator {
         self.dump_stage("2-map.md", &patterns);
         self.dump_stage("3-learn.md", &context);
 
-        // create: Synthesize SKILL.md
+        // Fact ledger: compact truth table with negative assertions from stages 1-3.
+        // Skip entirely in overwrite mode — the user's custom prompt replaces
+        // everything and the ledger would be discarded anyway.
+        let is_overwrite_create =
+            self.prompts_config.is_overwrite("create") && self.existing_skill.is_none();
+        let fact_ledger = if is_overwrite_create {
+            String::new()
+        } else if let Some((_, _, _, Some(ref cached))) = self.replay_stages {
+            info!(
+                "facts: REPLAY MODE — loaded {} chars from cache",
+                cached.len()
+            );
+            // Still dump to the variant's debug dir so it's self-contained
+            self.dump_stage("facts.md", cached);
+            cached.clone()
+        } else {
+            if self.replay_stages.is_some() {
+                info!("facts: cache miss — no facts.md in replay dir, running LLM call");
+            }
+            std::env::set_var("SKILLDO_DEBUG_STAGE", "facts");
+            info!("facts: Extracting verified fact ledger...");
+            let parts = prompts_v2::fact_ledger_prompt(
+                &data.package_name,
+                &api_surface,
+                &patterns,
+                &context,
+                &data.language,
+            );
+            let ledger = self
+                .get_client("create")
+                .complete_with_system(&parts.system, &parts.user)
+                .await?;
+            info!("facts: complete ({} chars)", ledger.len());
+            self.dump_stage("facts.md", &ledger);
+            ledger
+        };
+
+        // Prepend fact ledger to user message for create stage. The ledger is
+        // the highest-salience checklist — placed before all other data so the
+        // model sees it first and treats it as non-negotiable constraints.
+        let ledger_prefix = if fact_ledger.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "## Verified Facts (DO NOT contradict — highest priority)\n\n{}\n\n---\n\n",
+                fact_ledger
+            )
+        };
+
+        // create: Synthesize SKILL.md using system prompt split.
+        // System = rules, custom instructions, language hints (high-priority directive channel).
+        // User = fact ledger + data from stages 1-3 (evidence to process).
+        std::env::set_var("SKILLDO_DEBUG_STAGE", "4-create");
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
             // Update mode: patch existing SKILL.md
             info!("create: Updating existing SKILL.md...");
-            let update_prompt = prompts_v2::create_update_prompt(
+            let parts = prompts_v2::create_update_prompt_parts(
                 &data.package_name,
                 &data.version,
                 existing,
@@ -535,11 +634,16 @@ impl Generator {
                 &data.dependencies,
                 self.prompts_config.create_custom.as_deref(),
             );
-            self.get_client("create").complete(&update_prompt).await?
+            let user_with_ledger = format!("{}{}", ledger_prefix, parts.user);
+            self.dump_stage("4-create-system.md", &parts.system);
+            self.get_client("create")
+                .complete_with_system(&parts.system, &user_with_ledger)
+                .await?
         } else {
             // Normal mode: synthesize from scratch
             info!("create: Synthesizing SKILL.md...");
-            let synthesis_prompt = prompts_v2::create_prompt(
+            let is_overwrite = self.prompts_config.is_overwrite("create");
+            let parts = prompts_v2::create_prompt_parts(
                 &data.package_name,
                 &data.version,
                 data.license.as_deref(),
@@ -549,11 +653,19 @@ impl Generator {
                 &patterns,
                 &context,
                 self.prompts_config.create_custom.as_deref(),
-                self.prompts_config.is_overwrite("create"),
+                is_overwrite,
                 &data.dependencies,
             );
+            // Don't inject ledger into overwrite mode — the user's custom prompt
+            // replaces everything, and the ledger prefix would corrupt it.
+            let user_with_ledger = if is_overwrite {
+                parts.user.clone()
+            } else {
+                format!("{}{}", ledger_prefix, parts.user)
+            };
+            self.dump_stage("4-create-system.md", &parts.system);
             self.get_client("create")
-                .complete(&synthesis_prompt)
+                .complete_with_system(&parts.system, &user_with_ledger)
                 .await?
         };
 
@@ -816,6 +928,10 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {
                 last_review_attempt = review_attempt;
+                std::env::set_var(
+                    "SKILLDO_DEBUG_STAGE",
+                    format!("5-review-attempt{}", review_attempt + 1),
+                );
                 info!(
                     "review: Checking accuracy and safety (attempt {}/{})",
                     review_attempt + 1,
@@ -3643,6 +3759,22 @@ End of analysis."#;
             gen.debug_stage_dir.is_none(),
             "debug_stage_dir should be None when None is passed"
         );
+        // The remove_var calls are exercised by the code path.
+        // We don't assert on env var state because tests run in parallel.
+    }
+
+    #[test]
+    fn test_with_debug_stage_dir_empty_string() {
+        // Empty/whitespace string should be treated as None (via the filter)
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_debug_stage_dir(Some("  ".to_string()));
+
+        assert!(
+            gen.debug_stage_dir.is_none(),
+            "empty string should result in None"
+        );
+        // The remove_var calls are exercised by the code path.
+        // We don't assert on env var state because tests run in parallel.
     }
 
     #[test]
@@ -3882,6 +4014,84 @@ testpkg.run()
     // rescan_after_rewrite — error propagation at post-normalization (line 1044)
     // ========================================================================
 
+    // ========================================================================
+    // with_replay_stages: extract/map/learn + cached fact ledger
+    // ========================================================================
+
+    #[test]
+    fn test_with_replay_stages_sets_tuple() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_replay_stages(
+            "api surface".to_string(),
+            "patterns".to_string(),
+            "context".to_string(),
+            None,
+        );
+        assert!(gen.replay_stages.is_some());
+        let (api, pat, ctx, ledger) = gen.replay_stages.unwrap();
+        assert_eq!(api, "api surface");
+        assert_eq!(pat, "patterns");
+        assert_eq!(ctx, "context");
+        assert!(ledger.is_none());
+    }
+
+    #[test]
+    fn test_with_replay_stages_with_cached_fact_ledger() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3).with_replay_stages(
+            "api surface".to_string(),
+            "patterns".to_string(),
+            "context".to_string(),
+            Some("- fact 1\n- fact 2".to_string()),
+        );
+        assert!(gen.replay_stages.is_some());
+        let (_, _, _, ledger) = gen.replay_stages.unwrap();
+        assert_eq!(ledger.as_deref(), Some("- fact 1\n- fact 2"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_replay_stages_skips_extraction() {
+        // Replay stages provide cached extract/map/learn outputs — the generator
+        // should skip the extraction LLM calls and jump to fact ledger + create.
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false)
+            .with_replay_stages(
+                "# API Surface\nclass Foo: pass".to_string(),
+                "# Patterns\nFoo().bar()".to_string(),
+                "# Context\nUse Foo for everything".to_string(),
+                None,
+            );
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert!(
+            output.skill_md.contains("---"),
+            "replay mode should produce valid output"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_replay_stages_and_cached_fact_ledger() {
+        // When replay_stages includes a cached fact ledger (4th element = Some),
+        // the generator should use it directly instead of calling the LLM for
+        // the fact ledger stage (lines 566-573).
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false)
+            .with_replay_stages(
+                "# API Surface\nclass Foo: pass".to_string(),
+                "# Patterns\nFoo().bar()".to_string(),
+                "# Context\nUse Foo for everything".to_string(),
+                Some("- Package name is testpkg\n- Version is 1.0.0".to_string()),
+            );
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert!(
+            output.skill_md.contains("---"),
+            "replay mode with cached fact ledger should produce valid output"
+        );
+    }
+
     #[tokio::test]
     async fn test_post_normalization_rescan_fails_propagates_security_error() {
         // The normalizer injects `generated-by: skilldo/{model_name}` into
@@ -3908,6 +4118,34 @@ testpkg.run()
             err.to_string().contains("post-normalization"),
             "error should mention 'post-normalization' context, got: {}",
             err
+        );
+    }
+
+    // ========================================================================
+    // Overwrite-create mode: fact ledger is skipped
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_generate_overwrite_create_skips_fact_ledger() {
+        // When create_mode = "overwrite" and no existing_skill, the generator
+        // should skip the fact ledger LLM call entirely (line 575-576).
+        let prompts = PromptsConfig {
+            create_mode: Some("overwrite".to_string()),
+            create_custom: Some("Generate a SKILL.md for this library.".to_string()),
+            ..PromptsConfig::default()
+        };
+
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false)
+            .with_prompts_config(prompts);
+        // existing_skill is None by default — satisfies the `self.existing_skill.is_none()` check
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert!(
+            output.skill_md.contains("---"),
+            "overwrite-create mode should still produce valid output"
         );
     }
 }

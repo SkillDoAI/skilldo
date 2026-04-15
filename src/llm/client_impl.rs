@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, info};
 
 use super::client::LlmClient;
 use crate::util::SecretString;
@@ -90,6 +90,8 @@ struct AnthropicRequest {
     model: String,
     max_tokens: u32,
     messages: Vec<AnthropicMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -143,9 +145,9 @@ impl AnthropicClient {
     }
 }
 
-#[async_trait]
-impl LlmClient for AnthropicClient {
-    async fn complete(&self, prompt: &str) -> Result<String> {
+impl AnthropicClient {
+    /// Shared implementation for both complete() and complete_with_system().
+    async fn send_request(&self, prompt: &str, system: Option<&str>) -> Result<String> {
         if self.max_tokens == 0 {
             anyhow::bail!(
                 "Anthropic requires max_tokens >= 1. Set a positive value in config (default: 8192)."
@@ -158,9 +160,14 @@ impl LlmClient for AnthropicClient {
                 role: "user".to_string(),
                 content: prompt.to_string(),
             }],
+            system: system.filter(|s| !s.is_empty()).map(|s| s.to_string()),
         };
 
-        debug!("Calling Anthropic API with model: {}", self.model);
+        debug!(
+            "Calling Anthropic API with model: {} (system: {} chars)",
+            self.model,
+            system.map(|s| s.len()).unwrap_or(0)
+        );
 
         let mut req = self
             .client
@@ -205,6 +212,17 @@ impl LlmClient for AnthropicClient {
             .first()
             .map(|c| c.text.clone())
             .context("No content in Anthropic response")
+    }
+}
+
+#[async_trait]
+impl LlmClient for AnthropicClient {
+    async fn complete(&self, prompt: &str) -> Result<String> {
+        self.send_request(prompt, None).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.send_request(user, Some(system)).await
     }
 }
 
@@ -255,6 +273,16 @@ struct OpenAIMessage {
 }
 
 impl OpenAIMessage {
+    fn system(text: &str) -> Self {
+        Self {
+            role: "system".to_string(),
+            content: Some(text.to_string()),
+            reasoning: None,
+            reasoning_details: None,
+            refusal: None,
+        }
+    }
+
     fn user(prompt: &str) -> Self {
         Self {
             role: "user".to_string(),
@@ -329,6 +357,17 @@ impl OpenAIClient {
 #[async_trait]
 impl LlmClient for OpenAIClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        self.send_openai_request(prompt, None).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.send_openai_request(user, Some(system)).await
+    }
+}
+
+impl OpenAIClient {
+    /// Shared implementation for both `complete()` and `complete_with_system()`.
+    async fn send_openai_request(&self, prompt: &str, system: Option<&str>) -> Result<String> {
         // GPT-5+ models use max_completion_tokens instead of max_tokens.
         // max_tokens = 0 means "omit from request, let provider decide".
         // Normalize model name: strip provider prefix (e.g., "openai/gpt-5.1" → "gpt-5.1")
@@ -341,17 +380,26 @@ impl LlmClient for OpenAIClient {
             (Some(self.max_tokens), None)
         };
 
+        // Build messages — prepend system message if provided.
+        let mut messages = Vec::new();
+        if let Some(sys) = system.filter(|s| !s.is_empty()) {
+            messages.push(OpenAIMessage::system(sys));
+        }
+        messages.push(OpenAIMessage::user(prompt));
+
         let request = OpenAIRequest {
             model: self.model.clone(),
-            messages: vec![OpenAIMessage::user(prompt)],
+            messages,
             temperature: 0.7,
             max_tokens,
             max_completion_tokens,
         };
 
         debug!(
-            "Calling OpenAI-compatible API at {} with model: {}",
-            self.base_url, self.model
+            "Calling OpenAI-compatible API at {} with model: {} (system: {} chars)",
+            self.base_url,
+            self.model,
+            system.map(|s| s.len()).unwrap_or(0)
         );
 
         // Resolve endpoint URL and detect Responses API format.
@@ -367,10 +415,14 @@ impl LlmClient for OpenAIClient {
         };
 
         // Build request body — Responses API uses a different format than Chat Completions.
+        // For Responses API, system prompt goes in the `instructions` field.
         let body = if is_responses_api {
+            let instructions = system
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Follow the user's instructions precisely.");
             let responses_req = ResponsesRequest {
                 model: self.model.clone(),
-                instructions: "Follow the user's instructions precisely.".to_string(),
+                instructions: instructions.to_string(),
                 input: vec![ResponsesInputMessage {
                     msg_type: "message".to_string(),
                     role: "user".to_string(),
@@ -471,6 +523,27 @@ impl LlmClient for OpenAIClient {
                 .first()
                 .context("No choices in OpenAI response")?;
 
+            // Log reasoning/thinking tokens when present (useful for prompt debugging).
+            // Full reasoning at debug level, summary at info.
+            // Also dump to debug stage dir if set.
+            if let Some(ref reasoning) = choice.message.reasoning {
+                if !reasoning.is_empty() {
+                    info!("Thinking: {} chars of reasoning received", reasoning.len());
+                    debug!("Full reasoning:\n{}", reasoning);
+                    // Write reasoning to debug stage dir if available.
+                    // SKILLDO_DEBUG_STAGE names the current stage (e.g. "1-extract").
+                    if let Ok(dir) = std::env::var("SKILLDO_DEBUG_DIR") {
+                        let dir = std::path::Path::new(&dir);
+                        if dir.is_dir() {
+                            let stage = std::env::var("SKILLDO_DEBUG_STAGE")
+                                .unwrap_or_else(|_| "unknown".to_string());
+                            let path = dir.join(format!("{stage}-reasoning.md"));
+                            let _ = std::fs::write(&path, reasoning);
+                        }
+                    }
+                }
+            }
+
             match &choice.message.content {
                 Some(content) if !content.is_empty() => Ok(content.clone()),
                 _ => {
@@ -509,6 +582,8 @@ struct GeminiRequest {
     contents: Vec<GeminiContent>,
     #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
     generation_config: Option<GeminiGenerationConfig>,
+    #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<GeminiContent>,
 }
 
 #[derive(Debug, Serialize)]
@@ -603,6 +678,16 @@ impl GeminiClient {
 #[async_trait]
 impl LlmClient for GeminiClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        self.send_gemini_request(prompt, None).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.send_gemini_request(user, Some(system)).await
+    }
+}
+
+impl GeminiClient {
+    async fn send_gemini_request(&self, prompt: &str, system: Option<&str>) -> Result<String> {
         let request = GeminiRequest {
             contents: vec![GeminiContent {
                 parts: vec![GeminiPart {
@@ -616,9 +701,18 @@ impl LlmClient for GeminiClient {
                     max_output_tokens: self.max_tokens,
                 })
             },
+            system_instruction: system.filter(|s| !s.is_empty()).map(|s| GeminiContent {
+                parts: vec![GeminiPart {
+                    text: s.to_string(),
+                }],
+            }),
         };
 
-        debug!("Calling Gemini API with model: {}", self.model);
+        debug!(
+            "Calling Gemini API with model: {} (system: {} chars)",
+            self.model,
+            system.map(|s| s.len()).unwrap_or(0)
+        );
 
         let url = format!(
             "{}/v1beta/models/{}:generateContent",
@@ -767,9 +861,22 @@ impl ChatGPTClient {
 #[async_trait]
 impl LlmClient for ChatGPTClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
+        self.send_responses_request(prompt, None).await
+    }
+
+    async fn complete_with_system(&self, system: &str, user: &str) -> Result<String> {
+        self.send_responses_request(user, Some(system)).await
+    }
+}
+
+impl ChatGPTClient {
+    async fn send_responses_request(&self, prompt: &str, system: Option<&str>) -> Result<String> {
+        let instructions = system
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Follow the user's instructions precisely.");
         let request = ResponsesRequest {
             model: self.model.clone(),
-            instructions: "Follow the user's instructions precisely.".to_string(),
+            instructions: instructions.to_string(),
             input: vec![ResponsesInputMessage {
                 msg_type: "message".to_string(),
                 role: "user".to_string(),
@@ -915,6 +1022,7 @@ mod tests {
                 role: "user".to_string(),
                 content: "test".to_string(),
             }],
+            system: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -922,6 +1030,60 @@ mod tests {
         assert_eq!(json["max_tokens"], 4096);
         assert_eq!(json["messages"][0]["role"], "user");
         assert_eq!(json["messages"][0]["content"], "test");
+        // system field should be omitted when None
+        assert!(json.get("system").is_none());
+
+        // With system set, it should be included
+        let request_with_system = AnthropicRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 4096,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: "test".to_string(),
+            }],
+            system: Some("be helpful".to_string()),
+        };
+        let json = serde_json::to_value(&request_with_system).unwrap();
+        assert_eq!(json["system"], "be helpful");
+    }
+
+    #[tokio::test]
+    async fn test_openai_system_message_prepended() {
+        // Verify OpenAIMessage::system() creates a system role message
+        let sys = OpenAIMessage::system("system rules");
+        assert_eq!(sys.role, "system");
+        assert_eq!(sys.content.as_deref(), Some("system rules"));
+    }
+
+    #[tokio::test]
+    async fn test_gemini_system_instruction_serialization() {
+        let request = GeminiRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart {
+                    text: "user prompt".to_string(),
+                }],
+            }],
+            generation_config: None,
+            system_instruction: Some(GeminiContent {
+                parts: vec![GeminiPart {
+                    text: "system rules".to_string(),
+                }],
+            }),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json["systemInstruction"]["parts"][0]["text"],
+            "system rules"
+        );
+
+        // Without system instruction, field should be omitted
+        let request_no_sys = GeminiRequest {
+            contents: vec![],
+            generation_config: None,
+            system_instruction: None,
+        };
+        let json = serde_json::to_value(&request_no_sys).unwrap();
+        assert!(json.get("systemInstruction").is_none());
     }
 
     #[tokio::test]
@@ -1057,6 +1219,7 @@ mod tests {
                 }],
             }],
             generation_config: None,
+            system_instruction: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1190,6 +1353,7 @@ mod tests {
             generation_config: Some(GeminiGenerationConfig {
                 max_output_tokens: 16384,
             }),
+            system_instruction: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1622,6 +1786,7 @@ mod tests {
                     max_output_tokens: max_tokens,
                 })
             },
+            system_instruction: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1761,6 +1926,7 @@ mod tests {
                     max_output_tokens: max_tokens,
                 })
             },
+            system_instruction: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["generationConfig"]["maxOutputTokens"], 8192);
@@ -1844,6 +2010,57 @@ mod tests {
             result.err()
         );
         assert_eq!(result.unwrap(), "anthropic unit test response");
+    }
+
+    #[tokio::test]
+    async fn test_anthropic_complete_with_system_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Anthropic)
+                    .respond_with_content("system-aware response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = AnthropicClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client
+            .complete_with_system("You are a helpful assistant.", "Hello")
+            .await;
+        assert!(
+            result.is_ok(),
+            "Anthropic complete_with_system failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "system-aware response");
+    }
+
+    #[tokio::test]
+    async fn test_anthropic_complete_with_empty_system_omits_field() {
+        // When system is empty, the system field should be omitted (None)
+        let request = AnthropicRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 4096,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: "test".to_string(),
+            }],
+            system: Some("").filter(|s| !s.is_empty()).map(|s| s.to_string()),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(
+            json.get("system").is_none(),
+            "empty system string should result in None (omitted from JSON)"
+        );
     }
 
     #[tokio::test]
@@ -1949,6 +2166,40 @@ mod tests {
             result.err()
         );
         assert_eq!(result.unwrap(), "chatgpt unit test response");
+    }
+
+    #[tokio::test]
+    async fn test_chatgpt_complete_with_system_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Responses)
+                    .respond_with_content("chatgpt system response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = ChatGPTClient::new(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            4096,
+            30,
+            false,
+            Some(format!("{}/v1", server.url())),
+        )
+        .unwrap();
+
+        // complete_with_system uses the instructions field for system prompt
+        let result = client
+            .complete_with_system("system rules", "user prompt")
+            .await;
+        assert!(
+            result.is_ok(),
+            "ChatGPT complete_with_system failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "chatgpt system response");
     }
 
     #[tokio::test]
@@ -2103,6 +2354,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_openai_complete_with_system_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("openai system response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client
+            .complete_with_system("You are a coding assistant.", "Write hello world")
+            .await;
+        assert!(
+            result.is_ok(),
+            "OpenAI complete_with_system failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "openai system response");
+    }
+
+    #[tokio::test]
+    async fn test_gemini_complete_with_system_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::Gemini)
+                    .respond_with_content("gemini system response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = GeminiClient::with_base_url(
+            "test-key".to_string(),
+            "mock-model".to_string(),
+            server.url(),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client
+            .complete_with_system("You are a helpful AI.", "Test prompt")
+            .await;
+        assert!(
+            result.is_ok(),
+            "Gemini complete_with_system failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "gemini system response");
+    }
+
+    #[tokio::test]
     async fn test_gemini_complete_with_bearer_auth() {
         let server = llmposter::ServerBuilder::new()
             .fixture(
@@ -2129,6 +2444,313 @@ mod tests {
             result.is_ok(),
             "Gemini with bearer auth failed: {:?}",
             result.err()
+        );
+    }
+
+    // --- Coverage: OpenAI max_tokens=0 path exercised via real request (lines 375-378) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_max_tokens_zero_end_to_end() {
+        // max_tokens=0 means "omit from request, let provider decide"
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("zero-max response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            0, // max_tokens = 0
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(
+            result.is_ok(),
+            "max_tokens=0 call failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "zero-max response");
+    }
+
+    #[tokio::test]
+    async fn test_openai_complete_gpt5_max_completion_tokens_end_to_end() {
+        // GPT-5 models use max_completion_tokens instead of max_tokens
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("gpt5 response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-5.2".to_string(),
+            format!("{}/v1", server.url()),
+            16384,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "gpt-5 call failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "gpt5 response");
+    }
+
+    // --- Coverage: OpenAI extra_body merge via real request (lines 452-458) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_with_extra_body_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("extra body response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let mut extra = std::collections::HashMap::new();
+        extra.insert(
+            "reasoning".to_string(),
+            serde_json::json!({"effort": "high"}),
+        );
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap()
+        .with_extra_body(extra);
+
+        let result = client.complete("test").await;
+        assert!(result.is_ok(), "extra_body call failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "extra body response");
+    }
+
+    // --- Coverage: OpenAI extra_headers with protected header skip (lines 472-476) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_with_extra_headers_end_to_end() {
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("headers response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap()
+        .with_extra_headers(vec![
+            ("x-custom-header".to_string(), "custom-value".to_string()),
+            // Protected header should be skipped with a warning
+            ("authorization".to_string(), "should-be-skipped".to_string()),
+        ]);
+
+        let result = client.complete("test").await;
+        assert!(
+            result.is_ok(),
+            "extra_headers call failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "headers response");
+    }
+
+    // --- Coverage: OpenAI with prefix-stripped model name (gpt-5 with provider prefix) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_gpt5_with_provider_prefix() {
+        // Model name "openai/gpt-5.1" should strip prefix for starts_with check
+        let server = llmposter::ServerBuilder::new()
+            .fixture(
+                llmposter::Fixture::new()
+                    .for_provider(llmposter::Provider::OpenAI)
+                    .respond_with_content("prefixed gpt5 response"),
+            )
+            .build()
+            .await
+            .expect("failed to start mock server");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "openai/gpt-5.1".to_string(),
+            format!("{}/v1", server.url()),
+            8192,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        assert!(
+            result.is_ok(),
+            "prefixed gpt-5 call failed: {:?}",
+            result.err()
+        );
+    }
+
+    // --- Coverage: OpenAI reasoning token logging (lines 529-544) ---
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_openai_complete_with_reasoning_tokens() {
+        // Returns a response with a `reasoning` field so the reasoning logging
+        // path (lines 529-544) is exercised.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "final answer",
+                            "reasoning": "Let me think step by step about this..."
+                        }
+                    }],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 50, "total_tokens": 60}
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        // Set up a temp debug dir so the reasoning dump path is exercised
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("SKILLDO_DEBUG_DIR", tmp.path().to_str().unwrap());
+        std::env::set_var("SKILLDO_DEBUG_STAGE", "test-reasoning");
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        mock.assert_async().await;
+        assert!(result.is_ok(), "Should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "final answer");
+
+        // Verify reasoning was dumped to debug dir
+        let reasoning_file = tmp.path().join("test-reasoning-reasoning.md");
+        assert!(
+            reasoning_file.exists(),
+            "reasoning file should have been written"
+        );
+        let contents = std::fs::read_to_string(&reasoning_file).unwrap();
+        assert!(contents.contains("step by step"));
+
+        // Cleanup env vars
+        std::env::remove_var("SKILLDO_DEBUG_DIR");
+        std::env::remove_var("SKILLDO_DEBUG_STAGE");
+    }
+
+    // --- Coverage: OpenAI empty content with reasoning (line 550-554) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_empty_content_with_reasoning_errors() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "reasoning": "I ran out of tokens thinking..."
+                        }
+                    }]
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        mock.assert_async().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("reasoning exhausted"),
+            "Should mention reasoning: {err}"
+        );
+    }
+
+    // --- Coverage: OpenAI empty content without reasoning (line 556) ---
+
+    #[tokio::test]
+    async fn test_openai_complete_empty_content_no_reasoning_errors() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": ""
+                        }
+                    }]
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let client = OpenAIClient::with_base_url(
+            "test-key".to_string(),
+            "gpt-4o".to_string(),
+            format!("{}/v1", server.url()),
+            4096,
+            30,
+        )
+        .unwrap();
+
+        let result = client.complete("test").await;
+        mock.assert_async().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no content"),
+            "Should mention no content: {err}"
         );
     }
 }

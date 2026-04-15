@@ -282,6 +282,14 @@ pub struct LlmConfig {
     #[serde(default)]
     pub cli_args: Vec<String>,
 
+    /// CLI flag(s) for passing a system prompt via temp file. The system text
+    /// is written to a temp file and the file path is appended after these flags.
+    /// E.g., ["--system-prompt-file"] for claude, ["-s"] for codex.
+    /// When empty, system prompt is concatenated into the user message instead.
+    /// Only used when provider_type = "cli".
+    #[serde(default)]
+    pub cli_system_args: Vec<String>,
+
     /// JSON field path to extract the response text from CLI output.
     /// E.g., "response" extracts obj["response"]. If unset, uses raw stdout.
     /// Only used when provider_type = "cli".
@@ -533,7 +541,8 @@ pub struct GenerationConfig {
     #[serde(default = "default_true")]
     pub enable_test: bool,
 
-    /// Test agent validation mode: "thorough", "adaptive", or "minimal" (default: "thorough")
+    /// Test agent validation mode: "thorough" (all patterns), "quick" (up to 3 patterns),
+    /// "adaptive" (future: diff-based), or "minimal" (1 pattern). Default: "thorough".
     #[serde(default = "default_test_mode")]
     pub test_mode: String,
 
@@ -754,8 +763,9 @@ impl GenerationConfig {
     pub fn get_test_mode(&self) -> ValidationMode {
         match self.test_mode.to_lowercase().as_str() {
             "minimal" => ValidationMode::Minimal,
+            "quick" => ValidationMode::Quick,
             "adaptive" => ValidationMode::Adaptive,
-            _ => ValidationMode::Thorough, // Default
+            _ => ValidationMode::Thorough, // Default — tests ALL patterns
         }
     }
 }
@@ -992,6 +1002,7 @@ impl Default for Config {
                 extra_headers: Vec::new(),
                 cli_command: None,
                 cli_args: Vec::new(),
+                cli_system_args: Vec::new(),
                 cli_json_path: None,
             },
             generation: GenerationConfig::default(),
@@ -1148,6 +1159,7 @@ mod tests {
             extra_headers: Vec::new(),
             cli_command: None,
             cli_args: Vec::new(),
+            cli_system_args: Vec::new(),
             cli_json_path: None,
         };
         assert_eq!(llm.get_max_tokens(), 8192);
@@ -1201,6 +1213,12 @@ mod tests {
         assert_eq!(
             gen.get_test_mode(),
             crate::test_agent::ValidationMode::Minimal
+        );
+
+        gen.test_mode = "quick".to_string();
+        assert_eq!(
+            gen.get_test_mode(),
+            crate::test_agent::ValidationMode::Quick
         );
 
         gen.test_mode = "adaptive".to_string();

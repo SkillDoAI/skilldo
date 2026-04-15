@@ -88,7 +88,8 @@ max_source_tokens = 100000
 enable_test = true
 
 # Test validation mode (default: "thorough")
-#   "thorough"  — test every extracted pattern
+#   "thorough"  — test ALL extracted patterns (guarantees all code examples compile)
+#   "quick"     — test up to 3 patterns from priority categories (fast iteration)
 #   "adaptive"  — test patterns, reduce scope on repeated failures
 #   "minimal"   — test only core import + one pattern
 test_mode = "thorough"
@@ -223,6 +224,17 @@ cli_json_path = "result"
 
 The prompt is piped to the CLI via stdin. If `cli_json_path` is set, stdout is parsed as JSON and that path is extracted as the response text. Dot-notation is supported for nested fields.
 
+Use `cli_system_args` to declare how the CLI passes system prompts through the native system prompt channel. The system prompt is written to a temp file and the file path is passed as the argument (never inline, for security — inline args are visible via `ps aux`):
+
+```toml
+# Claude CLI — uses --system-prompt-file flag (reads prompt from file)
+cli_system_args = ["--system-prompt-file"]
+```
+
+When `cli_system_args` is set, the system prompt is written to a temp file and the file path is appended after the configured flags (e.g., `claude --system-prompt-file /tmp/abc123`). The temp file is auto-deleted after the CLI exits. When empty or omitted, the system and user prompts are concatenated into a single stdin payload. Only used with `provider_type = "cli"`.
+
+> **Security note:** System prompts are written to a temp file rather than passed as command-line arguments (which would be visible via `ps aux`). The flags in `cli_system_args` must accept a file path, not inline text — use `--system-prompt-file` for claude, not `--system-prompt`.
+
 Parallel extraction is automatically disabled for CLI providers (vendor CLIs typically share a single auth session).
 
 Other CLI examples:
@@ -270,3 +282,13 @@ skilldo generate /path/to/repo --debug-stage-files ./debug-out
 ```
 
 This writes files for each stage: `1-extract.md`, `2-map.md`, `3-learn.md`, `4-create-raw.md`, `5-review-attemptN.txt` (one per review attempt), and `6-normalized.md`. Useful for diagnosing prompt regressions, truncated outputs, hallucinations, or unexpected LLM formatting.
+
+## Replaying Cached Stages
+
+Use `--replay-from <DIR>` to load cached extract/map/learn outputs from a prior run's `--debug-stage-files` directory:
+
+```bash
+skilldo generate /path/to/repo --replay-from ./debug-out
+```
+
+This skips the extract, map, and learn LLM calls entirely, reusing the cached outputs from the specified directory. Useful for prompt-tuning iteration on the create/review/test stages without re-running (and re-paying for) the extraction pipeline.

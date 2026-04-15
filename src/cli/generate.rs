@@ -47,6 +47,11 @@ pub struct GenerateOptions {
     pub no_telemetry: bool,
     pub dry_run: bool,
     pub debug_stage_files: Option<String>,
+    /// Directory containing cached `1-extract.md`, `2-map.md`, `3-learn.md`
+    /// from a prior run. When set, those stages are skipped and their cached
+    /// content is used instead — lets you iterate on the create prompt
+    /// without repaying for the upstream LLM calls.
+    pub replay_from: Option<String>,
 }
 
 pub async fn run(opts: GenerateOptions) -> Result<()> {
@@ -82,8 +87,69 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         no_telemetry,
         dry_run,
         debug_stage_files,
+        replay_from,
     } = opts;
     let repo_path = Path::new(&path);
+
+    // If --replay-from is set, load the cached extract/map/learn outputs now
+    // so we can fail fast if any are missing.
+    let replay_stages: Option<(String, String, String, Option<String>)> =
+        if let Some(dir) = replay_from.as_deref() {
+            let dir = Path::new(dir);
+            if !dir.is_dir() {
+                anyhow::bail!("--replay-from: directory does not exist: {}", dir.display());
+            }
+            let load = |name: &str| -> Result<String> {
+                let path = dir.join(name);
+                let content = fs::read_to_string(&path).map_err(|e| {
+                    anyhow::anyhow!(
+                        "--replay-from: failed to read {} — run `skilldo generate` with \
+                     `--debug-stage-files {}` first to populate it: {e}",
+                        path.display(),
+                        dir.display()
+                    )
+                })?;
+                if content.trim().is_empty() {
+                    anyhow::bail!(
+                        "--replay-from: {} is empty — was the prior run interrupted?",
+                        path.display()
+                    );
+                }
+                Ok(content)
+            };
+            let api_surface = load("1-extract.md")?;
+            let patterns = load("2-map.md")?;
+            let context = load("3-learn.md")?;
+            // Fact ledger is optional — may not exist if the cache was created
+            // before the ledger feature was added.
+            let cached_ledger = dir.join("facts.md");
+            let fact_ledger = if cached_ledger.exists() {
+                let l = fs::read_to_string(&cached_ledger).map_err(|e| {
+                    anyhow::anyhow!(
+                        "--replay-from: failed to read {}: {e}",
+                        cached_ledger.display()
+                    )
+                })?;
+                if !l.trim().is_empty() {
+                    info!("Replay mode: loaded fact ledger ({} chars)", l.len());
+                    Some(l)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            info!(
+                "Replay mode: loaded {} + {} + {} chars from {}",
+                api_surface.len(),
+                patterns.len(),
+                context.len(),
+                dir.display()
+            );
+            Some((api_surface, patterns, context, fact_ledger))
+        } else {
+            None
+        };
 
     // Load config (explicit path, CWD, target repo, git root, or user config dir)
     let mut config = Config::load_with_path_and_repo(config_path, Some(repo_path))?;
@@ -505,6 +571,10 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
 
     if let Some(ref skill) = existing_skill {
         generator = generator.with_existing_skill(skill.clone());
+    }
+
+    if let Some((api_surface, patterns, context, cached_ledger)) = replay_stages {
+        generator = generator.with_replay_stages(api_surface, patterns, context, cached_ledger);
     }
 
     // Set up secret redaction for test agent output.
@@ -2167,5 +2237,206 @@ redact_env_vars = ["FAKE_API_KEY", "ANOTHER_SECRET"]
             result.err()
         );
         assert!(output.exists(), "output file should be written");
+    }
+
+    // ========================================================================
+    // --replay-from: loading cached stage files
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_run_replay_from_loads_cached_stages() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+
+        // Create a replay cache directory with the 3 required stage files
+        let replay_dir = repo.path().join("replay-cache");
+        fs::create_dir(&replay_dir).unwrap();
+        fs::write(
+            replay_dir.join("1-extract.md"),
+            "# API Surface\nfn hello() -> str",
+        )
+        .unwrap();
+        fs::write(
+            replay_dir.join("2-map.md"),
+            "# Usage Patterns\nhello() returns greeting",
+        )
+        .unwrap();
+        fs::write(
+            replay_dir.join("3-learn.md"),
+            "# Conventions\nUse hello() for greetings",
+        )
+        .unwrap();
+
+        let result = run(GenerateOptions {
+            replay_from: Some(replay_dir.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "replay-from dry run failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_replay_from_with_fact_ledger() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+
+        // Create replay cache with all 3 stages plus facts.md
+        let replay_dir = repo.path().join("replay-cache-facts");
+        fs::create_dir(&replay_dir).unwrap();
+        fs::write(replay_dir.join("1-extract.md"), "extract content").unwrap();
+        fs::write(replay_dir.join("2-map.md"), "map content").unwrap();
+        fs::write(replay_dir.join("3-learn.md"), "learn content").unwrap();
+        fs::write(
+            replay_dir.join("facts.md"),
+            "- Package name is testpkg\n- Version is 1.0.0",
+        )
+        .unwrap();
+
+        let result = run(GenerateOptions {
+            replay_from: Some(replay_dir.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "replay-from with facts.md failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_replay_from_with_empty_fact_ledger() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+
+        // Create replay cache with empty facts.md (should be treated as None)
+        let replay_dir = repo.path().join("replay-cache-empty-facts");
+        fs::create_dir(&replay_dir).unwrap();
+        fs::write(replay_dir.join("1-extract.md"), "extract content").unwrap();
+        fs::write(replay_dir.join("2-map.md"), "map content").unwrap();
+        fs::write(replay_dir.join("3-learn.md"), "learn content").unwrap();
+        fs::write(replay_dir.join("facts.md"), "   \n  ").unwrap();
+
+        let result = run(GenerateOptions {
+            replay_from: Some(replay_dir.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "replay-from with empty facts.md failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_replay_from_missing_dir_fails() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+
+        let result = run(GenerateOptions {
+            replay_from: Some("/tmp/nonexistent-replay-dir-xyz".to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(result.is_err(), "nonexistent replay dir should fail");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("--replay-from"),
+            "error should mention --replay-from: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_replay_from_missing_stage_file_fails() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+
+        // Create replay dir with only 2 of 3 required files
+        let replay_dir = repo.path().join("replay-cache-incomplete");
+        fs::create_dir(&replay_dir).unwrap();
+        fs::write(replay_dir.join("1-extract.md"), "extract content").unwrap();
+        fs::write(replay_dir.join("2-map.md"), "map content").unwrap();
+        // 3-learn.md is intentionally missing
+
+        let result = run(GenerateOptions {
+            replay_from: Some(replay_dir.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_err(),
+            "replay-from with missing stage file should fail"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("3-learn.md"),
+            "error should mention missing file: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_replay_from_invalid_utf8_fact_ledger_fails() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+
+        // Create replay cache with valid stage files but invalid UTF-8 in facts.md
+        let replay_dir = repo.path().join("replay-cache-bad-facts");
+        fs::create_dir(&replay_dir).unwrap();
+        fs::write(replay_dir.join("1-extract.md"), "extract content").unwrap();
+        fs::write(replay_dir.join("2-map.md"), "map content").unwrap();
+        fs::write(replay_dir.join("3-learn.md"), "learn content").unwrap();
+        // Write invalid UTF-8 bytes
+        std::fs::write(replay_dir.join("facts.md"), [0xFF, 0xFE, 0x80, 0x81]).unwrap();
+
+        let result = run(GenerateOptions {
+            replay_from: Some(replay_dir.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_err(),
+            "replay-from with invalid UTF-8 facts.md should fail"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("--replay-from") && err_msg.contains("facts.md"),
+            "error should mention --replay-from and facts.md: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replay_from_empty_stage_file_errors() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let replay_dir = repo.path().join("replay-empty");
+        fs::create_dir(&replay_dir).unwrap();
+        // Write an empty extract file (whitespace-only counts as empty)
+        fs::write(replay_dir.join("1-extract.md"), "   \n  ").unwrap();
+        fs::write(replay_dir.join("2-map.md"), "map content").unwrap();
+        fs::write(replay_dir.join("3-learn.md"), "learn content").unwrap();
+
+        let result = run(GenerateOptions {
+            replay_from: Some(replay_dir.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_err(),
+            "replay-from with empty stage file should fail"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("is empty"),
+            "error should mention the file is empty: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("1-extract.md"),
+            "error should mention the file name: {err_msg}"
+        );
     }
 }

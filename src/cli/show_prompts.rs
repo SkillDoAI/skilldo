@@ -11,7 +11,9 @@ use crate::test_agent::rust_code_gen::RUST_ENV;
 use crate::test_agent::CodePattern;
 use crate::test_agent::PatternCategory;
 
-const STAGES: &[&str] = &["extract", "map", "learn", "create", "review", "test"];
+const STAGES: &[&str] = &[
+    "extract", "map", "learn", "facts", "create", "review", "test",
+];
 
 /// Returns the canonical TestEnv for a language (reuses the real constants).
 fn test_env_for(lang: &Language) -> &'static TestEnv {
@@ -84,21 +86,37 @@ pub fn run(language_str: &str, stage_filter: Option<&str>) -> anyhow::Result<()>
                 );
                 println!("{prompt}");
             }
+            "facts" => {
+                let parts = prompts_v2::fact_ledger_prompt(
+                    "<PACKAGE_NAME>",
+                    "<EXTRACT_OUTPUT>",
+                    "<MAP_OUTPUT>",
+                    "<LEARN_OUTPUT>",
+                    &language,
+                );
+                println!(
+                    "=== SYSTEM PROMPT ===\n{}\n\n=== USER MESSAGE ===\n{}",
+                    parts.system, parts.user
+                );
+            }
             "create" => {
-                let prompt = prompts_v2::create_prompt(
+                let parts = prompts_v2::create_prompt_parts(
                     "<PACKAGE_NAME>",
                     "<VERSION>",
                     Some("MIT"),
                     &[],
                     &language,
                     "<EXTRACT_OUTPUT>",
-                    "<LEARN_OUTPUT>",
                     "<MAP_OUTPUT>",
+                    "<LEARN_OUTPUT>",
                     None,
                     false,
                     &[],
                 );
-                println!("{prompt}");
+                println!(
+                    "=== SYSTEM PROMPT ===\n{}\n\n=== USER MESSAGE ===\n{}",
+                    parts.system, parts.user
+                );
             }
             "review" => {
                 let prompt = prompts_v2::review_verdict_prompt(

@@ -101,7 +101,7 @@ enum Commands {
         #[arg(long = "no-test")]
         no_test: bool,
 
-        /// Test validation mode: thorough (3 patterns), minimal (1), adaptive (starts 1, expands)
+        /// Test validation mode: thorough (all patterns), quick (up to 3), minimal (1), adaptive (starts minimal, expands on success)
         #[arg(long = "test-mode")]
         test_mode: Option<String>,
 
@@ -170,6 +170,12 @@ enum Commands {
         /// Dump each pipeline stage's raw output to the specified directory
         #[arg(long, value_name = "DIR")]
         debug_stage_files: Option<String>,
+
+        /// Skip extract/map/learn and load their outputs from the given directory
+        /// (previously written by --debug-stage-files). Lets you iterate on the
+        /// create prompt without repaying for the upstream LLM calls.
+        #[arg(long, value_name = "DIR")]
+        replay_from: Option<String>,
     },
 
     /// Lint a SKILL.md file for errors
@@ -338,6 +344,7 @@ async fn main() -> Result<()> {
             no_telemetry,
             dry_run,
             debug_stage_files,
+            replay_from,
         } => {
             cli::generate::run(cli::generate::GenerateOptions {
                 path,
@@ -373,6 +380,7 @@ async fn main() -> Result<()> {
                 no_telemetry,
                 dry_run,
                 debug_stage_files,
+                replay_from,
             })
             .await?;
         }
