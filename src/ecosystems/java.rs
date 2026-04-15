@@ -2697,4 +2697,55 @@ dependencies {
         let content = "base.archivesName.set(someVariable)\n";
         assert_eq!(parse_gradle_archives_base_name(content), None);
     }
+
+    // --- Coverage: malformed parent in POM ---
+
+    #[test]
+    fn parse_pom_version_unclosed_parent() {
+        // <parent> opened but never closed — should bail
+        let pom = "<parent><groupId>com.foo</groupId><version>2.0</version>";
+        assert_eq!(parse_pom_version(pom), None);
+    }
+
+    #[test]
+    fn parse_pom_url_unclosed_parent() {
+        // <parent> opened but never closed — should bail
+        let pom = "<parent><url>https://example.com</url>";
+        assert_eq!(parse_pom_url(pom), None);
+    }
+
+    // --- Coverage: extract_gradle_quoted with trailing comments ---
+
+    #[test]
+    fn extract_gradle_quoted_trailing_line_comment() {
+        // Quoted value followed by // comment should be accepted
+        assert_eq!(
+            extract_gradle_quoted("'1.0.0' // some comment"),
+            Some("1.0.0".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_gradle_quoted_trailing_block_comment() {
+        // Quoted value followed by /* comment should be accepted
+        assert_eq!(
+            extract_gradle_quoted("\"2.3.4\" /* block comment */"),
+            Some("2.3.4".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_gradle_quoted_trailing_code() {
+        // Quoted value followed by code — should NOT be accepted
+        assert_eq!(extract_gradle_quoted("'1.0.0' + suffix"), None);
+    }
+
+    #[test]
+    fn extract_gradle_quoted_with_paren_and_comment() {
+        // version("1.0") // Kotlin DSL with closing paren and comment
+        assert_eq!(
+            extract_gradle_quoted("\"1.0\") // version"),
+            Some("1.0".to_string())
+        );
+    }
 }

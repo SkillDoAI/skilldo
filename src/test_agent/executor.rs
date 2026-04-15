@@ -4351,6 +4351,24 @@ dependencies = []
         assert!(result.contains("features"));
     }
 
+    #[test]
+    fn test_strip_optional_simplifies_to_version() {
+        // Stripping optional from a 2-key table leaves only version => simplifies to "1.0"
+        let spec = r#"{ version = "1.0", optional = true }"#;
+        let result = strip_optional_from_dep_spec(spec);
+        // Should simplify to just the version string
+        assert_eq!(result, r#""1.0""#);
+    }
+
+    #[test]
+    fn test_strip_optional_unparseable_remains() {
+        // Stripping optional leaves something TOML can't parse => return as-is
+        let spec = "{ optional = true }";
+        let result = strip_optional_from_dep_spec(spec);
+        // After stripping: "{  }" which is parseable but empty table (len==0), not simplified
+        assert!(!result.contains("optional"));
+    }
+
     // --- set_redact_vars poisoned RwLock path ---
 
     // Serialize tests that mutate the global REDACT_VARS RwLock

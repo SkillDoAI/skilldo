@@ -26,6 +26,17 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
     i
 }
 
+/// Scale source-file budget based on how many files exist in the repo.
+/// Larger repos get a bigger share to capture enough API surface.
+fn scale_source_budget(file_count: usize, remaining: usize) -> usize {
+    match file_count {
+        n if n > 2000 => remaining,            // Massive — use full remainder
+        n if n > 1000 => remaining * 60 / 100, // Very large
+        n if n > 300 => remaining * 40 / 100,  // Large
+        _ => remaining,                        // Small — use full remainder
+    }
+}
+
 /// Gathers source, test, doc, example, and changelog content from a project
 /// directory. Delegates to language-specific handlers (currently Python only).
 pub struct Collector {
@@ -109,12 +120,7 @@ impl Collector {
             + docs_content.len()
             + changelog_content.len();
         let remaining = budget.saturating_sub(fixed_actual);
-        let source_budget = match source_paths.len() {
-            n if n > 2000 => remaining,            // Massive — use full remainder
-            n if n > 1000 => remaining * 60 / 100, // Very large
-            n if n > 300 => remaining * 40 / 100,  // Large
-            _ => remaining,                        // Small — use full remainder
-        };
+        let source_budget = scale_source_budget(source_paths.len(), remaining);
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
         // Get package name - try multiple strategies, then validate
@@ -177,12 +183,7 @@ impl Collector {
             + docs_content.len()
             + changelog_content.len();
         let remaining = budget.saturating_sub(fixed_actual);
-        let source_budget = match source_paths.len() {
-            n if n > 2000 => remaining,
-            n if n > 1000 => remaining * 60 / 100,
-            n if n > 300 => remaining * 40 / 100,
-            _ => remaining,
-        };
+        let source_budget = scale_source_budget(source_paths.len(), remaining);
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
         let mut package_name = handler.get_package_name()?;
@@ -244,12 +245,7 @@ impl Collector {
             + docs_content.len()
             + changelog_content.len();
         let remaining = budget.saturating_sub(fixed_actual);
-        let source_budget = match source_paths.len() {
-            n if n > 2000 => remaining,
-            n if n > 1000 => remaining * 60 / 100,
-            n if n > 300 => remaining * 40 / 100,
-            _ => remaining,
-        };
+        let source_budget = scale_source_budget(source_paths.len(), remaining);
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
         let mut package_name = handler.extract_package_name()?;
@@ -311,12 +307,7 @@ impl Collector {
             + docs_content.len()
             + changelog_content.len();
         let remaining = budget.saturating_sub(fixed_actual);
-        let source_budget = match source_paths.len() {
-            n if n > 2000 => remaining,
-            n if n > 1000 => remaining * 60 / 100,
-            n if n > 300 => remaining * 40 / 100,
-            _ => remaining,
-        };
+        let source_budget = scale_source_budget(source_paths.len(), remaining);
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
         let mut package_name = handler.get_package_name()?;
@@ -382,12 +373,7 @@ impl Collector {
             + docs_content.len()
             + changelog_content.len();
         let remaining = budget.saturating_sub(fixed_actual);
-        let source_budget = match source_paths.len() {
-            n if n > 2000 => remaining,
-            n if n > 1000 => remaining * 60 / 100,
-            n if n > 300 => remaining * 40 / 100,
-            _ => remaining,
-        };
+        let source_budget = scale_source_budget(source_paths.len(), remaining);
         let source_content = Self::read_files_smart(&source_paths, source_budget, &self.repo_path)?;
 
         let mut package_name = handler.get_package_name()?;
@@ -1155,78 +1141,33 @@ setup(
 
     #[test]
     fn test_budget_scaling_small_repo() {
-        // Arrange: < 300 source files => remaining * 100% (full remainder)
-        let budget: usize = 100_000;
-        let examples_budget = budget * 30 / 100;
-        let test_budget = budget * 30 / 100;
-        let docs_budget = budget * 20 / 100;
-        let changelog_budget = budget * 5 / 100;
-        let fixed_total = examples_budget + test_budget + docs_budget + changelog_budget;
-        let remaining = budget.saturating_sub(fixed_total);
-
-        // Small repo: use full remainder
-        let source_budget = remaining;
-
-        // Assert: 15% of 100K = 15K
-        assert_eq!(remaining, 15_000);
-        assert_eq!(source_budget, 15_000);
+        // <= 300 source files => full remainder
+        assert_eq!(scale_source_budget(100, 15_000), 15_000);
+        assert_eq!(scale_source_budget(0, 15_000), 15_000);
+        assert_eq!(scale_source_budget(300, 15_000), 15_000);
     }
 
     #[test]
     fn test_budget_scaling_medium_repo() {
-        // Arrange: 300-1000 source files => remaining * 40%
-        let budget: usize = 100_000;
-        let fixed_total = budget * 85 / 100; // 85%
-        let remaining = budget.saturating_sub(fixed_total);
-        let file_count = 500;
-
-        let source_budget = match file_count {
-            n if n > 2000 => remaining,
-            n if n > 1000 => remaining * 60 / 100,
-            n if n > 300 => remaining * 40 / 100,
-            _ => remaining,
-        };
-
-        // Assert: 40% of 15K = 6K
-        assert_eq!(source_budget, 6_000);
+        // 300-1000 source files => remaining * 40%
+        assert_eq!(scale_source_budget(500, 15_000), 6_000);
+        assert_eq!(scale_source_budget(301, 15_000), 6_000);
+        assert_eq!(scale_source_budget(1000, 15_000), 6_000);
     }
 
     #[test]
     fn test_budget_scaling_large_repo() {
-        // Arrange: 1000-2000 source files => remaining * 60%
-        let budget: usize = 100_000;
-        let fixed_total = budget * 85 / 100;
-        let remaining = budget.saturating_sub(fixed_total);
-        let file_count = 1500;
-
-        let source_budget = match file_count {
-            n if n > 2000 => remaining,
-            n if n > 1000 => remaining * 60 / 100,
-            n if n > 300 => remaining * 40 / 100,
-            _ => remaining,
-        };
-
-        // Assert: 60% of 15K = 9K
-        assert_eq!(source_budget, 9_000);
+        // 1000-2000 source files => remaining * 60%
+        assert_eq!(scale_source_budget(1500, 15_000), 9_000);
+        assert_eq!(scale_source_budget(1001, 15_000), 9_000);
+        assert_eq!(scale_source_budget(2000, 15_000), 9_000);
     }
 
     #[test]
     fn test_budget_scaling_massive_repo() {
-        // Arrange: 2000+ source files => remaining * 100% (full remainder)
-        let budget: usize = 100_000;
-        let fixed_total = budget * 85 / 100;
-        let remaining = budget.saturating_sub(fixed_total);
-        let file_count = 3000;
-
-        let source_budget = match file_count {
-            n if n > 2000 => remaining,
-            n if n > 1000 => remaining * 60 / 100,
-            n if n > 300 => remaining * 40 / 100,
-            _ => remaining,
-        };
-
-        // Assert: 100% of 15K = 15K
-        assert_eq!(source_budget, 15_000);
+        // 2000+ source files => full remainder
+        assert_eq!(scale_source_budget(3000, 15_000), 15_000);
+        assert_eq!(scale_source_budget(2001, 15_000), 15_000);
     }
 
     // -- read_file_limited --

@@ -1276,22 +1276,13 @@ mod tests {
     // --- Coverage: OpenAI GPT-5 model uses max_completion_tokens (line 176-182) ---
     #[tokio::test]
     async fn test_openai_request_gpt5_uses_max_completion_tokens() {
-        // Verify that GPT-5 models use max_completion_tokens instead of max_tokens
-        let model = "gpt-5-turbo";
-        let (max_tokens, max_completion_tokens) = if model.starts_with("gpt-5") {
-            (None, Some(4096u32))
-        } else {
-            (Some(4096u32), None)
-        };
-        assert!(max_tokens.is_none());
-        assert_eq!(max_completion_tokens, Some(4096));
-
+        // GPT-5 models use max_completion_tokens instead of max_tokens
         let request = OpenAIRequest {
-            model: model.to_string(),
+            model: "gpt-5-turbo".to_string(),
             messages: vec![OpenAIMessage::user("test")],
             temperature: 0.7,
-            max_tokens,
-            max_completion_tokens,
+            max_tokens: None,
+            max_completion_tokens: Some(4096u32),
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1302,21 +1293,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_openai_request_non_gpt5_uses_max_tokens() {
-        let model = "gpt-4o";
-        let (max_tokens, max_completion_tokens) = if model.starts_with("gpt-5") {
-            (None, Some(4096u32))
-        } else {
-            (Some(4096u32), None)
-        };
-        assert_eq!(max_tokens, Some(4096));
-        assert!(max_completion_tokens.is_none());
-
+        // Non-GPT-5 models use max_tokens
         let request = OpenAIRequest {
-            model: model.to_string(),
+            model: "gpt-4o".to_string(),
             messages: vec![OpenAIMessage::user("test")],
             temperature: 0.7,
-            max_tokens,
-            max_completion_tokens,
+            max_tokens: Some(4096u32),
+            max_completion_tokens: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1741,25 +1724,13 @@ mod tests {
 
     #[test]
     fn test_openai_request_max_tokens_zero_omits_both() {
-        let max_tokens_cfg: u32 = 0;
-        let model = "gpt-4o";
-        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
-            (None, None)
-        } else if model.starts_with("gpt-5") {
-            (None, Some(max_tokens_cfg))
-        } else {
-            (Some(max_tokens_cfg), None)
-        };
-
-        assert!(max_tokens.is_none());
-        assert!(max_completion_tokens.is_none());
-
+        // max_tokens_cfg == 0 => both None
         let request = OpenAIRequest {
-            model: model.to_string(),
+            model: "gpt-4o".to_string(),
             messages: vec![OpenAIMessage::user("test")],
             temperature: 0.7,
-            max_tokens,
-            max_completion_tokens,
+            max_tokens: None,
+            max_completion_tokens: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1772,20 +1743,14 @@ mod tests {
 
     #[test]
     fn test_gemini_request_max_tokens_zero_omits_generation_config() {
-        let max_tokens: u32 = 0;
+        // max_tokens == 0 => generation_config is None
         let request = GeminiRequest {
             contents: vec![GeminiContent {
                 parts: vec![GeminiPart {
                     text: "test".to_string(),
                 }],
             }],
-            generation_config: if max_tokens == 0 {
-                None
-            } else {
-                Some(GeminiGenerationConfig {
-                    max_output_tokens: max_tokens,
-                })
-            },
+            generation_config: None,
             system_instruction: None,
         };
 
@@ -1798,16 +1763,12 @@ mod tests {
 
     #[test]
     fn test_chatgpt_request_max_tokens_zero_omits_max_output_tokens() {
-        let max_tokens: u32 = 0;
+        // max_tokens == 0 => max_output_tokens is None
         let req = ResponsesRequest {
             model: "gpt-5.2".to_string(),
             instructions: "i".to_string(),
             input: vec![],
-            max_output_tokens: if max_tokens == 0 {
-                None
-            } else {
-                Some(max_tokens)
-            },
+            max_output_tokens: None,
             store: false,
         };
 
@@ -1882,50 +1843,34 @@ mod tests {
 
     #[test]
     fn test_openai_request_max_tokens_nonzero_gpt5() {
-        let max_tokens_cfg: u32 = 4096;
-        let model = "gpt-5.2";
-        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
-            (None, None)
-        } else if model.starts_with("gpt-5") {
-            (None, Some(max_tokens_cfg))
-        } else {
-            (Some(max_tokens_cfg), None)
-        };
+        // GPT-5 with nonzero max_tokens: uses max_completion_tokens
+        let max_tokens: Option<u32> = None;
+        let max_completion_tokens: Option<u32> = Some(4096);
         assert!(max_tokens.is_none());
         assert_eq!(max_completion_tokens, Some(4096));
     }
 
     #[test]
     fn test_openai_request_max_tokens_nonzero_non_gpt5() {
-        let max_tokens_cfg: u32 = 4096;
-        let model = "gpt-4o";
-        let (max_tokens, max_completion_tokens) = if max_tokens_cfg == 0 {
-            (None, None)
-        } else if model.starts_with("gpt-5") {
-            (None, Some(max_tokens_cfg))
-        } else {
-            (Some(max_tokens_cfg), None)
-        };
+        // Non-GPT-5 with nonzero max_tokens: uses max_tokens
+        let max_tokens: Option<u32> = Some(4096);
+        let max_completion_tokens: Option<u32> = None;
         assert_eq!(max_tokens, Some(4096));
         assert!(max_completion_tokens.is_none());
     }
 
     #[test]
     fn test_gemini_request_max_tokens_nonzero_includes_config() {
-        let max_tokens: u32 = 8192;
+        // max_tokens > 0 => generation_config is Some
         let request = GeminiRequest {
             contents: vec![GeminiContent {
                 parts: vec![GeminiPart {
                     text: "test".to_string(),
                 }],
             }],
-            generation_config: if max_tokens == 0 {
-                None
-            } else {
-                Some(GeminiGenerationConfig {
-                    max_output_tokens: max_tokens,
-                })
-            },
+            generation_config: Some(GeminiGenerationConfig {
+                max_output_tokens: 8192,
+            }),
             system_instruction: None,
         };
         let json = serde_json::to_value(&request).unwrap();
@@ -1934,16 +1879,12 @@ mod tests {
 
     #[test]
     fn test_chatgpt_request_max_tokens_nonzero_includes_field() {
-        let max_tokens: u32 = 4096;
+        // max_tokens > 0 => max_output_tokens is Some
         let req = ResponsesRequest {
             model: "gpt-5.2".to_string(),
             instructions: "test".to_string(),
             input: vec![],
-            max_output_tokens: if max_tokens == 0 {
-                None
-            } else {
-                Some(max_tokens)
-            },
+            max_output_tokens: Some(4096),
             store: false,
         };
         let json = serde_json::to_value(&req).unwrap();

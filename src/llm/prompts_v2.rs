@@ -2654,4 +2654,29 @@ mod tests {
         );
         assert!(parts.system.contains("ALWAYS use ServerBuilder"));
     }
+
+    // --- days_to_ymd coverage: z < 0 branch and mp >= 10 branch ---
+
+    #[test]
+    fn test_days_to_ymd_negative_z() {
+        // z = days + 719468; z < 0 => days < -719468
+        // days = -719800 => z = -332 (exercises the z < 0 branch in era calculation)
+        let (y, m, d) = days_to_ymd(-719800);
+        assert_eq!((y, m, d), (-1, 4, 4));
+    }
+
+    #[test]
+    fn test_days_to_ymd_january() {
+        // 2024-01-15: mp=10 (>= 10), exercises the mp >= 10 branch (m = mp - 9)
+        // and the m <= 2 => y += 1 branch
+        let (y, m, d) = days_to_ymd(19737);
+        assert_eq!((y, m, d), (2024, 1, 15));
+    }
+
+    #[test]
+    fn test_days_to_ymd_february() {
+        // 2024-02-15: mp=11 (>= 10), exercises the mp >= 10 branch
+        let (y, m, d) = days_to_ymd(19768);
+        assert_eq!((y, m, d), (2024, 2, 15));
+    }
 }
