@@ -4120,4 +4120,32 @@ testpkg.run()
             err
         );
     }
+
+    // ========================================================================
+    // Overwrite-create mode: fact ledger is skipped
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_generate_overwrite_create_skips_fact_ledger() {
+        // When create_mode = "overwrite" and no existing_skill, the generator
+        // should skip the fact ledger LLM call entirely (line 575-576).
+        let prompts = PromptsConfig {
+            create_mode: Some("overwrite".to_string()),
+            create_custom: Some("Generate a SKILL.md for this library.".to_string()),
+            ..PromptsConfig::default()
+        };
+
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 1)
+            .with_test(false)
+            .with_review(false)
+            .with_prompts_config(prompts);
+        // existing_skill is None by default — satisfies the `self.existing_skill.is_none()` check
+
+        let data = make_test_data();
+        let output = gen.generate(&data).await.unwrap();
+        assert!(
+            output.skill_md.contains("---"),
+            "overwrite-create mode should still produce valid output"
+        );
+    }
 }

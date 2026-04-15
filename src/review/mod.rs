@@ -117,9 +117,13 @@ impl<'a> ReviewAgent<'a> {
             patterns,
             behavioral_semantics,
         );
-        // Split the prompt at the SKILL.MD UNDER REVIEW boundary:
-        // everything before it is review criteria (system), everything
-        // from it onward is the data to review (user).
+        self.call_with_split(&verdict_prompt).await
+    }
+
+    /// Split the prompt at the `SKILL.MD UNDER REVIEW:` boundary and call the
+    /// LLM with system/user separation.  Falls back to a single-message call
+    /// if the marker is absent (defensive — current templates always include it).
+    async fn call_with_split(&self, verdict_prompt: &str) -> Result<ReviewResult> {
         let verdict_response =
             if let Some(split_pos) = verdict_prompt.find("SKILL.MD UNDER REVIEW:") {
                 let system = &verdict_prompt[..split_pos];
@@ -134,7 +138,7 @@ impl<'a> ReviewAgent<'a> {
                      falling back to single-message call (system-prompt split disabled)"
                 );
                 self.client
-                    .complete(&verdict_prompt)
+                    .complete(verdict_prompt)
                     .await
                     .context("review verdict LLM call failed")?
             };
@@ -764,5 +768,67 @@ mod tests {
             },
         ];
         print_review_issues(&issues);
+    }
+
+    // ========================================================================
+    // call_with_split: marker-found (happy) and marker-missing (fallback)
+    // ========================================================================
+
+    use std::sync::{Arc, Mutex};
+
+    /// Mock that records which LlmClient method was invoked and always
+    /// returns a valid `passed: true` JSON verdict.
+    struct RecordingClient {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RecordingClient {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn call_log(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for RecordingClient {
+        async fn complete(&self, _prompt: &str) -> anyhow::Result<String> {
+            self.calls.lock().unwrap().push("complete");
+            Ok(r#"{"passed": true, "issues": []}"#.to_string())
+        }
+
+        async fn complete_with_system(&self, _system: &str, _user: &str) -> anyhow::Result<String> {
+            self.calls.lock().unwrap().push("complete_with_system");
+            Ok(r#"{"passed": true, "issues": []}"#.to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_call_with_split_happy_path_uses_complete_with_system() {
+        let client = RecordingClient::new();
+        let agent = ReviewAgent::new(&client, None);
+
+        let prompt = "Review instructions here\n\nSKILL.MD UNDER REVIEW:\n# My Skill\n";
+        let result = agent.call_with_split(prompt).await.unwrap();
+
+        assert!(result.passed);
+        assert_eq!(client.call_log(), vec!["complete_with_system"]);
+    }
+
+    #[tokio::test]
+    async fn test_call_with_split_fallback_uses_complete() {
+        let client = RecordingClient::new();
+        let agent = ReviewAgent::new(&client, None);
+
+        // Prompt without the marker — triggers the fallback warn + complete() path
+        let prompt = "Review this document for accuracy.\nHere is the content:\n# My Skill\n";
+        let result = agent.call_with_split(prompt).await.unwrap();
+
+        assert!(result.passed);
+        assert_eq!(client.call_log(), vec!["complete"]);
     }
 }

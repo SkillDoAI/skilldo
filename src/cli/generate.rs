@@ -2408,4 +2408,35 @@ redact_env_vars = ["FAKE_API_KEY", "ANOTHER_SECRET"]
             "error should mention --replay-from and facts.md: {err_msg}"
         );
     }
+
+    #[tokio::test]
+    async fn test_replay_from_empty_stage_file_errors() {
+        let repo = make_test_repo();
+        let output = repo.path().join("SKILL.md");
+        let replay_dir = repo.path().join("replay-empty");
+        fs::create_dir(&replay_dir).unwrap();
+        // Write an empty extract file (whitespace-only counts as empty)
+        fs::write(replay_dir.join("1-extract.md"), "   \n  ").unwrap();
+        fs::write(replay_dir.join("2-map.md"), "map content").unwrap();
+        fs::write(replay_dir.join("3-learn.md"), "learn content").unwrap();
+
+        let result = run(GenerateOptions {
+            replay_from: Some(replay_dir.to_str().unwrap().to_string()),
+            ..test_opts(&repo, &output)
+        })
+        .await;
+        assert!(
+            result.is_err(),
+            "replay-from with empty stage file should fail"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("is empty"),
+            "error should mention the file is empty: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("1-extract.md"),
+            "error should mention the file name: {err_msg}"
+        );
+    }
 }
