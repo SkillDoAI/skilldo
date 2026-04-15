@@ -541,7 +541,7 @@ pub struct GenerationConfig {
     #[serde(default = "default_true")]
     pub enable_test: bool,
 
-    /// Test agent validation mode: "thorough" (all patterns), "quick" (2-3 patterns),
+    /// Test agent validation mode: "thorough" (all patterns), "quick" (up to 3 patterns),
     /// "adaptive" (future: diff-based), or "minimal" (1 pattern). Default: "thorough".
     #[serde(default = "default_test_mode")]
     pub test_mode: String,

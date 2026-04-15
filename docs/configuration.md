@@ -89,7 +89,7 @@ enable_test = true
 
 # Test validation mode (default: "thorough")
 #   "thorough"  — test ALL extracted patterns (guarantees all code examples compile)
-#   "quick"     — test 2-3 patterns from priority categories (fast iteration)
+#   "quick"     — test up to 3 patterns from priority categories (fast iteration)
 #   "adaptive"  — test patterns, reduce scope on repeated failures
 #   "minimal"   — test only core import + one pattern
 test_mode = "thorough"

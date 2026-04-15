@@ -168,7 +168,7 @@ Key flags:
 - `--container` — run test agent in container (default: bare-metal with uv/cargo)
 - `--install-source <MODE>` — how the test agent installs the library for code validation: `registry` (from crates.io/PyPI/npm, default), `local-install` (mounts local repo and builds via package manager), `local-mount` (mounts repo and sets module path directly, no build step)
 - `--source-path <PATH>` — local source path for local-install/local-mount modes
-- `--test-mode <MODE>` — `thorough` tests ALL patterns (default), `quick` tests 2-3 for fast iteration, `minimal` tests 1, `adaptive` starts with 1 and expands
+- `--test-mode <MODE>` — `thorough` tests ALL patterns (default), `quick` tests up to 3 for fast iteration, `minimal` tests 1, `adaptive` starts with 1 and expands
 - `--review-model <MODEL>` / `--review-provider <PROVIDER>` — override model/provider for the review stage only
 - `--test-model <MODEL>` / `--test-provider <PROVIDER>` — override model/provider for the test code generation stage only
 - `--max-retries <N>` — max create→validate retries before giving up (default: from config)
@@ -216,7 +216,7 @@ Key `[generation]` fields:
 | `custom_instructions` | `"""..."""` | Repo-specific instructions for the create stage (overrides style/content rules) |
 | `enable_test` | `true`/`false` | Toggle test validation (default: true) |
 | `enable_review` | `true`/`false` | Toggle review validation (default: true) |
-| `test_mode` | `thorough`/`quick`/`minimal`/`adaptive` | Test all/2-3/1/1+ patterns |
+| `test_mode` | `thorough`/`quick`/`minimal`/`adaptive` | Test all/up to 3/1/1+ patterns |
 | `max_retries` | integer | Max create→validate retries (default: 10) |
 
 ### Model Communication

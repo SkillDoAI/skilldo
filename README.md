@@ -107,7 +107,7 @@ aiohttp, arrow, beautifulsoup4, boto3, celery, click, cryptography, django, fast
 - **Best overall model**: GPT-5.2 produces the cleanest output with fewest retries
 - **Best value**: Hybrid setup — local model for extract/map/learn, cloud model for review+test
 - **Local-only**: Qwen3-Coder (30B) via Ollama works well for small-to-medium libraries. Increase `max_retries` to 10+.
-- **Test modes**: `test_mode = "thorough"` (default) tests ALL patterns for maximum accuracy. Use `test_mode = "quick"` (2-3 patterns) for faster iteration. See [configuration docs](docs/configuration.md).
+- **Test modes**: `test_mode = "thorough"` (default) tests ALL patterns for maximum accuracy. Use `test_mode = "quick"` (up to 3 patterns) for faster iteration. See [configuration docs](docs/configuration.md).
 - **CLI providers**: Set `cli_system_args = ["--system-prompt-file"]` in your config to pass system prompts correctly for CLI-mode providers (Claude CLI, etc.). System prompts are written to a temp file for security. See [configuration docs](docs/configuration.md).
 - **Review the output.** Generation is a starting point, not a finished product.
 

@@ -32,7 +32,7 @@ pub enum ValidationMode {
     /// only mode that mechanically guarantees no broken examples ship.
     #[default]
     Thorough,
-    /// Test 2-3 patterns from different categories (BasicUsage, Configuration,
+    /// Test up to 3 patterns from different categories (BasicUsage, Configuration,
     /// ErrorHandling). Fast iteration mode — good for replay-based prompt tuning.
     Quick,
     /// Test 1 pattern initially, expand if it passes easily (future: diff-based)
