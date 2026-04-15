@@ -1154,7 +1154,7 @@ Every defect you miss ships to users. Current UTC time: {utc_now}
 
 REVIEW CRITERIA:
 
-1. **ACCURACY** — Evaluate ONLY against the reference data above and custom instructions (do NOT rely on your training data knowledge of external APIs — this library may implement its own routes, field names, and response formats that differ from the real services):
+1. **ACCURACY** — Evaluate ONLY against the reference data provided below and custom instructions (do NOT rely on your training data knowledge of external APIs — this library may implement its own routes, field names, and response formats that differ from the real services):
      IMPORTANT: SKILL.md is a quick-reference, not full API docs. These differences are OK:
        - Omitting type annotations (e.g., `name` vs `name: str`)
        - Omitting return type annotations
