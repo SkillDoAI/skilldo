@@ -11,17 +11,16 @@
 
 use crate::detector::Language;
 
-/// Separated prompt parts for providers that support native system prompts.
-/// System = rules, constraints, custom instructions (high-priority directive channel).
-/// User = data to process (extract output, patterns, context, existing SKILL.md).
 /// Marker string used to split the review verdict prompt for `complete_with_system()`.
-/// Everything before the marker (reviewer persona, instruction boundary, review
-/// criteria, severity rules, output format) goes into the system channel.
-/// Everything from the marker onward (SKILL.md content + reference data) goes
-/// into the user channel.
+/// Everything before the marker (reviewer persona, review criteria, severity rules,
+/// output format) goes into the system channel. Everything from the marker onward
+/// (SKILL.md content + reference data) goes into the user channel.
 /// Shared constant so prompts_v2 and review/mod.rs stay in sync.
 pub const REVIEW_SPLIT_MARKER: &str = "SKILL.MD UNDER REVIEW:";
 
+/// Separated prompt parts for providers that support native system prompts.
+/// System = rules, constraints, custom instructions (high-priority directive channel).
+/// User = data to process (extract output, patterns, context, existing SKILL.md).
 #[derive(Debug)]
 pub struct PromptParts {
     pub system: String,
