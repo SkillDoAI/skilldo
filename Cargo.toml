@@ -36,7 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 
 [dev-dependencies]
-llmposter = "0.4.2"
+llmposter = "0.4.7"
 mockito = "1"
 serial_test = "3"
 

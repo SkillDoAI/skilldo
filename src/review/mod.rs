@@ -125,7 +125,7 @@ impl<'a> ReviewAgent<'a> {
     /// if the marker is absent (defensive — current templates always include it).
     async fn call_with_split(&self, verdict_prompt: &str) -> Result<ReviewResult> {
         let verdict_response =
-            if let Some(split_pos) = verdict_prompt.find("SKILL.MD UNDER REVIEW:") {
+            if let Some(split_pos) = verdict_prompt.find(prompts_v2::REVIEW_SPLIT_MARKER) {
                 let system = &verdict_prompt[..split_pos];
                 let user = &verdict_prompt[split_pos..];
                 self.client
@@ -134,8 +134,9 @@ impl<'a> ReviewAgent<'a> {
                     .context("review verdict LLM call failed")?
             } else {
                 tracing::warn!(
-                    "review: 'SKILL.MD UNDER REVIEW:' marker not found in verdict prompt; \
-                     falling back to single-message call (system-prompt split disabled)"
+                    "review: '{}' marker not found in verdict prompt; \
+                     falling back to single-message call (system-prompt split disabled)",
+                    prompts_v2::REVIEW_SPLIT_MARKER
                 );
                 self.client
                     .complete(verdict_prompt)

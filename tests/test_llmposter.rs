@@ -594,10 +594,25 @@ async fn test_deterministic_pipeline() {
 
     let fact_ledger_response = "## Verified Facts\n\n- ServerBuilder is the primary public API\n- Fixtures match by substring on user message";
 
-    // Build llmposter server — fixture order matters (first match wins)
-    // Create prompt contains "agent rules file" — match it specifically
-    // Fact ledger prompt contains "fact extractor"
+    // Build llmposter server — each stage gets an explicit fixture so
+    // regressions (e.g., fact-ledger prompt change) fail loudly instead
+    // of silently falling through to a catch-all.
     let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("Extract the complete public API surface")
+                .respond_with_content(extract_response),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("Extract correct usage patterns")
+                .respond_with_content(extract_response),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("Extract conventions, best practices")
+                .respond_with_content(extract_response),
+        )
         .fixture(
             Fixture::new()
                 .match_user_message("Extract the verified facts checklist")
@@ -608,8 +623,6 @@ async fn test_deterministic_pipeline() {
                 .match_user_message("Now generate the SKILL.md")
                 .respond_with_content(create_output),
         )
-        // Extract/map/learn catch-all — returns simple JSON for all three
-        .fixture(Fixture::new().respond_with_content(extract_response))
         .build()
         .await
         .unwrap();
@@ -680,11 +693,27 @@ async fn test_deterministic_pipeline_with_review() {
 
     let fact_ledger_response = "## Verified Facts\n\n- ServerBuilder is the primary public API\n- Fixtures match by substring on user message";
 
+    // Each stage gets an explicit fixture — no catch-all.
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
                 .match_user_message("SKILL.MD UNDER REVIEW")
                 .respond_with_content(review_pass),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("Extract the complete public API surface")
+                .respond_with_content(extract_response),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("Extract correct usage patterns")
+                .respond_with_content(extract_response),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("Extract conventions, best practices")
+                .respond_with_content(extract_response),
         )
         .fixture(
             Fixture::new()
@@ -696,7 +725,6 @@ async fn test_deterministic_pipeline_with_review() {
                 .match_user_message("Now generate the SKILL.md")
                 .respond_with_content(create_output),
         )
-        .fixture(Fixture::new().respond_with_content(extract_response))
         .build()
         .await
         .unwrap();
