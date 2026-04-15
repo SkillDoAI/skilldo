@@ -2614,6 +2614,7 @@ mod tests {
     // --- Coverage: OpenAI reasoning token logging (lines 529-544) ---
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_openai_complete_with_reasoning_tokens() {
         // Returns a response with a `reasoning` field so the reasoning logging
         // path (lines 529-544) is exercised.
