@@ -478,6 +478,26 @@ impl RustHandler {
             }
         }
 
+        // If the repo has a docs/ directory with at least one .md file, link to it
+        if let Some((_, repo_url)) = urls.iter().find(|(k, _)| k == "Repository") {
+            let docs_dir = self.repo_path.join("docs");
+            if docs_dir.is_dir() {
+                let has_md = fs::read_dir(&docs_dir)
+                    .map(|entries| {
+                        entries.filter_map(|e| e.ok()).any(|e| {
+                            e.path()
+                                .extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                        })
+                    })
+                    .unwrap_or(false);
+                if has_md {
+                    let base = repo_url.trim_end_matches(".git");
+                    urls.push(("Repository docs".into(), format!("{base}/tree/main/docs")));
+                }
+            }
+        }
+
         urls
     }
 
@@ -1694,6 +1714,100 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let handler = RustHandler::new(dir.path());
         assert!(handler.get_project_urls().is_empty());
+    }
+
+    #[test]
+    fn get_project_urls_includes_repo_docs_when_docs_dir_has_md() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nrepository = \"https://github.com/org/my-crate\"\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs").join("guide.md"), "# Guide\n").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            urls.iter().any(|(k, v)| k == "Repository docs"
+                && v == "https://github.com/org/my-crate/tree/main/docs"),
+            "should include repo docs tree URL: {:?}",
+            urls
+        );
+    }
+
+    #[test]
+    fn get_project_urls_no_repo_docs_when_docs_dir_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nrepository = \"https://github.com/org/my-crate\"\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            !urls.iter().any(|(k, _)| k == "Repository docs"),
+            "should not include repo docs when docs/ has no .md files: {:?}",
+            urls
+        );
+    }
+
+    #[test]
+    fn get_project_urls_no_repo_docs_when_no_docs_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nrepository = \"https://github.com/org/my-crate\"\n",
+        )
+        .unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            !urls.iter().any(|(k, _)| k == "Repository docs"),
+            "should not include repo docs when docs/ doesn't exist: {:?}",
+            urls
+        );
+    }
+
+    #[test]
+    fn get_project_urls_no_repo_docs_without_repository_url() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs").join("guide.md"), "# Guide\n").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            !urls.iter().any(|(k, _)| k == "Repository docs"),
+            "should not include repo docs without a repository URL: {:?}",
+            urls
+        );
+    }
+
+    #[test]
+    fn get_project_urls_strips_git_suffix_from_repo_docs_url() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nrepository = \"https://github.com/org/my-crate.git\"\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs").join("README.md"), "# Docs\n").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            urls.iter().any(|(k, v)| k == "Repository docs"
+                && v == "https://github.com/org/my-crate/tree/main/docs"),
+            "should strip .git suffix: {:?}",
+            urls
+        );
     }
 
     // ── cargo_toml_field tests ────────────────────────────────────────

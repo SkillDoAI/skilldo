@@ -107,12 +107,32 @@ fn ensure_frontmatter_inner(
                 );
             }
 
-            // Has correct fields — inject generated-by inside metadata if missing
+            // Has correct fields — inject or update generated-by inside metadata
             if let Some(model) = generated_with {
-                if !fm_block.contains("generated-by:") && !fm_block.contains("generated_with:") {
-                    let frontmatter = fm_block.trim_end();
-                    let content_after = &after_start[end_pos + 3..];
+                let has_generated_by =
+                    fm_block.contains("generated-by:") || fm_block.contains("generated_with:");
+                let content_after = &after_start[end_pos + 3..];
 
+                if has_generated_by {
+                    // Replace existing generated-by line with the current model
+                    let updated_fm: String = fm_block
+                        .lines()
+                        .map(|line| {
+                            if line.trim_start().starts_with("generated-by:")
+                                || line.trim_start().starts_with("generated_with:")
+                            {
+                                // Preserve leading whitespace from original line
+                                let indent = &line[..line.len() - line.trim_start().len()];
+                                format!("{}generated-by: skilldo/{}", indent, model)
+                            } else {
+                                line.to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return format!("---{}\n---{}", updated_fm.trim_end(), content_after);
+                } else {
+                    let frontmatter = fm_block.trim_end();
                     if has_metadata {
                         // Append inside metadata block (metadata is last in our format)
                         return format!(
@@ -1134,6 +1154,36 @@ mod tests {
             "Should add metadata block with generated-by. Got: {}",
             result
         );
+    }
+
+    #[test]
+    fn test_update_existing_generated_by_on_rerun() {
+        // Bug fix: in update mode (--input), the normalizer must overwrite an existing
+        // generated-by value when the current run uses a different model.
+        let content = "---\nname: click\ndescription: CLI toolkit.\nlicense: BSD\nmetadata:\n  version: \"8.0.0\"\n  ecosystem: python\n  generated-by: skilldo/old-model\n---\n\n## Imports\n";
+        let result = ensure_frontmatter(
+            content,
+            "click",
+            "8.0.0",
+            "python",
+            Some("BSD"),
+            Some("new-model"),
+        );
+
+        assert!(
+            result.contains("generated-by: skilldo/new-model"),
+            "Should overwrite old generated-by with new model. Got: {}",
+            result
+        );
+        assert!(
+            !result.contains("old-model"),
+            "Old model name should not remain. Got: {}",
+            result
+        );
+        // Should still have exactly one frontmatter block
+        let dash_count = result.lines().filter(|l| l.trim() == "---").count();
+        assert_eq!(dash_count, 2);
+        assert!(result.contains("## Imports"));
     }
 
     #[test]
