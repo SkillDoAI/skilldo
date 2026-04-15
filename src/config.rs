@@ -282,9 +282,9 @@ pub struct LlmConfig {
     #[serde(default)]
     pub cli_args: Vec<String>,
 
-    /// CLI flag(s) for passing a system prompt. The system prompt text is
-    /// appended as the final argument after these flags.
-    /// E.g., ["--system-prompt"] for claude, ["-s"] for codex.
+    /// CLI flag(s) for passing a system prompt via temp file. The system text
+    /// is written to a temp file and the file path is appended after these flags.
+    /// E.g., ["--system-prompt-file"] for claude, ["-s"] for codex.
     /// When empty, system prompt is concatenated into the user message instead.
     /// Only used when provider_type = "cli".
     #[serde(default)]

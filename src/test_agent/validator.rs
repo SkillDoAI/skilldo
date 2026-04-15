@@ -38,8 +38,9 @@ pub enum ValidationMode {
     /// Test 1 pattern initially, expand if it passes easily (future: diff-based)
     Adaptive,
     /// Test just 1 pattern — always takes the first pattern regardless of
-    /// category. Unlike Quick (which selects by category and can return 0 if
-    /// no priority categories match), Minimal never returns an empty set.
+    /// category. Quick mode also guarantees at least one pattern (it fills
+    /// from remaining if priority categories don't match), but selects by
+    /// category priority first. Minimal always picks index 0.
     Minimal,
 }
 
