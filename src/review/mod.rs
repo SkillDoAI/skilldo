@@ -109,7 +109,9 @@ impl<'a> ReviewAgent<'a> {
         behavioral_semantics: Option<&str>,
     ) -> Result<ReviewResult> {
         // LLM verdict (accuracy + safety + consistency)
-        let verdict_prompt = prompts_v2::review_verdict_prompt(
+        // Uses PromptParts so review criteria go through the system channel
+        // and SKILL.md data goes through the user channel.
+        let parts = prompts_v2::review_verdict_prompt_parts(
             skill_md,
             self.custom_prompt.as_deref(),
             language,
@@ -117,32 +119,11 @@ impl<'a> ReviewAgent<'a> {
             patterns,
             behavioral_semantics,
         );
-        self.call_with_split(&verdict_prompt).await
-    }
-
-    /// Split the prompt at the `SKILL.MD UNDER REVIEW:` boundary and call the
-    /// LLM with system/user separation.  Falls back to a single-message call
-    /// if the marker is absent (defensive — current templates always include it).
-    async fn call_with_split(&self, verdict_prompt: &str) -> Result<ReviewResult> {
-        let verdict_response =
-            if let Some(split_pos) = verdict_prompt.find(prompts_v2::REVIEW_SPLIT_MARKER) {
-                let system = &verdict_prompt[..split_pos];
-                let user = &verdict_prompt[split_pos..];
-                self.client
-                    .complete_with_system(system, user)
-                    .await
-                    .context("review verdict LLM call failed")?
-            } else {
-                tracing::warn!(
-                    "review: '{}' marker not found in verdict prompt; \
-                     falling back to single-message call (system-prompt split disabled)",
-                    prompts_v2::REVIEW_SPLIT_MARKER
-                );
-                self.client
-                    .complete(verdict_prompt)
-                    .await
-                    .context("review verdict LLM call failed")?
-            };
+        let verdict_response = self
+            .client
+            .complete_with_system(&parts.system, &parts.user)
+            .await
+            .context("review verdict LLM call failed")?;
 
         let mut result = parse_review_response(&verdict_response, self.strict)?;
         result.raw_verdict = verdict_response;
@@ -772,7 +753,7 @@ mod tests {
     }
 
     // ========================================================================
-    // call_with_split: marker-found (happy) and marker-missing (fallback)
+    // review() uses complete_with_system via PromptParts
     // ========================================================================
 
     use std::sync::{Arc, Mutex};
@@ -809,27 +790,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_call_with_split_happy_path_uses_complete_with_system() {
+    async fn test_review_uses_complete_with_system() {
         let client = RecordingClient::new();
         let agent = ReviewAgent::new(&client, None);
 
-        let prompt = "Review instructions here\n\nSKILL.MD UNDER REVIEW:\n# My Skill\n";
-        let result = agent.call_with_split(prompt).await.unwrap();
+        let result = agent
+            .review("# Skill content", &Language::Python, None, None, None)
+            .await
+            .unwrap();
 
         assert!(result.passed);
+        // review() now uses review_verdict_prompt_parts() + complete_with_system()
         assert_eq!(client.call_log(), vec!["complete_with_system"]);
     }
 
-    #[tokio::test]
-    async fn test_call_with_split_fallback_uses_complete() {
-        let client = RecordingClient::new();
-        let agent = ReviewAgent::new(&client, None);
-
-        // Prompt without the marker — triggers the fallback warn + complete() path
-        let prompt = "Review this document for accuracy.\nHere is the content:\n# My Skill\n";
-        let result = agent.call_with_split(prompt).await.unwrap();
-
-        assert!(result.passed);
-        assert_eq!(client.call_log(), vec!["complete"]);
+    #[test]
+    fn test_review_verdict_prompt_parts_splits_correctly() {
+        let parts = prompts_v2::review_verdict_prompt_parts(
+            "# My Skill",
+            None,
+            &Language::Rust,
+            None,
+            None,
+            None,
+        );
+        // System should contain the review criteria
+        assert!(parts.system.contains("Darryl"));
+        assert!(parts.system.contains("ACCURACY"));
+        assert!(parts.system.contains("SAFETY"));
+        // User should contain the SKILL.md data
+        assert!(parts.user.contains("SKILL.MD UNDER REVIEW"));
+        assert!(parts.user.contains("# My Skill"));
+        // Criteria should NOT be in user
+        assert!(!parts.user.contains("ACCURACY"));
     }
 }

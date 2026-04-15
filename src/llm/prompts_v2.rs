@@ -1044,6 +1044,43 @@ fn append_rust_deps_section(
 }
 
 /// Review agent: evaluate SKILL.md for accuracy, safety, and consistency.
+/// Returns `PromptParts` for the review verdict — system contains the reviewer
+/// persona, review criteria, severity rules, and output format. User contains
+/// the SKILL.md under review and reference data from the extract stage.
+pub fn review_verdict_prompt_parts(
+    skill_md: &str,
+    custom_instructions: Option<&str>,
+    language: &Language,
+    api_surface: Option<&str>,
+    patterns: Option<&str>,
+    behavioral_semantics: Option<&str>,
+) -> PromptParts {
+    let combined = review_verdict_prompt(
+        skill_md,
+        custom_instructions,
+        language,
+        api_surface,
+        patterns,
+        behavioral_semantics,
+    );
+    // Split at the marker — everything before is system (rules), after is user (data).
+    if let Some(pos) = combined.find(REVIEW_SPLIT_MARKER) {
+        PromptParts {
+            system: combined[..pos].to_string(),
+            user: combined[pos..].to_string(),
+        }
+    } else {
+        // Defensive: if marker missing, put everything in user
+        PromptParts {
+            system: String::new(),
+            user: combined,
+        }
+    }
+}
+
+/// Combined review verdict prompt (backward compat for tests).
+/// Use `review_verdict_prompt_parts()` with `complete_with_system()` in production.
+#[allow(dead_code)]
 pub fn review_verdict_prompt(
     skill_md: &str,
     custom_instructions: Option<&str>,
