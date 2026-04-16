@@ -185,7 +185,7 @@ cleanup = true
 # Container images per language (defaults shown — override for specific versions)
 # python_image = "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
 # javascript_image = "node:24-alpine"
-# rust_image = "rust:1.75-slim"
+# rust_image = "rust:1.87-slim"
 # go_image = "golang:1.25-alpine"
 
 # ── Custom Prompts (Advanced) ────────────────────────────────

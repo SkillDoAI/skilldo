@@ -670,11 +670,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_select_patterns_minimal() {
-        assert_eq!(mode_count(&ValidationMode::Minimal, 2), 1);
-    }
-
-    #[test]
     fn test_test_result_all_passed() {
         let result = TestResult {
             passed: 3,
@@ -709,33 +704,6 @@ mod tests {
         let feedback = result.generate_feedback(&Language::Python).unwrap();
         assert!(feedback.contains("Test 2"));
         assert!(feedback.contains("error"));
-    }
-
-    #[test]
-    fn test_select_patterns_adaptive_mode() {
-        // Adaptive mode currently behaves like Minimal (1 pattern).
-        let count = mode_count(&ValidationMode::Adaptive, 4);
-        assert!(count < 4, "Adaptive should not return all patterns");
-    }
-
-    /// Helper to exercise the ValidationMode match logic for all arms,
-    /// mirroring the match in select_patterns.
-    fn mode_count(mode: &ValidationMode, num_patterns: usize) -> usize {
-        match mode {
-            ValidationMode::Minimal => 1,
-            ValidationMode::Quick => 3.min(num_patterns),
-            ValidationMode::Thorough => num_patterns,
-            ValidationMode::Adaptive => 1,
-        }
-    }
-
-    #[test]
-    fn test_select_patterns_all_modes() {
-        let num = 4;
-        assert_eq!(mode_count(&ValidationMode::Minimal, num), 1);
-        assert_eq!(mode_count(&ValidationMode::Quick, num), 3);
-        assert_eq!(mode_count(&ValidationMode::Thorough, num), num);
-        assert_eq!(mode_count(&ValidationMode::Adaptive, num), 1);
     }
 
     #[test]

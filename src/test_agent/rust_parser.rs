@@ -372,8 +372,15 @@ impl RustParser {
                     raw_spec: Some(raw_spec),
                     source: DepSource::Manifest,
                 });
-            } else if let Some(cargo_spec) = cargo_add_specs.remove(name) {
-                // Fallback: use features from `cargo add --features`
+                continue;
+            }
+            // Fallback: match cargo add --features, normalizing dash/underscore
+            // (cargo add tokio-util --features codec ↔ use tokio_util).
+            let cargo_key = cargo_add_specs
+                .keys()
+                .find(|k| k.replace('-', "_") == norm)
+                .cloned();
+            if let Some(cargo_spec) = cargo_key.and_then(|k| cargo_add_specs.remove(&k)) {
                 result.push(StructuredDep {
                     name: name.clone(),
                     raw_spec: Some(cargo_spec),
@@ -620,6 +627,29 @@ match serde_json::from_str::<Point>(data) {
         assert!(
             reqwest_dep.raw_spec.is_none(),
             "reqwest should have no raw_spec (no --features)"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_match_dash_underscore_variants() {
+        // `cargo add tokio-util --features codec` + `use tokio_util::...`
+        // should still preserve the features, since Cargo treats dashes and
+        // underscores as equivalent in crate names.
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```rust\nuse tokio_util::codec;\n```\n\n```bash\ncargo add tokio-util --features codec\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+
+        let dep = deps
+            .iter()
+            .find(|d| d.name == "tokio_util" || d.name == "tokio-util")
+            .expect("tokio_util dep should be present");
+        let spec = dep
+            .raw_spec
+            .as_ref()
+            .expect("hyphenated cargo add features must survive the dash/underscore lookup");
+        assert!(
+            spec.contains("codec"),
+            "spec should contain the 'codec' feature despite dash/underscore mismatch: {spec}"
         );
     }
 

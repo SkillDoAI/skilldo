@@ -630,7 +630,7 @@ pub struct ContainerConfig {
     #[serde(default = "default_node_image")]
     pub javascript_image: String,
 
-    /// Container image for Rust (default: "rust:1.75-slim")
+    /// Container image for Rust (default: "rust:1.87-slim")
     #[serde(default = "default_rust_image")]
     pub rust_image: String,
 
@@ -723,7 +723,8 @@ fn default_node_image() -> String {
 }
 
 fn default_rust_image() -> String {
-    "rust:1.75-slim".to_string()
+    // Must be >= our crate's rust-version; bump when MSRV moves.
+    "rust:1.87-slim".to_string()
 }
 
 fn default_go_image() -> String {

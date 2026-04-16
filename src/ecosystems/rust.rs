@@ -493,7 +493,9 @@ impl RustHandler {
                     .unwrap_or(false);
                 if has_md {
                     let base = repo_url.trim_end_matches(".git");
-                    urls.push(("Repository docs".into(), format!("{base}/tree/main/docs")));
+                    // Use HEAD instead of `main` so the URL resolves regardless of
+                    // the repo's default branch (master/trunk/develop/etc.).
+                    urls.push(("Repository docs".into(), format!("{base}/tree/HEAD/docs")));
                 }
             }
         }
@@ -1730,7 +1732,7 @@ mod tests {
         let urls = handler.get_project_urls();
         assert!(
             urls.iter().any(|(k, v)| k == "Repository docs"
-                && v == "https://github.com/org/my-crate/tree/main/docs"),
+                && v == "https://github.com/org/my-crate/tree/HEAD/docs"),
             "should include repo docs tree URL: {:?}",
             urls
         );
@@ -1804,7 +1806,7 @@ mod tests {
         let urls = handler.get_project_urls();
         assert!(
             urls.iter().any(|(k, v)| k == "Repository docs"
-                && v == "https://github.com/org/my-crate/tree/main/docs"),
+                && v == "https://github.com/org/my-crate/tree/HEAD/docs"),
             "should strip .git suffix: {:?}",
             urls
         );

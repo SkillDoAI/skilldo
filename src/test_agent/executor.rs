@@ -4361,11 +4361,11 @@ dependencies = []
     }
 
     #[test]
-    fn test_strip_optional_unparseable_remains() {
-        // Stripping optional leaves something TOML can't parse => return as-is
+    fn test_strip_optional_from_only_key() {
+        // Stripping optional from a 1-key table leaves an empty table; the
+        // stripped spec still contains no `optional` key, which is what matters.
         let spec = "{ optional = true }";
         let result = strip_optional_from_dep_spec(spec);
-        // After stripping: "{  }" which is parseable but empty table (len==0), not simplified
         assert!(!result.contains("optional"));
     }
 

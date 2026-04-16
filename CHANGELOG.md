@@ -3,6 +3,24 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## Unreleased (v0.5.16)
+
+### Added
+- **Rust dep features survive cargo-add fallback** — `cargo add tokio --features full` in a SKILL.md's `## Imports` without a TOML block now produces `{ version = "*", features = ["full"] }` in the test agent's Cargo.toml instead of dropping to `tokio = "*"`
+- **Repository docs URL** synthesised for Rust crates with a `docs/` directory containing markdown — added to the references block as `{repo}/tree/HEAD/docs` (branch-agnostic)
+- **Field precision rules** in the Rust create prompt — explicit guidance on `Option<T>` wrapping, qualified names, exact ranges, and boundary behaviour to reduce API-surface hallucinations
+- **Normalizer overwrites stale `generated-by`** on rerun in update mode instead of preserving the prior model/version stamp
+- **`scale_source_budget()` helper** in `pipeline::collector` — consolidates five identical budget-scaling match arms across the collector variants
+
+### Changed
+- **Default Rust container image** is now `rust:1.87-slim` (was `rust:1.75-slim`) to match the crate's declared `rust-version`
+- **Repository docs URL** uses `tree/HEAD/docs` instead of hard-coded `tree/main/docs` so it resolves for repos on `master`, `trunk`, or any default branch
+- **Cargo add feature lookup** now normalizes dash/underscore — `cargo add tokio-util --features codec` + `use tokio_util::codec` preserves the feature flag
+
+### Fixed
+- Normalized frontmatter no longer silently keeps an outdated `generated-by` line when regenerating
+- Redundant validator mode tests that duplicated `select_patterns` logic removed (real tests for the function still live in the module)
+
 ## 0.5.15 — 2026-04-13
 
 ### Added
