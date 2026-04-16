@@ -109,8 +109,13 @@ fn ensure_frontmatter_inner(
 
             // Has correct fields — inject or update generated-by inside metadata
             if let Some(model) = generated_with {
-                let has_generated_by =
-                    fm_block.contains("generated-by:") || fm_block.contains("generated_with:");
+                // Detect the key via line-start check so we don't false-match a
+                // field whose value happens to contain "generated-by:"
+                // (e.g., `description: "log generated-by: ..."`).
+                let has_generated_by = fm_block.lines().any(|line| {
+                    let t = line.trim_start();
+                    t.starts_with("generated-by:") || t.starts_with("generated_with:")
+                });
                 let content_after = &after_start[end_pos + 3..];
 
                 if has_generated_by {

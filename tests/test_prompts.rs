@@ -442,7 +442,8 @@ fn test_create_custom_instructions_none() {
         &[],
     );
 
-    assert!(!prompt.contains("CUSTOM INSTRUCTIONS FOR THIS REPO"));
+    // Without custom instructions, no CUSTOM INSTRUCTIONS section is emitted.
+    assert!(!prompt.contains("CUSTOM INSTRUCTIONS"));
 }
 
 #[test]

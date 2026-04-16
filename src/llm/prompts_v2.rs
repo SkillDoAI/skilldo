@@ -1519,8 +1519,10 @@ across multiple code blocks — duplicate module names cause E0428 compilation e
 - Only import types that are actually used in each code example. Unused imports cause \
 compiler warnings and confuse readers.\n\
 - For struct fields documented in the API Reference or Behavioral Semantics:\n\
-  - Include the full Rust type with `Option<T>` wrapping. Write \
-`latency_ms: Option<u64>`, never bare `latency_ms` or `u64`.\n\
+  - Include the full Rust type as it appears in source. Use `Option<T>` ONLY \
+when the field is actually optional or nullable in the library contract — write \
+`latency_ms: u64` for required fields, `latency_ms: Option<u64>` for optional \
+ones. Never omit the type.\n\
   - Use fully qualified names: `StructName.field_name`, not bare `field_name`.\n\
   - Specify exact ranges with mathematical notation: `[0.0, 1.0]`, `[-N, +N]`.\n\
   - State boundary behavior explicitly: \"clamps to 0\", \"saturates at MAX\".\n\

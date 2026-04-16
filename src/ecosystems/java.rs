@@ -689,9 +689,19 @@ fn extract_gradle_quoted(rhs: &str) -> Option<String> {
             // Strip one optional closing ')' for function-call syntax like version("1.0")
             let tail = rhs[1 + end + 1..].trim();
             let tail = tail.strip_prefix(')').map(|t| t.trim()).unwrap_or(tail);
-            // Accept if tail is empty or only contains a comment
-            if tail.is_empty() || tail.starts_with("//") || tail.starts_with("/*") {
+            // Accept if tail is empty, a line comment, or a block comment that
+            // runs to end-of-input (nothing but whitespace after the closing */).
+            // Rejects `"1.0" /* old */ + suffix` — a computed version expression
+            // that happens to start with /* but is followed by more code.
+            if tail.is_empty() || tail.starts_with("//") {
                 return Some(value.to_string());
+            }
+            if let Some(rest) = tail.strip_prefix("/*") {
+                if let Some(close_idx) = rest.find("*/") {
+                    if rest[close_idx + 2..].trim().is_empty() {
+                        return Some(value.to_string());
+                    }
+                }
             }
         }
     }
@@ -2747,5 +2757,21 @@ dependencies {
             extract_gradle_quoted("\"1.0\") // version"),
             Some("1.0".to_string())
         );
+    }
+
+    #[test]
+    fn extract_gradle_quoted_block_comment_then_code_rejected() {
+        // `"1.0" /* old */ + suffix` — block comment followed by an
+        // expression. Must be rejected so we don't treat a computed
+        // version as a literal.
+        assert_eq!(extract_gradle_quoted("\"1.0\" /* old */ + suffix"), None);
+        assert_eq!(extract_gradle_quoted("'1.0' /* note */ more code"), None);
+    }
+
+    #[test]
+    fn extract_gradle_quoted_unterminated_block_comment_rejected() {
+        // `"1.0" /* unterminated` — `/*` with no closing `*/` must not be
+        // mistaken for a valid trailing comment.
+        assert_eq!(extract_gradle_quoted("\"1.0\" /* unterminated"), None);
     }
 }

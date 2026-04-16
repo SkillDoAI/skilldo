@@ -28,10 +28,30 @@ static EXTERN_CRATE_RE: Lazy<Regex> = Lazy::new(|| {
     )
     .unwrap()
 });
-/// Matches `cargo add <crate>` with optional `--features <feat1,feat2>`.
-/// Group 1 = crate name, Group 2 (optional) = feature list.
+/// Matches `cargo add <crate>` with optional `--features <list>`.
+/// Group 1 = crate name. Group 2 (optional) = raw feature list, as one of:
+///   --features foo,bar            (comma-separated, single token)
+///   --features=foo,bar            (equals form)
+///   --features "foo bar"          (quoted, space-separated)
+///   --features 'foo,bar'          (single-quoted)
+/// The matcher captures the raw list verbatim; callers normalise quoting,
+/// whitespace, and separators.
 static CARGO_ADD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"cargo\s+add\s+([a-zA-Z_][a-zA-Z0-9_\-]*)(?:\s+--features\s+([^\s]+))?").unwrap()
+    Regex::new(
+        r#"(?x)
+        cargo\s+add\s+
+        ([a-zA-Z_][a-zA-Z0-9_\-]*)              # group 1 = crate name
+        (?:                                     # optional --features <list>
+            \s+--features[\s=]+
+            (?:
+                "([^"]*)"                       # group 2a = double-quoted list
+              | '([^']*)'                       # group 2b = single-quoted list
+              | ([^\s-][^\s]*)                  # group 2c = bare token (won't swallow --flag)
+            )
+        )?
+        "#,
+    )
+    .unwrap()
 });
 // Matches #[crate_name::macro] attribute usage (e.g., #[tokio::main], #[tokio::test])
 static ATTR_CRATE_RE: Lazy<Regex> =
@@ -343,16 +363,31 @@ impl RustParser {
         if let Ok(Some(imports_for_cargo_add)) = extract_section(skill_md, r"(?m)^##\s+Imports\s*$")
         {
             for cap in CARGO_ADD_RE.captures_iter(imports_for_cargo_add) {
-                if let Some(features) = cap.get(2) {
-                    let crate_name = cap[1].to_string();
-                    let feat_list: Vec<&str> = features.as_str().split(',').collect();
-                    let quoted: Vec<String> = feat_list
-                        .iter()
-                        .map(|f| format!("\"{}\"", f.trim()))
-                        .collect();
-                    let spec = format!("{{ version = \"*\", features = [{}] }}", quoted.join(", "));
-                    cargo_add_specs.insert(crate_name, spec);
+                // Groups 2/3/4 are mutually exclusive — one quoted variant
+                // is captured depending on which syntax the model used.
+                let Some(features_raw) = cap
+                    .get(2)
+                    .or_else(|| cap.get(3))
+                    .or_else(|| cap.get(4))
+                    .map(|m| m.as_str())
+                else {
+                    continue;
+                };
+                let crate_name = cap[1].to_string();
+                // Cargo accepts both comma- and whitespace-separated lists,
+                // and commas inside quoted strings are equivalent. Splitting
+                // on both covers `foo,bar`, `foo bar`, and `foo, bar` alike.
+                let quoted: Vec<String> = features_raw
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .map(str::trim)
+                    .filter(|f| !f.is_empty())
+                    .map(|f| format!("\"{f}\""))
+                    .collect();
+                if quoted.is_empty() {
+                    continue;
                 }
+                let spec = format!("{{ version = \"*\", features = [{}] }}", quoted.join(", "));
+                cargo_add_specs.insert(crate_name, spec);
             }
         }
 
@@ -627,6 +662,39 @@ match serde_json::from_str::<Point>(data) {
         assert!(
             reqwest_dep.raw_spec.is_none(),
             "reqwest should have no raw_spec (no --features)"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_equals_form() {
+        // `cargo add tokio --features=full` (equals form) should work.
+        let parser = RustParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --features=full\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio = deps.iter().find(|d| d.name == "tokio").unwrap();
+        let spec = tokio.raw_spec.as_ref().unwrap();
+        assert!(
+            spec.contains("full"),
+            "features=full should survive: {spec}"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_space_separated_quoted() {
+        // `cargo add tokio --features "net sync"` (shell-quoted, space-separated)
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --features \"net sync\"\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio = deps.iter().find(|d| d.name == "tokio").unwrap();
+        let spec = tokio.raw_spec.as_ref().unwrap();
+        assert!(
+            spec.contains("net"),
+            "net feature should be present: {spec}"
+        );
+        assert!(
+            spec.contains("sync"),
+            "sync feature should be present: {spec}"
         );
     }
 

@@ -478,25 +478,15 @@ impl RustHandler {
             }
         }
 
-        // If the repo has a docs/ directory with at least one .md file, link to it
+        // If the repo has a docs/ directory with at least one doc file
+        // anywhere under it (top-level or nested), link to it.
         if let Some((_, repo_url)) = urls.iter().find(|(k, _)| k == "Repository") {
             let docs_dir = self.repo_path.join("docs");
-            if docs_dir.is_dir() {
-                let has_md = fs::read_dir(&docs_dir)
-                    .map(|entries| {
-                        entries.filter_map(|e| e.ok()).any(|e| {
-                            e.path()
-                                .extension()
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                        })
-                    })
-                    .unwrap_or(false);
-                if has_md {
-                    let base = repo_url.trim_end_matches(".git");
-                    // Use HEAD instead of `main` so the URL resolves regardless of
-                    // the repo's default branch (master/trunk/develop/etc.).
-                    urls.push(("Repository docs".into(), format!("{base}/tree/HEAD/docs")));
-                }
+            if docs_dir.is_dir() && docs_dir_has_doc_file(&docs_dir) {
+                let base = repo_url.trim_end_matches(".git");
+                // Use HEAD instead of `main` so the URL resolves regardless of
+                // the repo's default branch (master/trunk/develop/etc.).
+                urls.push(("Repository docs".into(), format!("{base}/tree/HEAD/docs")));
             }
         }
 
@@ -1064,6 +1054,45 @@ fn parse_version_tag(tag: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Walks `dir` recursively looking for files with docs-like extensions
+/// (.md, .rst, .mdx, .adoc). Capped at 1000 entries so pathological
+/// symlink loops or huge repos don't stall the pipeline. Returns on the
+/// first match.
+fn docs_dir_has_doc_file(dir: &Path) -> bool {
+    let is_doc = |p: &Path| {
+        p.extension().is_some_and(|ext| {
+            ["md", "rst", "mdx", "adoc"]
+                .iter()
+                .any(|e| ext.eq_ignore_ascii_case(e))
+        })
+    };
+
+    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
+    let mut budget = 1000usize;
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
+            let path = entry.path();
+            // Avoid following symlinks — use metadata() which doesn't
+            // traverse, not a follow-style helper.
+            let Ok(md) = entry.metadata() else { continue };
+            if md.is_file() && is_doc(&path) {
+                return true;
+            }
+            if md.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1809,6 +1838,44 @@ mod tests {
                 && v == "https://github.com/org/my-crate/tree/HEAD/docs"),
             "should strip .git suffix: {:?}",
             urls
+        );
+    }
+
+    #[test]
+    fn get_project_urls_repo_docs_detects_nested_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nrepository = \"https://github.com/org/my-crate\"\n",
+        )
+        .unwrap();
+        // docs/ top-level has no .md, but docs/guide/intro.md does
+        let nested = dir.path().join("docs").join("guide");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("intro.md"), "# Intro\n").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            urls.iter().any(|(k, _)| k == "Repository docs"),
+            "nested .md should count: {urls:?}"
+        );
+    }
+
+    #[test]
+    fn get_project_urls_repo_docs_detects_rst() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\nrepository = \"https://github.com/org/my-crate\"\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs").join("index.rst"), "Welcome\n").unwrap();
+        let handler = RustHandler::new(dir.path());
+        let urls = handler.get_project_urls();
+        assert!(
+            urls.iter().any(|(k, _)| k == "Repository docs"),
+            ".rst should also count: {urls:?}"
         );
     }
 
