@@ -1843,20 +1843,34 @@ mod tests {
 
     #[test]
     fn test_openai_request_max_tokens_nonzero_gpt5() {
-        // GPT-5 with nonzero max_tokens: uses max_completion_tokens
-        let max_tokens: Option<u32> = None;
-        let max_completion_tokens: Option<u32> = Some(4096);
-        assert!(max_tokens.is_none());
-        assert_eq!(max_completion_tokens, Some(4096));
+        // GPT-5 with nonzero max_tokens: serialises max_completion_tokens
+        // and omits max_tokens from the wire JSON.
+        let request = OpenAIRequest {
+            model: "gpt-5-turbo".to_string(),
+            messages: vec![OpenAIMessage::user("test")],
+            temperature: 0.7,
+            max_tokens: None,
+            max_completion_tokens: Some(4096u32),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("max_tokens").is_none());
+        assert_eq!(json["max_completion_tokens"], 4096);
     }
 
     #[test]
     fn test_openai_request_max_tokens_nonzero_non_gpt5() {
-        // Non-GPT-5 with nonzero max_tokens: uses max_tokens
-        let max_tokens: Option<u32> = Some(4096);
-        let max_completion_tokens: Option<u32> = None;
-        assert_eq!(max_tokens, Some(4096));
-        assert!(max_completion_tokens.is_none());
+        // Non-GPT-5 with nonzero max_tokens: serialises max_tokens and
+        // omits max_completion_tokens from the wire JSON.
+        let request = OpenAIRequest {
+            model: "gpt-4o".to_string(),
+            messages: vec![OpenAIMessage::user("test")],
+            temperature: 0.7,
+            max_tokens: Some(4096u32),
+            max_completion_tokens: None,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["max_tokens"], 4096);
+        assert!(json.get("max_completion_tokens").is_none());
     }
 
     #[test]

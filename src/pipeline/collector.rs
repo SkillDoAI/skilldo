@@ -1149,7 +1149,7 @@ setup(
 
     #[test]
     fn test_budget_scaling_medium_repo() {
-        // 300-1000 source files => remaining * 40%
+        // (300, 1000] source files => remaining * 40%
         assert_eq!(scale_source_budget(500, 15_000), 6_000);
         assert_eq!(scale_source_budget(301, 15_000), 6_000);
         assert_eq!(scale_source_budget(1000, 15_000), 6_000);
@@ -1157,7 +1157,7 @@ setup(
 
     #[test]
     fn test_budget_scaling_large_repo() {
-        // 1000-2000 source files => remaining * 60%
+        // (1000, 2000] source files => remaining * 60%
         assert_eq!(scale_source_budget(1500, 15_000), 9_000);
         assert_eq!(scale_source_budget(1001, 15_000), 9_000);
         assert_eq!(scale_source_budget(2000, 15_000), 9_000);
