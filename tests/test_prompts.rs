@@ -542,6 +542,38 @@ fn test_create_includes_pitfall_requirements() {
 // package-name logic" rule — any per-library steering now lives in the prompt's
 // universal rules or user-provided custom instructions, not in hard-coded
 // keyword hints. The obsolete per-category tests were removed with this change.
+#[test]
+fn test_create_has_no_hardcoded_library_category_hints() {
+    // Regression guard: the create prompt must not reintroduce per-framework
+    // keyword steering (e.g., "Web frameworks", "CLI tools", "ORMs"). If a
+    // future prompt edit adds these back, it's a code-smell — library-specific
+    // guidance should come from user-provided custom instructions.
+    let prompt = create_prompt(
+        "any-library",
+        "1.0",
+        None,
+        &[],
+        &Language::Python,
+        "",
+        "",
+        "",
+        None,
+        false,
+        &[],
+    );
+    for banned in [
+        "Web frameworks",
+        "CLI tools",
+        "ORMs",
+        "HTTP clients",
+        "Async frameworks",
+    ] {
+        assert!(
+            !prompt.contains(banned),
+            "create prompt reintroduced hardcoded category hint: {banned:?}"
+        );
+    }
+}
 
 #[test]
 fn test_create_parameter_order() {
