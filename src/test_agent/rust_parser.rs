@@ -35,14 +35,16 @@ static EXTERN_CRATE_RE: Lazy<Regex> = Lazy::new(|| {
 ///   --features "foo bar"          (quoted, space-separated)
 ///   --features 'foo,bar'          (single-quoted)
 /// The matcher captures the raw list verbatim; callers normalise quoting,
-/// whitespace, and separators.
+/// whitespace, and separators. `--features` may come anywhere on the same
+/// line as the crate name, so e.g. `cargo add tokio --no-default-features
+/// --features full` still captures the `full` feature.
 static CARGO_ADD_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r#"(?x)
         cargo\s+add\s+
         ([a-zA-Z_][a-zA-Z0-9_\-]*)              # group 1 = crate name
         (?:                                     # optional --features <list>
-            \s+--features[\s=]+
+            [^\n]*?\s--features[\s=]+           # ...anywhere later on the same line
             (?:
                 "([^"]*)"                       # group 2a = double-quoted list
               | '([^']*)'                       # group 2b = single-quoted list
@@ -695,6 +697,21 @@ match serde_json::from_str::<Point>(data) {
         assert!(
             spec.contains("sync"),
             "sync feature should be present: {spec}"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_interleaved_with_other_flags() {
+        // `cargo add tokio --no-default-features --features full` — features
+        // doesn't follow the crate name directly, but should still be captured.
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --no-default-features --features full\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio = deps.iter().find(|d| d.name == "tokio").unwrap();
+        let spec = tokio.raw_spec.as_ref().unwrap();
+        assert!(
+            spec.contains("full"),
+            "features after interleaved flags should still be captured: {spec}"
         );
     }
 
