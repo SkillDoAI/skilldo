@@ -2710,18 +2710,31 @@ mod tests {
     }
 
     // --- Coverage: Gemini extra_headers with protected header skip (lines 733-737) ---
+    // Uses mockito so we can spy on the outbound request headers directly —
+    // asserts that the allowed custom header is sent AND the protected
+    // `authorization` header the caller tried to inject never reaches the wire.
 
     #[tokio::test]
     async fn test_gemini_complete_with_extra_headers() {
-        let server = llmposter::ServerBuilder::new()
-            .fixture(
-                llmposter::Fixture::new()
-                    .for_provider(llmposter::Provider::Gemini)
-                    .respond_with_content("gemini headers response"),
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1beta/models/mock-model:generateContent")
+            .match_header("x-custom-header", "custom-value")
+            .match_header("x-goog-api-key", "test-key")
+            .match_header("authorization", mockito::Matcher::Missing)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "candidates": [{
+                        "content": {
+                            "parts": [{"text": "gemini headers response"}]
+                        }
+                    }]
+                }"#,
             )
-            .build()
-            .await
-            .expect("failed to start mock server");
+            .create_async()
+            .await;
 
         let client = GeminiClient::with_base_url(
             "test-key".to_string(),
@@ -2733,27 +2746,46 @@ mod tests {
         .unwrap()
         .with_extra_headers(vec![
             ("x-custom-header".to_string(), "custom-value".to_string()),
-            // Protected header should be skipped with a warning
+            // Protected header — must be dropped before the request is sent.
             ("authorization".to_string(), "should-be-skipped".to_string()),
         ]);
 
         let result = client.complete("test").await;
-        assert!(result.is_ok(), "Should succeed even with protected header");
+        // The mock only matches when all three match_header assertions hold.
+        // If the protected header had leaked through, the match would fail
+        // and mockito would return 501, causing `complete` to error.
+        mock.assert_async().await;
+        assert!(
+            result.is_ok(),
+            "Gemini complete should succeed with filtered headers: {:?}",
+            result.err()
+        );
     }
 
     // --- Coverage: ChatGPT extra_headers with protected header skip (lines 919-923) ---
+    // The mock matches only when content-type is the client's own
+    // `application/json` and the protected value the caller tried to inject
+    // does not appear.
 
     #[tokio::test]
     async fn test_chatgpt_complete_with_extra_headers() {
-        let server = llmposter::ServerBuilder::new()
-            .fixture(
-                llmposter::Fixture::new()
-                    .for_provider(llmposter::Provider::Responses)
-                    .respond_with_content("chatgpt headers response"),
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/responses")
+            .match_header("x-custom-header", "custom-value")
+            .match_header("content-type", "application/json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "output": [{
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "chatgpt headers response"}]
+                    }]
+                }"#,
             )
-            .build()
-            .await
-            .expect("failed to start mock server");
+            .create_async()
+            .await;
 
         let client = ChatGPTClient::new(
             "test-key".to_string(),
@@ -2766,11 +2798,18 @@ mod tests {
         .unwrap()
         .with_extra_headers(vec![
             ("x-custom-header".to_string(), "custom-value".to_string()),
+            // Protected header — a bogus content-type value that must be
+            // overridden by the client's own application/json.
             ("content-type".to_string(), "should-be-skipped".to_string()),
         ]);
 
         let result = client.complete("test").await;
-        assert!(result.is_ok(), "Should succeed even with protected header");
+        mock.assert_async().await;
+        assert!(
+            result.is_ok(),
+            "ChatGPT complete should succeed with filtered headers: {:?}",
+            result.err()
+        );
     }
 
     // --- Coverage: Gemini max_tokens=0 omits generation_config via real request (line 698) ---
