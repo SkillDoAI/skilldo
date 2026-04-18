@@ -938,9 +938,10 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 );
                 format!(
                     "- The Verified Facts below are extracted from source code and are NON-NEGOTIABLE.\n\
+                     - They are a compact correction ledger, NOT a complete API surface.\n\
                      - If a fact says \"X is Y, NOT Z\", the SKILL.md MUST say Y, never Z.\n\
-                     - If a method/type is NOT mentioned in the Verified Facts, it may not exist. \
-                     Remove it rather than guess.\n\n\
+                     - Do NOT remove methods/types solely because they are absent from the facts; \
+                     only remove them when the review feedback identifies them as unsupported.\n\n\
                      ## Verified Facts (source of truth — DO NOT contradict)\n\n{}",
                     fact_ledger
                 )
