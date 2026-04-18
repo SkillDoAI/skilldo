@@ -917,15 +917,15 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 - Do NOT rely on your training data for what methods exist.\n\
                 - If you are unsure whether something exists, REMOVE IT rather than guess.\n\
                 - A hallucinated API is 3x worse than a missing one.\n\
-                - Unused imports (listed in ## Imports but never used in code examples) must be removed.\n\n\
-                Output ONLY the corrected SKILL.md content — no preamble, no commentary, \
-                no summary of changes. Just the raw SKILL.md from the opening --- to the last section.";
+                - Unused imports (listed in ## Imports but never used in code examples) must be removed.";
             let fix_context = if fact_ledger.is_empty() {
                 // No fact ledger (e.g., overwrite mode) — fall back to full raw data
                 debug!("review-fix: using full raw data (no fact ledger)");
                 format!(
                     "- If a method/type is NOT in the API Surface below, it DOES NOT EXIST. Remove it entirely.\n\
                      - ONLY the API Surface is truth.\n\n\
+                     Output ONLY the corrected SKILL.md content — no preamble, no commentary, \
+                     no summary of changes. Just the raw SKILL.md from the opening --- to the last section.\n\n\
                      API Surface (ONLY these methods/types exist):\n{}\n\n\
                      Usage patterns from tests (how the library is actually used):\n{}\n\n\
                      Conventions and context from docs:\n{}",
@@ -942,6 +942,8 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                      - If a fact says \"X is Y, NOT Z\", the SKILL.md MUST say Y, never Z.\n\
                      - Do NOT remove methods/types solely because they are absent from the facts; \
                      only remove them when the review feedback identifies them as unsupported.\n\n\
+                     Output ONLY the corrected SKILL.md content — no preamble, no commentary, \
+                     no summary of changes. Just the raw SKILL.md from the opening --- to the last section.\n\n\
                      ## Verified Facts (source of truth — DO NOT contradict)\n\n{}",
                     fact_ledger
                 )
