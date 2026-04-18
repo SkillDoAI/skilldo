@@ -442,7 +442,8 @@ fn test_create_custom_instructions_none() {
         &[],
     );
 
-    assert!(!prompt.contains("CUSTOM INSTRUCTIONS FOR THIS REPO"));
+    // Without custom instructions, no CUSTOM INSTRUCTIONS section is emitted.
+    assert!(!prompt.contains("CUSTOM INSTRUCTIONS"));
 }
 
 #[test]
@@ -463,7 +464,7 @@ fn test_create_custom_instructions_present() {
         &[],
     );
 
-    assert!(prompt.contains("CUSTOM INSTRUCTIONS FOR THIS REPO"));
+    assert!(prompt.contains("CUSTOM INSTRUCTIONS"));
     assert!(prompt.contains("Always use type hints"));
     assert!(prompt.contains("Prefer async functions"));
 }
@@ -494,30 +495,6 @@ fn test_create_includes_skill_md_structure() {
 }
 
 #[test]
-fn test_create_includes_library_specific_sections() {
-    let prompt = create_prompt(
-        "django",
-        "4.2.0",
-        None,
-        &[],
-        &Language::Python,
-        "",
-        "",
-        "",
-        None,
-        false,
-        &[],
-    );
-
-    // Library-specific guidance now lives in <instructions> block
-    assert!(prompt.contains("Web frameworks"));
-    assert!(prompt.contains("CLI tools"));
-    assert!(prompt.contains("ORMs"));
-    assert!(prompt.contains("HTTP clients"));
-    assert!(prompt.contains("Async frameworks"));
-}
-
-#[test]
 fn test_create_includes_validation_rules() {
     let prompt = create_prompt(
         "requests",
@@ -533,11 +510,9 @@ fn test_create_includes_validation_rules() {
         &[],
     );
 
-    // Validation rules now in <instructions> block with new wording
-    assert!(prompt.contains("Never use placeholder names"));
+    // Core anti-hallucination rules in the create prompt.
     assert!(prompt.contains("Do not invent APIs"));
     assert!(prompt.contains("REAL APIs"));
-    assert!(prompt.contains("Type hints required"));
 }
 
 #[test]
@@ -562,11 +537,20 @@ fn test_create_includes_pitfall_requirements() {
     assert!(prompt.contains("Pitfalls section is mandatory") || prompt.contains("## Pitfalls"));
 }
 
+// Library-specific prompt guidance (per-framework categories, routing/middleware/
+// CLI/ORM hints, etc.) was removed intentionally per CLAUDE.md's "no hardcoded
+// package-name logic" rule — any per-library steering now lives in the prompt's
+// universal rules or user-provided custom instructions, not in hard-coded
+// keyword hints. The obsolete per-category tests were removed with this change.
 #[test]
-fn test_create_includes_references_requirement() {
+fn test_create_has_no_hardcoded_library_category_hints() {
+    // Regression guard: the create prompt must not reintroduce per-framework
+    // keyword steering (e.g., "Web frameworks", "CLI tools", "ORMs"). If a
+    // future prompt edit adds these back, it's a code-smell — library-specific
+    // guidance should come from user-provided custom instructions.
     let prompt = create_prompt(
-        "package",
-        "1.0.0",
+        "any-library",
+        "1.0",
         None,
         &[],
         &Language::Python,
@@ -577,122 +561,18 @@ fn test_create_includes_references_requirement() {
         false,
         &[],
     );
-
-    // References requirement now in <instructions> block
-    assert!(prompt.contains("Include ALL provided URLs"));
-    assert!(prompt.contains("Do not skip any URLs"));
-}
-
-#[test]
-fn test_create_web_framework_patterns() {
-    let prompt = create_prompt(
-        "fastapi",
-        "0.100.0",
-        None,
-        &[],
-        &Language::Python,
-        "",
-        "",
-        "",
-        None,
-        false,
-        &[],
-    );
-
-    // Web framework guidance now in <instructions> block
-    assert!(prompt.contains("routing"));
-    assert!(prompt.contains("request"));
-    assert!(prompt.contains("middleware"));
-}
-
-#[test]
-fn test_create_cli_patterns() {
-    let prompt = create_prompt(
-        "click",
-        "8.1.0",
-        None,
-        &[],
-        &Language::Python,
-        "",
-        "",
-        "",
-        None,
-        false,
-        &[],
-    );
-
-    // CLI guidance now in <instructions> block
-    assert!(prompt.contains("command definition"));
-    assert!(prompt.contains("arguments vs options"));
-    assert!(prompt.contains("command groups"));
-}
-
-#[test]
-fn test_create_orm_patterns() {
-    let prompt = create_prompt(
-        "sqlalchemy",
-        "2.0.0",
-        None,
-        &[],
-        &Language::Python,
-        "",
-        "",
-        "",
-        None,
-        false,
-        &[],
-    );
-
-    // ORM guidance now in <instructions> block
-    assert!(prompt.contains("model definition"));
-    assert!(prompt.contains("query patterns"));
-    assert!(prompt.contains("relationships"));
-    assert!(prompt.contains("transactions"));
-}
-
-#[test]
-fn test_create_http_client_patterns() {
-    let prompt = create_prompt(
-        "requests",
-        "2.31.0",
-        None,
-        &[],
-        &Language::Python,
-        "",
-        "",
-        "",
-        None,
-        false,
-        &[],
-    );
-
-    // HTTP client guidance now in <instructions> block
-    assert!(prompt.contains("HTTP methods"));
-    assert!(prompt.contains("request params"));
-    assert!(prompt.contains("sessions"));
-    assert!(prompt.contains("auth"));
-}
-
-#[test]
-fn test_create_async_framework_patterns() {
-    let prompt = create_prompt(
-        "httpx",
-        "0.24.0",
-        None,
-        &[],
-        &Language::Python,
-        "",
-        "",
-        "",
-        None,
-        false,
-        &[],
-    );
-
-    // Async guidance now in <instructions> block
-    assert!(prompt.contains("async/await"));
-    assert!(prompt.contains("concurrency patterns"));
-    assert!(prompt.contains("sync wrappers"));
+    for banned in [
+        "Web frameworks",
+        "CLI tools",
+        "ORMs",
+        "HTTP clients",
+        "Async frameworks",
+    ] {
+        assert!(
+            !prompt.contains(banned),
+            "create prompt reintroduced hardcoded category hint: {banned:?}"
+        );
+    }
 }
 
 #[test]
@@ -1022,8 +902,6 @@ fn test_comprehensive_coverage_create() {
         "## Pitfalls",
         "## References",
         "## API Reference",
-        "<instructions>",
-        "</instructions>",
     ];
 
     for section in &required_sections {
@@ -1279,45 +1157,30 @@ fn test_create_synthesizer_contains_security_rule() {
         false,
         &[],
     );
-    // Core security rule exists
+    // Core security rule exists with its key threat categories.
     assert!(
-        prompt.contains("RULE 8") && prompt.contains("SECURITY"),
-        "create agent synthesizer must contain RULE 8 SECURITY"
+        prompt.contains("RULE — SECURITY"),
+        "create prompt must contain the SECURITY rule"
     );
-    // Key threat categories present
     assert!(
-        prompt.contains("DESTROY or corrupt data"),
+        prompt.contains("destroy data"),
         "Missing destruction category"
     );
     assert!(
-        prompt.contains("EXFILTRATE"),
+        prompt.contains("exfiltrate secrets"),
         "Missing exfiltration category"
     );
-    assert!(prompt.contains("backdoors"), "Missing backdoor category");
     assert!(
-        prompt.contains("bypass authentication"),
-        "Missing auth bypass category"
+        prompt.contains("persist access"),
+        "Missing persistence category"
     );
     assert!(
-        prompt.contains("ESCALATE privileges"),
+        prompt.contains("escalate privileges"),
         "Missing privilege escalation category"
     );
     assert!(
-        prompt.contains("MANIPULATE AI agents"),
+        prompt.contains("manipulate AI agents"),
         "Missing prompt injection category"
-    );
-    assert!(
-        prompt.contains("supply chain"),
-        "Missing supply chain category"
-    );
-    assert!(prompt.contains("PAM modules"), "Missing PAM module mention");
-    assert!(
-        prompt.contains("sshd plugins"),
-        "Missing sshd plugin mention"
-    );
-    assert!(
-        prompt.contains("outside the user's project directory"),
-        "Missing project boundary rule"
     );
 }
 
@@ -1467,7 +1330,7 @@ fn test_create_overwrite_mode_bypasses_security() {
 }
 
 #[test]
-fn test_create_synthesizer_security_in_verify_checklist() {
+fn test_create_security_is_mechanism_level() {
     let prompt = create_prompt(
         "test",
         "1.0",
@@ -1481,36 +1344,20 @@ fn test_create_synthesizer_security_in_verify_checklist() {
         false,
         &[],
     );
+    // Security rule must describe behaviours (destroy/exfiltrate/persist/etc.)
+    // rather than a filename or tool list — behavioural wording keeps the rule
+    // robust against new attack mechanisms.
     assert!(
-        prompt
-            .contains("NO destructive commands, data exfiltration, backdoors, or prompt injection"),
-        "Security check must be in the VERIFY checklist"
-    );
-}
-
-#[test]
-fn test_create_security_behavior_not_filename_based() {
-    let prompt = create_prompt(
-        "test",
-        "1.0",
-        None,
-        &[],
-        &Language::Python,
-        "apis",
-        "patterns",
-        "context",
-        None,
-        false,
-        &[],
-    );
-    // Ensure the prompt uses behavior-level rules, not just filename lists
-    assert!(
-        prompt.contains("by any mechanism"),
-        "Security rules must be mechanism-agnostic, not limited to specific tools/filenames"
+        prompt.contains("destroy data"),
+        "behaviour: destructive ops must be called out"
     );
     assert!(
-        prompt.contains("Reading any file outside the project directory"),
-        "Must have broad file access rule, not just specific paths"
+        prompt.contains("exfiltrate secrets"),
+        "behaviour: exfiltration must be called out"
+    );
+    assert!(
+        prompt.contains("manipulate AI agents"),
+        "behaviour: prompt-injection must be called out"
     );
 }
 

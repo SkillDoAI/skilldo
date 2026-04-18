@@ -907,23 +907,48 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                 self.prompts_config.review_custom.clone(),
             );
 
-            // Pre-build static parts once (context/api_surface don't change between retries)
+            // Prefer fact ledger over raw data for fix prompts — smaller, more
+            // precise, fewer hallucinations. Falls back to full raw data when
+            // no ledger exists (overwrite mode).
             let behavioral = extract_behavioral_semantics(&context);
-            let fix_preamble = format!(
-                "REVIEW FAILED. Fix the issues listed below in this SKILL.md.\n\n\
-                 CRITICAL RULES FOR FIXES:\n\
-                 - If a method/type is NOT in the API Surface below, it DOES NOT EXIST. Remove it entirely.\n\
-                 - Do NOT rely on your training data for what methods exist. ONLY the API Surface is truth.\n\
-                 - If you are unsure whether something exists, REMOVE IT rather than guess.\n\
-                 - A hallucinated API is 3x worse than a missing one.\n\
-                 - Unused imports (listed in ## Imports but never used in code examples) must be removed.\n\n\
-                 Output ONLY the corrected SKILL.md content — no preamble, no commentary, \
-                 no summary of changes. Just the raw SKILL.md from the opening --- to the last section.\n\n\
-                 API Surface (ONLY these methods/types exist):\n{}\n\n\
-                 Usage patterns from tests (how the library is actually used):\n{}\n\n\
-                 Conventions and context from docs:\n{}",
-                api_surface, patterns, context
-            );
+            let fix_shared = "\
+                REVIEW FAILED. Fix the issues listed below in this SKILL.md.\n\n\
+                CRITICAL RULES FOR FIXES:\n\
+                - Do NOT rely on your training data for what methods exist.\n\
+                - If you are unsure whether something exists, REMOVE IT rather than guess.\n\
+                - A hallucinated API is 3x worse than a missing one.\n\
+                - Unused imports (listed in ## Imports but never used in code examples) must be removed.";
+            let fix_context = if fact_ledger.is_empty() {
+                // No fact ledger (e.g., overwrite mode) — fall back to full raw data
+                debug!("review-fix: using full raw data (no fact ledger)");
+                format!(
+                    "- If a method/type is NOT in the API Surface below, it DOES NOT EXIST. Remove it entirely.\n\
+                     - ONLY the API Surface is truth.\n\n\
+                     Output ONLY the corrected SKILL.md content — no preamble, no commentary, \
+                     no summary of changes. Just the raw SKILL.md from the opening --- to the last section.\n\n\
+                     API Surface (ONLY these methods/types exist):\n{}\n\n\
+                     Usage patterns from tests (how the library is actually used):\n{}\n\n\
+                     Conventions and context from docs:\n{}",
+                    api_surface, patterns, context
+                )
+            } else {
+                debug!(
+                    "review-fix: using fact ledger ({} chars) as source of truth",
+                    fact_ledger.len()
+                );
+                format!(
+                    "- The Verified Facts below are extracted from source code and are NON-NEGOTIABLE.\n\
+                     - They are a compact correction ledger, NOT a complete API surface.\n\
+                     - If a fact says \"X is Y, NOT Z\", the SKILL.md MUST say Y, never Z.\n\
+                     - Do NOT remove methods/types solely because they are absent from the facts; \
+                     only remove them when the review feedback identifies them as unsupported.\n\n\
+                     Output ONLY the corrected SKILL.md content — no preamble, no commentary, \
+                     no summary of changes. Just the raw SKILL.md from the opening --- to the last section.\n\n\
+                     ## Verified Facts (source of truth — DO NOT contradict)\n\n{}",
+                    fact_ledger
+                )
+            };
+            let fix_preamble = format!("{}\n{}", fix_shared, fix_context);
             let mut last_review_attempt = 0;
             let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {

@@ -999,7 +999,7 @@ mod tests {
             "ghcr.io/astral-sh/uv:python3.11-bookworm-slim"
         );
         assert_eq!(executor.config.javascript_image, "node:24-alpine");
-        assert_eq!(executor.config.rust_image, "rust:1.75-slim");
+        assert_eq!(executor.config.rust_image, "rust:1.87-slim");
         assert_eq!(executor.config.go_image, "golang:1.25-alpine");
         assert_eq!(executor.config.timeout, 60);
         assert!(executor.config.cleanup);
@@ -1225,7 +1225,7 @@ mod tests {
     #[test]
     fn test_get_image_with_default_config_rust() {
         let executor = ContainerExecutor::new(ContainerConfig::default(), Language::Rust);
-        assert_eq!(executor.get_image(), "rust:1.75-slim");
+        assert_eq!(executor.get_image(), "rust:1.87-slim");
     }
 
     #[test]

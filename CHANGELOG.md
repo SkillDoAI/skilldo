@@ -3,6 +3,36 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
+## Unreleased (v0.5.16)
+
+### Added
+- **Rust dep features survive cargo-add fallback** — `cargo add tokio --features full` in a SKILL.md's `## Imports` without a TOML block now produces `{ version = "*", features = ["full"] }` in the test agent's Cargo.toml instead of dropping to `tokio = "*"`
+- **Repository docs URL** synthesised for Rust crates with a `docs/` directory containing markdown — added to the references block as `{repo}/tree/HEAD/docs` (branch-agnostic)
+- **Field precision rules** in the Rust create prompt — explicit guidance on `Option<T>` wrapping, qualified names, exact ranges, and boundary behaviour to reduce API-surface hallucinations
+- **Normalizer overwrites stale `generated-by`** on rerun in update mode instead of preserving the prior model/version stamp
+- **`scale_source_budget()` helper** in `pipeline::collector` — consolidates five identical budget-scaling match arms across the collector variants
+
+### Changed
+- **Default Rust container image** is now `rust:1.87-slim` (was `rust:1.75-slim`) to match the crate's declared `rust-version`
+- **Repository docs URL** uses `tree/HEAD/docs` instead of hard-coded `tree/main/docs` so it resolves for repos on `master`, `trunk`, or any default branch
+- **Cargo add feature lookup** now normalizes dash/underscore — `cargo add tokio-util --features codec` + `use tokio_util::codec` preserves the feature flag
+
+### Fixed
+- Normalized frontmatter no longer silently keeps an outdated `generated-by` line when regenerating
+- `has_generated_by` check uses line-start detection (not substring) so a description containing the phrase no longer false-positives
+- Gradle `extract_gradle_quoted` rejected `"1.0" /* old */ + suffix` — a block comment followed by code. Now requires the `*/` to be followed only by whitespace
+- `CARGO_ADD_RE` accepts `--features=value`, quoted lists, and space-separated features — not just comma-separated bare tokens
+- `rustls-webpki` bumped 0.103.10 → 0.103.12 to clear RUSTSEC-2026-0098/0099
+
+### Prompts
+- Rust field-precision guidance: `Option<T>` only when the field is actually optional/nullable in the spec, not blanket-forced on every documented field
+
+### Tests
+- Redundant validator mode tests that duplicated `select_patterns` logic removed (real tests for the function still live in the module)
+- 13 obsolete `test_prompts` tests that asserted on prompt content removed in v0.5.14/v0.5.15 (per-library keyword hints, `RULE 8`, `<instructions>` tags) pruned. These had drifted unnoticed because CI only runs `cargo test --lib`.
+- Regression guard added to ensure hardcoded per-library category keywords don't sneak back into the create prompt
+- Two OpenAI `max_tokens_nonzero` tests rewritten from tautologies into real serialisation assertions
+
 ## 0.5.15 — 2026-04-13
 
 ### Added

@@ -535,4 +535,75 @@ mod tests {
             "should contain user data from stdin: {result}"
         );
     }
+
+    // --- Coverage: JSON path type mismatch for number (line 211) ---
+
+    #[tokio::test]
+    async fn test_cli_client_json_path_type_mismatch_number() {
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec!["-c".to_string(), r#"echo '{"data": 42}'"#.to_string()],
+            vec![],
+            Some("data.nested".to_string()),
+            TEST_TIMEOUT,
+        );
+        let result = client.complete("ignored").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("number"), "should report number type: {err}");
+    }
+
+    // --- Coverage: JSON path type mismatch for bool (line 212) ---
+
+    #[tokio::test]
+    async fn test_cli_client_json_path_type_mismatch_bool() {
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec!["-c".to_string(), r#"echo '{"data": true}'"#.to_string()],
+            vec![],
+            Some("data.nested".to_string()),
+            TEST_TIMEOUT,
+        );
+        let result = client.complete("ignored").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("bool"), "should report bool type: {err}");
+    }
+
+    // --- Coverage: JSON path type mismatch for array (line 213) ---
+
+    #[tokio::test]
+    async fn test_cli_client_json_path_type_mismatch_array() {
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                r#"echo '{"data": [1, 2, 3]}'"#.to_string(),
+            ],
+            vec![],
+            Some("data.nested".to_string()),
+            TEST_TIMEOUT,
+        );
+        let result = client.complete("ignored").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("array"), "should report array type: {err}");
+    }
+
+    // --- Coverage: JSON path type mismatch for null (line 214) ---
+
+    #[tokio::test]
+    async fn test_cli_client_json_path_type_mismatch_null() {
+        let client = CliClient::new(
+            "sh".to_string(),
+            vec!["-c".to_string(), r#"echo '{"data": null}'"#.to_string()],
+            vec![],
+            Some("data.nested".to_string()),
+            TEST_TIMEOUT,
+        );
+        let result = client.complete("ignored").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("null"), "should report null type: {err}");
+    }
 }

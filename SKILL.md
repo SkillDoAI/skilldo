@@ -5,16 +5,17 @@ license: AGPL-3.0
 compatibility: Requires an LLM API key (Anthropic, OpenAI, Gemini, or OpenAI-compatible). Optional container runtime (docker/podman) for test validation.
 metadata:
   author: SkillDoAI
-  version: "0.5.15"
+  version: "0.5.16"
 ---
 
 # Skilldo CLI
 
-Skilldo is a 6-stage LLM pipeline that generates SKILL.md files for software libraries:
-**extract** → **map** → **learn** → **create** → **review** → **test**
+Skilldo is a 7-stage LLM pipeline that generates SKILL.md files for software libraries:
+**extract** → **map** → **learn** → **facts** → **create** → **review** → **test**
 
 Stages 1-3 gather library metadata (source files, docs, dependencies, version).
-Stage 4 generates the SKILL.md. Stage 5 reviews for accuracy/safety. Stage 6 validates
+Stage 4 (facts) extracts a compact truth table with negative assertions from stages 1-3.
+Stage 5 generates the SKILL.md. Stage 6 reviews for accuracy/safety. Stage 7 validates
 with generated test code.
 
 ## Installation
@@ -305,4 +306,4 @@ Data is local only — nothing is sent anywhere.
 
 ## Documentation
 
-Full docs — configuration, languages, architecture, authentication, best practices, and telemetry: [docs/](https://github.com/SkillDoAI/skilldo/tree/main/docs)
+Full docs — configuration, languages, architecture, authentication, best practices, and telemetry: [docs/](https://github.com/SkillDoAI/skilldo/tree/HEAD/docs)

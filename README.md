@@ -85,7 +85,7 @@ skilldo skill
 
 Skilldo is more powerful than the quick start above suggests. Dive deeper:
 
-- **[Architecture](docs/architecture.md)** — How the 6-stage pipeline works, what each agent does, security scanning details
+- **[Architecture](docs/architecture.md)** — How the 7-stage pipeline works, what each agent does, security scanning details
 - **[Configuration](docs/configuration.md)** — Full config reference, all TOML fields, per-stage model overrides, CLI provider mode, example configs
 - **[Authentication](docs/authentication.md)** — OAuth 2.0 + PKCE setup, API keys, Google credentials, per-stage auth
 - **[Languages](docs/languages.md)** — Supported ecosystems, test validation details, how to add a new language

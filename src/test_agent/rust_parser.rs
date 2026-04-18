@@ -28,8 +28,33 @@ static EXTERN_CRATE_RE: Lazy<Regex> = Lazy::new(|| {
     )
     .unwrap()
 });
-static CARGO_ADD_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"cargo\s+add\s+([a-zA-Z_][a-zA-Z0-9_\-]*)").unwrap());
+/// Matches `cargo add <crate>` with optional `--features <list>`.
+/// Group 1 = crate name. Group 2 (optional) = raw feature list, as one of:
+///   --features foo,bar            (comma-separated, single token)
+///   --features=foo,bar            (equals form)
+///   --features "foo bar"          (quoted, space-separated)
+///   --features 'foo,bar'          (single-quoted)
+/// The matcher captures the raw list verbatim; callers normalise quoting,
+/// whitespace, and separators. `--features` may come anywhere on the same
+/// line as the crate name, so e.g. `cargo add tokio --no-default-features
+/// --features full` still captures the `full` feature.
+static CARGO_ADD_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?x)
+        cargo\s+add\s+
+        ([a-zA-Z_][a-zA-Z0-9_\-]*)              # group 1 = crate name
+        (?:                                     # optional --features <list>
+            [^\n]*?\s--features[\s=]+           # ...anywhere later on the same line
+            (?:
+                "([^"]*)"                       # group 2a = double-quoted list
+              | '([^']*)'                       # group 2b = single-quoted list
+              | ([^\s-][^\s]*)                  # group 2c = bare token (won't swallow --flag)
+            )
+        )?
+        "#,
+    )
+    .unwrap()
+});
 // Matches #[crate_name::macro] attribute usage (e.g., #[tokio::main], #[tokio::test])
 static ATTR_CRATE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"#\[([a-zA-Z_][a-zA-Z0-9_]*)::").unwrap());
@@ -333,6 +358,41 @@ impl RustParser {
             }
         }
 
+        // Extract fallback specs from `cargo add X --features Y` commands.
+        // These are used when no TOML [dependencies] block provides a spec.
+        let mut cargo_add_specs: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        if let Ok(Some(imports_for_cargo_add)) = extract_section(skill_md, r"(?m)^##\s+Imports\s*$")
+        {
+            for cap in CARGO_ADD_RE.captures_iter(imports_for_cargo_add) {
+                // Groups 2/3/4 are mutually exclusive — one quoted variant
+                // is captured depending on which syntax the model used.
+                let Some(features_raw) = cap
+                    .get(2)
+                    .or_else(|| cap.get(3))
+                    .or_else(|| cap.get(4))
+                    .map(|m| m.as_str())
+                else {
+                    continue;
+                };
+                let crate_name = cap[1].to_string();
+                // Cargo accepts both comma- and whitespace-separated lists,
+                // and commas inside quoted strings are equivalent. Splitting
+                // on both covers `foo,bar`, `foo bar`, and `foo, bar` alike.
+                let quoted: Vec<String> = features_raw
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .map(str::trim)
+                    .filter(|f| !f.is_empty())
+                    .map(|f| format!("\"{f}\""))
+                    .collect();
+                if quoted.is_empty() {
+                    continue;
+                }
+                let spec = format!("{{ version = \"*\", features = [{}] }}", quoted.join(", "));
+                cargo_add_specs.insert(crate_name, spec);
+            }
+        }
+
         // Merge: upgrade name-only deps with TOML specs where available.
         // Normalize dash/underscore in the lookup — `use env_logger` should
         // match `env-logger = "0.11"` in the TOML block (Cargo equivalence).
@@ -348,6 +408,20 @@ impl RustParser {
                     name: name.clone(),
                     raw_spec: Some(raw_spec),
                     source: DepSource::Manifest,
+                });
+                continue;
+            }
+            // Fallback: match cargo add --features, normalizing dash/underscore
+            // (cargo add tokio-util --features codec ↔ use tokio_util).
+            let cargo_key = cargo_add_specs
+                .keys()
+                .find(|k| k.replace('-', "_") == norm)
+                .cloned();
+            if let Some(cargo_spec) = cargo_key.and_then(|k| cargo_add_specs.remove(&k)) {
+                result.push(StructuredDep {
+                    name: name.clone(),
+                    raw_spec: Some(cargo_spec),
+                    source: DepSource::Pattern,
                 });
             } else {
                 result.push(StructuredDep {
@@ -558,6 +632,125 @@ match serde_json::from_str::<Point>(data) {
             deps.contains(&"tokio".to_string()),
             "expected tokio from cargo add, got: {:?}",
             deps
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_preserved_in_structured_deps() {
+        let parser = RustParser;
+        // SKILL.md with cargo add --features but NO TOML block
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --features full\ncargo add serde --features derive\ncargo add reqwest\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        assert!(
+            tokio_dep.raw_spec.is_some(),
+            "tokio should have a raw_spec from cargo add --features"
+        );
+        let spec = tokio_dep.raw_spec.as_ref().unwrap();
+        assert!(
+            spec.contains("full"),
+            "tokio spec should contain 'full' feature: {spec}"
+        );
+
+        let serde_dep = deps.iter().find(|d| d.name == "serde").unwrap();
+        assert!(
+            serde_dep.raw_spec.as_ref().unwrap().contains("derive"),
+            "serde spec should contain 'derive' feature"
+        );
+
+        // reqwest has no --features, should have raw_spec = None
+        let reqwest_dep = deps.iter().find(|d| d.name == "reqwest").unwrap();
+        assert!(
+            reqwest_dep.raw_spec.is_none(),
+            "reqwest should have no raw_spec (no --features)"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_equals_form() {
+        // `cargo add tokio --features=full` (equals form) should work.
+        let parser = RustParser;
+        let skill =
+            "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --features=full\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio = deps.iter().find(|d| d.name == "tokio").unwrap();
+        let spec = tokio.raw_spec.as_ref().unwrap();
+        assert!(
+            spec.contains("full"),
+            "features=full should survive: {spec}"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_space_separated_quoted() {
+        // `cargo add tokio --features "net sync"` (shell-quoted, space-separated)
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --features \"net sync\"\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio = deps.iter().find(|d| d.name == "tokio").unwrap();
+        let spec = tokio.raw_spec.as_ref().unwrap();
+        assert!(
+            spec.contains("net"),
+            "net feature should be present: {spec}"
+        );
+        assert!(
+            spec.contains("sync"),
+            "sync feature should be present: {spec}"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_interleaved_with_other_flags() {
+        // `cargo add tokio --no-default-features --features full` — features
+        // doesn't follow the crate name directly, but should still be captured.
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --no-default-features --features full\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio = deps.iter().find(|d| d.name == "tokio").unwrap();
+        let spec = tokio.raw_spec.as_ref().unwrap();
+        assert!(
+            spec.contains("full"),
+            "features after interleaved flags should still be captured: {spec}"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_match_dash_underscore_variants() {
+        // `cargo add tokio-util --features codec` + `use tokio_util::...`
+        // should still preserve the features, since Cargo treats dashes and
+        // underscores as equivalent in crate names.
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```rust\nuse tokio_util::codec;\n```\n\n```bash\ncargo add tokio-util --features codec\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+
+        let dep = deps
+            .iter()
+            .find(|d| d.name == "tokio_util" || d.name == "tokio-util")
+            .expect("tokio_util dep should be present");
+        let spec = dep
+            .raw_spec
+            .as_ref()
+            .expect("hyphenated cargo add features must survive the dash/underscore lookup");
+        assert!(
+            spec.contains("codec"),
+            "spec should contain the 'codec' feature despite dash/underscore mismatch: {spec}"
+        );
+    }
+
+    #[test]
+    fn cargo_add_features_not_used_when_toml_block_exists() {
+        let parser = RustParser;
+        // SKILL.md with BOTH cargo add --features AND a TOML block — TOML wins
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --features full\n```\n\n```toml\n[dependencies]\ntokio = { version = \"1.51\", features = [\"full\", \"macros\"] }\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        let spec = tokio_dep.raw_spec.as_ref().unwrap();
+        // TOML block spec should win — has version "1.51" not "*"
+        assert!(
+            spec.contains("1.51"),
+            "TOML block should take precedence over cargo add: {spec}"
         );
     }
 

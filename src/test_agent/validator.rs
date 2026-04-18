@@ -670,36 +670,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_select_patterns_minimal() {
-        let patterns = [
-            CodePattern {
-                name: "Basic".to_string(),
-                description: "".to_string(),
-                code: "".to_string(),
-                category: PatternCategory::BasicUsage,
-            },
-            CodePattern {
-                name: "Config".to_string(),
-                description: "".to_string(),
-                code: "".to_string(),
-                category: PatternCategory::Configuration,
-            },
-        ];
-
-        // Create a mock validator (can't easily test without real LLM client)
-        // Just test the pattern selection logic separately
-        let mode = ValidationMode::Minimal;
-        let selected_count = match mode {
-            ValidationMode::Minimal => 1,
-            ValidationMode::Quick => 3.min(patterns.len()),
-            ValidationMode::Thorough => patterns.len(),
-            ValidationMode::Adaptive => 1,
-        };
-
-        assert_eq!(selected_count, 1);
-    }
-
-    #[test]
     fn test_test_result_all_passed() {
         let result = TestResult {
             passed: 3,
@@ -734,52 +704,6 @@ mod tests {
         let feedback = result.generate_feedback(&Language::Python).unwrap();
         assert!(feedback.contains("Test 2"));
         assert!(feedback.contains("error"));
-    }
-
-    #[test]
-    fn test_select_patterns_adaptive_mode() {
-        // Adaptive mode currently behaves like Minimal (1 pattern).
-        // Verify it returns a subset, not all patterns.
-        let patterns = [
-            CodePattern {
-                name: "Basic".to_string(),
-                description: "".to_string(),
-                code: "".to_string(),
-                category: PatternCategory::BasicUsage,
-            },
-            CodePattern {
-                name: "Config".to_string(),
-                description: "".to_string(),
-                code: "".to_string(),
-                category: PatternCategory::Configuration,
-            },
-            CodePattern {
-                name: "Error".to_string(),
-                description: "".to_string(),
-                code: "".to_string(),
-                category: PatternCategory::ErrorHandling,
-            },
-            CodePattern {
-                name: "Async".to_string(),
-                description: "".to_string(),
-                code: "".to_string(),
-                category: PatternCategory::AsyncPattern,
-            },
-        ];
-
-        // Simulate Adaptive selection logic (mirrors select_patterns)
-        let mode = ValidationMode::Adaptive;
-        let selected_count = match mode {
-            ValidationMode::Minimal => 1,
-            ValidationMode::Quick => 3.min(patterns.len()),
-            ValidationMode::Thorough => patterns.len(),
-            ValidationMode::Adaptive => 1,
-        };
-
-        assert!(
-            selected_count < patterns.len(),
-            "Adaptive should not return all patterns"
-        );
     }
 
     #[test]

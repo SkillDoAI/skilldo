@@ -34,7 +34,7 @@ Each language has a dedicated executor that runs generated test code:
 
 ### Rust
 - **Bare-metal**: Creates an isolated temp directory with `CARGO_HOME` confined, runs `cargo run`
-- **Container**: `rust:1.75-slim` — generates Cargo.toml with deps, runs `cargo run`
+- **Container**: `rust:1.87-slim` — generates Cargo.toml with deps, runs `cargo run`
 - **Requirements**: Rust toolchain installed locally (bare-metal) or Docker/Podman (container)
 
 ### Java

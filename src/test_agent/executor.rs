@@ -4351,6 +4351,24 @@ dependencies = []
         assert!(result.contains("features"));
     }
 
+    #[test]
+    fn test_strip_optional_simplifies_to_version() {
+        // Stripping optional from a 2-key table leaves only version => simplifies to "1.0"
+        let spec = r#"{ version = "1.0", optional = true }"#;
+        let result = strip_optional_from_dep_spec(spec);
+        // Should simplify to just the version string
+        assert_eq!(result, r#""1.0""#);
+    }
+
+    #[test]
+    fn test_strip_optional_from_only_key() {
+        // Stripping optional from a 1-key table leaves an empty table; the
+        // stripped spec still contains no `optional` key, which is what matters.
+        let spec = "{ optional = true }";
+        let result = strip_optional_from_dep_spec(spec);
+        assert!(!result.contains("optional"));
+    }
+
     // --- set_redact_vars poisoned RwLock path ---
 
     // Serialize tests that mutate the global REDACT_VARS RwLock

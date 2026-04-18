@@ -1517,7 +1517,24 @@ from the Known Dependencies input. The tool uses this block to write Cargo.toml.
 and descriptive (e.g., `mod basic_usage`, `mod streaming_example`). Never reuse `mod example` \
 across multiple code blocks — duplicate module names cause E0428 compilation errors.\n\
 - Only import types that are actually used in each code example. Unused imports cause \
-compiler warnings and confuse readers."
+compiler warnings and confuse readers.\n\
+- For struct fields documented in the API Reference or Behavioral Semantics:\n\
+  - Include the full Rust type as it appears in source. Use `Option<T>` ONLY \
+when the field is actually optional or nullable in the library contract — write \
+`latency_ms: u64` for required fields, `latency_ms: Option<u64>` for optional \
+ones. Never omit the type.\n\
+  - Use fully qualified names: `StructName.field_name`, not bare `field_name`.\n\
+  - Specify exact ranges with mathematical notation: `[0.0, 1.0]`, `[-N, +N]`.\n\
+  - State boundary behavior explicitly: \"clamps to 0\", \"saturates at MAX\".\n\
+  - State the meaning of `None` / default explicitly: \"when unset, derives \
+from X\" or \"None means feature disabled\".\n\
+  - State prerequisites between fields: \"Requires `other_field > 0` to act on\".\n\
+  - When a flag gates other features, list EXACTLY which features it gates AND \
+which features it does NOT gate by name.\n\
+- When documenting 3+ related struct fields, prefer a bulleted list with one \
+bullet per field over inline parenthetical descriptions.\n\
+- Avoid fuzzy verbs: occasionally, sometimes, about, roughly. Use precise \
+terms: \"always when X is set\", \"never\", \"exactly N times\", \"every frame\"."
         }
         "review_verdict" => {
             "\
@@ -2638,5 +2655,30 @@ mod tests {
             Some("ALWAYS use ServerBuilder"),
         );
         assert!(parts.system.contains("ALWAYS use ServerBuilder"));
+    }
+
+    // --- days_to_ymd coverage: z < 0 branch and mp >= 10 branch ---
+
+    #[test]
+    fn test_days_to_ymd_negative_z() {
+        // z = days + 719468; z < 0 => days < -719468
+        // days = -719800 => z = -332 (exercises the z < 0 branch in era calculation)
+        let (y, m, d) = days_to_ymd(-719800);
+        assert_eq!((y, m, d), (-1, 4, 4));
+    }
+
+    #[test]
+    fn test_days_to_ymd_january() {
+        // 2024-01-15: mp=10 (>= 10), exercises the mp >= 10 branch (m = mp - 9)
+        // and the m <= 2 => y += 1 branch
+        let (y, m, d) = days_to_ymd(19737);
+        assert_eq!((y, m, d), (2024, 1, 15));
+    }
+
+    #[test]
+    fn test_days_to_ymd_february() {
+        // 2024-02-15: mp=11 (>= 10), exercises the mp >= 10 branch
+        let (y, m, d) = days_to_ymd(19768);
+        assert_eq!((y, m, d), (2024, 2, 15));
     }
 }

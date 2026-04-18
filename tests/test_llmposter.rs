@@ -678,6 +678,34 @@ async fn test_deterministic_pipeline() {
         skill_md.contains("## Imports") || skill_md.contains("## Core Patterns"),
         "Should have standard sections"
     );
+
+    // Verify the fact ledger stage was actually called — 5 fixtures means
+    // 5 requests (extract, map, learn, facts, create). If facts were
+    // skipped, we'd only see 4.
+    let requests = server.get_requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "Expected 5 requests (extract+map+learn+facts+create), got {}",
+        requests.len()
+    );
+    // The 4th request (index 3) should be the fact ledger call
+    let fact_req = &requests[3];
+    assert!(
+        fact_req.body.contains("verified facts"),
+        "4th request should be the fact ledger prompt, body: {}",
+        &fact_req.body[..fact_req.body.len().min(200)]
+    );
+    // The 5th request (create) should contain the ledger output,
+    // proving it was injected into the create prompt as context.
+    let create_req = &requests[4];
+    assert!(
+        create_req
+            .body
+            .contains("ServerBuilder is the primary public API"),
+        "create prompt must include fact ledger content, body: {}",
+        &create_req.body[..create_req.body.len().min(300)]
+    );
 }
 
 /// Pipeline with review enabled — review passes on first attempt.
