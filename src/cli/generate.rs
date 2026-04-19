@@ -1156,6 +1156,12 @@ model = "local-learn"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 
+[generation.fact_llm]
+provider_type = "openai-compatible"
+model = "local-fact"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
 [generation.create_llm]
 provider_type = "openai-compatible"
 model = "local-create"
