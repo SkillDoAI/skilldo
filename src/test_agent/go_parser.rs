@@ -14,7 +14,7 @@ use crate::util::sanitize_dep_name;
 // Cached regexes for pattern/dependency extraction
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
 static CODE_BLOCK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:go(?:lang)?)?\n([\s\S]*?)(?:```|~~~)").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:go(?:lang)?)?\r?\n([\s\S]*?)(?:```|~~~)").unwrap());
 static SINGLE_IMPORT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?m)import\s+"([^"]+)""#).unwrap());
 static GROUP_IMPORT_RE: Lazy<Regex> =
@@ -615,5 +615,22 @@ import (
         let parser = GoParser;
         let skill = "---\ndescription: no name field\n---\n\n## Overview\n";
         assert_eq!(parser.extract_name(skill).unwrap(), None);
+    }
+
+    #[test]
+    fn code_block_matches_crlf_line_endings() {
+        let parser = GoParser;
+        // SKILL.md with \r\n (Windows) line endings
+        let skill = "---\r\nname: chi\r\n---\r\n\r\n## Imports\r\n\r\n```go\r\nimport \"github.com/go-chi/chi/v5\"\r\n```\r\n\r\n## Core Patterns\r\n\r\n### Basic Router\r\n\r\n```go\r\nr := chi.NewRouter()\r\n```\r\n";
+        let patterns = parser.extract_patterns(skill).unwrap();
+        assert!(
+            !patterns.is_empty(),
+            "CRLF line endings should not prevent code block extraction"
+        );
+        assert!(
+            patterns[0].code.contains("chi.NewRouter"),
+            "code should be extracted from CRLF content: {:?}",
+            patterns[0].code
+        );
     }
 }

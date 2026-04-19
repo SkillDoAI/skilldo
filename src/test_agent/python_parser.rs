@@ -285,7 +285,7 @@ impl LanguageParser for PythonParser {
             };
 
         let pattern_re = Regex::new(r"(?m)^###\s+(.+?)$")?;
-        let code_block_re = Regex::new(r"(?i)(?:```|~~~)(?:python|py)?\n([\s\S]*?)(?:```|~~~)")?;
+        let code_block_re = Regex::new(r"(?i)(?:```|~~~)(?:python|py)?\r?\n([\s\S]*?)(?:```|~~~)")?;
 
         let pattern_starts: Vec<(usize, String)> = pattern_re
             .captures_iter(core_patterns_content)
