@@ -297,6 +297,51 @@ mod tests {
     }
 
     #[test]
+    fn walk_files_empty_extensions_collects_all_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        std::fs::write(root.join("code.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("data.json"), "{}").unwrap();
+        std::fs::write(root.join("readme.md"), "# Hi").unwrap();
+
+        let files = walk_files(root, &[], &[], None);
+        assert_eq!(
+            files.len(),
+            3,
+            "empty extensions should collect all: {files:?}"
+        );
+    }
+
+    #[test]
+    fn walk_files_skips_nested_extra_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        std::fs::create_dir_all(root.join("sub").join("vendor")).unwrap();
+        std::fs::write(root.join("good.md"), "# Good").unwrap();
+        std::fs::write(root.join("sub").join("also_good.md"), "# Also").unwrap();
+        std::fs::write(
+            root.join("sub").join("vendor").join("deep.md"),
+            "# Vendored",
+        )
+        .unwrap();
+
+        let files = walk_files(root, &["md"], &["vendor"], None);
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"good.md"));
+        assert!(names.contains(&"also_good.md"));
+        assert!(
+            !names.contains(&"deep.md"),
+            "nested vendor/ should be excluded: {names:?}"
+        );
+    }
+
+    #[test]
     fn walk_files_skips_extra_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

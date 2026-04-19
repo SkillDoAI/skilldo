@@ -1648,6 +1648,13 @@ mod tests {
     // ========================================================================
 
     #[test]
+    fn test_with_fact_client_sets_client() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3)
+            .with_fact_client(Box::new(MockLlmClient::new()));
+        assert!(gen.fact_client.is_some());
+    }
+
+    #[test]
     fn test_with_review_client_sets_client() {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 3)
             .with_review_client(Box::new(MockLlmClient::new()));
