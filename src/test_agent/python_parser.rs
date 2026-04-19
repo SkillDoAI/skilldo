@@ -3,12 +3,16 @@
 //! to understand what to validate.
 
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use tracing::{debug, warn};
 
 use super::parser::{extract_section, CodePattern, PatternCategory};
 use super::LanguageParser;
 use crate::util::sanitize_dep_name;
+
+static CODE_BLOCK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:python|py)?\r?\n([\s\S]*?)(?:```|~~~)").unwrap());
 
 /// Python-specific parser for SKILL.md files
 pub struct PythonParser;
@@ -285,7 +289,7 @@ impl LanguageParser for PythonParser {
             };
 
         let pattern_re = Regex::new(r"(?m)^###\s+(.+?)$")?;
-        let code_block_re = Regex::new(r"(?i)(?:```|~~~)(?:python|py)?\r?\n([\s\S]*?)(?:```|~~~)")?;
+        let code_block_re = &*CODE_BLOCK_RE;
 
         let pattern_starts: Vec<(usize, String)> = pattern_re
             .captures_iter(core_patterns_content)

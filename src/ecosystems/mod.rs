@@ -47,10 +47,15 @@ pub(crate) fn walk_files(
 
     let mut files = Vec::new();
     for entry in builder.build().flatten() {
-        let path = entry.path();
-        if !path.is_file() {
+        // Use DirEntry::file_type() to respect follow_links(false) —
+        // Path::is_file() would follow symlinks and defeat the setting.
+        let Some(ft) = entry.file_type() else {
+            continue;
+        };
+        if !ft.is_file() {
             continue;
         }
+        let path = entry.path();
         if extensions.is_empty() {
             files.push(path.to_path_buf());
             continue;
