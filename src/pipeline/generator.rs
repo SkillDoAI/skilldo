@@ -212,6 +212,7 @@ pub struct Generator {
     extract_client: Option<Box<dyn LlmClient>>,
     map_client: Option<Box<dyn LlmClient>>,
     learn_client: Option<Box<dyn LlmClient>>,
+    fact_client: Option<Box<dyn LlmClient>>,
     create_client: Option<Box<dyn LlmClient>>,
     review_client: Option<Box<dyn LlmClient>>,
     test_client: Option<Box<dyn LlmClient>>,
@@ -243,6 +244,7 @@ impl Generator {
             extract_client: None,
             map_client: None,
             learn_client: None,
+            fact_client: None,
             create_client: None,
             review_client: None,
             test_client: None,
@@ -297,6 +299,11 @@ impl Generator {
         self
     }
 
+    pub fn with_fact_client(mut self, client: Box<dyn LlmClient>) -> Self {
+        self.fact_client = Some(client);
+        self
+    }
+
     pub fn with_create_client(mut self, client: Box<dyn LlmClient>) -> Self {
         self.create_client = Some(client);
         self
@@ -319,6 +326,7 @@ impl Generator {
             "extract" => self.extract_client.as_deref(),
             "map" => self.map_client.as_deref(),
             "learn" => self.learn_client.as_deref(),
+            "fact" => self.fact_client.as_deref(),
             "create" => self.create_client.as_deref(),
             "review" => self.review_client.as_deref(),
             "test" => self.test_client.as_deref(),
@@ -614,7 +622,7 @@ impl Generator {
                 &data.language,
             );
             let ledger = self
-                .get_client("create")
+                .get_client("fact")
                 .complete_with_system(&parts.system, &parts.user)
                 .await?;
             info!(

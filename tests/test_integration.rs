@@ -238,6 +238,7 @@ async fn test_pipeline_with_custom_config() {
             extract_llm: None,
             map_llm: None,
             learn_llm: None,
+            fact_llm: None,
             create_llm: None,
             review_llm: None,
             test_llm: None,

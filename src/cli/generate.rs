@@ -469,6 +469,14 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         );
         generator = generator.with_learn_client(client);
     }
+    if let Some(ref fact_config) = config.generation.fact_llm {
+        let client = factory::create_client_from_llm_config(fact_config, dry_run).await?;
+        info!(
+            "Using {} for fact ledger: {}",
+            fact_config.provider, fact_config.model
+        );
+        generator = generator.with_fact_client(client);
+    }
     if let Some(ref create_config) = config.generation.create_llm {
         let client = factory::create_client_from_llm_config(create_config, dry_run).await?;
         info!(
@@ -528,6 +536,11 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
                 .learn_llm
                 .as_ref()
                 .map(|c| format!("learn:{}", c.model)),
+            config
+                .generation
+                .fact_llm
+                .as_ref()
+                .map(|c| format!("fact:{}", c.model)),
             config
                 .generation
                 .create_llm

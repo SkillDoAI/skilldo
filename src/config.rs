@@ -585,6 +585,10 @@ pub struct GenerationConfig {
     #[serde(default)]
     pub learn_llm: Option<LlmConfig>,
 
+    /// Optional: Override LLM for fact ledger extraction (truth table)
+    #[serde(default)]
+    pub fact_llm: Option<LlmConfig>,
+
     /// Optional: Override LLM for create agent (synthesis)
     #[serde(default)]
     pub create_llm: Option<LlmConfig>,
@@ -924,6 +928,7 @@ impl Config {
             &self.generation.extract_llm,
             &self.generation.map_llm,
             &self.generation.learn_llm,
+            &self.generation.fact_llm,
             &self.generation.create_llm,
             &self.generation.review_llm,
             &self.generation.test_llm,
@@ -1029,6 +1034,7 @@ impl Default for GenerationConfig {
             extract_llm: None,
             map_llm: None,
             learn_llm: None,
+            fact_llm: None,
             create_llm: None,
             review_llm: None,
             test_llm: None,
@@ -1196,6 +1202,7 @@ mod tests {
             extract_llm: None,
             map_llm: None,
             learn_llm: None,
+            fact_llm: None,
             create_llm: None,
             review_llm: None,
             test_llm: None,
