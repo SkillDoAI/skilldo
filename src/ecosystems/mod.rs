@@ -4,6 +4,66 @@ pub mod javascript;
 pub mod python;
 pub mod rust;
 
+use std::path::{Path, PathBuf};
+
+/// Walk a directory tree respecting `.gitignore`, returning files matching
+/// the given extensions. Uses the `ignore` crate (same walker as ripgrep)
+/// so `.gitignore`, `.git/info/exclude`, and global gitignore are all honoured.
+///
+/// - `root`: directory to walk
+/// - `extensions`: file extensions to include (without dot), e.g. `["rs", "toml"]`
+/// - `extra_skip`: additional directory names to skip beyond gitignore
+/// - `max_depth`: maximum recursion depth (None for unlimited)
+pub(crate) fn walk_files(
+    root: &Path,
+    extensions: &[&str],
+    extra_skip: &[&str],
+    max_depth: Option<usize>,
+) -> Vec<PathBuf> {
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(true) // skip hidden files/dirs (dotfiles)
+        .git_ignore(true) // respect .gitignore
+        .git_global(true) // respect global gitignore
+        .git_exclude(true) // respect .git/info/exclude
+        .follow_links(false) // don't follow symlinks
+        .sort_by_file_path(|a, b| a.cmp(b)); // deterministic order
+
+    if let Some(depth) = max_depth {
+        builder.max_depth(Some(depth));
+    }
+
+    // Add overrides to skip extra directories (ecosystem-specific)
+    if !extra_skip.is_empty() {
+        let mut overrides = ignore::overrides::OverrideBuilder::new(root);
+        for dir in extra_skip {
+            // Negate pattern: !dir/ means skip this directory
+            let _ = overrides.add(&format!("!{dir}/"));
+        }
+        if let Ok(ov) = overrides.build() {
+            builder.overrides(ov);
+        }
+    }
+
+    let mut files = Vec::new();
+    for entry in builder.build().flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if extensions.is_empty() {
+            files.push(path.to_path_buf());
+            continue;
+        }
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if extensions.iter().any(|e| ext.eq_ignore_ascii_case(e)) {
+                files.push(path.to_path_buf());
+            }
+        }
+    }
+    files
+}
+
 /// Common license file names found at the root of open-source repositories.
 pub(crate) const LICENSE_FILENAMES: &[&str] =
     &["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "COPYING"];
@@ -120,5 +180,61 @@ mod tests {
         assert!(LICENSE_FILENAMES.contains(&"LICENSE"));
         assert!(LICENSE_FILENAMES.contains(&"LICENSE.md"));
         assert!(LICENSE_FILENAMES.contains(&"COPYING"));
+    }
+
+    #[test]
+    fn walk_files_respects_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Init a git repo so .gitignore is honoured
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        // Create .gitignore that excludes internal/
+        std::fs::write(root.join(".gitignore"), "internal/\n").unwrap();
+
+        // Create docs: one visible, one gitignored
+        let docs = root.join("docs");
+        std::fs::create_dir_all(docs.join("internal")).unwrap();
+        std::fs::write(docs.join("guide.md"), "# Guide\n").unwrap();
+        std::fs::write(docs.join("internal").join("design.md"), "# Design\n").unwrap();
+
+        let files = walk_files(&docs, &["md"], &[], None);
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"guide.md"), "visible doc should be found");
+        assert!(
+            !names.contains(&"design.md"),
+            "gitignored doc should be excluded: {names:?}"
+        );
+    }
+
+    #[test]
+    fn walk_files_skips_extra_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        std::fs::create_dir_all(root.join("vendor")).unwrap();
+        std::fs::write(root.join("good.md"), "# Good\n").unwrap();
+        std::fs::write(root.join("vendor").join("vendored.md"), "# Vendored\n").unwrap();
+
+        let files = walk_files(root, &["md"], &["vendor"], None);
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"good.md"));
+        assert!(
+            !names.contains(&"vendored.md"),
+            "extra_skip should exclude vendor/: {names:?}"
+        );
     }
 }

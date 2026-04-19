@@ -92,10 +92,17 @@ impl GoHandler {
             docs.push(doc_go);
         }
 
+        // Walk docs/ recursively, respecting .gitignore
+        let skip = &["vendor", "node_modules", "_build"];
         for docs_dirname in &["docs", "doc"] {
             let docs_dir = self.repo_path.join(docs_dirname);
             if docs_dir.is_dir() {
-                self.collect_docs_recursive(&docs_dir, &mut docs, 0)?;
+                docs.extend(super::walk_files(
+                    &docs_dir,
+                    &["md", "rst"],
+                    skip,
+                    Some(Self::MAX_DEPTH),
+                ));
             }
         }
 
@@ -320,44 +327,6 @@ impl GoHandler {
                     if !Self::should_skip_dir(name) {
                         self.collect_example_test_files(&path, files, depth + 1)?;
                     }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn collect_docs_recursive(
-        &self,
-        dir: &Path,
-        docs: &mut Vec<PathBuf>,
-        depth: usize,
-    ) -> Result<()> {
-        if depth > Self::MAX_DEPTH {
-            return Ok(());
-        }
-
-        if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.')
-                || name == "node_modules"
-                || name == "_build"
-                || name == "vendor"
-            {
-                return Ok(());
-            }
-        }
-
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Ok(ft) = entry.file_type() else { continue };
-                if ft.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext == "md" || ext == "rst" {
-                            docs.push(path);
-                        }
-                    }
-                } else if ft.is_dir() {
-                    self.collect_docs_recursive(&path, docs, depth + 1)?;
                 }
             }
         }

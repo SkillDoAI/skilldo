@@ -219,10 +219,11 @@ impl RustHandler {
     }
 
     /// Find documentation files (README, *.md at root, docs/ directory).
+    /// Respects `.gitignore` — gitignored docs are excluded from collection.
     pub fn find_docs(&self) -> Result<Vec<PathBuf>> {
         let mut docs = Vec::new();
 
-        // README at root
+        // README at root (special: first match wins)
         for name in &["README.md", "README.rst", "README.txt", "README"] {
             let path = self.repo_path.join(name);
             if path.exists() {
@@ -231,34 +232,31 @@ impl RustHandler {
             }
         }
 
-        // Other *.md files at root (excluding README already added, CHANGELOG handled separately)
-        if let Ok(entries) = fs::read_dir(&self.repo_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext == "md" {
-                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                // Skip files already added or changelog files
-                                if !name.starts_with("README")
-                                    && !name.starts_with("CHANGELOG")
-                                    && !name.starts_with("CHANGES")
-                                    && !name.starts_with("HISTORY")
-                                {
-                                    docs.push(path);
-                                }
-                            }
-                        }
-                    }
+        // Other *.md files at root (excluding README/CHANGELOG, depth=1)
+        for path in super::walk_files(&self.repo_path, &["md"], &[], Some(1)) {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if !name.starts_with("README")
+                    && !name.starts_with("CHANGELOG")
+                    && !name.starts_with("CHANGES")
+                    && !name.starts_with("HISTORY")
+                {
+                    docs.push(path);
                 }
             }
         }
 
-        // docs/ and doc/ directories
+        // docs/ and doc/ directories — walk recursively, respecting .gitignore.
+        // Always skip target/vendor/node_modules regardless of gitignore.
+        let skip = &["target", "vendor", "node_modules", "_build"];
         for docs_dirname in &["docs", "doc"] {
             let docs_dir = self.repo_path.join(docs_dirname);
             if docs_dir.is_dir() {
-                self.collect_docs_recursive(&docs_dir, &mut docs, 0)?;
+                docs.extend(super::walk_files(
+                    &docs_dir,
+                    &["md", "rst"],
+                    skip,
+                    Some(Self::MAX_DEPTH),
+                ));
             }
         }
 
@@ -757,45 +755,6 @@ impl RustHandler {
                         continue;
                     }
                     self.collect_test_rs_files(&path, files, depth + 1)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn collect_docs_recursive(
-        &self,
-        dir: &Path,
-        docs: &mut Vec<PathBuf>,
-        depth: usize,
-    ) -> Result<()> {
-        if depth > Self::MAX_DEPTH {
-            return Ok(());
-        }
-
-        if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.')
-                || name == "node_modules"
-                || name == "_build"
-                || name == "vendor"
-                || name == "target"
-            {
-                return Ok(());
-            }
-        }
-
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Ok(ft) = entry.file_type() else { continue };
-                if ft.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext == "md" || ext == "rst" {
-                            docs.push(path);
-                        }
-                    }
-                } else if ft.is_dir() {
-                    self.collect_docs_recursive(&path, docs, depth + 1)?;
                 }
             }
         }
@@ -4975,32 +4934,5 @@ mod tests {
         handler.collect_test_rs_files(&src, &mut files, 0).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].ends_with("foo_test.rs"));
-    }
-
-    // ── collect_docs_recursive ──────────────────────────────────────
-
-    #[test]
-    fn collect_docs_recursive_rust_enters_subdirs() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let docs = root.join("docs").join("api");
-        std::fs::create_dir_all(&docs).unwrap();
-        std::fs::write(docs.join("reference.md"), "# Ref\n").unwrap();
-        // target/ should be skipped
-        let target = root.join("docs").join("target");
-        std::fs::create_dir_all(&target).unwrap();
-        std::fs::write(target.join("output.md"), "# Build").unwrap();
-
-        let handler = RustHandler::new(root);
-        let mut found = Vec::new();
-        handler
-            .collect_docs_recursive(&root.join("docs"), &mut found, 0)
-            .unwrap();
-        let names: Vec<_> = found
-            .iter()
-            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
-            .collect();
-        assert!(names.contains(&"reference.md"));
-        assert!(!names.contains(&"output.md"));
     }
 }
