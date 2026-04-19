@@ -412,20 +412,20 @@ impl Generator {
                     warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
                     self.debug_stage_dir = None;
                     // Clean stale env vars so a previous run's path isn't reused
-                    std::env::remove_var("SKILLDO_DEBUG_DIR");
-                    std::env::remove_var("SKILLDO_DEBUG_STAGE");
+                    crate::util::set_debug_dir(None);
+                    crate::util::set_debug_stage(None);
                 } else {
                     info!("Debug stage files: {}", dir.display());
                     // Set env var so LLM clients can dump reasoning tokens here
-                    std::env::set_var("SKILLDO_DEBUG_DIR", &dir);
+                    crate::util::set_debug_dir(Some(dir.clone()));
                     self.debug_stage_dir = Some(dir);
                 }
             }
             None => {
-                // Clean up stale env vars so LLM clients don't dump reasoning
-                // tokens into a directory from a previous run.
-                std::env::remove_var("SKILLDO_DEBUG_DIR");
-                std::env::remove_var("SKILLDO_DEBUG_STAGE");
+                // Clean up stale debug context so LLM clients don't dump
+                // reasoning tokens into a directory from a previous run.
+                crate::util::set_debug_dir(None);
+                crate::util::set_debug_stage(None);
                 self.debug_stage_dir = None;
             }
         }
@@ -562,15 +562,15 @@ impl Generator {
                     result
                 } else {
                     info!("Running extract/map/learn sequentially...");
-                    std::env::set_var("SKILLDO_DEBUG_STAGE", "1-extract");
+                    crate::util::set_debug_stage(Some("1-extract"));
                     let t = Instant::now();
                     let api_surface = extract_client.complete(&extract_prompt).await?;
                     info!("extract: complete ({})", fmt_elapsed(t));
-                    std::env::set_var("SKILLDO_DEBUG_STAGE", "2-map");
+                    crate::util::set_debug_stage(Some("2-map"));
                     let t = Instant::now();
                     let patterns = map_client.complete(&map_prompt).await?;
                     info!("map: complete ({})", fmt_elapsed(t));
-                    std::env::set_var("SKILLDO_DEBUG_STAGE", "3-learn");
+                    crate::util::set_debug_stage(Some("3-learn"));
                     let t = Instant::now();
                     let context = learn_client.complete(&learn_prompt).await?;
                     info!("learn: complete ({})", fmt_elapsed(t));
@@ -603,7 +603,7 @@ impl Generator {
             if self.replay_stages.is_some() {
                 info!("facts: cache miss — no facts.md in replay dir, running LLM call");
             }
-            std::env::set_var("SKILLDO_DEBUG_STAGE", "facts");
+            crate::util::set_debug_stage(Some("facts"));
             info!("facts: Extracting verified fact ledger...");
             let t = Instant::now();
             let parts = prompts_v2::fact_ledger_prompt(
@@ -641,7 +641,7 @@ impl Generator {
         // create: Synthesize SKILL.md using system prompt split.
         // System = rules, custom instructions, language hints (high-priority directive channel).
         // User = fact ledger + data from stages 1-3 (evidence to process).
-        std::env::set_var("SKILLDO_DEBUG_STAGE", "4-create");
+        crate::util::set_debug_stage(Some("4-create"));
         let create_start = Instant::now();
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
             // Update mode: patch existing SKILL.md
@@ -977,10 +977,10 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {
                 last_review_attempt = review_attempt;
-                std::env::set_var(
-                    "SKILLDO_DEBUG_STAGE",
-                    format!("5-review-attempt{}", review_attempt + 1),
-                );
+                crate::util::set_debug_stage(Some(&format!(
+                    "5-review-attempt{}",
+                    review_attempt + 1
+                )));
                 info!(
                     "review: Checking accuracy and safety (attempt {}/{})",
                     review_attempt + 1,

@@ -7,6 +7,39 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
+// ── Debug context (replaces SKILLDO_DEBUG_DIR / SKILLDO_DEBUG_STAGE env vars) ──
+// Thread-safe static so parallel extraction doesn't race on env vars, and
+// avoids the deprecated `std::env::set_var` in future Rust editions.
+
+static DEBUG_CTX: std::sync::RwLock<(Option<PathBuf>, Option<String>)> =
+    std::sync::RwLock::new((None, None));
+
+/// Set the debug stage directory. Called once per generation run.
+pub fn set_debug_dir(dir: Option<PathBuf>) {
+    if let Ok(mut ctx) = DEBUG_CTX.write() {
+        ctx.0 = dir;
+    }
+}
+
+/// Set the current pipeline stage name (e.g., "1-extract", "facts").
+/// In parallel mode, call with None — reasoning files land as "parallel".
+pub fn set_debug_stage(stage: Option<&str>) {
+    if let Ok(mut ctx) = DEBUG_CTX.write() {
+        ctx.1 = stage.map(String::from);
+    }
+}
+
+/// Get the current debug dir + stage for writing reasoning files.
+/// Returns None if no debug dir is configured.
+pub fn get_debug_context() -> Option<(PathBuf, String)> {
+    DEBUG_CTX.read().ok().and_then(|ctx| {
+        ctx.0.as_ref().map(|dir| {
+            let stage = ctx.1.clone().unwrap_or_else(|| "unknown".to_string());
+            (dir.clone(), stage)
+        })
+    })
+}
+
 /// Check if a line starts a fenced code block (backtick or tilde, per CommonMark).
 pub fn is_fence_line(line: &str) -> bool {
     let trimmed = line.trim_start();
