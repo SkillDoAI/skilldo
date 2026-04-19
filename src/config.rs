@@ -585,6 +585,10 @@ pub struct GenerationConfig {
     #[serde(default)]
     pub learn_llm: Option<LlmConfig>,
 
+    /// Optional: Override LLM for fact ledger extraction (truth table)
+    #[serde(default)]
+    pub fact_llm: Option<LlmConfig>,
+
     /// Optional: Override LLM for create agent (synthesis)
     #[serde(default)]
     pub create_llm: Option<LlmConfig>,
@@ -924,6 +928,7 @@ impl Config {
             &self.generation.extract_llm,
             &self.generation.map_llm,
             &self.generation.learn_llm,
+            &self.generation.fact_llm,
             &self.generation.create_llm,
             &self.generation.review_llm,
             &self.generation.test_llm,
@@ -1029,6 +1034,7 @@ impl Default for GenerationConfig {
             extract_llm: None,
             map_llm: None,
             learn_llm: None,
+            fact_llm: None,
             create_llm: None,
             review_llm: None,
             test_llm: None,
@@ -1196,6 +1202,7 @@ mod tests {
             extract_llm: None,
             map_llm: None,
             learn_llm: None,
+            fact_llm: None,
             create_llm: None,
             review_llm: None,
             test_llm: None,
@@ -1375,6 +1382,42 @@ setup_commands = ["apt-get install -y libxml2-dev", "pip install numpy"]
     fn test_setup_commands_defaults_to_empty() {
         let config = ContainerConfig::default();
         assert!(config.setup_commands.is_empty());
+    }
+
+    #[test]
+    fn test_fact_llm_defaults_to_none() {
+        let config = Config::default();
+        assert!(
+            config.generation.fact_llm.is_none(),
+            "fact_llm should default to None"
+        );
+    }
+
+    #[test]
+    fn test_fact_llm_from_toml() {
+        let toml = r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[generation]
+max_retries = 5
+max_source_tokens = 100000
+
+[generation.fact_llm]
+provider_type = "openai"
+model = "gpt-5.2"
+api_key_env = "OPENAI_API_KEY"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(
+            config.generation.fact_llm.is_some(),
+            "fact_llm should parse from TOML"
+        );
+        let fact = config.generation.fact_llm.unwrap();
+        assert_eq!(fact.provider, Provider::OpenAI);
+        assert_eq!(fact.model, "gpt-5.2");
     }
 
     #[test]

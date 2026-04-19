@@ -69,10 +69,23 @@ impl JsHandler {
             }
         }
 
+        let skip = &[
+            "node_modules",
+            "dist",
+            "build",
+            "coverage",
+            "vendor",
+            "bower_components",
+        ];
         for docs_dirname in &["docs", "doc"] {
             let docs_dir = self.repo_path.join(docs_dirname);
             if docs_dir.is_dir() {
-                self.collect_docs_recursive(&docs_dir, &mut docs, 0)?;
+                docs.extend(super::walk_files(
+                    &docs_dir,
+                    &["md", "rst"],
+                    skip,
+                    Some(Self::MAX_DEPTH),
+                ));
             }
         }
 
@@ -299,41 +312,6 @@ impl JsHandler {
                     if !Self::is_excluded_dir(name) {
                         self.collect_all_js_in_dir(&path, files, depth + 1)?;
                     }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Collect documentation files recursively.
-    fn collect_docs_recursive(
-        &self,
-        dir: &Path,
-        docs: &mut Vec<PathBuf>,
-        depth: usize,
-    ) -> Result<()> {
-        if depth > Self::MAX_DEPTH {
-            return Ok(());
-        }
-
-        if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
-            if Self::is_excluded_dir(name) {
-                return Ok(());
-            }
-        }
-
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Ok(ft) = entry.file_type() else { continue };
-                if ft.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext == "md" || ext == "rst" {
-                            docs.push(path);
-                        }
-                    }
-                } else if ft.is_dir() {
-                    self.collect_docs_recursive(&path, docs, depth + 1)?;
                 }
             }
         }
@@ -1520,42 +1498,5 @@ mod tests {
         assert!(!names.contains(&"types.d.mts"));
         assert!(!names.contains(&"types.d.cts"));
         assert!(!names.contains(&"lib.min.js"));
-    }
-
-    // ── collect_docs_recursive ──────────────────────────────────────
-
-    #[test]
-    fn collect_docs_recursive_enters_subdirs() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        fs::write(
-            root.join("package.json"),
-            r#"{"name":"t","version":"1.0.0"}"#,
-        )
-        .unwrap();
-        let docs = root.join("docs").join("guides");
-        fs::create_dir_all(&docs).unwrap();
-        fs::write(docs.join("intro.md"), "# Intro\n").unwrap();
-        // node_modules should be skipped
-        let nm = root.join("docs").join("node_modules");
-        fs::create_dir_all(&nm).unwrap();
-        fs::write(nm.join("README.md"), "# Dep\n").unwrap();
-
-        let handler = JsHandler::new(root);
-        let mut found = Vec::new();
-        handler
-            .collect_docs_recursive(&root.join("docs"), &mut found, 0)
-            .unwrap();
-        let names: Vec<_> = found
-            .iter()
-            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
-            .collect();
-        assert!(names.contains(&"intro.md"));
-        assert!(
-            !found
-                .iter()
-                .any(|p| p.to_string_lossy().contains("node_modules")),
-            "should skip node_modules"
-        );
     }
 }

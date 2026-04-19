@@ -228,6 +228,12 @@ enable_review = true
 # api_key_env = "none"
 # base_url = "http://localhost:11434/v1"
 
+# [generation.fact_llm]
+# provider_type = "openai-compatible"
+# model = "qwen3-coder:latest"
+# api_key_env = "none"
+# base_url = "http://localhost:11434/v1"
+
 # [generation.create_llm]
 # provider_type = "anthropic"
 # model = "claude-sonnet-4-6"

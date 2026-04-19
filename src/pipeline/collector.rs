@@ -1148,26 +1148,44 @@ setup(
     }
 
     #[test]
+    fn test_budget_scaling_boundary_300() {
+        // Exactly 300 is "small" (full remainder), 301 is "medium" (40%)
+        assert_eq!(scale_source_budget(300, 15_000), 15_000);
+        assert_eq!(scale_source_budget(301, 15_000), 6_000);
+    }
+
+    #[test]
     fn test_budget_scaling_medium_repo() {
         // (300, 1000] source files => remaining * 40%
         assert_eq!(scale_source_budget(500, 15_000), 6_000);
-        assert_eq!(scale_source_budget(301, 15_000), 6_000);
         assert_eq!(scale_source_budget(1000, 15_000), 6_000);
+    }
+
+    #[test]
+    fn test_budget_scaling_boundary_1000() {
+        // Exactly 1000 is "medium" (40%), 1001 is "large" (60%)
+        assert_eq!(scale_source_budget(1000, 15_000), 6_000);
+        assert_eq!(scale_source_budget(1001, 15_000), 9_000);
     }
 
     #[test]
     fn test_budget_scaling_large_repo() {
         // (1000, 2000] source files => remaining * 60%
         assert_eq!(scale_source_budget(1500, 15_000), 9_000);
-        assert_eq!(scale_source_budget(1001, 15_000), 9_000);
         assert_eq!(scale_source_budget(2000, 15_000), 9_000);
+    }
+
+    #[test]
+    fn test_budget_scaling_boundary_2000() {
+        // Exactly 2000 is "large" (60%), 2001 is "massive" (full)
+        assert_eq!(scale_source_budget(2000, 15_000), 9_000);
+        assert_eq!(scale_source_budget(2001, 15_000), 15_000);
     }
 
     #[test]
     fn test_budget_scaling_massive_repo() {
         // 2000+ source files => full remainder
         assert_eq!(scale_source_budget(3000, 15_000), 15_000);
-        assert_eq!(scale_source_budget(2001, 15_000), 15_000);
     }
 
     // -- read_file_limited --

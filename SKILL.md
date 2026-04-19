@@ -5,7 +5,7 @@ license: AGPL-3.0
 compatibility: Requires an LLM API key (Anthropic, OpenAI, Gemini, or OpenAI-compatible). Optional container runtime (docker/podman) for test validation.
 metadata:
   author: SkillDoAI
-  version: "0.5.16"
+  version: "0.5.17"
 ---
 
 # Skilldo CLI
@@ -14,6 +14,7 @@ Skilldo is a 7-stage LLM pipeline that generates SKILL.md files for software lib
 **extract** → **map** → **learn** → **facts** → **create** → **review** → **test**
 
 Stages 1-3 gather library metadata (source files, docs, dependencies, version).
+File collection respects `.gitignore` — gitignored files are excluded from LLM context.
 Stage 4 (facts) extracts a compact truth table with negative assertions from stages 1-3.
 Stage 5 generates the SKILL.md. Stage 6 reviews for accuracy/safety. Stage 7 validates
 with generated test code.
@@ -63,7 +64,7 @@ max_retries = 10                # retry on lint/test failures
 
 ### Per-stage model overrides
 
-Different models can be used for review and test stages:
+Different models can be used for individual stages:
 
 ```toml
 [llm]
@@ -85,6 +86,8 @@ api_key_env = "OPENAI_API_KEY"
 provider_type = "openai"
 model = "gpt-5.2"
 api_key_env = "OPENAI_API_KEY"
+
+# Also available: extract_llm, map_llm, learn_llm, fact_llm, create_llm
 ```
 
 ### Local models (Ollama)

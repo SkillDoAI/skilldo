@@ -4,6 +4,71 @@ pub mod javascript;
 pub mod python;
 pub mod rust;
 
+use std::path::{Path, PathBuf};
+
+/// Walk a directory tree respecting `.gitignore`, returning files matching
+/// the given extensions. Uses the `ignore` crate (same walker as ripgrep)
+/// so `.gitignore`, `.git/info/exclude`, and global gitignore are all honoured.
+///
+/// - `root`: directory to walk
+/// - `extensions`: file extensions to include (without dot), e.g. `["rs", "toml"]`
+/// - `extra_skip`: additional directory names to skip beyond gitignore
+/// - `max_depth`: maximum recursion depth (None for unlimited)
+pub(crate) fn walk_files(
+    root: &Path,
+    extensions: &[&str],
+    extra_skip: &[&str],
+    max_depth: Option<usize>,
+) -> Vec<PathBuf> {
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .follow_links(false)
+        .sort_by_file_path(|a, b| a.cmp(b));
+
+    if let Some(depth) = max_depth {
+        builder.max_depth(Some(depth));
+    }
+
+    if !extra_skip.is_empty() {
+        let mut overrides = ignore::overrides::OverrideBuilder::new(root);
+        for dir in extra_skip {
+            if let Err(e) = overrides.add(&format!("!{dir}/")) {
+                tracing::warn!("walk_files: invalid skip pattern '!{dir}/': {e}");
+            }
+        }
+        if let Ok(ov) = overrides.build() {
+            builder.overrides(ov);
+        }
+    }
+
+    let mut files = Vec::new();
+    for entry in builder.build().flatten() {
+        // Use DirEntry::file_type() to respect follow_links(false) —
+        // Path::is_file() would follow symlinks and defeat the setting.
+        let Some(ft) = entry.file_type() else {
+            continue;
+        };
+        if !ft.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if extensions.is_empty() {
+            files.push(path.to_path_buf());
+            continue;
+        }
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if extensions.iter().any(|e| ext.eq_ignore_ascii_case(e)) {
+                files.push(path.to_path_buf());
+            }
+        }
+    }
+    files
+}
+
 /// Common license file names found at the root of open-source repositories.
 pub(crate) const LICENSE_FILENAMES: &[&str] =
     &["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "COPYING"];
@@ -120,5 +185,136 @@ mod tests {
         assert!(LICENSE_FILENAMES.contains(&"LICENSE"));
         assert!(LICENSE_FILENAMES.contains(&"LICENSE.md"));
         assert!(LICENSE_FILENAMES.contains(&"COPYING"));
+    }
+
+    #[test]
+    fn walk_files_respects_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Init a git repo so .gitignore is honoured
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        // Create .gitignore that excludes internal/
+        std::fs::write(root.join(".gitignore"), "internal/\n").unwrap();
+
+        // Create docs: one visible, one gitignored
+        let docs = root.join("docs");
+        std::fs::create_dir_all(docs.join("internal")).unwrap();
+        std::fs::write(docs.join("guide.md"), "# Guide\n").unwrap();
+        std::fs::write(docs.join("internal").join("design.md"), "# Design\n").unwrap();
+
+        let files = walk_files(&docs, &["md"], &[], None);
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"guide.md"), "visible doc should be found");
+        assert!(
+            !names.contains(&"design.md"),
+            "gitignored doc should be excluded: {names:?}"
+        );
+    }
+
+    #[test]
+    fn walk_files_filters_by_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        std::fs::write(root.join("lib.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("helper.rs"), "fn help() {}").unwrap();
+        std::fs::write(root.join("script.py"), "print('hi')").unwrap();
+        std::fs::write(root.join("readme.md"), "# Readme").unwrap();
+
+        let files = walk_files(root, &["rs"], &[], None);
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert_eq!(names.len(), 2, "should find exactly 2 .rs files: {names:?}");
+        assert!(names.contains(&"lib.rs"));
+        assert!(names.contains(&"helper.rs"));
+        assert!(!names.contains(&"script.py"));
+        assert!(!names.contains(&"readme.md"));
+    }
+
+    #[test]
+    fn walk_files_max_depth_limits_recursion() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // depth 1 (relative to root): root/top.txt
+        std::fs::write(root.join("top.txt"), "top").unwrap();
+        // depth 2: root/sub/mid.txt
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub").join("mid.txt"), "mid").unwrap();
+        // depth 3: root/sub/deep/bottom.txt
+        std::fs::create_dir_all(root.join("sub").join("deep")).unwrap();
+        std::fs::write(root.join("sub").join("deep").join("bottom.txt"), "bot").unwrap();
+
+        // max_depth=1 means only the root directory itself (no subdirs)
+        let files_d1 = walk_files(root, &["txt"], &[], Some(1));
+        let names_d1: Vec<&str> = files_d1
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names_d1.contains(&"top.txt"), "depth-1 file should appear");
+        assert!(
+            !names_d1.contains(&"mid.txt"),
+            "depth-2 file should be excluded at max_depth=1"
+        );
+
+        // max_depth=2 includes root + one level of subdirs
+        let files_d2 = walk_files(root, &["txt"], &[], Some(2));
+        let names_d2: Vec<&str> = files_d2
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names_d2.contains(&"top.txt"));
+        assert!(names_d2.contains(&"mid.txt"));
+        assert!(
+            !names_d2.contains(&"bottom.txt"),
+            "depth-3 file should be excluded at max_depth=2"
+        );
+    }
+
+    #[test]
+    fn walk_files_empty_directory_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let files = walk_files(root, &["rs"], &[], None);
+        assert!(
+            files.is_empty(),
+            "empty directory should return no files: {files:?}"
+        );
+    }
+
+    #[test]
+    fn walk_files_skips_extra_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        std::fs::create_dir_all(root.join("vendor")).unwrap();
+        std::fs::write(root.join("good.md"), "# Good\n").unwrap();
+        std::fs::write(root.join("vendor").join("vendored.md"), "# Vendored\n").unwrap();
+
+        let files = walk_files(root, &["md"], &["vendor"], None);
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"good.md"));
+        assert!(
+            !names.contains(&"vendored.md"),
+            "extra_skip should exclude vendor/: {names:?}"
+        );
     }
 }

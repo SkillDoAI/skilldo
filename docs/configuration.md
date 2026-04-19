@@ -109,7 +109,7 @@ enable_review = true
 # model = "gpt-5.2"
 # api_key_env = "OPENAI_API_KEY"
 #
-# Also available: extract_llm, map_llm, learn_llm, create_llm, review_llm
+# Also available: extract_llm, map_llm, learn_llm, fact_llm, create_llm, review_llm
 
 # ── Additional Generation Settings ─────────────────────────────
 # Review loop retries (separate from create/test retries, default: 10)

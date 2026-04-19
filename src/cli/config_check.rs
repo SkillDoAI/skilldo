@@ -137,10 +137,11 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
     }
 
     // 7. Check per-stage LLM overrides
-    let stage_llms: [(&str, &Option<crate::config::LlmConfig>); 4] = [
+    let stage_llms: [(&str, &Option<crate::config::LlmConfig>); 5] = [
         ("extract", &config.generation.extract_llm),
         ("map", &config.generation.map_llm),
         ("learn", &config.generation.learn_llm),
+        ("fact", &config.generation.fact_llm),
         ("create", &config.generation.create_llm),
     ];
     for (name, llm_opt) in &stage_llms {
@@ -238,10 +239,11 @@ pub fn run(config_path: Option<String>, strict: bool) -> Result<()> {
             results.error(format!("Main LLM extra_body_json: {}", e));
         }
     }
-    let all_stage_llms: [(&str, &Option<crate::config::LlmConfig>); 6] = [
+    let all_stage_llms: [(&str, &Option<crate::config::LlmConfig>); 7] = [
         ("extract", &config.generation.extract_llm),
         ("map", &config.generation.map_llm),
         ("learn", &config.generation.learn_llm),
+        ("fact", &config.generation.fact_llm),
         ("create", &config.generation.create_llm),
         ("review", &config.generation.review_llm),
         ("test", &config.generation.test_llm),

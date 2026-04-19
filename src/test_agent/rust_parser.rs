@@ -755,6 +755,25 @@ match serde_json::from_str::<Point>(data) {
     }
 
     #[test]
+    fn cargo_add_features_not_merged_into_toml_version_only() {
+        // TOML has `tokio = "1.51"` (no features), cargo add has --features full.
+        // TOML wins entirely — features from cargo add are NOT merged in.
+        // This is by design: the TOML block is from the actual manifest and is
+        // more authoritative than generated cargo add commands.
+        let parser = RustParser;
+        let skill = "---\nname: test\n---\n\n## Imports\n\n```bash\ncargo add tokio --features full\n```\n\n```toml\n[dependencies]\ntokio = \"1.51\"\n```\n";
+        let deps = parser.extract_structured_dependencies(skill).unwrap();
+        let tokio_dep = deps.iter().find(|d| d.name == "tokio").unwrap();
+        let spec = tokio_dep.raw_spec.as_ref().unwrap();
+        assert!(spec.contains("1.51"), "TOML version should be used: {spec}");
+        assert!(
+            !spec.contains("full"),
+            "cargo add features should NOT be merged into TOML-only spec: {spec}"
+        );
+        assert_eq!(tokio_dep.source, DepSource::Manifest);
+    }
+
+    #[test]
     fn cargo_add_skips_stdlib_crates() {
         let parser = RustParser;
         let skill =
