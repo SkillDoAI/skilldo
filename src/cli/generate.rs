@@ -213,6 +213,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             &mut config.generation.extract_llm,
             &mut config.generation.map_llm,
             &mut config.generation.learn_llm,
+            &mut config.generation.fact_llm,
             &mut config.generation.create_llm,
             &mut config.generation.review_llm,
             &mut config.generation.test_llm,

@@ -145,6 +145,7 @@ fn collect_all_endpoints(config: &Config) -> Result<Vec<OAuthEndpoint>> {
         .chain(config.generation.extract_llm.as_ref())
         .chain(config.generation.map_llm.as_ref())
         .chain(config.generation.learn_llm.as_ref())
+        .chain(config.generation.fact_llm.as_ref())
         .chain(config.generation.create_llm.as_ref())
         .chain(config.generation.review_llm.as_ref())
         .chain(config.generation.test_llm.as_ref())
