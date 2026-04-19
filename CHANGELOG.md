@@ -3,7 +3,17 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
-## Unreleased (v0.5.16)
+## Unreleased (v0.5.17)
+
+### Added
+- **`.gitignore`-aware file collection** — doc and source walkers now use the `ignore` crate (same engine as ripgrep) to respect `.gitignore`, `.git/info/exclude`, and global gitignore rules. Gitignored files are no longer sent to LLM stages
+- **Per-stage elapsed time logging** — each pipeline stage (extract, map, learn, facts, create, review) now logs its wall-clock duration at `info` level, making it easy to spot slow stages without `--debug-stage-files`
+- **`[generation.fact_llm]` per-stage override** — use a different model for the fact ledger extraction stage, same as existing `extract_llm`/`create_llm`/etc. overrides
+
+### Fixed
+- **CRLF parsing in all 5 parsers** — code block regexes in Python, JavaScript, Rust, Go, and Java parsers now handle `\r\n` line endings, fixing pattern extraction failures on Windows-authored SKILL.md files
+
+## v0.5.16
 
 ### Added
 - **Rust dep features survive cargo-add fallback** — `cargo add tokio --features full` in a SKILL.md's `## Imports` without a TOML block now produces `{ version = "*", features = ["full"] }` in the test agent's Cargo.toml instead of dropping to `tokio = "*"`

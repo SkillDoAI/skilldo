@@ -246,7 +246,6 @@ impl RustHandler {
         }
 
         // docs/ and doc/ directories — walk recursively, respecting .gitignore.
-        // Always skip target/vendor/node_modules regardless of gitignore.
         let skip = &["target", "vendor", "node_modules", "_build"];
         for docs_dirname in &["docs", "doc"] {
             let docs_dir = self.repo_path.join(docs_dirname);

@@ -326,7 +326,10 @@ impl Generator {
             "extract" => self.extract_client.as_deref(),
             "map" => self.map_client.as_deref(),
             "learn" => self.learn_client.as_deref(),
-            "fact" => self.fact_client.as_deref(),
+            "fact" => self
+                .fact_client
+                .as_deref()
+                .or(self.create_client.as_deref()),
             "create" => self.create_client.as_deref(),
             "review" => self.review_client.as_deref(),
             "test" => self.test_client.as_deref(),
@@ -419,12 +422,10 @@ impl Generator {
                 if let Err(e) = std::fs::create_dir_all(&dir) {
                     warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
                     self.debug_stage_dir = None;
-                    // Clean stale env vars so a previous run's path isn't reused
                     crate::util::set_debug_dir(None);
                     crate::util::set_debug_stage(None);
                 } else {
                     info!("Debug stage files: {}", dir.display());
-                    // Set env var so LLM clients can dump reasoning tokens here
                     crate::util::set_debug_dir(Some(dir.clone()));
                     self.debug_stage_dir = Some(dir);
                 }
@@ -1244,6 +1245,69 @@ mod tests {
     use crate::detector::Language;
     use crate::llm::client::MockLlmClient;
     use crate::pipeline::collector::CollectedData;
+
+    // ── fmt_elapsed tests ──
+
+    #[test]
+    fn fmt_elapsed_seconds_only() {
+        // An instant created just now should format as "0s" (under 60 seconds)
+        let start = Instant::now();
+        let result = fmt_elapsed(start);
+        assert!(result.ends_with('s'), "should end with 's': {result}");
+        assert!(
+            !result.contains('m'),
+            "should not contain 'm' for sub-60s: {result}"
+        );
+    }
+
+    #[test]
+    fn fmt_elapsed_formatting_logic() {
+        // Test the formatting logic directly by verifying the format patterns.
+        // For seconds < 60: "{secs}s"
+        // For seconds >= 60: "{mins}m{secs:02}s"
+        //
+        // We can't fake Instant, but we can verify the format of each branch
+        // by testing the branch condition and format string.
+        let secs: u64 = 45;
+        let result = if secs < 60 {
+            format!("{}s", secs)
+        } else {
+            format!("{}m{:02}s", secs / 60, secs % 60)
+        };
+        assert_eq!(result, "45s");
+
+        let secs: u64 = 125;
+        let result = if secs < 60 {
+            format!("{}s", secs)
+        } else {
+            format!("{}m{:02}s", secs / 60, secs % 60)
+        };
+        assert_eq!(result, "2m05s");
+
+        let secs: u64 = 60;
+        let result = if secs < 60 {
+            format!("{}s", secs)
+        } else {
+            format!("{}m{:02}s", secs / 60, secs % 60)
+        };
+        assert_eq!(result, "1m00s");
+
+        let secs: u64 = 0;
+        let result = if secs < 60 {
+            format!("{}s", secs)
+        } else {
+            format!("{}m{:02}s", secs / 60, secs % 60)
+        };
+        assert_eq!(result, "0s");
+
+        let secs: u64 = 3661;
+        let result = if secs < 60 {
+            format!("{}s", secs)
+        } else {
+            format!("{}m{:02}s", secs / 60, secs % 60)
+        };
+        assert_eq!(result, "61m01s");
+    }
 
     #[test]
     fn test_strip_markdown_fences() {

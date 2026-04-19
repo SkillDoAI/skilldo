@@ -69,7 +69,6 @@ impl JsHandler {
             }
         }
 
-        // Walk docs/ recursively, respecting .gitignore
         let skip = &[
             "node_modules",
             "dist",

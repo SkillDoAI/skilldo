@@ -539,6 +539,76 @@ pub async fn run_cmd_with_timeout(
 mod tests {
     use super::*;
 
+    // ── debug context tests ──
+    // These tests mutate a global static (DEBUG_CTX), so they must run serially.
+
+    #[test]
+    #[serial_test::serial]
+    fn debug_context_set_then_get() {
+        // Set a debug dir and stage, then verify get returns them.
+        let dir = PathBuf::from("/tmp/skilldo-test-debug");
+        set_debug_dir(Some(dir.clone()));
+        set_debug_stage(Some("1-extract"));
+
+        let ctx = get_debug_context();
+        assert!(ctx.is_some(), "should return Some after setting dir");
+        let (got_dir, got_stage) = ctx.unwrap();
+        assert_eq!(got_dir, dir);
+        assert_eq!(got_stage, "1-extract");
+
+        // Clean up global state for other tests
+        set_debug_dir(None);
+        set_debug_stage(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn debug_context_returns_none_when_dir_not_set() {
+        // Ensure dir is cleared
+        set_debug_dir(None);
+        set_debug_stage(Some("facts"));
+
+        let ctx = get_debug_context();
+        assert!(
+            ctx.is_none(),
+            "should return None when debug dir is not set"
+        );
+
+        // Clean up
+        set_debug_stage(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn debug_context_set_none_clears() {
+        // Set, then clear, then verify None
+        set_debug_dir(Some(PathBuf::from("/tmp/debug")));
+        set_debug_stage(Some("create"));
+
+        // Clear both
+        set_debug_dir(None);
+        set_debug_stage(None);
+
+        let ctx = get_debug_context();
+        assert!(ctx.is_none(), "should return None after clearing dir");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn debug_context_stage_defaults_to_unknown() {
+        // Set dir but not stage — stage should default to "unknown"
+        set_debug_dir(Some(PathBuf::from("/tmp/debug-unknown")));
+        set_debug_stage(None);
+
+        let ctx = get_debug_context();
+        assert!(ctx.is_some());
+        let (_, stage) = ctx.unwrap();
+        assert_eq!(stage, "unknown", "unset stage should default to 'unknown'");
+
+        // Clean up
+        set_debug_dir(None);
+    }
+
     #[test]
     fn detect_fence_char_backtick() {
         assert_eq!(detect_fence_char("```python"), Some('`'));

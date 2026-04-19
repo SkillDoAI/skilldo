@@ -22,23 +22,23 @@ pub(crate) fn walk_files(
 ) -> Vec<PathBuf> {
     let mut builder = ignore::WalkBuilder::new(root);
     builder
-        .hidden(true) // skip hidden files/dirs (dotfiles)
-        .git_ignore(true) // respect .gitignore
-        .git_global(true) // respect global gitignore
-        .git_exclude(true) // respect .git/info/exclude
-        .follow_links(false) // don't follow symlinks
-        .sort_by_file_path(|a, b| a.cmp(b)); // deterministic order
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .follow_links(false)
+        .sort_by_file_path(|a, b| a.cmp(b));
 
     if let Some(depth) = max_depth {
         builder.max_depth(Some(depth));
     }
 
-    // Add overrides to skip extra directories (ecosystem-specific)
     if !extra_skip.is_empty() {
         let mut overrides = ignore::overrides::OverrideBuilder::new(root);
         for dir in extra_skip {
-            // Negate pattern: !dir/ means skip this directory
-            let _ = overrides.add(&format!("!{dir}/"));
+            if let Err(e) = overrides.add(&format!("!{dir}/")) {
+                tracing::warn!("walk_files: invalid skip pattern '!{dir}/': {e}");
+            }
         }
         if let Ok(ov) = overrides.build() {
             builder.overrides(ov);
@@ -213,6 +213,81 @@ mod tests {
         assert!(
             !names.contains(&"design.md"),
             "gitignored doc should be excluded: {names:?}"
+        );
+    }
+
+    #[test]
+    fn walk_files_filters_by_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        std::fs::write(root.join("lib.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("helper.rs"), "fn help() {}").unwrap();
+        std::fs::write(root.join("script.py"), "print('hi')").unwrap();
+        std::fs::write(root.join("readme.md"), "# Readme").unwrap();
+
+        let files = walk_files(root, &["rs"], &[], None);
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert_eq!(names.len(), 2, "should find exactly 2 .rs files: {names:?}");
+        assert!(names.contains(&"lib.rs"));
+        assert!(names.contains(&"helper.rs"));
+        assert!(!names.contains(&"script.py"));
+        assert!(!names.contains(&"readme.md"));
+    }
+
+    #[test]
+    fn walk_files_max_depth_limits_recursion() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // depth 1 (relative to root): root/top.txt
+        std::fs::write(root.join("top.txt"), "top").unwrap();
+        // depth 2: root/sub/mid.txt
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub").join("mid.txt"), "mid").unwrap();
+        // depth 3: root/sub/deep/bottom.txt
+        std::fs::create_dir_all(root.join("sub").join("deep")).unwrap();
+        std::fs::write(root.join("sub").join("deep").join("bottom.txt"), "bot").unwrap();
+
+        // max_depth=1 means only the root directory itself (no subdirs)
+        let files_d1 = walk_files(root, &["txt"], &[], Some(1));
+        let names_d1: Vec<&str> = files_d1
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names_d1.contains(&"top.txt"), "depth-1 file should appear");
+        assert!(
+            !names_d1.contains(&"mid.txt"),
+            "depth-2 file should be excluded at max_depth=1"
+        );
+
+        // max_depth=2 includes root + one level of subdirs
+        let files_d2 = walk_files(root, &["txt"], &[], Some(2));
+        let names_d2: Vec<&str> = files_d2
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names_d2.contains(&"top.txt"));
+        assert!(names_d2.contains(&"mid.txt"));
+        assert!(
+            !names_d2.contains(&"bottom.txt"),
+            "depth-3 file should be excluded at max_depth=2"
+        );
+    }
+
+    #[test]
+    fn walk_files_empty_directory_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let files = walk_files(root, &["rs"], &[], None);
+        assert!(
+            files.is_empty(),
+            "empty directory should return no files: {files:?}"
         );
     }
 

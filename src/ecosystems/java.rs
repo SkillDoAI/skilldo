@@ -83,7 +83,6 @@ impl JavaHandler {
             }
         }
 
-        // Walk docs/ recursively, respecting .gitignore
         let skip = &["target", "build", "out", "bin", "node_modules", "buildSrc"];
         for docs_dirname in &["docs", "doc"] {
             let docs_dir = self.repo_path.join(docs_dirname);

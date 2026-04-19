@@ -92,7 +92,6 @@ impl GoHandler {
             docs.push(doc_go);
         }
 
-        // Walk docs/ recursively, respecting .gitignore
         let skip = &["vendor", "node_modules", "_build"];
         for docs_dirname in &["docs", "doc"] {
             let docs_dir = self.repo_path.join(docs_dirname);
