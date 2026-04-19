@@ -1,10 +1,21 @@
 //! Pipeline orchestrator — runs the 6-agent sequence (extract → map → learn →
 //! create → review → test) with retry loops, normalization, and lint checks.
 
+use std::time::Instant;
+
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::collector::CollectedData;
+
+fn fmt_elapsed(start: Instant) -> String {
+    let secs = start.elapsed().as_secs();
+    if secs < 60 {
+        format!("{}s", secs)
+    } else {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    }
+}
 
 /// Extract the behavioral_semantics JSON array from the learn stage output.
 /// Returns None if not found. Uses simple string matching to avoid fragile JSON parsing.
@@ -541,22 +552,28 @@ impl Generator {
 
                 if self.parallel_extraction {
                     info!("Running extract/map/learn in parallel...");
-                    tokio::try_join!(
+                    let t = Instant::now();
+                    let result = tokio::try_join!(
                         extract_client.complete(&extract_prompt),
                         map_client.complete(&map_prompt),
                         learn_client.complete(&learn_prompt),
-                    )?
+                    )?;
+                    info!("extract/map/learn: parallel complete ({})", fmt_elapsed(t));
+                    result
                 } else {
                     info!("Running extract/map/learn sequentially...");
                     std::env::set_var("SKILLDO_DEBUG_STAGE", "1-extract");
+                    let t = Instant::now();
                     let api_surface = extract_client.complete(&extract_prompt).await?;
-                    info!("extract: complete");
+                    info!("extract: complete ({})", fmt_elapsed(t));
                     std::env::set_var("SKILLDO_DEBUG_STAGE", "2-map");
+                    let t = Instant::now();
                     let patterns = map_client.complete(&map_prompt).await?;
-                    info!("map: complete");
+                    info!("map: complete ({})", fmt_elapsed(t));
                     std::env::set_var("SKILLDO_DEBUG_STAGE", "3-learn");
+                    let t = Instant::now();
                     let context = learn_client.complete(&learn_prompt).await?;
-                    info!("learn: complete");
+                    info!("learn: complete ({})", fmt_elapsed(t));
                     (api_surface, patterns, context)
                 }
             };
@@ -588,6 +605,7 @@ impl Generator {
             }
             std::env::set_var("SKILLDO_DEBUG_STAGE", "facts");
             info!("facts: Extracting verified fact ledger...");
+            let t = Instant::now();
             let parts = prompts_v2::fact_ledger_prompt(
                 &data.package_name,
                 &api_surface,
@@ -599,7 +617,11 @@ impl Generator {
                 .get_client("create")
                 .complete_with_system(&parts.system, &parts.user)
                 .await?;
-            info!("facts: complete ({} chars)", ledger.len());
+            info!(
+                "facts: complete ({} chars, {})",
+                ledger.len(),
+                fmt_elapsed(t)
+            );
             self.dump_stage("facts.md", &ledger);
             ledger
         };
@@ -620,6 +642,7 @@ impl Generator {
         // System = rules, custom instructions, language hints (high-priority directive channel).
         // User = fact ledger + data from stages 1-3 (evidence to process).
         std::env::set_var("SKILLDO_DEBUG_STAGE", "4-create");
+        let create_start = Instant::now();
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
             // Update mode: patch existing SKILL.md
             info!("create: Updating existing SKILL.md...");
@@ -669,6 +692,7 @@ impl Generator {
                 .await?
         };
 
+        info!("create: complete ({})", fmt_elapsed(create_start));
         self.dump_stage("4-create-raw.md", &skill_md);
 
         // Strip conflict notes first — a trailing note after a closing fence blocks unwrapping
