@@ -321,6 +321,8 @@ impl Generator {
 
     /// Get the LLM client for a specific pipeline stage.
     /// Returns the per-stage client if configured, otherwise the main client.
+    /// Special case: "fact" falls back to create_client before the main client,
+    /// since fact extraction was historically done by the create model.
     fn get_client(&self, stage: &str) -> &dyn LlmClient {
         match stage {
             "extract" => self.extract_client.as_deref(),
@@ -1652,6 +1654,20 @@ mod tests {
         let gen = Generator::new(Box::new(MockLlmClient::new()), 3)
             .with_fact_client(Box::new(MockLlmClient::new()));
         assert!(gen.fact_client.is_some());
+    }
+
+    #[test]
+    fn test_fact_client_falls_back_to_create_then_default() {
+        // No fact_client, no create_client → falls back to main client
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3);
+        let _client = gen.get_client("fact"); // should not panic
+
+        // No fact_client but create_client set → falls back to create
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3)
+            .with_create_client(Box::new(MockLlmClient::new()));
+        assert!(gen.fact_client.is_none());
+        assert!(gen.create_client.is_some());
+        let _client = gen.get_client("fact"); // uses create_client
     }
 
     #[test]
