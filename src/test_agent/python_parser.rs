@@ -11,6 +11,7 @@ use super::parser::{extract_section, CodePattern, PatternCategory};
 use super::LanguageParser;
 use crate::util::sanitize_dep_name;
 
+static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").unwrap());
 static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)(?:python|py)?\r?\n([\s\S]*?)(?:```|~~~)").unwrap());
 
@@ -288,7 +289,7 @@ impl LanguageParser for PythonParser {
                 }
             };
 
-        let pattern_re = Regex::new(r"(?m)^###\s+(.+?)$")?;
+        let pattern_re = &*PATTERN_RE;
         let code_block_re = &*CODE_BLOCK_RE;
 
         let pattern_starts: Vec<(usize, String)> = pattern_re
