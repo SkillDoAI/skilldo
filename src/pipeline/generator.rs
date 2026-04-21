@@ -9,11 +9,21 @@ use tracing::{debug, info, warn};
 use super::collector::CollectedData;
 
 fn fmt_elapsed(start: Instant) -> String {
-    let secs = start.elapsed().as_secs();
-    if secs < 60 {
-        format!("{}s", secs)
-    } else {
+    fmt_duration_secs(start.elapsed().as_secs())
+}
+
+fn fmt_duration_secs(secs: u64) -> String {
+    if secs >= 3600 {
+        format!(
+            "{}h{:02}m{:02}s",
+            secs / 3600,
+            (secs % 3600) / 60,
+            secs % 60
+        )
+    } else if secs >= 60 {
         format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
     }
 }
 
@@ -1263,52 +1273,16 @@ mod tests {
     }
 
     #[test]
-    fn fmt_elapsed_formatting_logic() {
-        // Test the formatting logic directly by verifying the format patterns.
-        // For seconds < 60: "{secs}s"
-        // For seconds >= 60: "{mins}m{secs:02}s"
-        //
-        // We can't fake Instant, but we can verify the format of each branch
-        // by testing the branch condition and format string.
-        let secs: u64 = 45;
-        let result = if secs < 60 {
-            format!("{}s", secs)
-        } else {
-            format!("{}m{:02}s", secs / 60, secs % 60)
-        };
-        assert_eq!(result, "45s");
-
-        let secs: u64 = 125;
-        let result = if secs < 60 {
-            format!("{}s", secs)
-        } else {
-            format!("{}m{:02}s", secs / 60, secs % 60)
-        };
-        assert_eq!(result, "2m05s");
-
-        let secs: u64 = 60;
-        let result = if secs < 60 {
-            format!("{}s", secs)
-        } else {
-            format!("{}m{:02}s", secs / 60, secs % 60)
-        };
-        assert_eq!(result, "1m00s");
-
-        let secs: u64 = 0;
-        let result = if secs < 60 {
-            format!("{}s", secs)
-        } else {
-            format!("{}m{:02}s", secs / 60, secs % 60)
-        };
-        assert_eq!(result, "0s");
-
-        let secs: u64 = 3661;
-        let result = if secs < 60 {
-            format!("{}s", secs)
-        } else {
-            format!("{}m{:02}s", secs / 60, secs % 60)
-        };
-        assert_eq!(result, "61m01s");
+    fn fmt_duration_secs_formatting() {
+        assert_eq!(fmt_duration_secs(0), "0s");
+        assert_eq!(fmt_duration_secs(45), "45s");
+        assert_eq!(fmt_duration_secs(59), "59s");
+        assert_eq!(fmt_duration_secs(60), "1m00s");
+        assert_eq!(fmt_duration_secs(125), "2m05s");
+        assert_eq!(fmt_duration_secs(3599), "59m59s");
+        assert_eq!(fmt_duration_secs(3600), "1h00m00s");
+        assert_eq!(fmt_duration_secs(3661), "1h01m01s");
+        assert_eq!(fmt_duration_secs(7384), "2h03m04s");
     }
 
     #[test]
