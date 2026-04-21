@@ -46,7 +46,13 @@ pub(crate) fn walk_files(
     }
 
     let mut files = Vec::new();
-    for entry in builder.build().flatten() {
+    for entry in builder.build().filter_map(|e| match e {
+        Ok(entry) => Some(entry),
+        Err(e) => {
+            tracing::debug!("walk_files: skipping entry: {e}");
+            None
+        }
+    }) {
         // Use DirEntry::file_type() to respect follow_links(false) —
         // Path::is_file() would follow symlinks and defeat the setting.
         let Some(ft) = entry.file_type() else {
