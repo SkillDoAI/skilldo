@@ -373,6 +373,11 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
                 .map(|c| format!("learn: {}/{}", c.provider, c.model)),
             config
                 .generation
+                .fact_llm
+                .as_ref()
+                .map(|c| format!("fact: {}/{}", c.provider, c.model)),
+            config
+                .generation
                 .create_llm
                 .as_ref()
                 .map(|c| format!("create: {}/{}", c.provider, c.model)),

@@ -234,6 +234,8 @@ impl PythonHandler {
             }
         }
 
+        docs.sort();
+        docs.dedup();
         let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
 
         info!("Found {} documentation files", docs.len());

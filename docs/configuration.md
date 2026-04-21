@@ -281,7 +281,7 @@ Use `--debug-stage-files DIR` to dump each pipeline stage's raw LLM output to a 
 skilldo generate /path/to/repo --debug-stage-files ./debug-out
 ```
 
-This writes files for each stage: `1-extract.md`, `2-map.md`, `3-learn.md`, `4-create-raw.md`, `5-review-attemptN.txt` (one per review attempt), and `6-normalized.md`. Useful for diagnosing prompt regressions, truncated outputs, hallucinations, or unexpected LLM formatting.
+This writes files for each stage: `1-extract.md`, `2-map.md`, `3-learn.md`, `facts.md`, `4-create-system.md`, `4-create-raw.md`, `5-review-attemptN.txt` (one per review attempt), and `6-normalized.md`. The `facts.md` file contains the fact ledger — a compact truth table with negative assertions used as the highest-priority constraint for the create stage.
 
 ## Replaying Cached Stages
 
@@ -291,4 +291,4 @@ Use `--replay-from <DIR>` to load cached extract/map/learn outputs from a prior 
 skilldo generate /path/to/repo --replay-from ./debug-out
 ```
 
-This skips the extract, map, and learn LLM calls entirely, reusing the cached outputs from the specified directory. Useful for prompt-tuning iteration on the create/review/test stages without re-running (and re-paying for) the extraction pipeline.
+This skips the extract, map, and learn LLM calls entirely, reusing the cached outputs from the specified directory. If `facts.md` is present in the replay directory, the fact ledger stage is also skipped. Useful for prompt-tuning iteration on the create/review/test stages without re-running (and re-paying for) the extraction pipeline.

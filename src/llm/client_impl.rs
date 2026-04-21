@@ -476,6 +476,10 @@ impl OpenAIClient {
             req = req.header(key, value);
         }
 
+        // Snapshot debug context before the await — the stage name may change
+        // between send and response parsing if another task runs concurrently.
+        let debug_ctx = crate::util::get_debug_context();
+
         let response = req
             .send()
             .await
@@ -530,8 +534,8 @@ impl OpenAIClient {
                 if !reasoning.is_empty() {
                     info!("Thinking: {} chars of reasoning received", reasoning.len());
                     debug!("Full reasoning:\n{}", reasoning);
-                    // Write reasoning to debug stage dir if available.
-                    if let Some((dir, stage)) = crate::util::get_debug_context() {
+                    // Write reasoning to debug stage dir (uses pre-await snapshot).
+                    if let Some((ref dir, ref stage)) = debug_ctx {
                         if dir.is_dir() {
                             let path = dir.join(format!("{stage}-reasoning.md"));
                             let _ = std::fs::write(&path, reasoning);
