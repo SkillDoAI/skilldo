@@ -5,7 +5,7 @@
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::detector::Language;
 use crate::ecosystems::go::GoHandler;
@@ -64,7 +64,7 @@ impl Collector {
     /// Collect all project data (source, tests, docs, examples, changelog).
     /// Returns an error for unsupported languages or empty projects.
     pub async fn collect(&self) -> Result<CollectedData> {
-        info!("Collecting files for {:?}", self.language);
+        debug!("Collecting files for {:?}", self.language);
 
         match self.language {
             Language::Python => self.collect_python().await,
@@ -439,7 +439,7 @@ impl Collector {
             }
         }
 
-        info!("Read {} characters from {} files", total_chars, paths.len());
+        debug!("Read {} characters from {} files", total_chars, paths.len());
         Ok(content)
     }
 

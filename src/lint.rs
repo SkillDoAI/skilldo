@@ -119,8 +119,9 @@ impl SkillLinter {
         // Check frontmatter
         issues.extend(self.check_frontmatter(content));
 
-        // Check structure
-        issues.extend(self.check_structure(content));
+        // Check structure (pass ecosystem for language-aware rules)
+        let ecosystem = self.detect_ecosystem(content);
+        issues.extend(self.check_structure(content, ecosystem.as_deref()));
 
         // Check content quality
         issues.extend(self.check_content(content));
@@ -246,13 +247,25 @@ impl SkillLinter {
         issues
     }
 
-    fn check_structure(&self, content: &str) -> Vec<LintIssue> {
+    /// Extract ecosystem from frontmatter metadata (e.g., "go", "rust", "python").
+    fn detect_ecosystem(&self, content: &str) -> Option<String> {
+        let frontmatter = self.extract_frontmatter(content);
+        frontmatter
+            .get("metadata.ecosystem")
+            .or_else(|| frontmatter.get("ecosystem"))
+            .cloned()
+    }
+
+    fn check_structure(&self, content: &str, ecosystem: Option<&str>) -> Vec<LintIssue> {
         let mut issues = Vec::new();
 
-        // Required sections
-        let required_sections = vec!["## Imports", "## Core Patterns", "## Pitfalls"];
+        // Required sections — ## Imports is a warning (not error) for Go
+        // because Go uses inline import blocks in code examples rather than
+        // a standalone imports section.
+        let always_required = vec!["## Core Patterns", "## Pitfalls"];
+        let imports_required = ecosystem != Some("go");
 
-        for section in required_sections {
+        for section in always_required {
             if !content.contains(section) {
                 issues.push(LintIssue {
                     severity: Severity::Error,
@@ -261,6 +274,19 @@ impl SkillLinter {
                     suggestion: Some(format!("Add a '{}' section", section)),
                 });
             }
+        }
+
+        if !content.contains("## Imports") {
+            issues.push(LintIssue {
+                severity: if imports_required {
+                    Severity::Error
+                } else {
+                    Severity::Warning
+                },
+                category: "structure".to_string(),
+                message: "Missing required section: ## Imports".to_string(),
+                suggestion: Some("Add a '## Imports' section".to_string()),
+            });
         }
 
         issues

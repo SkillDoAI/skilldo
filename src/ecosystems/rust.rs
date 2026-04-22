@@ -168,7 +168,7 @@ impl RustHandler {
         if files.is_empty() {
             bail!("No Rust source files found in {}", self.repo_path.display());
         }
-        info!("Found {} Rust source files", files.len());
+        debug!("Found {} Rust source files", files.len());
         Ok(files)
     }
 
@@ -198,7 +198,7 @@ impl RustHandler {
                 self.repo_path.display()
             );
         } else {
-            info!("Found {} Rust test files", files.len());
+            debug!("Found {} Rust test files", files.len());
         }
         Ok(files)
     }
@@ -214,7 +214,7 @@ impl RustHandler {
 
         files.sort();
         let files = crate::util::filter_within_boundary(files, &self.repo_path);
-        info!("Found {} Rust example files", files.len());
+        debug!("Found {} Rust example files", files.len());
         Ok(files)
     }
 
@@ -262,7 +262,7 @@ impl RustHandler {
         docs.sort();
         docs.dedup();
         let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
-        info!("Found {} documentation files", docs.len());
+        debug!("Found {} documentation files", docs.len());
         Ok(docs)
     }
 

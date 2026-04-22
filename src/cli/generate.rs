@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::cli::version;
 use crate::config::{Config, InstallSource, Provider};
@@ -172,9 +172,9 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         lang
     };
 
-    info!("Repository path: {}", repo_path.display());
-    info!("Output: {}", output);
-    info!("Dry run: {}", dry_run);
+    debug!("Repository path: {}", repo_path.display());
+    debug!("Output: {}", output);
+    debug!("Dry run: {}", dry_run);
 
     // Apply CLI overrides
     if let Some(ref provider) = provider_override {
@@ -404,7 +404,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     }
 
     // Collect files
-    info!("Collecting files...");
+    debug!("Collecting files...");
     let language_str = detected_language.as_str().to_string();
     let collector = Collector::new(repo_path, detected_language)
         .with_max_source_chars(config.generation.max_source_tokens);

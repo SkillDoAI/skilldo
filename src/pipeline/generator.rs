@@ -771,9 +771,9 @@ impl Generator {
         for attempt in 0..=self.max_retries {
             last_attempt = attempt;
             info!(
-                "Validation pass {} of {}",
+                "Validation pass {} (up to {} retries)",
                 attempt + 1,
-                self.max_retries + 1
+                self.max_retries
             );
 
             // 1. Format Validation (Linter) - Fast
@@ -1008,9 +1008,9 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
                     review_attempt + 1
                 )));
                 info!(
-                    "review: Checking accuracy and safety (attempt {}/{})",
+                    "review: Checking accuracy and safety (attempt {}, up to {} retries)",
                     review_attempt + 1,
-                    self.review_max_retries + 1
+                    self.review_max_retries
                 );
                 let result = review_agent
                     .review(
