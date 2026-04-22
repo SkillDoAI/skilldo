@@ -5,7 +5,7 @@
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 pub struct GoHandler {
     repo_path: PathBuf,
@@ -33,7 +33,7 @@ impl GoHandler {
         if files.is_empty() {
             bail!("No Go source files found in {}", self.repo_path.display());
         }
-        info!("Found {} Go source files", files.len());
+        debug!("Found {} Go source files", files.len());
         Ok(files)
     }
 
@@ -48,7 +48,7 @@ impl GoHandler {
             warn!("No test files found in {}", self.repo_path.display());
         }
 
-        info!("Found {} Go test files", files.len());
+        debug!("Found {} Go test files", files.len());
         Ok(files)
     }
 
@@ -70,7 +70,7 @@ impl GoHandler {
         files.sort();
         files.dedup();
         let files = crate::util::filter_within_boundary(files, &self.repo_path);
-        info!("Found {} Go example files", files.len());
+        debug!("Found {} Go example files", files.len());
         Ok(files)
     }
 
@@ -106,7 +106,7 @@ impl GoHandler {
         }
 
         let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
-        info!("Found {} documentation files", docs.len());
+        debug!("Found {} documentation files", docs.len());
         Ok(docs)
     }
 

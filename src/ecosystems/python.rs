@@ -108,7 +108,7 @@ impl PythonHandler {
             );
         }
 
-        info!("Found {} Python source files", source_files.len());
+        debug!("Found {} Python source files", source_files.len());
         Ok(source_files)
     }
 
@@ -134,7 +134,7 @@ impl PythonHandler {
             warn!("No test files found in {}", self.repo_path.display());
         }
 
-        info!("Found {} Python test files", test_files.len());
+        debug!("Found {} Python test files", test_files.len());
         Ok(test_files)
     }
 
@@ -203,7 +203,7 @@ impl PythonHandler {
 
         let example_files = crate::util::filter_within_boundary(example_files, &self.repo_path);
 
-        info!("Found {} Python example files", example_files.len());
+        debug!("Found {} Python example files", example_files.len());
         Ok(example_files)
     }
 
@@ -238,7 +238,7 @@ impl PythonHandler {
         docs.dedup();
         let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
 
-        info!("Found {} documentation files", docs.len());
+        debug!("Found {} documentation files", docs.len());
         Ok(docs)
     }
 
@@ -253,7 +253,7 @@ impl PythonHandler {
         ] {
             let path = self.repo_path.join(name);
             if path.exists() && path.is_file() {
-                info!("Found changelog: {}", name);
+                debug!("Found changelog: {}", name);
                 return Some(path);
             }
         }
@@ -418,7 +418,7 @@ impl PythonHandler {
                     }
                     // Simple string format (already trimmed/unquoted by helper)
                     else if !raw.starts_with('[') && !raw.starts_with('{') {
-                        info!("Found license in pyproject.toml: {}", raw);
+                        debug!("Found license in pyproject.toml: {}", raw);
                         return Some(raw);
                     }
                 }
@@ -499,7 +499,7 @@ impl PythonHandler {
                             let key = key.trim().trim_matches('"').trim_matches('\'');
                             let value = value.trim().trim_matches('"').trim_matches('\'');
                             if value.starts_with("http") {
-                                info!("Found project URL: {} = {}", key, value);
+                                debug!("Found project URL: {} = {}", key, value);
                                 urls.push((key.to_string(), value.to_string()));
                             }
                         }

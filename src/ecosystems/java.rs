@@ -5,7 +5,7 @@
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 pub struct JavaHandler {
     repo_path: PathBuf,
@@ -33,7 +33,7 @@ impl JavaHandler {
         if files.is_empty() {
             bail!("No Java source files found in {}", self.repo_path.display());
         }
-        info!("Found {} Java source files", files.len());
+        debug!("Found {} Java source files", files.len());
         Ok(files)
     }
 
@@ -49,7 +49,7 @@ impl JavaHandler {
         }
 
         files.sort();
-        info!("Found {} Java test files", files.len());
+        debug!("Found {} Java test files", files.len());
         Ok(files)
     }
 
@@ -67,7 +67,7 @@ impl JavaHandler {
         files.sort();
         files.dedup();
         let files = crate::util::filter_within_boundary(files, &self.repo_path);
-        info!("Found {} Java example files", files.len());
+        debug!("Found {} Java example files", files.len());
         Ok(files)
     }
 
@@ -99,7 +99,7 @@ impl JavaHandler {
         docs.sort();
         docs.dedup();
         let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
-        info!("Found {} documentation files", docs.len());
+        debug!("Found {} documentation files", docs.len());
         Ok(docs)
     }
 
