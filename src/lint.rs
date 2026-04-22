@@ -263,7 +263,7 @@ impl SkillLinter {
         // because Go uses inline import blocks in code examples rather than
         // a standalone imports section.
         let always_required = vec!["## Core Patterns", "## Pitfalls"];
-        let imports_required = ecosystem != Some("go");
+        let imports_required = !ecosystem.is_some_and(|e| e.eq_ignore_ascii_case("go"));
 
         for section in always_required {
             if !content.contains(section) {
@@ -277,14 +277,15 @@ impl SkillLinter {
         }
 
         if !content.contains("## Imports") {
+            let (severity, label) = if imports_required {
+                (Severity::Error, "required")
+            } else {
+                (Severity::Warning, "recommended")
+            };
             issues.push(LintIssue {
-                severity: if imports_required {
-                    Severity::Error
-                } else {
-                    Severity::Warning
-                },
+                severity,
                 category: "structure".to_string(),
-                message: "Missing required section: ## Imports".to_string(),
+                message: format!("Missing {label} section: ## Imports"),
                 suggestion: Some("Add a '## Imports' section".to_string()),
             });
         }
