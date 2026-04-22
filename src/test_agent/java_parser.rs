@@ -16,7 +16,7 @@ static PATTERN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^###\s+(.+?)$").u
 // Generic fence regex for finding code block boundaries and extracting content.
 // Used by extract_patterns for both position detection and code body capture.
 static CODE_BLOCK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)[^\n]*\n([\s\S]*?)(?:```|~~~)").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(?:```|~~~)[^\r\n]*\r?\n([\s\S]*?)(?:```|~~~)").unwrap());
 // Both regexes require a dot in groupId to reduce false positives from prose
 // like "HH:mm:ss" or "Returns:String". Dot-less coords (junit:junit:4.13.2)
 // are still covered by the extract_xml_deps XML <dependency> fallback.

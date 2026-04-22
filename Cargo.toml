@@ -1,6 +1,6 @@
 [package]
 name = "skilldo"
-version = "0.5.16"
+version = "0.5.17"
 edition = "2021"
 rust-version = "1.87"
 license = "AGPL-3.0-or-later"
@@ -31,6 +31,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ignore = "0.4.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

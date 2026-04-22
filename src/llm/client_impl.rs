@@ -476,6 +476,10 @@ impl OpenAIClient {
             req = req.header(key, value);
         }
 
+        // Snapshot debug context before the await — the stage name may change
+        // between send and response parsing if another task runs concurrently.
+        let debug_ctx = crate::util::get_debug_context();
+
         let response = req
             .send()
             .await
@@ -530,13 +534,9 @@ impl OpenAIClient {
                 if !reasoning.is_empty() {
                     info!("Thinking: {} chars of reasoning received", reasoning.len());
                     debug!("Full reasoning:\n{}", reasoning);
-                    // Write reasoning to debug stage dir if available.
-                    // SKILLDO_DEBUG_STAGE names the current stage (e.g. "1-extract").
-                    if let Ok(dir) = std::env::var("SKILLDO_DEBUG_DIR") {
-                        let dir = std::path::Path::new(&dir);
+                    // Write reasoning to debug stage dir (uses pre-await snapshot).
+                    if let Some((ref dir, ref stage)) = debug_ctx {
                         if dir.is_dir() {
-                            let stage = std::env::var("SKILLDO_DEBUG_STAGE")
-                                .unwrap_or_else(|_| "unknown".to_string());
                             let path = dir.join(format!("{stage}-reasoning.md"));
                             let _ = std::fs::write(&path, reasoning);
                         }
@@ -2595,8 +2595,8 @@ mod tests {
 
         // Set up a temp debug dir so the reasoning dump path is exercised
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("SKILLDO_DEBUG_DIR", tmp.path().to_str().unwrap());
-        std::env::set_var("SKILLDO_DEBUG_STAGE", "test-reasoning");
+        crate::util::set_debug_dir(Some(tmp.path().to_path_buf()));
+        crate::util::set_debug_stage(Some("test-reasoning"));
 
         let client = OpenAIClient::with_base_url(
             "test-key".to_string(),
@@ -2621,9 +2621,9 @@ mod tests {
         let contents = std::fs::read_to_string(&reasoning_file).unwrap();
         assert!(contents.contains("step by step"));
 
-        // Cleanup env vars
-        std::env::remove_var("SKILLDO_DEBUG_DIR");
-        std::env::remove_var("SKILLDO_DEBUG_STAGE");
+        // Cleanup debug context
+        crate::util::set_debug_dir(None);
+        crate::util::set_debug_stage(None);
     }
 
     // --- Coverage: OpenAI empty content with reasoning (line 550-554) ---

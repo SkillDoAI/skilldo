@@ -213,6 +213,7 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
             &mut config.generation.extract_llm,
             &mut config.generation.map_llm,
             &mut config.generation.learn_llm,
+            &mut config.generation.fact_llm,
             &mut config.generation.create_llm,
             &mut config.generation.review_llm,
             &mut config.generation.test_llm,
@@ -372,6 +373,11 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
                 .map(|c| format!("learn: {}/{}", c.provider, c.model)),
             config
                 .generation
+                .fact_llm
+                .as_ref()
+                .map(|c| format!("fact: {}/{}", c.provider, c.model)),
+            config
+                .generation
                 .create_llm
                 .as_ref()
                 .map(|c| format!("create: {}/{}", c.provider, c.model)),
@@ -469,6 +475,14 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
         );
         generator = generator.with_learn_client(client);
     }
+    if let Some(ref fact_config) = config.generation.fact_llm {
+        let client = factory::create_client_from_llm_config(fact_config, dry_run).await?;
+        info!(
+            "Using {} for fact ledger: {}",
+            fact_config.provider, fact_config.model
+        );
+        generator = generator.with_fact_client(client);
+    }
     if let Some(ref create_config) = config.generation.create_llm {
         let client = factory::create_client_from_llm_config(create_config, dry_run).await?;
         info!(
@@ -528,6 +542,11 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
                 .learn_llm
                 .as_ref()
                 .map(|c| format!("learn:{}", c.model)),
+            config
+                .generation
+                .fact_llm
+                .as_ref()
+                .map(|c| format!("fact:{}", c.model)),
             config
                 .generation
                 .create_llm
@@ -1139,6 +1158,12 @@ base_url = "http://localhost:11434/v1"
 [generation.learn_llm]
 provider_type = "openai-compatible"
 model = "local-learn"
+api_key_env = "none"
+base_url = "http://localhost:11434/v1"
+
+[generation.fact_llm]
+provider_type = "openai-compatible"
+model = "local-fact"
 api_key_env = "none"
 base_url = "http://localhost:11434/v1"
 

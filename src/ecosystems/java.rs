@@ -83,10 +83,16 @@ impl JavaHandler {
             }
         }
 
+        let skip = &["target", "build", "out", "bin", "node_modules", "buildSrc"];
         for docs_dirname in &["docs", "doc"] {
             let docs_dir = self.repo_path.join(docs_dirname);
             if docs_dir.is_dir() {
-                self.collect_docs_recursive(&docs_dir, &mut docs, 0)?;
+                docs.extend(super::walk_files(
+                    &docs_dir,
+                    &["md", "rst", "txt", "adoc"],
+                    skip,
+                    Some(Self::MAX_DEPTH),
+                ));
             }
         }
 
@@ -387,43 +393,6 @@ impl JavaHandler {
                         self.collect_all_java_in_dir(&path, files, depth + 1)?;
                     }
                 }
-            }
-        }
-        Ok(())
-    }
-
-    /// Collect documentation files recursively.
-    fn collect_docs_recursive(
-        &self,
-        dir: &Path,
-        docs: &mut Vec<PathBuf>,
-        depth: usize,
-    ) -> Result<()> {
-        if !dir.is_dir() || depth > Self::MAX_DEPTH {
-            return Ok(());
-        }
-
-        for entry in fs::read_dir(dir)?.flatten() {
-            let path = entry.path();
-            let Ok(ft) = entry.file_type() else { continue };
-            if ft.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    let lower = name.to_lowercase();
-                    if lower.ends_with(".md")
-                        || lower.ends_with(".rst")
-                        || lower.ends_with(".txt")
-                        || lower.ends_with(".adoc")
-                    {
-                        docs.push(path);
-                    }
-                }
-            } else if ft.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if Self::should_skip_dir(name) {
-                        continue;
-                    }
-                }
-                self.collect_docs_recursive(&path, docs, depth + 1)?;
             }
         }
         Ok(())

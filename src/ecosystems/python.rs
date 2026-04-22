@@ -220,65 +220,26 @@ impl PythonHandler {
             }
         }
 
-        // Search both docs/ and doc/ directories recursively
+        // Search docs/ and doc/ recursively, respecting .gitignore
+        let skip = &["node_modules", "__pycache__", "build", "dist", "_build"];
         for docs_dirname in &["docs", "doc"] {
             let docs_dir = self.repo_path.join(docs_dirname);
-            if docs_dir.exists() && docs_dir.is_dir() {
-                self.collect_docs_recursive(&docs_dir, &mut docs, 0)?;
+            if docs_dir.is_dir() {
+                docs.extend(super::walk_files(
+                    &docs_dir,
+                    &["md", "rst"],
+                    skip,
+                    Some(Self::MAX_DEPTH),
+                ));
             }
         }
 
+        docs.sort();
+        docs.dedup();
         let docs = crate::util::filter_within_boundary(docs, &self.repo_path);
 
         info!("Found {} documentation files", docs.len());
         Ok(docs)
-    }
-
-    /// Recursively collect documentation files from a directory
-    fn collect_docs_recursive(
-        &self,
-        dir: &Path,
-        docs: &mut Vec<PathBuf>,
-        depth: usize,
-    ) -> Result<()> {
-        // Limit recursion depth to avoid performance issues
-        if depth > 10 {
-            return Ok(());
-        }
-
-        // Skip common non-documentation directories
-        if let Some(dir_name) = dir.file_name().and_then(|n| n.to_str()) {
-            if dir_name.starts_with('.')
-                || dir_name == "node_modules"
-                || dir_name == "__pycache__"
-                || dir_name == "build"
-                || dir_name == "dist"
-                || dir_name == "_build"
-                || dir_name == ".git"
-            {
-                return Ok(());
-            }
-        }
-
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-
-                if path.is_file() {
-                    // Collect .md and .rst documentation files
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext == "md" || ext == "rst" {
-                            docs.push(path);
-                        }
-                    }
-                } else if path.is_dir() {
-                    // Recurse into subdirectories
-                    self.collect_docs_recursive(&path, docs, depth + 1)?;
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// Find changelog
@@ -1881,10 +1842,10 @@ mod tests {
 
     #[test]
     fn test_collect_docs_recursive_depth_limit() {
-        // Create a directory structure deeper than 10 levels
+        // Create a directory structure deeper than MAX_DEPTH (20) levels
         let dir = TempDir::new().unwrap();
         let mut deepest = dir.path().join("docs");
-        for i in 0..12 {
+        for i in 0..22 {
             deepest = deepest.join(format!("level_{}", i));
         }
         fs::create_dir_all(&deepest).unwrap();
@@ -1892,10 +1853,10 @@ mod tests {
 
         let handler = PythonHandler::new(dir.path());
         let docs = handler.find_docs().unwrap();
-        // The file at depth 12+ should NOT be found due to depth limit of 10
+        // The file at depth 22+ should NOT be found due to MAX_DEPTH limit
         assert!(
             !docs.iter().any(|p| p.ends_with("deep.md")),
-            "File beyond depth 10 should not be collected"
+            "File beyond MAX_DEPTH should not be collected"
         );
     }
 
@@ -2566,32 +2527,5 @@ mod tests {
     fn pyproject_project_field_empty_value_returns_none() {
         let content = "[project]\nname = \nversion = \"1.0\"\n";
         assert_eq!(pyproject_project_field(content, "name"), None);
-    }
-
-    // ── collect_docs_recursive into subdirectory ────────────────────
-
-    #[test]
-    fn collect_docs_recursive_enters_subdir() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let guides = root.join("docs").join("guides");
-        fs::create_dir_all(&guides).unwrap();
-        fs::write(guides.join("getting-started.md"), "# Guide").unwrap();
-        // _build should be skipped
-        let build = root.join("docs").join("_build");
-        fs::create_dir_all(&build).unwrap();
-        fs::write(build.join("output.md"), "# Build output").unwrap();
-
-        let handler = PythonHandler::new(root);
-        let mut docs = Vec::new();
-        handler
-            .collect_docs_recursive(&root.join("docs"), &mut docs, 0)
-            .unwrap();
-        let names: Vec<_> = docs
-            .iter()
-            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
-            .collect();
-        assert!(names.contains(&"getting-started.md"));
-        assert!(!names.contains(&"output.md"));
     }
 }

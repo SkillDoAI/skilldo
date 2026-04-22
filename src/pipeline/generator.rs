@@ -1,10 +1,36 @@
 //! Pipeline orchestrator — runs the 6-agent sequence (extract → map → learn →
 //! create → review → test) with retry loops, normalization, and lint checks.
 
+use std::time::Instant;
+
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use super::collector::CollectedData;
+
+fn fmt_elapsed(start: Instant) -> String {
+    let d = start.elapsed();
+    if d.as_secs() > 0 {
+        fmt_duration_secs(d.as_secs())
+    } else {
+        format!("{}ms", d.subsec_millis())
+    }
+}
+
+fn fmt_duration_secs(secs: u64) -> String {
+    if secs >= 3600 {
+        format!(
+            "{}h{:02}m{:02}s",
+            secs / 3600,
+            (secs % 3600) / 60,
+            secs % 60
+        )
+    } else if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
 
 /// Extract the behavioral_semantics JSON array from the learn stage output.
 /// Returns None if not found. Uses simple string matching to avoid fragile JSON parsing.
@@ -201,6 +227,7 @@ pub struct Generator {
     extract_client: Option<Box<dyn LlmClient>>,
     map_client: Option<Box<dyn LlmClient>>,
     learn_client: Option<Box<dyn LlmClient>>,
+    fact_client: Option<Box<dyn LlmClient>>,
     create_client: Option<Box<dyn LlmClient>>,
     review_client: Option<Box<dyn LlmClient>>,
     test_client: Option<Box<dyn LlmClient>>,
@@ -232,6 +259,7 @@ impl Generator {
             extract_client: None,
             map_client: None,
             learn_client: None,
+            fact_client: None,
             create_client: None,
             review_client: None,
             test_client: None,
@@ -286,6 +314,11 @@ impl Generator {
         self
     }
 
+    pub fn with_fact_client(mut self, client: Box<dyn LlmClient>) -> Self {
+        self.fact_client = Some(client);
+        self
+    }
+
     pub fn with_create_client(mut self, client: Box<dyn LlmClient>) -> Self {
         self.create_client = Some(client);
         self
@@ -303,11 +336,17 @@ impl Generator {
 
     /// Get the LLM client for a specific pipeline stage.
     /// Returns the per-stage client if configured, otherwise the main client.
+    /// Special case: "fact" falls back to create_client before the main client,
+    /// since fact extraction was historically done by the create model.
     fn get_client(&self, stage: &str) -> &dyn LlmClient {
         match stage {
             "extract" => self.extract_client.as_deref(),
             "map" => self.map_client.as_deref(),
             "learn" => self.learn_client.as_deref(),
+            "fact" => self
+                .fact_client
+                .as_deref()
+                .or(self.create_client.as_deref()),
             "create" => self.create_client.as_deref(),
             "review" => self.review_client.as_deref(),
             "test" => self.test_client.as_deref(),
@@ -400,21 +439,19 @@ impl Generator {
                 if let Err(e) = std::fs::create_dir_all(&dir) {
                     warn!("Failed to create debug stage dir {}: {}", dir.display(), e);
                     self.debug_stage_dir = None;
-                    // Clean stale env vars so a previous run's path isn't reused
-                    std::env::remove_var("SKILLDO_DEBUG_DIR");
-                    std::env::remove_var("SKILLDO_DEBUG_STAGE");
+                    crate::util::set_debug_dir(None);
+                    crate::util::set_debug_stage(None);
                 } else {
                     info!("Debug stage files: {}", dir.display());
-                    // Set env var so LLM clients can dump reasoning tokens here
-                    std::env::set_var("SKILLDO_DEBUG_DIR", &dir);
+                    crate::util::set_debug_dir(Some(dir.clone()));
                     self.debug_stage_dir = Some(dir);
                 }
             }
             None => {
-                // Clean up stale env vars so LLM clients don't dump reasoning
-                // tokens into a directory from a previous run.
-                std::env::remove_var("SKILLDO_DEBUG_DIR");
-                std::env::remove_var("SKILLDO_DEBUG_STAGE");
+                // Clean up stale debug context so LLM clients don't dump
+                // reasoning tokens into a directory from a previous run.
+                crate::util::set_debug_dir(None);
+                crate::util::set_debug_stage(None);
                 self.debug_stage_dir = None;
             }
         }
@@ -541,22 +578,28 @@ impl Generator {
 
                 if self.parallel_extraction {
                     info!("Running extract/map/learn in parallel...");
-                    tokio::try_join!(
+                    let t = Instant::now();
+                    let result = tokio::try_join!(
                         extract_client.complete(&extract_prompt),
                         map_client.complete(&map_prompt),
                         learn_client.complete(&learn_prompt),
-                    )?
+                    )?;
+                    info!("extract/map/learn: parallel complete ({})", fmt_elapsed(t));
+                    result
                 } else {
                     info!("Running extract/map/learn sequentially...");
-                    std::env::set_var("SKILLDO_DEBUG_STAGE", "1-extract");
+                    crate::util::set_debug_stage(Some("1-extract"));
+                    let t = Instant::now();
                     let api_surface = extract_client.complete(&extract_prompt).await?;
-                    info!("extract: complete");
-                    std::env::set_var("SKILLDO_DEBUG_STAGE", "2-map");
+                    info!("extract: complete ({})", fmt_elapsed(t));
+                    crate::util::set_debug_stage(Some("2-map"));
+                    let t = Instant::now();
                     let patterns = map_client.complete(&map_prompt).await?;
-                    info!("map: complete");
-                    std::env::set_var("SKILLDO_DEBUG_STAGE", "3-learn");
+                    info!("map: complete ({})", fmt_elapsed(t));
+                    crate::util::set_debug_stage(Some("3-learn"));
+                    let t = Instant::now();
                     let context = learn_client.complete(&learn_prompt).await?;
-                    info!("learn: complete");
+                    info!("learn: complete ({})", fmt_elapsed(t));
                     (api_surface, patterns, context)
                 }
             };
@@ -586,8 +629,9 @@ impl Generator {
             if self.replay_stages.is_some() {
                 info!("facts: cache miss — no facts.md in replay dir, running LLM call");
             }
-            std::env::set_var("SKILLDO_DEBUG_STAGE", "facts");
+            crate::util::set_debug_stage(Some("facts"));
             info!("facts: Extracting verified fact ledger...");
+            let t = Instant::now();
             let parts = prompts_v2::fact_ledger_prompt(
                 &data.package_name,
                 &api_surface,
@@ -596,10 +640,14 @@ impl Generator {
                 &data.language,
             );
             let ledger = self
-                .get_client("create")
+                .get_client("fact")
                 .complete_with_system(&parts.system, &parts.user)
                 .await?;
-            info!("facts: complete ({} chars)", ledger.len());
+            info!(
+                "facts: complete ({} chars, {})",
+                ledger.len(),
+                fmt_elapsed(t)
+            );
             self.dump_stage("facts.md", &ledger);
             ledger
         };
@@ -619,7 +667,8 @@ impl Generator {
         // create: Synthesize SKILL.md using system prompt split.
         // System = rules, custom instructions, language hints (high-priority directive channel).
         // User = fact ledger + data from stages 1-3 (evidence to process).
-        std::env::set_var("SKILLDO_DEBUG_STAGE", "4-create");
+        crate::util::set_debug_stage(Some("4-create"));
+        let create_start = Instant::now();
         let mut skill_md = if let Some(ref existing) = self.existing_skill {
             // Update mode: patch existing SKILL.md
             info!("create: Updating existing SKILL.md...");
@@ -669,6 +718,7 @@ impl Generator {
                 .await?
         };
 
+        info!("create: complete ({})", fmt_elapsed(create_start));
         self.dump_stage("4-create-raw.md", &skill_md);
 
         // Strip conflict notes first — a trailing note after a closing fence blocks unwrapping
@@ -953,10 +1003,10 @@ Keep all content intact — only fix the structural issues. Output ONLY the fixe
             let mut last_review_tests_passed = false;
             for review_attempt in 0..=self.review_max_retries {
                 last_review_attempt = review_attempt;
-                std::env::set_var(
-                    "SKILLDO_DEBUG_STAGE",
-                    format!("5-review-attempt{}", review_attempt + 1),
-                );
+                crate::util::set_debug_stage(Some(&format!(
+                    "5-review-attempt{}",
+                    review_attempt + 1
+                )));
                 info!(
                     "review: Checking accuracy and safety (attempt {}/{})",
                     review_attempt + 1,
@@ -1212,6 +1262,32 @@ mod tests {
     use crate::detector::Language;
     use crate::llm::client::MockLlmClient;
     use crate::pipeline::collector::CollectedData;
+
+    // ── fmt_elapsed tests ──
+
+    #[test]
+    fn fmt_elapsed_sub_second_shows_ms() {
+        // An instant created just now should format as "Nms" (sub-second)
+        let start = Instant::now();
+        let result = fmt_elapsed(start);
+        assert!(
+            result.ends_with("ms"),
+            "near-instant should show milliseconds: {result}"
+        );
+    }
+
+    #[test]
+    fn fmt_duration_secs_formatting() {
+        assert_eq!(fmt_duration_secs(0), "0s");
+        assert_eq!(fmt_duration_secs(45), "45s");
+        assert_eq!(fmt_duration_secs(59), "59s");
+        assert_eq!(fmt_duration_secs(60), "1m00s");
+        assert_eq!(fmt_duration_secs(125), "2m05s");
+        assert_eq!(fmt_duration_secs(3599), "59m59s");
+        assert_eq!(fmt_duration_secs(3600), "1h00m00s");
+        assert_eq!(fmt_duration_secs(3661), "1h01m01s");
+        assert_eq!(fmt_duration_secs(7384), "2h03m04s");
+    }
 
     #[test]
     fn test_strip_markdown_fences() {
@@ -1550,6 +1626,27 @@ mod tests {
     // Generator builder methods: review_client, review, review_max_retries,
     // parallel_extraction
     // ========================================================================
+
+    #[test]
+    fn test_with_fact_client_sets_client() {
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3)
+            .with_fact_client(Box::new(MockLlmClient::new()));
+        assert!(gen.fact_client.is_some());
+    }
+
+    #[test]
+    fn test_fact_client_falls_back_to_create_then_default() {
+        // No fact_client, no create_client → falls back to main client
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3);
+        let _client = gen.get_client("fact"); // should not panic
+
+        // No fact_client but create_client set → falls back to create
+        let gen = Generator::new(Box::new(MockLlmClient::new()), 3)
+            .with_create_client(Box::new(MockLlmClient::new()));
+        assert!(gen.fact_client.is_none());
+        assert!(gen.create_client.is_some());
+        let _client = gen.get_client("fact"); // uses create_client
+    }
 
     #[test]
     fn test_with_review_client_sets_client() {

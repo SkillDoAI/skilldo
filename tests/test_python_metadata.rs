@@ -449,9 +449,9 @@ fn test_docs_collection_depth_limit() {
     let temp = TempDir::new().unwrap();
     let repo_path = temp.path();
 
-    // Create deeply nested docs directories (12+ levels, limit is 10)
+    // Create deeply nested docs directories (22+ levels, limit is MAX_DEPTH=20)
     let mut deep_dir = repo_path.join("docs");
-    for i in 0..12 {
+    for i in 0..22 {
         deep_dir = deep_dir.join(format!("level{}", i));
     }
     fs::create_dir_all(&deep_dir).unwrap();
@@ -467,7 +467,7 @@ fn test_docs_collection_depth_limit() {
     // Shallow doc should be found
     assert!(docs.iter().any(|p| p.ends_with("shallow.md")));
 
-    // Deep doc beyond depth 10 should NOT be found
+    // Deep doc beyond MAX_DEPTH (20) should NOT be found
     assert!(!docs.iter().any(|p| p.ends_with("deep.md")));
 }
 
@@ -1167,8 +1167,7 @@ fn test_docs_depth_limit_boundary_at_10() {
     let temp = TempDir::new().unwrap();
     let repo_path = temp.path();
 
-    // Build exactly depth=10 nesting under docs/ (should still be reachable)
-    // docs/ is depth=0, level0 is depth=1, ..., level9 is depth=10
+    // Build nesting at depth 10 (well within limit — should be reachable)
     let mut dir_at_10 = repo_path.join("docs");
     for i in 0..10 {
         dir_at_10 = dir_at_10.join(format!("level{}", i));
@@ -1176,27 +1175,25 @@ fn test_docs_depth_limit_boundary_at_10() {
     fs::create_dir_all(&dir_at_10).unwrap();
     fs::write(dir_at_10.join("boundary.md"), "# At depth 10").unwrap();
 
-    // Build depth=11 (should NOT be reachable, depth > 10 returns early)
-    let mut dir_at_11 = repo_path.join("docs");
-    for i in 0..11 {
-        dir_at_11 = dir_at_11.join(format!("d{}", i));
+    // Build depth 22 (beyond MAX_DEPTH=20 — should NOT be reachable)
+    let mut dir_at_22 = repo_path.join("docs");
+    for i in 0..22 {
+        dir_at_22 = dir_at_22.join(format!("d{}", i));
     }
-    fs::create_dir_all(&dir_at_11).unwrap();
-    fs::write(dir_at_11.join("too_deep.md"), "# Too deep").unwrap();
+    fs::create_dir_all(&dir_at_22).unwrap();
+    fs::write(dir_at_22.join("too_deep.md"), "# Too deep").unwrap();
 
     let handler = PythonHandler::new(repo_path);
     let docs = handler.find_docs().unwrap();
 
-    // depth=10 doc should be found (the check is depth > 10, not depth >= 10)
     assert!(
         docs.iter().any(|p| p.ends_with("boundary.md")),
         "Doc at depth 10 should be reachable"
     );
 
-    // depth=11 doc should NOT be found
     assert!(
         !docs.iter().any(|p| p.ends_with("too_deep.md")),
-        "Doc at depth 11 should not be reachable"
+        "Doc beyond MAX_DEPTH should not be reachable"
     );
 }
 
