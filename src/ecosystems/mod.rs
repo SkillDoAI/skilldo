@@ -40,8 +40,15 @@ pub(crate) fn walk_files(
                 tracing::warn!("walk_files: invalid skip pattern '!{dir}/': {e}");
             }
         }
-        if let Ok(ov) = overrides.build() {
-            builder.overrides(ov);
+        match overrides.build() {
+            Ok(ov) => {
+                builder.overrides(ov);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "walk_files: failed to build override rules for extra_skip={extra_skip:?}: {e}"
+                );
+            }
         }
     }
 

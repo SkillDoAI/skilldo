@@ -9,7 +9,12 @@ use tracing::{debug, info, warn};
 use super::collector::CollectedData;
 
 fn fmt_elapsed(start: Instant) -> String {
-    fmt_duration_secs(start.elapsed().as_secs())
+    let d = start.elapsed();
+    if d.as_secs() > 0 {
+        fmt_duration_secs(d.as_secs())
+    } else {
+        format!("{}ms", d.subsec_millis())
+    }
 }
 
 fn fmt_duration_secs(secs: u64) -> String {
@@ -1261,14 +1266,13 @@ mod tests {
     // ── fmt_elapsed tests ──
 
     #[test]
-    fn fmt_elapsed_seconds_only() {
-        // An instant created just now should format as "0s" (under 60 seconds)
+    fn fmt_elapsed_sub_second_shows_ms() {
+        // An instant created just now should format as "Nms" (sub-second)
         let start = Instant::now();
         let result = fmt_elapsed(start);
-        assert!(result.ends_with('s'), "should end with 's': {result}");
         assert!(
-            !result.contains('m'),
-            "should not contain 'm' for sub-60s: {result}"
+            result.ends_with("ms"),
+            "near-instant should show milliseconds: {result}"
         );
     }
 
