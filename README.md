@@ -125,3 +125,4 @@ make lint          # Clippy + formatter check
 ## License
 
 [AGPL-3.0](LICENSE) — free to use, modify, and distribute. If you modify the source and distribute it or run it as a service, you must share your changes under the same license.
+
