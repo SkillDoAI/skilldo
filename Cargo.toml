@@ -37,7 +37,7 @@ ignore = "0.4.25"
 libc = "0.2"
 
 [dev-dependencies]
-llmposter = "0.4.7"
+llmposter = "0.4.8"
 mockito = "1"
 serial_test = "3"
 
