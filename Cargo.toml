@@ -8,7 +8,7 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-auth-git2 = "0.5"
+auth-git2 = "0.6"
 base64 = "0.22"
 boreal = "1.1.0"
 clap = { version = "4", features = ["derive"] }
