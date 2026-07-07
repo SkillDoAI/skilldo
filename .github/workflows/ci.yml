@@ -333,6 +333,12 @@ jobs:
           done
 
           for section in "## Imports" "## Core Patterns" "## Pitfalls"; do
+            # Imports is optional for Go (inline import blocks, PR #101) —
+            # keep this in sync with the linter policy in src/lint.rs
+            if [ "$section" = "## Imports" ] && [ "${{ matrix.lang }}" = "go" ]; then
+              echo "go: '## Imports' optional (inline imports)"
+              continue
+            fi
             if ! grep -q "$section" "$FILE"; then
               echo "::error::${{ matrix.lang }}: Missing required section: $section"
               ERRORS=$((ERRORS + 1))
