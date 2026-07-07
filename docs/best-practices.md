@@ -4,21 +4,22 @@ Tips for getting the most out of skilldo-generated SKILL.md files.
 
 ## How the Pipeline Works
 
-Skilldo runs a 6-stage pipeline that reads your library's source code, tests, and docs, then synthesizes everything into a structured SKILL.md:
+Skilldo runs a 7-stage pipeline that reads your library's source code, tests, and docs, then synthesizes everything into a structured SKILL.md:
 
 ```text
 Source Code ──→ Extract (API Surface)       ──┐
-Test Files  ──→ Map (Pattern Extraction)    ──┤──→ Create ──→ Review ──→ Test ──→ SKILL.md
-Docs/README ──→ Learn (Context Extraction)  ──┘      ↑          │         │
-                                                     └──────────┴─────────┘
-                                                      (retry on failure)
+Test Files  ──→ Map (Pattern Extraction)    ──┤──→ Fact Ledger ──→ Create ──→ Review ──→ Test ──→ SKILL.md
+Docs/README ──→ Learn (Context Extraction)  ──┘                     ↑          │         │
+                                                                    └──────────┴─────────┘
+                                                                     (retry on failure)
 ```
 
 1. **Extract**, **Map**, and **Learn** run in parallel to gather API signatures, usage patterns, and conventions
-2. **Create** combines everything into a formatted SKILL.md
-3. **Review** verifies accuracy (dates, signatures, consistency) and safety (prompt injection, nefarious content)
-4. **Test** generates runnable code from the patterns and executes it (bare-metal by default, container optional)
-5. If Review or Test fails, feedback loops back to Create for regeneration (up to `max_retries`)
+2. The **Fact Ledger** distills their output into a compact truth table
+3. **Create** combines everything into a formatted SKILL.md
+4. **Review** verifies accuracy (dates, signatures, consistency) and safety (prompt injection, nefarious content)
+5. **Test** generates runnable code from the patterns and executes it (bare-metal by default, container optional)
+6. If Review or Test fails, feedback loops back to Create for regeneration (up to `max_retries`)
 
 ## What to Expect
 
@@ -29,7 +30,7 @@ Generation gets you **90-95%** of the way to a production-quality SKILL.md. The 
 - **Code examples**: Occasionally use invalid syntax or hallucinated API calls
 - **Security CVEs**: Referenced generically instead of by specific CVE number
 
-The **test stage** catches many of these by actually running the code examples. All 5 languages (Python, Go, JavaScript, Java, Rust) are supported in both bare-metal and container modes.
+The **test stage** catches many of these by actually running the code examples. All 5 languages (Python, Go, JavaScript, Java, Rust) are supported in both bare-metal and container modes (container `local-install` is Python-only and falls back to bare metal for other languages).
 
 ## Model Selection
 
@@ -72,6 +73,7 @@ create_custom = "Always include type annotations in code examples. List CVEs by 
 
 - Start with `append` mode — the built-in prompts handle the structure, yours handles the specifics
 - Use `overwrite` only if you need fundamentally different output structure
+- Note: `review_custom` and `test_custom` are always appended — only extract/map/learn/create support `overwrite` mode
 - Test prompt changes on a small library first before running on your target
 
 ## Reviewing Generated Output

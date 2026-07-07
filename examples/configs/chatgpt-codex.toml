@@ -1,0 +1,44 @@
+# ChatGPT Codex — subscription-based access via OAuth
+#
+# Uses your ChatGPT Plus/Pro subscription instead of API keys.
+# Device code flow authenticates via browser.
+#
+# Setup:
+#   1. export OPENAI_CLIENT_ID="app_EMoamEEZ73f0CkXaXp7hrann"
+#   2. skilldo auth login     (opens browser for device code auth)
+#   3. skilldo auth status    (verify token is valid)
+#   4. skilldo generate ...   (uses your subscription)
+#
+# The ChatGPT-Account-ID header is required — get yours from:
+#   codex login status, or decode the JWT from ~/.config/skilldo/tokens/openai-codex.json
+
+[llm]
+provider_type = "chatgpt"
+provider_name = "openai-codex"
+model = "gpt-5.3-codex"
+api_key_env = "none"
+
+oauth_auth_url = "https://auth.openai.com/oauth/authorize"
+oauth_token_url = "https://auth.openai.com/oauth/token"
+oauth_scopes = "openid profile email offline_access"
+oauth_client_id_env = "OPENAI_CLIENT_ID"
+
+# Replace with your account ID (see setup instructions above)
+extra_headers = ["ChatGPT-Account-ID: YOUR_ACCOUNT_ID_HERE"]
+
+request_timeout_secs = 300
+network_retries = 3
+retry_delay = 30
+
+[generation]
+# Disable parallelization to avoid rate limits on subscription
+parallel_extraction = false
+max_retries = 10
+enable_test = true
+enable_review = true
+test_mode = "thorough"
+
+[generation.container]
+runtime = "podman"
+timeout = 120
+cleanup = true

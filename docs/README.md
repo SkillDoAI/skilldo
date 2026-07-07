@@ -4,7 +4,7 @@
 |-------|-------------|
 | [Configuration](configuration.md) | All TOML config fields — providers, generation settings, per-stage LLM overrides, security context, redaction |
 | [Languages](languages.md) | Supported languages, detection, test validation, install modes |
-| [Architecture](architecture.md) | 6-stage pipeline, security scanner, model communication (SKILLDO-* comments) |
+| [Architecture](architecture.md) | 7-stage pipeline, security scanner, model communication (SKILLDO-* comments) |
 | [Authentication](authentication.md) | OAuth flows, API key setup, provider-specific auth |
 | [Best Practices](best-practices.md) | Custom instructions, prompt tuning, CI integration |
 | [Telemetry](telemetry.md) | Local run logging schema |

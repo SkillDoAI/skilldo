@@ -3,7 +3,33 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
-## Unreleased (v0.5.17)
+## v0.5.18
+
+### Added
+- **ChatGPT Codex example config** — `examples/configs/chatgpt-codex.toml` for subscription-based OAuth access (the `chatgpt` provider shipped earlier but never had a committed example)
+
+### Fixed
+- **Frontmatter close-delimiter search is now line-anchored** — when a model omitted the closing `---`, the normalizer's substring search matched the dashes of a markdown table separator row and injected `generated-by:` into the middle of the table (observed in a Go e2e artifact). The closing delimiter must now be a line that is exactly `---`
+- **Stale temp file accumulation** — `.tmpXXXXXX` leftovers from interrupted writes and kept-on-error outputs were never swept (cleanup only matched a legacy `.SKILL.md.*.tmp` naming no longer produced). The pre-write sweep now also removes `NamedTempFile`-shaped leftovers older than one hour (age-guarded so a concurrent run's live temp file is never touched), and runs before the new temp file is created
+- **`e2e: go` coin-flip CI failures** — the workflow's hardcoded section check still required `## Imports` for Go, contradicting the linter policy from v0.5.17 that made it optional (Go uses inline import blocks). The workflow check now matches the linter
+
+### Docs
+- **Pipeline diagrams re-synced** — README.md's diagram now includes the Fact Ledger stage (matching docs/architecture.md); docs/best-practices.md and docs/README.md updated from "6-stage" to the 7-stage pipeline
+- **Local-install accuracy** — SKILL.md's troubleshooting claimed `local-install`/`local-mount` is Python-only; in reality bare-metal local-install works for all 5 languages, container local-install falls back to bare metal for non-Python, and local-mount works in-container everywhere. SKILL.md, docs/languages.md, and docs/best-practices.md now say so
+- **README command list** — added `show-prompts` and `completion`, pointed at advanced generate flags; noted `review_custom`/`test_custom` are always appended
+
+### Security
+- **quinn-proto 0.11.14 → 0.11.16** — fixes RUSTSEC-2026-0185 (high, 7.5): remote memory exhaustion from unbounded out-of-order stream reassembly. Transitive via `reqwest` (unused `http3` feature — never compiled, but flagged by `cargo audit`)
+- **crossbeam-epoch 0.9.18 → 0.9.20** — fixes RUSTSEC-2026-0204: invalid pointer dereference in `fmt::Pointer`. Transitive via `ignore`
+- **rand transitive duplicates bumped** past RUSTSEC-2026-0097 where compatible
+
+### Changed
+- **git2 0.20 → 0.21, auth-git2 0.5 → 0.6** — the two must move in lockstep (auth-git2 0.6 requires git2 0.21). Resolves the git2 0.20.4 unsoundness advisories RUSTSEC-2026-0183/0184. git2 0.21 no longer enables `ssh`/`https` by default, so they are now explicit in Cargo.toml to keep tag fetching working on ssh:// and https:// remotes; adapted to the new `Reference::shorthand()` and `StringArray::iter()` signatures
+
+### CI
+- **Windows build check timeout raised 15 → 20 minutes** — cold-cache runs take ~14.5 minutes and were being killed after all tests had already passed
+
+## v0.5.17
 
 ### Added
 - **`.gitignore`-aware file collection** — doc and source walkers now use the `ignore` crate (same engine as ripgrep) to respect `.gitignore`, `.git/info/exclude`, and global gitignore rules. Gitignored files are no longer sent to LLM stages
