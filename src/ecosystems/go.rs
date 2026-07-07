@@ -367,6 +367,7 @@ impl GoHandler {
         // aren't reachable from HEAD, e.g. shallow clones after tag fetch)
         if let Some(v) = repo
             .list_tags_sorted()
+            .inspect_err(|e| warn!("Failed to list git tags: {e:#}"))
             .ok()
             .and_then(|tags| tags.iter().find_map(|tag| parse_version_tag(tag)))
         {
@@ -378,6 +379,7 @@ impl GoHandler {
         if repo.fetch_tags(std::time::Duration::from_secs(30)).is_ok() {
             if let Some(v) = repo
                 .list_tags_sorted()
+                .inspect_err(|e| warn!("Failed to list git tags: {e:#}"))
                 .ok()
                 .and_then(|tags| tags.iter().find_map(|tag| parse_version_tag(tag)))
             {
