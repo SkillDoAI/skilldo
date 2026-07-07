@@ -73,7 +73,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
-    timeout-minutes: 15
+    # cold rust-cache runs take ~14.5 min; 15 left zero margin (PR #115 timeout)
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
