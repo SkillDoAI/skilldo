@@ -79,12 +79,15 @@ impl Git2Repo {
     /// `git tag -l --sort=-v:refname`.
     pub fn list_tags_sorted(&self) -> Result<Vec<String>> {
         let tags = self.repo.tag_names(None).context("Failed to list tags")?;
-        let mut tag_list: Vec<String> = tags
-            .iter()
-            .flatten()
-            .flatten()
-            .map(|s| s.to_string())
-            .collect();
+        let mut tag_list: Vec<String> = Vec::new();
+        for tag in tags.iter() {
+            // Err = libgit2 failed to read the entry (propagate — a silently
+            // partial list could resolve to a wrong version); Ok(None) = tag
+            // name is not valid UTF-8 (skip, matching pre-git2-0.21 behavior)
+            if let Some(s) = tag.context("Failed to read tag name")? {
+                tag_list.push(s.to_string());
+            }
+        }
         tag_list.sort_by(|a, b| compare_semver_desc(a, b));
         Ok(tag_list)
     }

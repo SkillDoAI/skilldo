@@ -725,14 +725,23 @@ fn cleanup_stale_tmp_files(dir: &Path, output_path: &Path) {
             .unwrap_or_default()
             .to_string_lossy()
     );
+    let stale_cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60);
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         let legacy_tmp = name.starts_with(&prefix) && name.ends_with(".tmp");
-        // NamedTempFile's fixed shape: ".tmp" + exactly 6 random alphanumerics
+        // NamedTempFile's fixed shape: ".tmp" + exactly 6 random alphanumerics.
+        // Age-guarded: a fresh one may be a concurrent run's live temp file,
+        // so only sweep files untouched for over an hour (skip when mtime is
+        // unavailable — never delete on uncertainty).
         let named_tmp = name.len() == 10
             && name.starts_with(".tmp")
-            && name[4..].chars().all(|c| c.is_ascii_alphanumeric());
+            && name[4..].chars().all(|c| c.is_ascii_alphanumeric())
+            && entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .map(|mtime| mtime < stale_cutoff)
+                .unwrap_or(false);
         if legacy_tmp || named_tmp {
             let _ = fs::remove_file(entry.path());
         }
@@ -1398,19 +1407,33 @@ install_source = "registry"
         cleanup_stale_tmp_files(Path::new("/nonexistent/dir"), Path::new("SKILL.md"));
     }
 
+    /// Set a file's mtime into the past so the age guard treats it as stale.
+    fn age_file(path: &Path, secs_ago: u64) {
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+
     #[test]
     fn cleanup_stale_tmp_files_removes_namedtempfile_leftovers() {
         let dir = TempDir::new().unwrap();
         let output = dir.path().join("SKILL.md");
 
         // NamedTempFile leftovers (".tmp" + 6 alphanumerics) from interrupted
-        // writes or kept-on-error outputs of prior runs
+        // writes or kept-on-error outputs of prior runs, aged past the guard
         fs::write(dir.path().join(".tmp2lXAnD"), "stale1").unwrap();
         fs::write(dir.path().join(".tmpQt5rOO"), "stale2").unwrap();
-        // Near-misses must survive: wrong length, non-alphanumeric suffix
+        age_file(&dir.path().join(".tmp2lXAnD"), 2 * 60 * 60);
+        age_file(&dir.path().join(".tmpQt5rOO"), 2 * 60 * 60);
+        // Near-misses must survive even when old: wrong length, non-alphanumeric
         fs::write(dir.path().join(".tmpshort"), "keep").unwrap();
         fs::write(dir.path().join(".tmpabcdefg"), "keep").unwrap();
         fs::write(dir.path().join(".tmp-abc_d"), "keep").unwrap();
+        age_file(&dir.path().join(".tmpshort"), 2 * 60 * 60);
 
         cleanup_stale_tmp_files(dir.path(), &output);
 
@@ -1419,6 +1442,20 @@ install_source = "registry"
         assert!(dir.path().join(".tmpshort").exists());
         assert!(dir.path().join(".tmpabcdefg").exists());
         assert!(dir.path().join(".tmp-abc_d").exists());
+    }
+
+    #[test]
+    fn cleanup_stale_tmp_files_spares_recent_namedtempfile() {
+        // A fresh .tmpXXXXXX may belong to a concurrent run — the age guard
+        // must leave it alone
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("SKILL.md");
+
+        fs::write(dir.path().join(".tmpAbCd12"), "live").unwrap();
+
+        cleanup_stale_tmp_files(dir.path(), &output);
+
+        assert!(dir.path().join(".tmpAbCd12").exists());
     }
 
     #[tokio::test]

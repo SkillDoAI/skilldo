@@ -10,7 +10,7 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 
 ### Fixed
 - **Frontmatter close-delimiter search is now line-anchored** — when a model omitted the closing `---`, the normalizer's substring search matched the dashes of a markdown table separator row and injected `generated-by:` into the middle of the table (observed in a Go e2e artifact). The closing delimiter must now be a line that is exactly `---`
-- **Stale temp file accumulation** — `.tmpXXXXXX` leftovers from interrupted writes and kept-on-error outputs were never swept (cleanup only matched a legacy `.SKILL.md.*.tmp` naming no longer produced). The pre-write sweep now also removes `NamedTempFile`-shaped leftovers, and runs before the new temp file is created
+- **Stale temp file accumulation** — `.tmpXXXXXX` leftovers from interrupted writes and kept-on-error outputs were never swept (cleanup only matched a legacy `.SKILL.md.*.tmp` naming no longer produced). The pre-write sweep now also removes `NamedTempFile`-shaped leftovers older than one hour (age-guarded so a concurrent run's live temp file is never touched), and runs before the new temp file is created
 - **`e2e: go` coin-flip CI failures** — the workflow's hardcoded section check still required `## Imports` for Go, contradicting the linter policy from v0.5.17 that made it optional (Go uses inline import blocks). The workflow check now matches the linter
 
 ### Docs
