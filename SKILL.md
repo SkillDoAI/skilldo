@@ -5,7 +5,7 @@ license: AGPL-3.0
 compatibility: Requires an LLM API key (Anthropic, OpenAI, Gemini, or OpenAI-compatible). Optional container runtime (docker/podman) for test validation.
 metadata:
   author: SkillDoAI
-  version: "0.5.17"
+  version: "0.5.18"
 ---
 
 # Skilldo CLI
@@ -53,7 +53,7 @@ Skilldo uses TOML config files. Place `skilldo.toml` in the repo root, or pass `
 
 ```toml
 [llm]
-provider_type = "anthropic"          # anthropic, openai, gemini, openai-compatible, chatgpt
+provider_type = "anthropic"          # anthropic, openai, gemini, openai-compatible, chatgpt, cli
 model = "claude-sonnet-4-6"
 api_key_env = "ANTHROPIC_API_KEY"  # env var name containing the key
 
@@ -305,7 +305,7 @@ Data is local only — nothing is sent anywhere.
 - **Test failures looping** — try `--test-mode minimal` or `--no-test` for a first pass.
 - **Rate limited** — increase `retry_delay` in config, or switch to a local model.
 - **OAuth errors** — run `skilldo auth status --config <path>` to check token state.
-- **install_source errors on non-Python** — `local-install`/`local-mount` only works for Python. Use default `registry` for other languages.
+- **Container local-install on non-Python** — falls back to bare-metal execution with a warning; `local-mount` works in-container for all languages, and bare-metal `local-install` works for all 5 languages.
 
 ## Documentation
 

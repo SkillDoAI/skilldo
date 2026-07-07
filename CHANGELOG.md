@@ -3,13 +3,20 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
-## Unreleased
+## v0.5.18
 
 ### Added
 - **ChatGPT Codex example config** — `examples/configs/chatgpt-codex.toml` for subscription-based OAuth access (the `chatgpt` provider shipped earlier but never had a committed example)
 
 ### Fixed
+- **Frontmatter close-delimiter search is now line-anchored** — when a model omitted the closing `---`, the normalizer's substring search matched the dashes of a markdown table separator row and injected `generated-by:` into the middle of the table (observed in a Go e2e artifact). The closing delimiter must now be a line that is exactly `---`
 - **Stale temp file accumulation** — `.tmpXXXXXX` leftovers from interrupted writes and kept-on-error outputs were never swept (cleanup only matched a legacy `.SKILL.md.*.tmp` naming no longer produced). The pre-write sweep now also removes `NamedTempFile`-shaped leftovers, and runs before the new temp file is created
+- **`e2e: go` coin-flip CI failures** — the workflow's hardcoded section check still required `## Imports` for Go, contradicting the linter policy from v0.5.17 that made it optional (Go uses inline import blocks). The workflow check now matches the linter
+
+### Docs
+- **Pipeline diagrams re-synced** — README.md's diagram now includes the Fact Ledger stage (matching docs/architecture.md); docs/best-practices.md and docs/README.md updated from "6-stage" to the 7-stage pipeline
+- **Local-install accuracy** — SKILL.md's troubleshooting claimed `local-install`/`local-mount` is Python-only; in reality bare-metal local-install works for all 5 languages, container local-install falls back to bare metal for non-Python, and local-mount works in-container everywhere. SKILL.md, docs/languages.md, and docs/best-practices.md now say so
+- **README command list** — added `show-prompts` and `completion`, pointed at advanced generate flags; noted `review_custom`/`test_custom` are always appended
 
 ### Security
 - **quinn-proto 0.11.14 → 0.11.16** — fixes RUSTSEC-2026-0185 (high, 7.5): remote memory exhaustion from unbounded out-of-order stream reassembly. Transitive via `reqwest` (unused `http3` feature — never compiled, but flagged by `cargo audit`)
