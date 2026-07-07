@@ -47,6 +47,8 @@ Each language has a dedicated executor that runs generated test code:
 
 When `install_source` is set to `"local-install"` or `"local-mount"` in config, the local repository is mounted at `/src` inside the container. Each language wires `/src` into its import resolution:
 
+> **Exception:** under container mode, `local-install` is currently implemented only for Python — other languages fall back to bare-metal execution (with a warning) and use the local path directly. `local-mount` runs in-container for all five languages.
+
 | Language | `local-install` | `local-mount` |
 |----------|-----------------|---------------|
 | **Python** | `pip install /src` | Adds `/src` to `PYTHONPATH` |

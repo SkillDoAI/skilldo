@@ -49,18 +49,18 @@ skilldo generate /tmp/click --provider openai-compatible --model qwen3-coder:lat
   --base-url http://localhost:11434/v1 --no-parallel
 ```
 
-That's it. Skilldo reads the source, runs a 6-agent pipeline, validates the output, and writes a `SKILL.md`.
+That's it. Skilldo reads the source, runs a 7-stage pipeline, validates the output, and writes a `SKILL.md`.
 
 ```text
 Source Code ──→ Extract (API Surface)       ──┐
-Test Files  ──→ Map (Pattern Extraction)    ──┤──→ Create ──→ Review ──→ Test ──→ SKILL.md
-Docs/README ──→ Learn (Context Extraction)  ──┘      ↑          ↓         ↓
-                                                     │       failed?   failed?
-                                                     │          ↓         ↓
-                                                     ←── feedback ←───────┘
+Test Files  ──→ Map (Pattern Extraction)    ──┤──→ Fact Ledger ──→ Create ──→ Review ──→ Test ──→ SKILL.md
+Docs/README ──→ Learn (Context Extraction)  ──┘                     ↑          ↓         ↓
+                                                                    │       failed?   failed?
+                                                                    │          ↓         ↓
+                                                                    ←── feedback ←───────┘
 ```
 
-Three agents gather information from the source code in parallel, then Create combines their output into a SKILL.md. Review and Test validate the result — if either fails, error feedback loops back to Create for regeneration.
+Three agents gather information from the source code in parallel, then the Fact Ledger distills their output into a compact truth table before Create combines everything into a SKILL.md. Review and Test validate the result — if either fails, error feedback loops back to Create for regeneration.
 
 ## More Commands
 
@@ -79,7 +79,15 @@ skilldo hello-world --config my-config.toml
 
 # Print the embedded skilldo SKILL.md (for AI assistants)
 skilldo skill
+
+# Show the exact prompts each stage would send (debugging custom instructions)
+skilldo show-prompts --config my-config.toml
+
+# Generate shell completions (bash, zsh, fish, ...)
+skilldo completion zsh
 ```
+
+Advanced `generate` flags (`--install-source`, `--review-model`, `--best-effort`, `--no-security-scan`, ...) are documented in `skilldo generate --help`.
 
 ## Documentation
 
