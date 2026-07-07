@@ -64,11 +64,11 @@ fn ensure_frontmatter_inner(
     if !trimmed.starts_with("---") && depth < MAX_DEPTH {
         if let Some(fm_start) = trimmed.find("\n---\n") {
             let after = &trimmed[fm_start + 5..]; // skip the \n---\n (5 bytes)
-            if let Some(fm_end) = after.find("\n---") {
-                let fm_block = &after[..fm_end];
+            if let Some(fm_end) = find_delimiter_line(after) {
+                let fm_block = after[..fm_end].trim_end();
                 if fm_block.contains("name:") && fm_block.contains("description:") {
                     // Found valid frontmatter after preamble — reconstruct without preamble
-                    let body = &after[fm_end + 4..]; // skip \n---
+                    let body = &after[fm_end + 3..]; // skip ---
                     let reconstructed = format!("---\n{}\n---\n{}", fm_block, body);
                     // Recurse to handle generated-by injection on the clean content
                     return ensure_frontmatter_inner(
@@ -88,7 +88,7 @@ fn ensure_frontmatter_inner(
     // If frontmatter exists at the start but has wrong format, replace it
     if let Some(after_start) = trimmed.strip_prefix("---") {
         // Scope field checks to frontmatter block (between first two --- delimiters)
-        if let Some(end_pos) = after_start.find("---") {
+        if let Some(end_pos) = find_delimiter_line(after_start) {
             let fm_block = &after_start[..end_pos];
             let has_name = fm_block.contains("name:");
             let has_description = fm_block.contains("description:");
@@ -193,6 +193,21 @@ pub fn ensure_references(content: &str, project_urls: &[(String, String)]) -> St
     }
 
     format!("{}{}", content, refs)
+}
+
+/// Byte offset of the `---` in the first line of `s` that is exactly `---`
+/// (ignoring surrounding whitespace). A substring `find("---")` would
+/// false-match markdown table separator rows (`|---|---|`) or dashes inside
+/// field values when the real closing delimiter is missing.
+fn find_delimiter_line(s: &str) -> Option<usize> {
+    let mut offset = 0;
+    for line in s.split_inclusive('\n') {
+        if line.trim() == "---" {
+            return Some(offset + (line.len() - line.trim_start().len()));
+        }
+        offset += line.len();
+    }
+    None
 }
 
 /// Find (open, close) line indices of the YAML frontmatter `---` delimiters.
@@ -717,6 +732,44 @@ mod tests {
         assert!(result.contains("metadata:"));
         assert!(result.contains("  version: \"2.0.0\""));
         assert!(result.contains("  ecosystem: python"));
+    }
+
+    #[test]
+    fn missing_close_delimiter_does_not_match_table_separator() {
+        // Model omitted the closing --- entirely; a markdown table separator
+        // row later in the body must not be mistaken for it (substring "---"
+        // false-match observed in e2e run 27127922979: generated-by was
+        // injected into the middle of a Pitfalls table)
+        let content = "---\nname: color\ndescription: Go color library\nmetadata:\n  version: \"1.18.0\"\n\n## Pitfalls\n\n| Wrong | Right | Why |\n|-------|-------|-----|\n| a | b | c |\n";
+        let result =
+            ensure_frontmatter(content, "color", "1.18.0", "go", None, Some("gpt-oss-120b"));
+
+        // Table must survive intact — nothing injected into it
+        assert!(
+            result.contains("|-------|-------|-----|"),
+            "table separator mangled: {result}"
+        );
+        assert!(
+            !result.contains("|\n  generated-by"),
+            "generated-by injected into body: {result}"
+        );
+        // Broken frontmatter falls through to a fresh generated block
+        assert!(result.starts_with("---\n"));
+        assert!(result.contains("generated-by: skilldo/gpt-oss-120b"));
+    }
+
+    #[test]
+    fn close_delimiter_search_is_line_anchored() {
+        // A "---" inside a frontmatter value must not be taken as the close
+        let content = "---\nname: foo\ndescription: uses --- dashes\nmetadata:\n  version: \"1\"\n---\nBody text\n";
+        let result = ensure_frontmatter(content, "foo", "1.0", "rust", None, Some("m"));
+
+        assert!(
+            result.contains("description: uses --- dashes"),
+            "value with dashes was destroyed: {result}"
+        );
+        assert!(result.contains("Body text"));
+        assert!(result.contains("generated-by: skilldo/m"));
     }
 
     #[test]
