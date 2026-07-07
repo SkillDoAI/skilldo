@@ -605,13 +605,15 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     let output_path = Path::new(&output);
     let output_dir = output_path.parent().unwrap_or(Path::new("."));
     if !dry_run {
+        // Clean up stale temp files from previous failed runs before creating
+        // the new temp file — the sweep matches NamedTempFile names, so it must
+        // run first or it would delete the live temp file below
+        cleanup_stale_tmp_files(output_dir, output_path);
+
         let mut tmp = tempfile::NamedTempFile::new_in(output_dir)?;
         std::io::Write::write_all(&mut tmp, output_result.skill_md.as_bytes())?;
 
         // Only promote to final path if the run succeeded (or --best-effort)
-        // Clean up stale temp files from previous failed runs before writing new output
-        cleanup_stale_tmp_files(output_dir, output_path);
-
         if !output_result.has_unresolved_errors || best_effort {
             tmp.persist(output_path).map_err(|e| e.error)?;
             info!("✓ Generated SKILL.md written to {}", output);
@@ -708,7 +710,9 @@ pub async fn run(opts: GenerateOptions) -> Result<()> {
     Ok(())
 }
 
-/// Remove stale `.SKILL.md.*.tmp` files from prior failed runs.
+/// Remove stale temp files from prior failed runs: legacy `.{output}.*.tmp`
+/// names and `NamedTempFile` leftovers (`.tmp` + 6 random alphanumerics) from
+/// interrupted writes or kept-on-error outputs.
 fn cleanup_stale_tmp_files(dir: &Path, output_path: &Path) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
@@ -724,7 +728,12 @@ fn cleanup_stale_tmp_files(dir: &Path, output_path: &Path) {
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with(&prefix) && name.ends_with(".tmp") {
+        let legacy_tmp = name.starts_with(&prefix) && name.ends_with(".tmp");
+        // NamedTempFile's fixed shape: ".tmp" + exactly 6 random alphanumerics
+        let named_tmp = name.len() == 10
+            && name.starts_with(".tmp")
+            && name[4..].chars().all(|c| c.is_ascii_alphanumeric());
+        if legacy_tmp || named_tmp {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -1387,6 +1396,29 @@ install_source = "registry"
     fn cleanup_stale_tmp_files_nonexistent_dir() {
         // Should not panic on a missing directory
         cleanup_stale_tmp_files(Path::new("/nonexistent/dir"), Path::new("SKILL.md"));
+    }
+
+    #[test]
+    fn cleanup_stale_tmp_files_removes_namedtempfile_leftovers() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("SKILL.md");
+
+        // NamedTempFile leftovers (".tmp" + 6 alphanumerics) from interrupted
+        // writes or kept-on-error outputs of prior runs
+        fs::write(dir.path().join(".tmp2lXAnD"), "stale1").unwrap();
+        fs::write(dir.path().join(".tmpQt5rOO"), "stale2").unwrap();
+        // Near-misses must survive: wrong length, non-alphanumeric suffix
+        fs::write(dir.path().join(".tmpshort"), "keep").unwrap();
+        fs::write(dir.path().join(".tmpabcdefg"), "keep").unwrap();
+        fs::write(dir.path().join(".tmp-abc_d"), "keep").unwrap();
+
+        cleanup_stale_tmp_files(dir.path(), &output);
+
+        assert!(!dir.path().join(".tmp2lXAnD").exists());
+        assert!(!dir.path().join(".tmpQt5rOO").exists());
+        assert!(dir.path().join(".tmpshort").exists());
+        assert!(dir.path().join(".tmpabcdefg").exists());
+        assert!(dir.path().join(".tmp-abc_d").exists());
     }
 
     #[tokio::test]

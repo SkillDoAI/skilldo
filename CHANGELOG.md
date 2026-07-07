@@ -5,6 +5,12 @@ published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/rel
 
 ## Unreleased
 
+### Added
+- **ChatGPT Codex example config** — `examples/configs/chatgpt-codex.toml` for subscription-based OAuth access (the `chatgpt` provider shipped earlier but never had a committed example)
+
+### Fixed
+- **Stale temp file accumulation** — `.tmpXXXXXX` leftovers from interrupted writes and kept-on-error outputs were never swept (cleanup only matched a legacy `.SKILL.md.*.tmp` naming no longer produced). The pre-write sweep now also removes `NamedTempFile`-shaped leftovers, and runs before the new temp file is created
+
 ### Security
 - **quinn-proto 0.11.14 → 0.11.16** — fixes RUSTSEC-2026-0185 (high, 7.5): remote memory exhaustion from unbounded out-of-order stream reassembly. Transitive via `reqwest` (unused `http3` feature — never compiled, but flagged by `cargo audit`)
 - **crossbeam-epoch 0.9.18 → 0.9.20** — fixes RUSTSEC-2026-0204: invalid pointer dereference in `fmt::Pointer`. Transitive via `ignore`
