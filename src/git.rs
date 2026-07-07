@@ -79,7 +79,12 @@ impl Git2Repo {
     /// `git tag -l --sort=-v:refname`.
     pub fn list_tags_sorted(&self) -> Result<Vec<String>> {
         let tags = self.repo.tag_names(None).context("Failed to list tags")?;
-        let mut tag_list: Vec<String> = tags.iter().flatten().map(|s| s.to_string()).collect();
+        let mut tag_list: Vec<String> = tags
+            .iter()
+            .flatten()
+            .flatten()
+            .map(|s| s.to_string())
+            .collect();
         tag_list.sort_by(|a, b| compare_semver_desc(a, b));
         Ok(tag_list)
     }
@@ -89,9 +94,7 @@ impl Git2Repo {
     pub fn branch_name(&self) -> Result<String> {
         let head = self.repo.head().context("HEAD not found")?;
         if head.is_branch() {
-            let name = head
-                .shorthand()
-                .ok_or_else(|| anyhow::anyhow!("HEAD is not a symbolic ref"))?;
+            let name = head.shorthand().context("HEAD is not a symbolic ref")?;
             Ok(name.to_string())
         } else {
             Ok("HEAD".to_string())

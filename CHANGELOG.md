@@ -3,7 +3,20 @@
 All notable changes to Skilldo are documented here. This changelog is also
 published verbatim in [GitHub Releases](https://github.com/SkillDoAI/skilldo/releases).
 
-## Unreleased (v0.5.17)
+## Unreleased
+
+### Security
+- **quinn-proto 0.11.14 → 0.11.16** — fixes RUSTSEC-2026-0185 (high, 7.5): remote memory exhaustion from unbounded out-of-order stream reassembly. Transitive via `reqwest` (unused `http3` feature — never compiled, but flagged by `cargo audit`)
+- **crossbeam-epoch 0.9.18 → 0.9.20** — fixes RUSTSEC-2026-0204: invalid pointer dereference in `fmt::Pointer`. Transitive via `ignore`
+- **rand transitive duplicates bumped** past RUSTSEC-2026-0097 where compatible
+
+### Changed
+- **git2 0.20 → 0.21, auth-git2 0.5 → 0.6** — the two must move in lockstep (auth-git2 0.6 requires git2 0.21). Resolves the git2 0.20.4 unsoundness advisories RUSTSEC-2026-0183/0184. git2 0.21 no longer enables `ssh`/`https` by default, so they are now explicit in Cargo.toml to keep tag fetching working on ssh:// and https:// remotes; adapted to the new `Reference::shorthand()` and `StringArray::iter()` signatures
+
+### CI
+- **Windows build check timeout raised 15 → 20 minutes** — cold-cache runs take ~14.5 minutes and were being killed after all tests had already passed
+
+## v0.5.17
 
 ### Added
 - **`.gitignore`-aware file collection** — doc and source walkers now use the `ignore` crate (same engine as ripgrep) to respect `.gitignore`, `.git/info/exclude`, and global gitignore rules. Gitignored files are no longer sent to LLM stages
